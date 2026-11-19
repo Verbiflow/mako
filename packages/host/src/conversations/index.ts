@@ -271,7 +271,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     })
   }
   const workspaceSnapshots = new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots"))
-  workspaceSnapshots.followHistory(workspaces.fileHistory)
+  workspaceSnapshots.followHistory(workspaces.checkpointHistory)
   workspaceSnapshots.followSettlement(() => readSnapshotSettlement(join(dataRoot, "conversations"), id => deps.elsewhere?.(id) ?? false))
   deps.jobs.every("settled rewind snapshot budget", 60 * 60_000, async () => {
     if ((await workspaceSnapshots.budget.settings()).mode === "evict") await workspaceSnapshots.budget.run()

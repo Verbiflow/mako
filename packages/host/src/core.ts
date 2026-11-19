@@ -247,6 +247,7 @@ interface LateParts {
   turnOn?: CloudTurnOnFollower
   /** The file system's history, for fseventsd's restart to end reads across it. */
   fileHistory?: FileHistory
+  checkpointHistory?: FileHistory
 }
 
 export async function openCore(shell: CoreShell): Promise<Core> {
@@ -376,6 +377,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     recover: () => {
       watchBackend.recover()
       late.fileHistory?.recover?.()
+      late.checkpointHistory?.recover?.()
     },
     activity: () => ({ ...watchReadings.totals(), turnsRunning: (late.conversations?.live.summaries() ?? []).filter(({ session }) => session.status === "running").length }),
     emit: (service) => emit({ type: "file-events-service", service }),
@@ -550,6 +552,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     daemonRestarts: fileEvents,
   })
   late.fileHistory = workspaces.fileHistory
+  late.checkpointHistory = workspaces.checkpointHistory
   // Who changed what in every checkout a Thread works in. It catches up on its own, after the host is up.
   const unfollowEffects = fixtureDesk ? undefined : liveToolEffects.subscribe((reported) => {
     late.attribution?.effects(reported.conversation, reported.call)

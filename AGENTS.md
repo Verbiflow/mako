@@ -5659,6 +5659,22 @@ index, and the answers that only configuration changes (`CheckoutFacts`), kept
 per checkout until a config file's stamp differs. `test-checkpoint-reuse.ts`
 holds the process counts and `test-checkpoint-order.ts` the lock's span.
 
+A turn's checkpoint follows on from the repository's last one when FSEvents'
+history says what changed since (`WorkspaceSnapshots.sinceLast`): only those
+paths are read, and the agent goes before the checkpoint is saved. History only
+avoids a whole capture, so a mark or read slower than `CHECKPOINT_HISTORY_MS` is
+bypassed. Checkpoints read it in a child of their own
+(`Workspaces.checkpointHistory`) that stays up between turns: in the child the
+journal's footprints and the apps' probes share, a read holds parcel's FSEvents
+lock for seconds when its mark is hours back, and a turn's mark waited behind
+it, and a child started for the turn's mark took longer than the wait. Turns
+asking while a read is under way go as one read after it, from the oldest of
+their marks (`changedSince`), so a wave of turns across worktrees doesn't queue
+read by read. A capture's Git reads go ahead of the host's other reads until its
+checkpoint holds the workspace (`RunOptions.urgent`). `bench-checkpoint-load.ts`
+measures how long turns wait at the scale of several worktrees and a project
+folder under load.
+
 Retained checkpoint payloads are limited to 1 GiB per profile/workspace, with a
 512 MiB per-capture limit, a 30-day/1,000-record retention target, and at most 64
 removals per pass. This payload budget excludes the SQLite catalog, provider-native
