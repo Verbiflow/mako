@@ -3,6 +3,7 @@ import { makoRuntimeReadings } from "@mako/sessions/record-observed"
 import { makoRecords } from "@mako/sessions/record-streams"
 import type { MethodTable } from "../base/methods.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
+import type { Foreground } from "../base/foreground.js"
 import type { ProviderHost } from "./host.js"
 import { describeHarnesses, harnessLabel } from "./harness-descriptors.js"
 import { describeConnection } from "./connection-capability.js"
@@ -27,11 +28,13 @@ import type { HostEvent } from "../contracts/host-events-boot.js"
 export type { PrefetchOutcome } from "./start-prefetch.js"
 export { createHarnessHost, detachedHarnessContext } from "./harness-host.js"
 export { callGateAnswer, heldAnswer, HookCall } from "./call-gate.js"
-export { WriteHolds } from "./write-holds.js"
+export { heldSubmission, WriteHolds } from "./write-holds.js"
 export { CliReadings } from "./cli-readings.js"
 export type { HarnessContext, ProviderHost } from "./host.js"
 export type { AccountLaunch, HarnessAccounts } from "./accounts.js"
 export { ExecutionAccountChanged, ExecutionIdentityMismatch } from "./accounts.js"
+export { CREDENTIAL_REFRESH_MS } from "./credential-revisions.js"
+export { HostWarmer, warmPieces } from "./host-warmup.js"
 export type { VerifiedSignIn } from "./account-sign-ins.js"
 export { HandoffRefused, TurnInProgressError } from "./prompt-dispatch.js"
 export type { AccountHold } from "./account-holds.js"
@@ -69,7 +72,7 @@ export interface Harnesses {
    * them: every host on this machine launches the same binaries.
    */
   updates: RuntimeUpdates
-  /** Each harness's models and settings, discovered per account and workspace. */
+  /** Each harness's models, discovered per account, and its settings in each workspace. */
   profiles: HarnessProfiles
   /** The accounts each harness runs on, their usage and what holds them. */
   accounts: HarnessAccounts
@@ -97,19 +100,21 @@ export interface HarnessesDeps {
   subscribed: JobDemand
   /** The harness processes Mako's hosts on this Mac recorded, with the session each holds, for a resume's check. */
   makoProcesses?: MakoProcesses
+  /** Held while a person waits on a start: a discovery nobody waits for starts once it is free. */
+  foreground?: Pick<Foreground, "idle" | "busy">
 }
 
-export function openHarnesses({ host, appRoot, userRoot, catalog, live, emit, jobs, subscribed, makoProcesses }: HarnessesDeps): Harnesses {
-  const profiles = new HarnessProfiles(host, new ProviderProfileCache(providerProfilesPath(userRoot)))
+export function openHarnesses({ host, appRoot, userRoot, catalog, live, emit, jobs, subscribed, makoProcesses, foreground }: HarnessesDeps): Harnesses {
+  const profiles = new HarnessProfiles(host, new ProviderProfileCache(providerProfilesPath(userRoot)), foreground)
   const updates = new RuntimeUpdates({
     sources: () => host.updateSources.list(),
     processes: host.discovery,
     path: makoRuntimeReadings(userRoot),
     emit: (state) => emit({ type: "runtime-updates", updates: state }),
-    // A new binary lists new models: drop the catalog and discover again, so
+    // A new binary lists new models: the account's list is read again, so
     // the picker shows what the updated CLI offers without a restart.
     onRuntimeChanged: ({ provider }) => {
-      void profiles.refresh(provider)
+      void profiles.refresh(provider).catch(() => undefined)
     },
     label: (provider) => harnessLabel(host, provider),
   })
@@ -177,7 +182,7 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
     capability.onChange?.(() => {
       // The transport a new thread opens through changed, and with it the
       // models on offer: discovery runs again and every window hears both.
-      void harnesses.profiles.get(capability.provider, true).catch(() => undefined)
+      void harnesses.profiles.refresh(capability.provider).catch(() => undefined)
       void listConnections().then((connections) => emit({ type: "provider-connections", connections }))
     })
   }
@@ -200,7 +205,7 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
   const connections = host.modelConnections
   // What a connection serves is in OpenCode's catalog: read it again, and every window hears the new one.
   const changed = <T>(result: T): T => {
-    void harnesses.profiles.get("opencode", true).catch(() => undefined)
+    void harnesses.profiles.refresh("opencode").catch(() => undefined)
     return result
   }
   methods.handle("mako:model-connections", () => connections.snapshot())
@@ -211,9 +216,11 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
   methods.handle("mako:model-connection-test", (id: string) => connections.test(id))
   methods.handle("mako:model-connection-local", () => connections.detectLocal())
 
-  // The picker opens on what is known; each provider's discovery arrives as
-  // its own event, so the slowest CLI no longer hides the rest.
-  methods.handle("mako:harness-profiles", (force?: boolean) => force === true ? harnesses.profiles.all(true) : harnesses.profiles.now())
+  // A window paints what is held and this starts no discovery: all six ran at
+  // every window's start, with the picker closed. A harness is asked when the
+  // picker opens (`mako:harness-tuning` with `force`); its answer arrives as
+  // its own event, so the slowest CLI never hides the rest.
+  methods.handle("mako:harness-profiles", (force?: boolean) => force === true ? harnesses.profiles.all(true) : harnesses.profiles.snapshots())
   methods.handle("mako:harness-availability", () => {
     const available = new Set(harnesses.installed())
     return Object.fromEntries(

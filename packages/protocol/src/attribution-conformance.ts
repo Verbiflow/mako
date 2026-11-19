@@ -408,6 +408,8 @@ export function runTrackerConformance(make: MakeTracker, test: ConformanceTest):
     world.fs.write("/work/a.txt", "1\nwhile closed\n")
     const walks = world.fs.walks
     world.tracker = await make(world.ports)
+    // A reopened tracker reads a root's time away when something asks for it, as the next turn there does.
+    await world.tracker.track({ id: "work", path: world.root, kind: "attached" })
     const all = await entries(world)
     assert.equal(world.fs.walks, walks, "caught up without walking")
     assert.equal(all.length, 2)

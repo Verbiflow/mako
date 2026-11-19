@@ -11,7 +11,7 @@ import type { FileEventsService } from "./file-events-service.js"
 import type { McpSignIns } from "./mcp-sign-ins.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { Entry } from "@mako/sessions/entries"
-import type { WorktreeStep, WorktreeSummary } from "./thread-worktrees.js"
+import type { WorktreeStep, WorktreeSummary, WorktreeSummaryChanges } from "./thread-worktrees.js"
 import type { MachineOffer } from "./machine-offer.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { CloudStartStep, ThreadContinueStep, ThreadMoveStep, ThreadReturnStep } from "./cloud-threads.js"
@@ -23,7 +23,7 @@ import type { NativeRequest } from "./native-requests.js"
 import type { AccountRemovalEvent, AccountUsage } from "./accounts.js"
 import type { ProcessPlatform } from "./platform.js"
 import type { AppshotShortcutWatch } from "./appshot-shortcut.js"
-import type { CompactLiveBatch, LiveBatch, LiveSummary } from "./live-conversations.js"
+import type { CompactLiveBatch, LiveAhead, LiveBatch, LiveSummary } from "./live-conversations.js"
 import type {
   ThreadRef as CatalogThreadRef,
 } from "@mako/sessions"
@@ -80,8 +80,16 @@ export type HostEventBody =
   | { type: "cloud-archive-step"; step: CloudArchiveStep }
   /** A followed checkout's HEAD moved, by folder; window-wide. */
   | { type: "checkout-heads"; heads: CheckoutHeads }
-  /** Every worktree's summary, said whenever one changes (`ThreadWorktreeService.followSummaries`); window-wide. */
+  /**
+   * Every worktree's summary, the whole list, said whenever one changes (`ThreadWorktreeService.followSummaries`);
+   * window-wide. The form a window knew before `worktree-summary-changes`: a host says it until a window has asked
+   * for changes and none for the whole list.
+   */
   | { type: "worktree-summaries"; summaries: WorktreeSummary[] }
+  /** The summaries that changed, each as it was read, and the worktrees that went (`followSummaryChanges`); window-wide. */
+  | ({ type: "worktree-summary-changes" } & WorktreeSummaryChanges)
+  /** What an inventory listed as measured or read behind it is in, sizes or statuses: the next `mako:worktree-inventory` has them. */
+  | { type: "worktree-sizes" }
   /** A new Thread's worktree is checked out; its provider starts next. */
   | { type: "worktree-ready"; conversationId: string }
   | { type: "worktree-step"; conversationId: string; step: WorktreeStep }
@@ -152,6 +160,8 @@ export type HostEventBody =
    * same again for a host's own windows, its roster as what changed, where it has one (`rosteredLiveBatch`).
    */
   | { type: "live-batch"; batch: LiveBatch; compact?: CompactLiveBatch; rostered?: CompactLiveBatch }
+  /** What a conversation's next batch will add to its last block, for this host's own windows alone (`LiveAhead`). */
+  | { type: "live-ahead"; ahead: LiveAhead }
   /**
    * Conversations the account lists that this host doesn't run (another device's in the cloud): each listed as one is
    * at boot, unopened, or listed again as it changed. Opening one reads it where it runs.

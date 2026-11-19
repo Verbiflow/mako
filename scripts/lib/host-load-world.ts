@@ -11,6 +11,7 @@ import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import { AppKeySchema, type AppKey } from "@mako/host/contracts/thread-environments"
 import { ThreadEnvironments } from "@mako/host/workspaces/thread-environment"
 import { RECIPE_PATH, type Recipe } from "@mako/host/workspaces/thread-recipe"
+import { seedTrees, writeLongJournal, type SeededTree } from "./host-load-trees.ts"
 
 /**
  * The world `bench:host-load` runs a host in: a project folder of two repositories, Threads with worktrees of it,
@@ -32,9 +33,25 @@ export interface WorldScale {
   processes: number
   /** Sessions in the harness stores besides the Fins' own. */
   sessions: number
+  /** Sessions older than a week besides: a catalog several times its rail. */
+  olderSessions?: number
+  /** Apexes whose Fins have finished, each one's count, made before the host starts (`seedTrees`). */
+  trees?: readonly number[]
+  /** Megabytes of the journals of Threads at rest, one each from the last Thread back: what a window opens. */
+  journalsMb?: readonly number[]
 }
 
 export const TODAY: WorldScale = { threads: 29, fins: [6, 6, 4, 3, 2, 2], files: [4900, 7400], apps: 95, running: 24, processes: 600, sessions: 1200 }
+
+/**
+ * The person's host of 2026-11-17 as nearly as this builder makes one: 30 agents at work (25 Fins and their five
+ * Apexes) in 54 checkouts of the two repositories (108 worktrees; theirs had 107), two Apexes of 226 and 130 finished
+ * Fins, 600 sessions of the last week in a catalog of 5,336, and journals from a few kilobytes to past 100 MB.
+ */
+export const PERSON: WorldScale = {
+  threads: 29, fins: [7, 6, 5, 4, 3], files: [5000, 7700], apps: 95, running: 24, processes: 600, sessions: 600, olderSessions: 4736,
+  trees: [226, 130], journalsMb: [150, 120, 105, 60, 40, 25, 12, 8, 5, 3, 2, 1],
+}
 
 export interface World {
   root: string
@@ -43,7 +60,10 @@ export interface World {
   temporary: string
   project: string
   /** Every Thread's checkout, Apexes first, with the worktree of each repository. */
-  checkouts: { thread: string; session: string; path: string; repositories: string[]; fin: boolean }[]
+  checkouts: { thread: string; conversation: string; session: string; path: string; repositories: string[]; fin: boolean }[]
+  /** The seeded Apexes (`WorldScale.trees`), and the resting conversations with long journals, largest first, with each file's megabytes. */
+  trees: SeededTree[]
+  long: { conversation: string; megabytes: number; fileMb: number }[]
   /** Current folders' web logs, under the app owner the desk resolves, for output reads and controlled writes. */
   appOutputs: { cwd: string; app: AppKey; file: string }[]
   /** The process groups playing the running apps and the busy Mac, by their IDs. */
@@ -94,15 +114,19 @@ export function claudeSessionPath(home: string, cwd: string, session: string): s
   return join(folder, `${session}.jsonl`)
 }
 
-/** Sessions of other days, a few long ones among them, so the catalog has a rail's worth to list. */
-function pastSessions(home: string, project: string, count: number): void {
-  for (let n = 0; n < count; n += 1) {
+/**
+ * Sessions of other days, a few long ones among them, so the catalog has a rail's worth to list: `count` of the last
+ * two weeks (the last one with `older` given), then `older` from eight days to four months back.
+ */
+function pastSessions(home: string, project: string, count: number, older = 0): void {
+  for (let n = 0; n < count + older; n += 1) {
     const session = randomUUID()
     const path = claudeSessionPath(home, n % 3 ? project : join(project, "app"), session)
     let parent: string | null = null
     let text = ""
     // Written days ago, as a rail's past sessions were: not stores at work now.
-    const at = new Date(Date.now() - ((n % 14) + 1) * 86_400_000)
+    const days = n >= count ? 8 + (n % 112) : older ? (n % 6) + 1 : (n % 14) + 1
+    const at = new Date(Date.now() - days * 86_400_000)
     const turns = n % 50 === 0 ? 400 : 6
     for (let turn = 0; turn < turns; turn += 1) {
       const asked = claudeLine(session, project, "user", `Question ${turn} of session ${n}.`, parent, at)
@@ -186,7 +210,7 @@ export async function makeWorld(root: string, scale: WorldScale): Promise<World>
     const made = await worktrees.prepare(conversation, cwd, name)
     await worktrees.attach(conversation)
     const repositories = store.worktrees().filter((row) => row.path.startsWith(`${made.path}/`) || row.path === made.path).map((row) => row.path)
-    checkouts.push({ thread: placed.thread, session, path: made.path, repositories, fin })
+    checkouts.push({ thread: placed.thread, conversation, session, path: made.path, repositories, fin })
     return made.path
   }
   for (let n = 0; n < scale.threads; n += 1) await make(project, `thread ${n}`, false)
@@ -225,7 +249,22 @@ export async function makeWorld(root: string, scale: WorldScale): Promise<World>
   store.close()
   await runner.close()
 
-  pastSessions(home, project, scale.sessions)
+  pastSessions(home, project, scale.sessions, scale.olderSessions)
+  // Finished Fins weigh from tens of kilobytes to a few megabytes, most of them little.
+  const trees = scale.trees?.length
+    ? await seedTrees(dataRoot, { trees: scale.trees, kilobytes: (index) => index % 40 === 7 ? 4_000 : index % 10 === 3 ? 900 : index % 3 === 1 ? 200 : 40, reports: 15, agedMs: 3 * 86_400_000 })
+    : []
+  const long: World["long"] = []
+  const resting = checkouts.filter((checkout, index) => !checkout.fin && index >= scale.fins.length).reverse()
+  for (const [index, megabytes] of (scale.journalsMb ?? []).entries()) {
+    const checkout = resting[index]
+    if (!checkout) break
+    const path = claudeSessionPath(home, checkout.path, checkout.session)
+    const asked = claudeLine(checkout.session, checkout.path, "user", "Where did this stand?", null)
+    writeFileSync(path, asked.line + claudeLine(checkout.session, checkout.path, "assistant", [{ type: "text", text: "Here is where it stood." }], asked.uuid).line)
+    const bytes = await writeLongJournal(dataRoot, { conversation: checkout.conversation, session: checkout.session, path, cwd: checkout.path, megabytes })
+    long.push({ conversation: checkout.conversation, megabytes, fileMb: Math.round(bytes / 104_857.6) / 10 })
+  }
 
   // The apps: each checkout's records, the first `running` with a process group up, the rest with checks that ended.
   const groups: { pid: number; stop(): void; ended: Promise<void> }[] = []
@@ -251,7 +290,7 @@ export async function makeWorld(root: string, scale: WorldScale): Promise<World>
   }
   for (let n = 0; n < scale.processes / 2; n += 1) groups.push(idleGroup(`mako-load-busy-${n}`, temporary, 1))
 
-  return { root, home, dataRoot, temporary, project, checkouts, appOutputs, fixtures: groups.map((group) => group.pid), release: holdFixtures(groups) }
+  return { root, home, dataRoot, temporary, project, checkouts, trees, long, appOutputs, fixtures: groups.map((group) => group.pid), release: holdFixtures(groups) }
 }
 
 /**

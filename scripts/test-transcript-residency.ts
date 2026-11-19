@@ -102,6 +102,12 @@ try {
   assert.equal(reopened.response.at(-1)!.blocks.at(-1)!.type, "text")
   assert.deepEqual(current.blocks.slice(cold.blocks.start, cold.blocks.end), initial.blocks.slice(cold.blocks.start, cold.blocks.end))
   assert.equal(current.revision, initial.revision, "Reload never rewinds controls")
+  // A reload reads the window again before the turn (`loadReleasedLiveTurn`), which brings every released turn back
+  // with it: the cold ones go again on the watcher's next sweep, and only then is there one to rewrite.
+  await idle()
+  current = acpStore.get().conversations[source.session.id]!
+  assert.ok(current.releasedTurns?.length, "The next sweep releases the cold turns again")
+  assert.ok(weights.of(current) < weights.of(initial) / 5, "The window is back within its budget after a reload")
   const older = current.releasedTurns!.find(item => item.blocks.end < source.blocks.length - 3)!
   const protectChanged = transcriptReaders.protect(live, older.id)
   source.revision++
@@ -132,7 +138,7 @@ try {
   await oldRange
   assert.equal(acpStore.get().conversations[source.session.id]!.epoch, newer.epoch)
   assert.deepEqual(acpStore.get().conversations[source.session.id]!.blocks[staleTurn.blocks.start + 2], newer.blocks[staleTurn.blocks.start + 2],
-    "A delayed range from an old source cannot overwrite its replacement")
+    "A delayed read from an old source cannot overwrite its replacement")
 } finally { stop(); a.release(); b.release(); read.mock.restore() }
 
 const legacy = { ...snapshot, session: { ...snapshot.session, id: auditId(9899) }, history: { ...snapshot.history!, ranges: undefined } }

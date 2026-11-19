@@ -4,7 +4,7 @@ import { receiveLive, unlistedSince, unplacedReadAnswered, unplacedReadGoesOut }
 import { projectAcp, projectLive } from "@/state/live-projection"
 import { responseText, type Exchange } from "@/lib/exchanges"
 import type { LiveSnapshot } from "@/lib/types"
-import { HISTORY_PARTS_IN_FLIGHT, LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryChunk, type LiveHistoryRead, type LiveHistoryAddress, type LiveHistoryPage, type LiveHistorySnapshot } from "@mako/host/contracts/live-history"
+import { HISTORY_PARTS_IN_FLIGHT, LIVE_HISTORY_CHUNK_CHARS, type LiveHistoryChunk, type LiveHistoryCursor, type LiveHistoryRead, type LiveHistoryAddress, type LiveHistoryPage, type LiveHistorySnapshot } from "@mako/host/contracts/live-history"
 import { liveReadingSource, transcriptReaders } from "@/state/transcript-reading"
 import type { ReleasedTurn } from "@/state/transcript-residency"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
@@ -61,17 +61,23 @@ export async function readLiveValue<T>(id: string, input: LiveHistoryRead): Prom
   return JSON.parse(pieces.join("")) as T
 }
 
+/**
+ * A conversation's snapshot, over the window this one holds of it. One it holds nothing of is read at its newest page,
+ * wherever a pane was last reading it: read back to that place first, a Thread once scrolled far up read all of that
+ * range before it painted anything. The place is read once its newest page is on screen (`loadEarlierLive`, which a
+ * transcript restoring a place asks), with `from` saying how far back.
+ */
 export function readLiveSnapshot(id: string): Promise<LiveSnapshot | null>
 export function readLiveSnapshot(id: string, conditional: true): Promise<LiveHistorySnapshot>
-export async function readLiveSnapshot(id: string, conditional = false): Promise<LiveHistorySnapshot> {
+export function readLiveSnapshot(id: string, conditional: false, from: LiveHistoryCursor): Promise<LiveSnapshot | null>
+export async function readLiveSnapshot(id: string, conditional = false, from?: LiveHistoryCursor): Promise<LiveHistorySnapshot> {
   const bridge = getMako()
   if (Object.hasOwn(bridge, "liveRead")) {
     const held = acpStore.get().conversations[id]
     try { return await readLiveValue<LiveHistorySnapshot>(id, { kind: "snapshot", epoch: held?.epoch,
-      ifCurrent: conditional && held?.hydrated && held.history && held.revision !== undefined
+      ifCurrent: conditional && !from && held?.hydrated && held.history && held.revision !== undefined
         ? { token: held.history.token, revision: held.revision } : undefined,
-      from: held?.history ? { blocks: held.history.blockStart, base: held.base?.start ?? 0 }
-        : transcriptReaders.rememberedWindow(liveReadingSource(id)) }) }
+      from: from ?? (held?.history ? { blocks: held.history.blockStart, base: held.base?.start ?? 0 } : undefined) }) }
     catch (error) {
       // Existing hosts keep their old read API. A data/transport failure is
       // never a reason to silently retry an unbounded read.

@@ -10,7 +10,7 @@ import {
 } from "@mako/sessions/settings"
 import type { HarnessProfile, ThreadRef } from "@/lib/types"
 import { prefsStore, setPref } from "@/state/prefs"
-import { providerStore, providerProfileKey, providers } from "@/state/providers"
+import { profileUnread, providerStore, providerProfileKey, providers } from "@/state/providers"
 import { threadsStore } from "@/state/thread-store"
 import {
   acpForThread,
@@ -137,7 +137,7 @@ export function composerModelLabel(input: {
 }): string {
   const { profile } = input
   if (input.error) return "Model unavailable"
-  if (!profile || profile.pending) return "Loading model…"
+  if (!profile || profileUnread(profile)) return "Loading model…"
   if (!profile.available) return "Model unavailable"
   if (input.target.kind === "new") return "Choose a model"
   return input.reporting ? "Loading model…" : "Model not recorded"
@@ -298,7 +298,10 @@ export async function settingsForSend(
       : undefined
   const cached =
     providerStore.get().contexts[providerProfileKey(target.harness, target.cwd)]
-  if (!cached?.available || cached.configurationError)
+  // Only a harness with no catalogue to validate against is read again here. A catalogue kept through a failed
+  // refresh still validates the send, and its retry has its own clock: asking on every send for as long as the note
+  // stood started a discovery per message.
+  if (!cached?.available || !cached.models.length)
     void providers.load(target.harness, false, target.cwd).catch(() => {})
   const profile =
     providerStore.get().contexts[providerProfileKey(target.harness, target.cwd)]

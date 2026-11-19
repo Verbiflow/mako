@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto"
 import { constants, existsSync } from "node:fs"
 import { access, mkdir, rename, rm } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
-import { PARALLEL_CHECKOUT, type Git } from "@mako/git"
+import { commonDirOf, fileStamp, PARALLEL_CHECKOUT, personalGitConfigFiles, type Git } from "@mako/git"
 import { endChildInput } from "@mako/sessions/child-input"
 import { hostCommand } from "../base/host-command.js"
 import type { ReturnProjectMissing } from "../contracts/cloud-threads.js"
@@ -87,8 +87,31 @@ export async function fillWorktree(git: Git, path: string): Promise<void> {
 /** How long the post-checkout hook may run, as any Git command may (`Git.run`'s default), before it's stopped. */
 const HOOK_TIMEOUT_MS = 120_000
 
+// Per `Git`, so per host: where each repository's worktrees find the hook, as Git named it, by the stamps of the
+// configuration that can move it (`core.hooksPath`).
+const hookPaths = new WeakMap<Git, Map<string, { stamp: string; named: string }>>()
+
+/**
+ * Where a linked worktree's post-checkout hook is, as `rev-parse --git-path` names it: the repository's own `hooks`
+ * folder, or `core.hooksPath`, which names the same thing for every linked worktree of a repository (a path of its
+ * own, or one inside each checkout). Asked once per repository while its configuration and the person's stand, where
+ * every new worktree asked again.
+ */
+async function postCheckoutHook(git: Git, path: string): Promise<string> {
+  const common = commonDirOf(path)
+  const stamp = (await Promise.all([join(common, "config"), ...personalGitConfigFiles()].map((file) => fileStamp(file)))).join("\n")
+  let known = hookPaths.get(git)
+  if (!known) hookPaths.set(git, known = new Map())
+  const held = known.get(common)
+  if (held?.stamp === stamp) return held.named
+  const named = await git.output(path, ["rev-parse", "--git-path", "hooks/post-checkout"])
+  // A main checkout names its own `.git` folder from where it stands, which no other checkout can use.
+  if (!named.startsWith(".git/")) known.set(common, { stamp, named })
+  return named
+}
+
 async function runPostCheckout(git: Git, path: string): Promise<void> {
-  const hook = resolve(path, await git.output(path, ["rev-parse", "--git-path", "hooks/post-checkout"]))
+  const hook = resolve(path, await postCheckoutHook(git, path))
   if (!(await access(hook, constants.X_OK).then(() => true, () => false))) return
   const head = await git.output(path, ["rev-parse", "HEAD"])
   const env = { ...git.environment() }
