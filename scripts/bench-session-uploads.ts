@@ -22,7 +22,7 @@ import { ThreadRefSchema } from "@mako/sessions/thread-schema"
  * remote in memory that takes them by the gateway's rule. Measures the first upload (bytes, chunks, requests, wall and
  * CPU time, drawing included), one more turn on the largest Session, and a restart, which should draw and send
  * nothing. The network is left out: bytes are what it carries. The harnesses' stores are only read; the copies go under
- * `$MAKO_THREAD_DATA_DIR` and are removed.
+ * `$MAKO_THREAD_SCRATCH_DIR` (or `$MAKO_THREAD_DATA_DIR`) and are removed.
  *
  *   npx tsx scripts/bench-session-uploads.ts [--report <file>] [--keep]
  */
@@ -122,7 +122,7 @@ const listed = ownedSessions({
 const pathOf = (harness: string, nativeId: string) => native.find((ref) => ref.harness === harness && ref.nativeId === nativeId)?.path
 const scope = uploadScope(listed, { onBattery: false, percent: undefined, lowPower: false }, pathOf, Date.now())
 
-const scratch = join(process.env.MAKO_THREAD_DATA_DIR ?? join(homedir(), ".mako", "tmp"), `bench-session-uploads-${Date.now()}`)
+const scratch = join(process.env.MAKO_THREAD_SCRATCH_DIR ?? process.env.MAKO_THREAD_DATA_DIR ?? join(homedir(), ".mako", "tmp"), `bench-session-uploads-${Date.now()}`)
 mkdirSync(scratch, { recursive: true })
 try {
   // The harnesses' stores, read read-only through the readers the catalog worker runs, drawn as the catalog draws them.
