@@ -1,7 +1,7 @@
 import type { ProposedPlan } from "@mako/sessions/content"
 import type { ModelOption, SessionSettings } from "@mako/sessions/settings"
 import type { ComposerSettingsView } from "@/components/composer/use-composer-settings"
-import { getMako, hasBridge } from "@/lib/bridge"
+import { hasBridge } from "@/lib/bridge"
 import { harnessLabel } from "@/lib/harness-label"
 import { appendPlanContext, proposedPlanReply } from "@/lib/proposed-plan"
 import type { Entry } from "@mako/sessions/entries"
@@ -22,6 +22,7 @@ import {
 } from "@/state/composer-settings"
 import { draftText, rememberDraft, rememberDraftPlan } from "@/state/drafts"
 import { answerLiveApproval } from "@/state/live-approvals"
+import { shownMode, switchLiveMode, useSwitching } from "@/state/live-mode"
 import {
   planChoiceStore,
   rememberReturnMode,
@@ -174,7 +175,7 @@ function planContext(sources: PlanSources): PlanContext {
 function conversationSource(conversation: AcpConversation | null | undefined, harness: string): PlanSources["conversation"] {
   if (!conversation || liveSettingsTarget(conversation).harness !== harness) return undefined
   return conversation.kind === "live"
-    ? { key: conversation.key, starting: false, modes: conversation.session.modes, currentMode: conversation.session.currentMode }
+    ? { key: conversation.key, starting: false, modes: conversation.session.modes, currentMode: shownMode(conversation.key, conversation.session.currentMode) }
     : { key: conversation.key, starting: true }
 }
 
@@ -214,10 +215,12 @@ export function usePlanContext(view: ComposerSettingsView): PlanContext {
     const conversation = key ? state.conversations[key] : undefined
     return conversation?.kind === "live" ? conversation.session.modes : undefined
   })
-  const currentMode = useAcp((state) => {
+  const sessionMode = useAcp((state) => {
     const conversation = key ? state.conversations[key] : undefined
     return conversation?.kind === "live" ? conversation.session.currentMode : undefined
   })
+  // A pick on its way shows as made (`live-mode.ts`).
+  const currentMode = useSwitching((state) => (key ? state.pending.get(key)?.mode : undefined)) ?? sessionMode
   const providerModes = useThreads((state) => providerAccessModes(state, harness))
   const threadMode = useThreads((state) =>
     target.kind === "thread" ? threadAccessMode(threadRef(state, target.path), providerModes, harness) : null
@@ -261,7 +264,8 @@ export async function setPlanMode(context: PlanContext, on: boolean): Promise<vo
   if (on && context.currentMode && context.currentMode !== control.mode.id) rememberReturnMode(target, context.currentMode)
   if (context.phase === "live" && context.conversation) {
     if (!hasBridge()) return
-    await getMako().liveSetMode(context.conversation, next)
+    const change = await switchLiveMode(context.conversation, next)
+    if (change.kind === "refused") throw new Error(change.reason)
     return
   }
   if (target.kind === "thread") chooseThreadMode({ path: target.path, harness: target.harness }, next, false)

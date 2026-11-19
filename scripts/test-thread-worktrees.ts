@@ -22,6 +22,7 @@ import { ThreadStore } from "@mako/host/threads/store"
 import { worktreeCheckout, worktreeSlug, type WorktreeBranchPull, type WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
 import { openWorkspaces } from "@mako/host/workspaces"
 import { ThreadWorktreeService, type CheckoutConversations } from "@mako/host/workspaces/thread-worktrees"
+import { WorktreeSpares } from "@mako/host/workspaces/worktree-spares"
 import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "@mako/host/workspaces/worktree-carry"
 
 // Comparison observes every field and row order, including in-place changes; work yields while a large pass is made.
@@ -428,6 +429,63 @@ writeFileSync(join(spareRecords, wantedFile), String(Date.now() - 25 * 60 * 60_0
 await service().tidy()
 assert.deepEqual(spares().filter((spare) => spare.repoRoot === shop), [])
 for (const spare of idle) assert.equal(existsSync(spare.path), false, "an idle spare's folder is moved aside at once")
+
+// A fill under way anywhere when another host finds the project idle makes nothing more, and gives back what it was making.
+{
+  const project = repository("idle-race")
+  const pool = join(root, "idle-race-pool")
+  const folder = () => join(pool, "idle-race-1")
+  const wanted = join(pool, "spares", "idle-race-1.wanted")
+  const dayAgo = () => String(Date.now() - 25 * 60 * 60_000)
+  const raceRecords = () => readdirSync(join(pool, "spares")).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(readFileSync(join(pool, "spares", name), "utf8")))
+  let adds = 0
+  let held: (() => void) | undefined
+  let holdNext = false
+  class HeldGit extends Git {
+    override async output(cwd: string, args: readonly string[], background = false): Promise<string> {
+      if (args[0] === "worktree" && args[1] === "add") {
+        adds += 1
+        if (holdNext) {
+          holdNext = false
+          await new Promise<void>((resolve) => { held = resolve })
+        }
+      }
+      return super.output(cwd, args, background)
+    }
+  }
+  const settles = async (spares: WorktreeSpares) => {
+    let done = false
+    const settling = spares.settled().then(() => { done = true })
+    for (const deadline = Date.now() + 10_000; !done && Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 50))) { /* waiting */ }
+    assert.equal(done, true, "the fill ends instead of making and giving back spares for an idle project")
+    await settling
+  }
+
+  // Asked for while wanted, idle by the time it looks.
+  const asked = new WorktreeSpares(new HeldGit(), pool, folder)
+  await asked.want(project)
+  writeFileSync(wanted, dayAgo())
+  await settles(asked)
+  assert.equal(adds, 0, "a fill for a project gone idle makes no spare")
+  assert.deepEqual(raceRecords(), [])
+
+  // Mid-checkout when another host's tidy gives the project's spares back.
+  const making = new WorktreeSpares(new HeldGit(), pool, folder)
+  holdNext = true
+  await making.want(project)
+  for (const deadline = Date.now() + 10_000; !held && Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 10))) { /* waiting */ }
+  assert.ok(held, "the fill reached its checkout")
+  assert.deepEqual(raceRecords().map((spare) => spare.state), ["preparing"])
+  writeFileSync(wanted, dayAgo())
+  await new WorktreeSpares(new Git(), pool, folder).sweep()
+  assert.deepEqual(raceRecords(), [], "the other host gives back the spare being made")
+  held()
+  await settles(making)
+  assert.equal(adds, 1, "nothing more is made for the idle project")
+  assert.deepEqual(raceRecords(), [], "the half-made spare isn't saved again")
+  assert.deepEqual(readdirSync(folder()).filter((name) => name.startsWith(".spare-")), [], "its checkout is given back")
+  assert.doesNotMatch(git(project, "worktree", "list", "--porcelain"), /\.spare-/)
+}
 
 // Its work since it branched, committed and not, and merging it into the project's branch only when that's safe.
 assert.equal(git(shop, "status", "--porcelain", "--untracked-files=no"), "")

@@ -25,6 +25,7 @@ export type Recording = z.infer<typeof RecordingSchema>
 export const ThreadRecordingSchema = z.object({
   pid: z.number(), threadId: z.number(), since: z.number(), at: z.number(), activeMs: z.number(), idleMs: z.number(),
   delayMs: z.object({ p50: z.number(), p99: z.number(), max: z.number() }),
+  heapUsedMb: z.number().optional(), heapTotalMb: z.number().optional(),
 })
 
 export const SeriesSchema = z.object({ at: z.array(z.number()), late: z.array(z.number()) })

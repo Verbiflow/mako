@@ -4,10 +4,8 @@ import { fileURLToPath } from "node:url"
 import { existsSync } from "node:fs"
 import { locate } from "@mako/git"
 import { hostLog, hostWarn, hostError } from "../base/host-log.js"
-import { gitRepository } from "./ports.js"
 import type { AttributionDeps, CataloguedSession } from "./index.js"
 import type { BackfillResult } from "./backfill.js"
-import type { TrackerRepository } from "./tracker.js"
 import { FromWriterSchema, WriterSnapshotSchema, WriterCommandResults, type WriterReply, type WriterStateMessage, type WriterCommandResult, type WriterHostResult, type ToWriter, type WriterCommand, type WriterHostRequest, type WriterSettings, type WriterSnapshot, type WriterContextChange } from "./writer-protocol.js"
 
 const ASK_MS = 30_000
@@ -23,7 +21,8 @@ interface Generation {
   fail(error: Error): void
   pending: Map<number, Pending>
   subscriptions: Map<number, Subscription>
-  repositories: Map<string, TrackerRepository>
+  /** Each repository root the writer opened, with how its Git folder is watched (`watchGitDir`), when it is. */
+  repositories: Map<string, { watchHead?(moved: () => void): { close(): void } }>
   context: SentContext
   closed: boolean
   started: boolean
@@ -247,16 +246,11 @@ export class AttributionWriter {
         const found = await locate(this.deps.git, request.root).catch(() => null)
         if (generation.closed) throw new Error("The writing owner has stopped.")
         if (found?.root !== request.root) return null
-        const repository = gitRepository(this.deps.git, request.root, this.deps.watchGitDir)
+        const watchGitDir = this.deps.watchGitDir
+        const repository = { ...(watchGitDir && { watchHead: (moved: () => void) => watchGitDir(request.root, moved) }) }
         generation.repositories.set(request.root, repository)
-        return { ignoredEntries: Boolean(repository.ignoredEntries), watchHead: Boolean(repository.watchHead) }
+        return { watchHead: Boolean(repository.watchHead) }
       }
-      case "head": return this.repository(generation, request.root).head()
-      case "inventory": return this.repository(generation, request.root).inventory(request.includeTracked)
-      case "ignored": return this.repository(generation, request.root).ignored(request.paths)
-      case "ignored-entries": return this.repository(generation, request.root).ignoredEntries?.()
-      case "read": return this.repository(generation, request.root).read(request.commit, request.path)
-      case "changed": return this.repository(generation, request.root).changed(request.from, request.to)
       case "history-mark": return this.deps.history?.mark()
       case "history-since": return this.deps.history?.since(request.mark, request.roots, request.options)
       case "children": return this.deps.children?.children(request.path) ?? null
@@ -292,7 +286,7 @@ export class AttributionWriter {
     return told.change
   }
 
-  private repository(generation: Generation, root: string): TrackerRepository {
+  private repository(generation: Generation, root: string): { watchHead?(moved: () => void): { close(): void } } {
     const repository = generation.repositories.get(root)
     if (!repository) throw new Error("The writing owner asked for a repository it hasn't opened.")
     return repository

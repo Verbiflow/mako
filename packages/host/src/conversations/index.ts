@@ -40,9 +40,9 @@ import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
 import { placeLink } from "./place-link.js"
 import { PlacedCheckouts } from "./placed-checkouts.js"
-import { verifyFinSource } from "./fin-source.js"
+import { captureFinSource, verifyFinSource } from "./fin-source.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
-import { Agents } from "./agents.js"
+import { Agents, type CloudFins } from "./agents.js"
 import { continueOn as continuing, type ContinueOn } from "./continue-on.js"
 import { MacCapacity } from "./mac-capacity.js"
 import type { HostJobs } from "../base/host-jobs.js"
@@ -114,6 +114,7 @@ export type { MoveArrivalDeps } from "./move-arrival.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 import type { ThreadHistoryTools } from "./thread-history.js"
+import { stagedWait } from "../base/live-steps.js"
 export { Agents } from "./agents.js"
 export { AgentAnswerSchema, declareAgentMethods, registerAgentTools } from "./agent-tools.js"
 export { AgentAskGate, declareAgentAskMethods } from "./agent-ask-gate.js"
@@ -230,6 +231,30 @@ export interface ConversationsDeps {
    * be placed on one, and one placed here reports to its Apex's device. Without it Fins start here only.
    */
   account?(): Pick<CloudAccount, "deviceId" | "devices" | "session" | "heldCloudFinLimits"> | undefined
+  /**
+   * The account's cloud Fin calls, given only to a proof's isolated host (`HostConfig.cloudFinProof`): with them cloud
+   * Fins open here (`AgentsDeps.cloudFins`); absent, `place: cloud` is refused as it ships.
+   */
+  cloudFinProof?(): CloudFinAccount | undefined
+}
+
+/** What a proof host's cloud Fins ask of its account. */
+type CloudFinAccount = Pick<CloudAccount, "cloudHarnesses" | "reserveCloudFin" | "startCloudFin" | "cancelCloudFin">
+
+/** A proof host's cloud Fins, through its account: each call says why when the host isn't signed in. */
+function proofCloudFins(git: Git, account: () => CloudFinAccount | undefined): CloudFins {
+  const call = <Name extends keyof CloudFinAccount>(name: Name): NonNullable<CloudFinAccount[Name]> => {
+    const method = account()?.[name]
+    if (!method) throw new Error("this host isn't signed in to an account that starts cloud Fins")
+    return method
+  }
+  return {
+    harnesses: async () => Object.keys((await call("cloudHarnesses")())?.harnesses ?? {}),
+    capture: (folder) => captureFinSource(git, folder),
+    reserve: (start) => call("reserveCloudFin")(start),
+    start: (place) => call("startCloudFin")(place),
+    cancel: (start) => call("cancelCloudFin")(start),
+  }
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -484,6 +509,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       remoteOf: (cwd) => deps.git.output(cwd, ["remote", "get-url", "origin"]).then((text) => text.trim() || undefined, () => undefined),
       checkoutOf: (remote) => checkouts.find(remote),
       verifySource: (folder, source) => verifyFinSource(deps.git, folder, source),
+      ...(deps.cloudFinProof && { cloudFins: proofCloudFins(deps.git, () => deps.cloudFinProof?.()) }),
     })
     deps.finCapacity?.subscribe(() => agents?.capacityChanged())
     await agents.resumeInSlices()
@@ -831,7 +857,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     deps.used?.(session.harness, tuning)
     // The settings and the attachments' files are readied together; the message is admitted in one turn after both.
     const held = live.holdAttachments(requestId, attachments)
-    const ready = Promise.all([profiles.resolveLaunch(session.harness, session.cwd, tuning), held]).then(([selected]) => selected)
+    const ready = Promise.all([stagedWait(id, "launch settings", () => profiles.resolveLaunch(session.harness, session.cwd, tuning)), held]).then(([selected]) => selected)
     return live.admitInOrder(id, ready,
       (selected) => live.submit(id, requestId, text, attachments, selected, undefined, undefined, options?.actor))
       .finally(() => live.releaseAttachments(requestId))

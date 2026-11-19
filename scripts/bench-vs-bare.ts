@@ -75,14 +75,12 @@ import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { cpus, loadavg, tmpdir, totalmem } from "node:os"
-import { join, resolve } from "node:path"
-import { createInterface } from "node:readline"
+import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { parseArgs } from "node:util"
 import { z } from "zod"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { resolveExecutable } from "@mako/host/base/executable"
-import { HOST_NODE_OPTIONS } from "@mako/host/base/process-warnings"
 import { LIVE_AHEAD_MS, LIVE_FRAME_MS } from "@mako/host/contracts/live-conversations"
 import { LONG_ANSWER_CHARS, LONG_ANSWER_FLUSH_MS } from "@mako/host/conversations/answer-pace"
 import { claudeRuntime } from "@mako/host/harnesses/claude/runtime"
@@ -90,7 +88,7 @@ import { resolveCodexExecutable } from "@mako/host/harnesses/codex/executable"
 import { devinExecutable } from "@mako/host/harnesses/devin/executable"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
 import { openCodeExecutable } from "@mako/host/harnesses/opencode/installation"
-import { invokeRuntime, probeRuntime, subscribeRuntime } from "@mako/host/transport/connection"
+import { invokeRuntime, subscribeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { COMPACT_LIVE_FORM, WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
@@ -98,6 +96,7 @@ import { resolveSessionSettings, SessionModelSchema, SessionSettingsSchema, type
 import { processesUsingSync, removeScratchSync } from "./lib/scratch-processes.mjs"
 import { assertScratchEnvironment, scratchKeychain, seedScratchHome, type ScratchHome } from "./scratch-harness-home.ts"
 import { pointAt, SCRIPTED_GETS } from "./scripted-harness-env.ts"
+import { benchHostReady, benchHostScript, benchNow, startBenchHost, type ProbeLine } from "./lib/bench-host.ts"
 import { scriptedModel, words, type ScriptedReply } from "./scripted-model.ts"
 import { scriptedWindsurf } from "./scripted-windsurf.ts"
 
@@ -141,7 +140,7 @@ const ANSWER = z.enum(["prose", "markdown"]).parse(values.answer)
 const say = (line = "") => process.stdout.write(`${line}\n`)
 const note = (line: string) => process.stderr.write(`${line}\n`)
 /** Milliseconds on the machine's monotonic clock, which the host's probe and every child share. */
-const now = () => Number(process.hrtime.bigint() / 1000n) / 1000
+const now = benchNow
 
 /* ------------------------------------------------------------------ harnesses */
 
@@ -373,13 +372,6 @@ interface Sample {
   batches: { at: number; revision: number; bytes: number; characters: number }[]
 }
 
-const ProbeLine = z.object({
-  t: z.number(), s: z.string(), c: z.string().optional(), q: z.string().optional(), r: z.number().optional(),
-  kind: z.string().optional(), evidence: z.string().optional(), client: z.string().optional(), bytes: z.number().optional(),
-  u: z.array(z.tuple([z.string(), z.string().nullable(), z.number(), z.number()])).optional(),
-  scope: z.string().optional(), message: z.string().optional(), status: z.string().optional(), connection: z.string().optional(),
-  fields: z.record(z.string(), z.json()).optional(),
-}).loose()
 const Update = z.object({ kind: z.string(), id: z.string().optional(), text: z.string().optional(), replace: z.boolean().optional() }).loose()
 const BatchBody = z.object({ id: z.string(), revision: z.number(), updates: z.array(Update).optional() }).loose()
 const AheadLine = z.object({ type: z.literal("live-ahead"), ahead: z.object({ revision: z.number(), more: z.string() }) })
@@ -581,7 +573,6 @@ function standIn(harness: string): Promise<{ url: string }> {
 /* ----------------------------------------------------------------------- a host */
 
 const MARK = "bbbbbbbb"
-const hostScript = resolve(import.meta.dirname, "../packages/host/dist/mako-host.js")
 interface Heard { at: number; conversation: string; payload: string }
 /** This checkout's host on a scratch home and data root, the bench attached to it as a window and as a reader of the batches alone. */
 interface Host {
@@ -604,23 +595,14 @@ interface Host {
 
 async function startHost(folder: string, home: ScratchHome): Promise<Host> {
   const dataRoot = join(folder, "data")
-  const { directory, socket } = runtimeLocation(dataRoot)
-  mkdirSync(directory, { recursive: true, mode: 0o700 })
-  const env = { ...home.env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", BENCH_VS_BARE_MARK: MARK }
-  assertScratchEnvironment(env, "bench:vs-bare host")
+  assertScratchEnvironment({ ...home.env, MAKO_DATA_ROOT: dataRoot, MAKO_WEB_SOCKET: runtimeLocation(dataRoot).socket }, "bench:vs-bare host")
   const began = now()
-  const host = spawn(process.execPath, [...HOST_NODE_OPTIONS, "--import", join(import.meta.dirname, "lib/bench-vs-bare-probe.mjs"), hostScript], { env, stdio: ["ignore", "ignore", "pipe", "pipe"] })
+  // The host and its probe, as `bench:actions` starts them too (`lib/bench-host.ts`).
+  const started = startBenchHost({ dataRoot, env: home.env, mark: MARK })
+  const { child: host, socket, probe } = started
   children.add(host)
   host.once("exit", () => children.delete(host))
-  let stderr = ""
-  host.stderr!.setEncoding("utf8").on("data", (chunk: string) => { stderr = (stderr + chunk).slice(-4_000) })
   let stopping = false
-  const probe: z.infer<typeof ProbeLine>[] = []
-  // SAFETY: the host was started with a fourth descriptor piped, which its probe writes to.
-  createInterface({ input: host.stdio[3] as NodeJS.ReadableStream }).on("line", (line) => {
-    const read = ProbeLine.safeParse(JSON.parse(line))
-    if (read.success) probe.push(read.data)
-  })
   const unsubscribes: (() => void)[] = []
   const stop = async () => {
     stopping = true
@@ -634,10 +616,7 @@ async function startHost(folder: string, home: ScratchHome): Promise<Host> {
     return existsSync(log) ? readFileSync(log, "utf8").split("\n").filter((line) => !line.includes(" provider-startup phase ")).slice(-40).map((line) => line.slice(0, 320)).join("\n") : undefined
   }
   try {
-    await until("the host to answer /health", async () => {
-      if (host.exitCode !== null) throw new Error(`the host exited (${host.exitCode}) before it was ready: ${stderr.trim().slice(-800)}`)
-      return (await probeRuntime(socket, { timeoutMs: 2_000 }).catch(() => undefined))?.state === "ready"
-    }, 90_000, 100)
+    await benchHostReady(started)
     const client = randomUUID()
     const call = (channel: string, ...args: unknown[]) => invokeRuntime(socket, client, channel, args, 1, { timeoutMs: 300_000 })
     await until("the host to read its catalog", async () => Catalog.parse(await call("mako:threads")).ready, 180_000, 250)
@@ -1048,7 +1027,8 @@ async function measure(harness: string, bare: BareHarness): Promise<{ samples: S
 /* ----------------------------------------------------------------------- main */
 
 async function main(): Promise<number> {
-  if (!existsSync(hostScript)) throw new Error(`${hostScript} isn't built: npx tsgo -b packages/host`)
+  // Refused before anything starts when the host isn't built.
+  benchHostScript()
   const names = values.harness === "all" ? Object.keys(BARE) : values.harness.split(",")
   const drivers = createHarnessHost(detachedHarnessContext(new NativeStores(false))).liveDrivers.list()
   const all: Sample[] = []
