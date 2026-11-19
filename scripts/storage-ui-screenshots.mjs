@@ -38,7 +38,7 @@ try {
         "--hide-scrollbars",
         "--allow-file-access-from-files",
         `--user-data-dir=${join(work, "profile")}`,
-        "--window-size=768,1020",
+        "--window-size=768,3000",
         "--virtual-time-budget=10000",
         ...flags,
         `${page}?${query}`,
@@ -56,13 +56,27 @@ try {
       assert.match(text, /Cursor agents/)
       assert.match(text, /Collected by Mako/)
       assert.match(text, /\d+\.\d GB free of 926 GB/)
-      assert.doesNotMatch(text, /Under 10/, "a disk with room isn't warned about")
+      assert.doesNotMatch(text, /Under 30\.0 GB free\. Mako frees/, "a disk with room isn't warned about")
+      assert.match(text, /Safe to remove now .*Needs your OK .*Kept/, "each class, with its total")
+      assert.match(text, /Biggest Threads .*phone-open-2/)
+      assert.match(text, /Freed 14\.2 GB when the disk ran low/)
+      assert.match(text, /Free space when the disk runs low/)
+    })
+    await shot(`storage-now-preview-${theme}.png`, `theme=${theme}&open=now`, (text) => {
+      assert.match(text, /queue-rules .*The Fin finished and has been quiet for 3 days/, "the preview says exactly what goes, and why")
+      assert.match(text, /Remove 35\.4 GB/)
+    })
+    await shot(`storage-approve-confirm-${theme}.png`, `theme=${theme}&open=approve&confirm`, (text) => {
+      assert.match(text, /Remove 6 folders \(98\.6 GB\)/, "the confirmation names the count and the size")
+    })
+    await shot(`storage-keep-${theme}.png`, `theme=${theme}&open=keep`, (text) => {
+      assert.match(text, /uncommitted changes/)
     })
     await shot(`disk-budget-storage-freed-${theme}.png`, `theme=${theme}&free`, (text) => {
       assert.match(text, /Cursor agents: freed .* when you asked/)
     })
     await shot(`disk-budget-storage-low-${theme}.png`, `theme=${theme}&storage=low`, (text) => {
-      assert.match(text, /Under 10\.0 GB free/)
+      assert.match(text, /Under 30\.0 GB free/)
     })
   }
 } finally {

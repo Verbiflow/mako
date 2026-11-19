@@ -3262,9 +3262,14 @@ test. Existing debt is never a reason to add new debt.
 
 ## Disk space
 
-Scratch copies of the checkout and scratch builds go in the Thread's data
-folder (`$MAKO_THREAD_DATA_DIR`), and you delete them before you hand off the
-task. Never copy `release/` or `node_modules` by hand: one hand-made update
+Scratch copies of the checkout, scratch builds, packaged apps, test homes and
+benchmark worlds go in the Thread's scratch folder (`$MAKO_THREAD_SCRATCH_DIR`),
+never the data folder (`$MAKO_THREAD_DATA_DIR`, for screenshots and reports),
+and you delete them before you hand off the task. Mako removes a Thread's scratch
+once it is archived, its Fin finished, or it has been quiet three days; told to
+use the data folder, Fins left 175 GB there on one Mac (`thread-data/<app key>`,
+which `AppDataRetention` now offers to remove in Settings › Storage). The
+benches that write a scratch tree take `$MAKO_THREAD_SCRATCH_DIR` first. Never copy `release/` or `node_modules` by hand: one hand-made update
 rehearsal copied `release/`, reached 25.6 GB and filled the disk. To rehearse
 a Settings update, run `npm run test:settings-build` (`-- --as-installed-updater`
 rehearses an older installed updater, which passes no `MAKO_BUILD_SOURCE`); it

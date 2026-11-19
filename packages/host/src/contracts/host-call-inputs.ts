@@ -3097,6 +3097,9 @@ const inputs = {
   "mako:stage-file-path": () => z.tuple([z.string()]),
   "mako:storage": () => z.tuple([z.boolean()]),
   "mako:storage-free": () => z.tuple([]),
+  "mako:storage-plan": () => z.tuple([]),
+  "mako:storage-reclaim": () => z.tuple([z.union([z.literal("now"), z.literal("approve")]), z.array(z.string().min(1)).max(10_000)]),
+  "mako:storage-budget-set": () => z.tuple([z.object({ autoFree: z.boolean() }).strict()]),
   "mako:store-formats": () => z.tuple([]),
   "mako:stream-original": () =>
     z.tuple([
@@ -3930,6 +3933,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:stage-file-path", "workspaces"],
   ["mako:storage", "usage"],
   ["mako:storage-free", "usage"],
+  ["mako:storage-plan", "usage"],
+  ["mako:storage-reclaim", "usage"],
+  ["mako:storage-budget-set", "usage"],
   ["mako:store-formats", "threads"],
   ["mako:stream-original", "threads"],
   ["mako:sync-readings", "conversations"],
