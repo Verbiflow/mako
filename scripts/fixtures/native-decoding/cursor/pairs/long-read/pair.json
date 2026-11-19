@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.4.0"
+    "version": "1.4.1"
   },
   "about": "Read log.md with your file read tool, once and without an offset or limit, then tell me the last line you were shown. Don't run commands. One read of a file longer than a harness shows at once, then the answer.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-f96baac7610fa33f53c77a077725ef994ed5915ae5f610fbeb9d40dce18d4b14/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-47bc85a94c16d76c536dac1230e9861fa4d43b4cb9e86aa1f3d107f760190293/store.db",
       "known": []
     }
   ]

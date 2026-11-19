@@ -1,17 +1,17 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.4.0"
+    "version": "1.4.1"
   },
   "about": "Run exactly one subagent in the background (do not wait for it) whose whole task is to reply with a marker, then end your turn at once. A subagent left running in the background reports after the turn that started it; the harness runs a turn of its own on the report, or takes it into the turn still running.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-eca30814228a218708a46e26e1fa6492f4f6b49def93945ba3d95aa55a2859ee/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-e65720f69b963c38345ea581660099f6a5c56dd68b7a455836fb85d315afe3ad/store.db",
       "known": [],
       "children": [
         {
-          "nativeId": "1f193949-b38a-4c79-9a52-1dd8e3e0ec59",
+          "nativeId": "2993f22c-fe7d-42de-8c70-817ad3b51f3c",
           "state": "missing",
           "reason": "The SDK keeps no store for a subagent; its only record is the plain transcript Cursor writes under ~/.cursor/projects, which the recorder doesn't keep with the pair."
         }
