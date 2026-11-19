@@ -15,7 +15,14 @@ import {
 } from "@/state/crew-card-view"
 import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
-import { showAutomation } from "@/state/automations-view"
+import { automationView, automationsStore } from "@/state/automations"
+import { openAutomations, showAutomation } from "@/state/automations-view"
+
+/** A proposal is reviewed where its change is shown: its page, or the list for one not yet in the file (a create). */
+function reviewProposal(project: string, id: string): void {
+  if (automationView(automationsStore.get(), project, id)) showAutomation(project, id)
+  else openAutomations({ kind: "list" })
+}
 
 /**
  * One line while the crew card is scrolled away and Fins need the person:
@@ -184,7 +191,7 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
             <button
               type="button"
               data-fin-answer="review"
-              onClick={() => showAutomation(ask.ask.review!.project, ask.ask.review!.automation)}
+              onClick={() => reviewProposal(ask.ask.review!.project, ask.ask.review!.automation)}
               className="pressable flex items-center gap-1.5 border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90"
             >
               Review the change
