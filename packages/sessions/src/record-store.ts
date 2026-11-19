@@ -98,6 +98,12 @@ const EXPORT_VERSION_COLUMNS = {
 }
 const ExportVersionSchema = z.object(EXPORT_VERSION_COLUMNS)
 /** A version and its unit, as one batch of `RecordStore.exportFor` reads them together. */
+/** `PRAGMA table_info`'s columns, by name. */
+const TableColumnsSchema = z.object({ name: z.string() }).array()
+/** Each unit's offset from its local numbering to the account's. */
+const UnitShiftsSchema = z.object({ key: z.string(), shift: z.number() }).array()
+/** One side of a version where two copies part: what a conflict names. */
+const VersionSideSchema = z.object({ seq: z.number(), kind: z.string(), size: z.number(), chunks: z.instanceof(Uint8Array) }).optional()
 const ExportRowSchema = ExportUnitSchema.omit({ held: true }).extend({ ...EXPORT_VERSION_COLUMNS, shift: z.number() })
 
 /** Rows an export reads at once (`RecordStore.exportSteps`): a few ms of the loop, however large its batch. */
@@ -1543,7 +1549,7 @@ export class RecordStore {
       CREATE TABLE IF NOT EXISTS orphans (hash BLOB PRIMARY KEY) WITHOUT ROWID;
     `)
     // Additions: each version's writer (`record-writers.ts`), the harness version that wrote what the version took and where that's known from.
-    const columns = new Set(z.object({ name: z.string() }).array().parse(this.db.prepare("PRAGMA table_info(versions)").all()).map((column) => column.name))
+    const columns = new Set(TableColumnsSchema.parse(this.db.prepare("PRAGMA table_info(versions)").all()).map((column) => column.name))
     if (!columns.has("writer")) this.db.exec("ALTER TABLE versions ADD COLUMN writer TEXT")
     if (!columns.has("writer_source")) this.db.exec("ALTER TABLE versions ADD COLUMN writer_source TEXT")
     // Additions: the intent of each capture in progress, the chunks it stored and claimed, and chunks a sweep found unnamed (`record-orphans.ts`).
@@ -1573,11 +1579,11 @@ export class RecordStore {
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS remote_pushed (remote TEXT NOT NULL, session INTEGER NOT NULL, capture INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (remote, session)) WITHOUT ROWID;
     `)
-    if (!z.object({ name: z.string() }).array().parse(this.db.prepare("PRAGMA table_info(chunks)").all()).some((column) => column.name === "intent"))
+    if (!TableColumnsSchema.parse(this.db.prepare("PRAGMA table_info(chunks)").all()).some((column) => column.name === "intent"))
       this.db.exec("ALTER TABLE chunks ADD COLUMN intent INTEGER")
     // Addition: how a remote only this store writes numbers a unit's versions past `head` (`rebased`): this store's
     // `seq` plus `shift`. 0 but where the remote held a line of the unit this store lost and took its content anew.
-    if (!z.object({ name: z.string() }).array().parse(this.db.prepare("PRAGMA table_info(remote_session_units)").all()).some((column) => column.name === "shift"))
+    if (!TableColumnsSchema.parse(this.db.prepare("PRAGMA table_info(remote_session_units)").all()).some((column) => column.name === "shift"))
       this.db.exec("ALTER TABLE remote_session_units ADD COLUMN shift INTEGER NOT NULL DEFAULT 0")
     const additions = new Set((meta("additions") ?? "").split(" ").filter(Boolean))
     if (ADDITIONS.some((name) => !additions.has(name)))
@@ -1899,7 +1905,7 @@ export class RecordStore {
       await beginWriting(this.db, STORE_WRITE_WAIT_MS)
       try {
         // The remote's numbers, each turned back into this store's by its unit's shift, which a reset remote keeps.
-        const shifts = new Map(z.object({ key: z.string(), shift: z.number() }).array()
+        const shifts = new Map(UnitShiftsSchema
           .parse(this.prepared("SELECT u.key, r.shift FROM remote_session_units r JOIN units u ON u.id = r.unit WHERE r.remote = ? AND r.session = ? AND r.shift != 0").all(remote, session))
           .map((row) => [row.key, row.shift]))
         if ("holdings" in held) this.prepared("DELETE FROM remote_session_units WHERE remote = ? AND session = ?").run(remote, session)
@@ -2031,7 +2037,7 @@ export class RecordStore {
 
   /** A unit's version as a remote numbers it (`seq`), and what it holds, for saying where two lines of it part; null when this store doesn't hold it. */
   versionFor(remote: string, harness: string, nativeId: string, key: string, seq: number): { seq: number; kind: string; size: number; chunks: string } | null {
-    const row = z.object({ seq: z.number(), kind: z.string(), size: z.number(), chunks: z.instanceof(Uint8Array) }).optional().parse(this.committedRead(`
+    const row = VersionSideSchema.parse(this.committedRead(`
       SELECT v.seq, v.kind, v.size, v.chunks FROM sessions s JOIN session_units su ON su.session = s.id JOIN units u ON u.id = su.unit
       LEFT JOIN remote_session_units r ON r.remote = ? AND r.session = s.id AND r.unit = u.id
       JOIN versions v ON v.unit = u.id AND v.seq = ? - coalesce(r.shift, 0)
