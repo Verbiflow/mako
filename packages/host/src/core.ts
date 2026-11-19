@@ -1268,6 +1268,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     writeHolds,
     // A person's own device reaches their others through the account; a fixture desk reaches none.
     ...(!fixtureDesk && { account: () => late.cloud }),
+    // Only a proof's isolated host opens cloud Fins (`HostConfig.cloudFinProof`); every other host refuses `place: cloud`.
+    ...(!fixtureDesk && config.cloudFinProof && { cloudFinProof: () => late.cloud }),
     finDefaults,
     finCapacity,
     lent: () => lent.count(),

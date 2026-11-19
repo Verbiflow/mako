@@ -35,7 +35,8 @@ import { ToolGrowthSchema, changedEntryStart, continues, growTool, type ToolGrow
 import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { RequestChangesSchema } from "../contracts/turn-changes.js"
 import { TurnUndoneSchema } from "../contracts/turn-review.js"
-import { ACCOUNT_SWITCH_WAITS, JOINED_MAX, MAX_INTERRUPTED_CALLS, savedReason, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
+import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, JOINED_MAX, MAX_INTERRUPTED_CALLS, savedReason, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
+import { cutLast, type CutFacts } from "../contracts/turn-continuation.js"
 import { ActorSchema } from "../contracts/thread-identity.js"
 import { laterPrompt, personPromptedAt, type PromptedRequest } from "../contracts/worked-at.js"
 import { ACCESS_TIER_NAMES } from "../contracts/access.js"
@@ -551,6 +552,9 @@ const RowSchema = z.object({ value: z.string() })
 const BlockRowSchema = z.object({ id: z.number().int(), value: z.string() })
 const RowAtSchema = z.object({ at: z.number().int(), value: z.string() })
 const RowKeysSchema = z.object({ keys: z.string() })
+/** A request's status and why it was cut short, as `LiveJournal.cut` reads them. */
+type CutRow = z.infer<typeof CutRowSchema>
+const CutRowSchema = z.object({ status: z.enum(["queued", "held", "canceled", "dispatching", "completed", "failed", "uncertain", "interrupted"]), reason: z.enum(INTERRUPTION_REASONS).nullable() })
 
 /**
  * Whether `next` is `previous` with requests added after it and none moved: the rows' insertion order still says the
@@ -1172,8 +1176,32 @@ export class LiveJournal {
     const wakeAt = sooner(this.wakeAt(), transferWakeAt)
     const promptedAt = laterPrompt(this.requestedAt(), steeredAt)
     const unsettled = this.unsettled()
+    const cut = this.cut()
     const hasSignInHold = this.db.prepare(`SELECT 1 FROM requests WHERE value LIKE '%"signIn":%' AND json_extract(value, '$.signIn') IS NOT NULL AND json_extract(value, '$.status') != 'canceled' LIMIT 1`).get() !== undefined
-    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled }, ...hasSignInHold && { hasSignInHold: true } }
+    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled }, ...cut && { cut }, ...hasSignInHold && { hasSignInHold: true } }
+  }
+
+  /**
+   * Whether the last request that ran here was cut short as `cutLast` reads it: what a starting host watches a Fin for,
+   * learned without reading the journal in. The requests are read newest first, in the queue's order where the journal
+   * keeps one, and only their status and reason, until one that ran.
+   */
+  private cut(): true | undefined {
+    const facts = this.db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.interruption.reason') AS reason FROM requests WHERE id = ?")
+    const newest: CutFacts[] = []
+    const ran = (read: CutRow | undefined) => {
+      if (!read) return false
+      newest.unshift({ status: read.status, ...read.reason && { interruption: { reason: read.reason } } })
+      return read.status !== "queued" && read.status !== "held" && read.status !== "canceled"
+    }
+    const order = this.ordered ? this.db.prepare("SELECT keys FROM request_order WHERE id=1").get() : undefined
+    const keys = order ? KeyListSchema.safeParse(JSON.parse(RowKeysSchema.parse(order).keys)).data : undefined
+    if (keys) {
+      for (let index = keys.length - 1; index >= 0; index--) if (ran(CutRowSchema.safeParse(facts.get(keys[index]!)).data)) break
+    } else {
+      for (const row of this.db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.interruption.reason') AS reason FROM requests ORDER BY rowid DESC").iterate()) if (ran(CutRowSchema.safeParse(row).data)) break
+    }
+    return cutLast(newest) ? true : undefined
   }
 
   /** Whether a message here was waiting, paused or running as the journal was last written; only rows that name such a status are parsed. */
