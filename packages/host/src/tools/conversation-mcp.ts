@@ -1,15 +1,14 @@
-import { NATIVE_OVERRIDE } from "../contracts/native-calls.js"
 import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
 import type { JsonValue } from "@mako/control"
 import type { ToolSteps } from "../contracts/tool-steps.js"
 import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
 import { z } from "zod"
-import { SHOW_MEDIA_LINE } from "@mako/sessions/turn-media"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { configuredListenPort } from "../base/listen-port.js"
 import { heavy } from "../base/heavy-packages.js"
-import { ORCHESTRATION_INSTRUCTIONS } from "../contracts/agent-tools.js"
+import { MAKO_SERVER_INSTRUCTIONS } from "../contracts/primer.js"
+import { INSTRUCTIONS_PARAM } from "../contracts/mcp-reach.js"
 import { hostLog } from "../base/host-log.js"
 
 /** Whose agents call: it throws unless `bindingId` is the conversation's binding that is running now. */
@@ -50,26 +49,19 @@ interface Scope {
   controlRequests: Map<string, AbortController>
 }
 
-/** What an agent reads about the `mako` server before calling any of its tools. */
-export const MAKO_INSTRUCTIONS = [
-  "Mako's tools for the Thread this Session belongs to. Each acts on this Thread only. Their words:",
-  "- main checkout: the project's own folder, the user's.",
-  "- worktree: a Git worktree Mako made for one Thread, on its own branch.",
-  "- checkout: either; this Session edits in one.",
-  "- project folder: several repositories as one project; its worktree has one per repository on the Thread's branch.",
-  "- app: the project running from a checkout on this Thread's ports.",
-  "- recipe: how every Thread of the project installs, starts and checks its app.",
-  "worktree_*: which checkout you edit in: worktree_move, never `git worktree add` or a new branch in the main checkout.",
-  "pull_request_*: this branch's pull request: its checks, reviews and merge; never `gh pr merge`.",
-  "app_*: run and check your work in this Thread's app, never a server started by hand. recipe_*: a change to how the project installs, starts or is checked updates the recipe in the same turn.",
-  `Mako refuses those routes; ${NATIVE_OVERRIDE} before one runs it anyway, never a worktree, and only when the Mako tool failed. Other native routes run with a note naming the better tool. Commit, push, diff and log stay plain Git.`,
-  "wait: to wait on your Fins, a pull request, an app check or a time, call wait and end your turn; Mako wakes you. Never poll or sleep.",
-  "port_holder: who holds a port, before you assume it's free or stop anything.",
-  "thread_move: this Thread itself to the cloud, when the person asks. That's this Thread going on elsewhere, not new work for a Fin.",
-  "thread_history: this Thread's earlier turns in every harness, and the threads it referenced, read whole; use it instead of guessing.",
-  `show: ${SHOW_MEDIA_LINE}`,
-  ORCHESTRATION_INSTRUCTIONS,
-].join("\n")
+/** What an agent reads about the `mako` server before calling any of its tools (`contracts/primer.ts`). */
+export const MAKO_INSTRUCTIONS = MAKO_SERVER_INSTRUCTIONS
+
+/**
+ * The `mako` server's options for a request to `url`. `?instructions=0`
+ * (`withoutInstructions`) serves it with none, for a harness that hears
+ * them as Mako's `server` block instead: Codex repeats a server's
+ * instructions on every one of its tools a lookup returns.
+ */
+export function makoServerOptions(url: string | undefined): { instructions?: string } {
+  const query = url?.split("?", 2)[1]
+  return new URLSearchParams(query).get(INSTRUCTIONS_PARAM) === "0" ? {} : { instructions: MAKO_INSTRUCTIONS }
+}
 
 type Route = "computer" | "mako"
 
@@ -199,7 +191,7 @@ export async function startConversationMcp(
               stepped?.(scope.conversationId, null)
             }
           })
-        : new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
+        : new McpServer({ name: "mako", version: "1.0.0" }, makoServerOptions(request.url))
       if (route === "mako") for (const register of makoTools) register(mcp, authorized)
       response.once("close", () => {
         if (controlRequestId !== undefined) scope.controlRequests.delete(controlRequestId)

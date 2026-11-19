@@ -1324,6 +1324,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         const harness = late.conversations?.live.session(conversationId)?.harness
         return harness === undefined ? undefined : harnesses.host.liveDrivers.get(harness)?.makoInstructions !== undefined
       },
+      serverUnread: (conversationId) => {
+        const harness = late.conversations?.live.session(conversationId)?.harness
+        return harness !== undefined && harnesses.host.liveDrivers.get(harness)?.layer?.serverInstructions?.kind === "unread"
+      },
       notices: async (conversationId, signal) => {
         const returned = await late.cloudReturns?.notices(conversationId, signal) ?? []
         signal.throwIfAborted()

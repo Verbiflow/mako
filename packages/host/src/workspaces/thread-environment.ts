@@ -67,7 +67,10 @@ export const CLOUD_MACHINE_INSTRUCTIONS = [
   "The project's carried files (an .env, a local settings file) are placed in this checkout from Mako's Settings › Apps › this project › In Mako Cloud. For access this machine doesn't have, or a file that's only on the person's computer, say exactly what you need and ask the person: to add the file there, to push it to the repository, or to bring the Thread back to their computer for that step. Never ask for a secret's value in the conversation.",
 ].join(" ")
 
-/** One line for the note sent with each prompt; it names only what the process was started with. */
+/**
+ * One line for the note sent with each prompt; it names only what the process was started with. Values only: how to
+ * use them (worktree_move, app_*, the recipe) is the primer's (`contracts/primer.ts`), said once.
+ */
 export function threadEnvironmentInstructions(environment: ThreadEnvironment, place: "local" | "cloud" = "local"): string {
   const last = environment.port + environment.ports - 1
   const sharing = place === "cloud"
@@ -77,7 +80,7 @@ export function threadEnvironmentInstructions(environment: ThreadEnvironment, pl
   // Before this, agents were told clones and builds go in the data folder, and nothing removed it: 175 GB on one Mac.
   const scratch = environment.scratchDir ? `Clones, builds, packaged apps, test homes and benchmark worlds go in ${environment.scratchDir} (MAKO_THREAD_SCRATCH_DIR), never in the checkout or the data folder. It belongs only to this Thread, and Mako removes it once the Thread is archived, a Fin finishes, or the Thread has been quiet for a few days; put a .keep file in it only if the person must keep something there.` : undefined
   const data = environment.threadDataDir ? "MAKO_THREAD_DATA_DIR is for small evidence someone reads afterwards (screenshots, reports, proofs), never a copy of the checkout or a build. A Fin’s goes after it finishes and every ancestor closes or is archived, once that cleanup is enabled; a .keep file retains it. Shared app state stays in MAKO_APP_DATA_DIR and recipe {data}; it is not retired with the Thread." : undefined
-  return [values, data, scratch, WORKTREE_INSTRUCTIONS, missingInstructions(environment), recipeInstructions(environment)].filter(Boolean).join(" ")
+  return [values, data, scratch, missingInstructions(environment), recipeInstructions(environment)].filter(Boolean).join(" ")
 }
 
 function missingInstructions(environment: ThreadEnvironment): string | undefined {
@@ -89,23 +92,20 @@ function missingInstructions(environment: ThreadEnvironment): string | undefined
   return `This worktree has only what Git checks out and what the recipe brings, so it lacks ${missing}, which the main checkout (${environment.missing!.main}) has. If your work needs one, call worktree_bring with it: Mako brings it without anyone reading it. Never copy one yourself. So every new worktree gets them, ${fix}.`
 }
 
-const WORKTREE_INSTRUCTIONS = "To work on a branch of this Thread's own, call worktree_move (worktree_status says where you edit now, and whose the uncommitted changes there are). It takes only this Thread's own changes, so other Threads' or the user's work in the checkout is no reason not to move. Never make a worktree with `git worktree add` or copy the checkout, since Mako, its Changes panel and the recipe's checks see only this Thread's checkouts."
-
 function recipeInstructions(environment: ThreadEnvironment): string | undefined {
   const recipe = environment.recipe
   if (!recipe) return undefined
-  if (recipe.kind === "none") return "This project has no recipe yet for running its app in each Thread; if you're asked to set one up, call recipe_guide."
+  // No recipe yet: the primer's app line names recipe_guide (`PrimerThread.noRecipe`).
+  if (recipe.kind === "none") return undefined
   if (recipe.kind === "invalid") return `The project's recipe is broken, so its values aren't set and its processes can't start: ${recipe.message}. Tell the user; recipe_guide says how to repair it.`
   const names = Object.entries(environment.values ?? {}).map(([name, value]) => `${name}=${value}`)
   const processes = recipe.processes.map((entry) => entry.port === undefined ? entry.name : `${entry.name} on ${entry.port}`)
   return [
     names.length ? `The project's recipe also sets ${names.join(", ")} in your shell.` : undefined,
-    processes.length ? `Its processes (${processes.join(", ")}) run through the mako server's app_start, app_stop, app_restart, app_status and app_logs tools; start them there rather than by hand, so they stay this Thread's and survive your turn.` : undefined,
-    recipe.checks.length ? `Its checks (${recipe.checks.join(", ")}) run with app_check, when one covers what you changed.` : undefined,
+    processes.length ? `Its processes, for app_start: ${processes.join(", ")}.` : undefined,
+    recipe.checks.length ? `Its checks, for app_check: ${recipe.checks.join(", ")}.` : undefined,
     recipe.linked?.length ? `This checkout's ${recipe.linked.join(", ")} link each entry to the main checkout's, so it needed no install. An install here would write through the links into the main checkout's: before you install, add, remove or upgrade any dependency, call app_own_packages, which gives this checkout its own copy in a few seconds, then install as usual.` : undefined,
     recipe.shared?.length ? `This checkout's ${recipe.shared.join(", ")} ${recipe.shared.length === 1 ? "is" : "are"} linked to the main checkout's, so a write there changes it for every Thread. To change ${recipe.shared.length === 1 ? "it" : "one"} in this Thread only, first call worktree_bring with it and no link, which makes it this checkout's own.` : undefined,
-    "port_holder names whoever holds a port.",
-    "If your change alters how the project installs, starts or is checked, update the recipe in the same turn: recipe_save, then recipe_publish once it works.",
   ].filter(Boolean).join(" ")
 }
 
