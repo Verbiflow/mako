@@ -15,6 +15,14 @@ import {
 } from "@/state/shiver-card-view"
 import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
+import { automationView, automationsStore } from "@/state/automations"
+import { openAutomations, showAutomation } from "@/state/automations-view"
+
+/** A proposal is reviewed where its change is shown: its page, or the list for one not yet in the file (a create). */
+function reviewProposal(project: string, id: string): void {
+  if (automationView(automationsStore.get(), project, id)) showAutomation(project, id)
+  else openAutomations({ kind: "list" })
+}
 
 /**
  * One line while the Shiver card is scrolled away and Fins need the person:
@@ -177,7 +185,29 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-1.5">
-        {approval ? (
+        {ask.ask.review ? (
+          // An automation proposal: approved where its change is shown, never from here. Its way there, or Decline.
+          <>
+            <button
+              type="button"
+              data-fin-answer="review"
+              onClick={() => reviewProposal(ask.ask.review!.project, ask.ask.review!.automation)}
+              className="pressable flex items-center gap-1.5 border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90"
+            >
+              Review the change
+            </button>
+            <button
+              type="button"
+              data-fin-answer="refuse"
+              disabled={sending}
+              onClick={() => send({ allow: false })}
+              className="pressable flex items-center gap-1.5 border border-hairline px-2 py-1 text-label text-foreground hover:bg-fill-hover disabled:opacity-50"
+            >
+              <XIcon className="size-3" />
+              Decline
+            </button>
+          </>
+        ) : approval ? (
           <>
             <button
               type="button"

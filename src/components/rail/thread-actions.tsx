@@ -1,6 +1,6 @@
 import { useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
-import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, CopyIcon, FolderOpenIcon, HistoryIcon, MoreHorizontalIcon, PencilLineIcon, PinIcon, PinOffIcon, ScrollTextIcon, SquareIcon, Trash2Icon } from "lucide-react"
+import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, CopyIcon, FolderOpenIcon, HistoryIcon, MoreHorizontalIcon, PencilLineIcon, PinIcon, PinOffIcon, ScrollTextIcon, SquareIcon, Trash2Icon, WorkflowIcon } from "lucide-react"
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import { desktop } from "@/state/desktop"
 import { IfCanReveal } from "@/components/ui/machine-gate"
@@ -12,6 +12,7 @@ import { viewer } from "@/state/viewer"
 import { lostVersions } from "@/state/lost-versions"
 import { RestoreVersions } from "@/components/rail/restore-versions"
 import { useWindowRoutes, windowRoutesStore } from "@/state/window-routes"
+import { automationFromThread } from "@/state/automations-view"
 
 export interface ThreadMenuProps {
   target: ThreadTarget
@@ -125,6 +126,11 @@ function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Re
         <MenuItem onSelect={() => { void threadLifecycle.copyTranscript(path, "concise") }}><ClipboardListIcon className="size-3.5" />Copy concise transcript</MenuItem>
         <MenuItem onSelect={() => { void threadLifecycle.copyTranscript(path, "full") }}><ClipboardCopyIcon className="size-3.5" />Copy full transcript</MenuItem>
       </> : null}
+      {target.kind === "live" ? (
+        <MenuItem data-thread-action="make-automation" onSelect={() => { void automationFromThread(target.id, title) }}>
+          <WorkflowIcon className="size-3.5" />Make this an automation
+        </MenuItem>
+      ) : null}
       {menu.lost ? (
         <MenuItem data-thread-action="restore-version" onSelect={menu.restore}>
           <HistoryIcon className="size-3.5" />Restore a version from the last 14 days

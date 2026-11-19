@@ -28,6 +28,9 @@ import { unpublished } from "./lib/pinned-builds.ts"
  *
  *   npx tsx scripts/bump-harness-versions.ts --dry-run       what would move; changes nothing
  *   npx tsx scripts/bump-harness-versions.ts --json          the same, as JSON (the workflow's matrix)
+ *   npx tsx scripts/bump-harness-versions.ts --json --gate   an automation's gate: exits 1 when nothing would bump, else
+ *                                                            prints { key, bumps, readings }, `key` naming each bump's
+ *                                                            harness and version, so one set of releases runs once
  *   npx tsx scripts/bump-harness-versions.ts --published     fails when a pinned tested build is no longer published
  *                                                            and its feed names nothing to move to
  *   npx tsx scripts/bump-harness-versions.ts codex --write   move one harness, install it through
@@ -49,6 +52,7 @@ const { values: options, positionals } = parseArgs({
   options: {
     "dry-run": { type: "boolean", default: false },
     json: { type: "boolean", default: false },
+    gate: { type: "boolean", default: false },
     published: { type: "boolean", default: false },
     write: { type: "boolean", default: false },
     verify: { type: "boolean", default: false },
@@ -416,9 +420,15 @@ if (options.keep) {
   process.exitCode = steps.every((step) => step.ok) ? 0 : 1
 } else {
   const found = await readings(only)
-  if (options.json) {
-    console.log(JSON.stringify(found.map(({ provider, current, newest, withdrawn, error, bump, versions }) =>
-      ({ provider, tested: versions.tested, oldest: versions.oldest ?? null, bundled: versions.bundled ?? null, current, newest: newest ?? null, withdrawn: withdrawn ?? null, error: error ?? null, bump }))))
+  const readingsJson = found.map(({ provider, current, newest, withdrawn, error, bump, versions }) =>
+    ({ provider, tested: versions.tested, oldest: versions.oldest ?? null, bundled: versions.bundled ?? null, current, newest: newest ?? null, withdrawn: withdrawn ?? null, error: error ?? null, bump }))
+  if (options.gate) {
+    // An automation's gate (`.mako/automations.json`): exit 1 skips the run; the key dedupes it.
+    const bumps = found.filter((reading) => reading.bump && reading.newest).map((reading) => ({ provider: reading.provider, from: reading.current, to: reading.newest! }))
+    if (!bumps.length) process.exitCode = 1
+    else console.log(JSON.stringify({ key: bumps.map((bump) => `${bump.provider}@${bump.to}`).sort().join(","), bumps, readings: readingsJson }))
+  } else if (options.json) {
+    console.log(JSON.stringify(readingsJson))
   } else if (options.published) {
     // A withdrawn build a bump can't move off: every install of it fails, and nothing will open a pull request.
     const stuck = found.filter((reading) => reading.withdrawn && !reading.bump)

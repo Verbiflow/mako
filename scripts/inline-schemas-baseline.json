@@ -180,8 +180,6 @@
   "scripts/test-account-threads.ts": 1,
   "scripts/test-agent-list-results.ts": 1,
   "scripts/test-agents-wake.ts": 1,
-  "scripts/test-automation-approval.ts": 6,
-  "scripts/test-automation-workspace.ts": 9,
   "scripts/test-base-source.ts": 1,
   "scripts/test-browser-runtime.ts": 2,
   "scripts/test-browser-tools.ts": 1,

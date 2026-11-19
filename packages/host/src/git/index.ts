@@ -21,6 +21,8 @@ export { checkoutStatuses, type CheckoutStatuses } from "./checkout-status.js"
 export { forgetGitHubReads, githubApi, githubStatus, listBranchPulls, listPullHeads, readPull, PullReadError, RequiredChecks, type GitHubRunner, type PullTarget } from "./github.js"
 export { machinePullRequestsAs, pullRequestTools, registerPullRequestTools, type PullRequestTools, type ReachableRepository, type RepositoryPlace } from "./pull-request-tools.js"
 
+export { UtilityRunWhen } from "./automation-run-when.js"
+
 export interface GitMethodsDeps {
   /** Thread worktrees remember each branch's pull request; a new or merged one makes them read it again. */
   worktrees: { forgetPulls(): void } | null
@@ -36,12 +38,13 @@ export interface GitMethodsDeps {
   harnessOrder?: HarnessOrderPreference
 }
 
-/** Status, staging, commits and their drafts, and the pull requests of the tab in front. */
-export function declareGitMethods(methods: MethodTable, { worktrees, withHost, git, environment, secrets, recordHelperRun, person, harnessOrder }: GitMethodsDeps): void {
+/** Status, staging, commits and their drafts, and the pull requests of the tab in front. Its utility models' work, for what else asks a fast model (`UtilityRunWhen`). */
+export function declareGitMethods(methods: MethodTable, { worktrees, withHost, git, environment, secrets, recordHelperRun, person, harnessOrder }: GitMethodsDeps): UtilityWork {
   const models = openUtilityModels(environment, secrets, recordHelperRun)
   const avatars = join(environment.dataRoot, "avatars")
   const pullSearch = new PullRequestSearch()
-  installGitIpc(methods, { withHost, git, models, work: new UtilityWork({ models }), record: recordHelperRun, ...(harnessOrder && { harnessOrder }) })
+  const work = new UtilityWork({ models })
+  installGitIpc(methods, { withHost, git, models, work, record: recordHelperRun, ...(harnessOrder && { harnessOrder }) })
   methods.handle("mako:github-status", () => withHost((h) => githubStatus(h.gitWorkspace)))
   methods.handle("mako:pull-request", () => withHost((h) => pullForBranch(h.gitWorkspace)))
   methods.handle("mako:pull-requests", (limit?: number) => withHost((h) => listPulls(h.gitWorkspace, limit)))
@@ -65,4 +68,5 @@ export function declareGitMethods(methods: MethodTable, { worktrees, withHost, g
   methods.handle("mako:rerun-checks", () => withHost((h) => rerunFailedChecks(git, h.gitWorkspace)))
   methods.handle("mako:repo-avatar", (repo: string) => withHost((h) => repoAvatar(h.gitWorkspace, repo, avatars)))
   methods.handle("mako:user-avatar", () => withHost((h) => userAvatar(h.gitWorkspace, avatars)))
+  return work
 }

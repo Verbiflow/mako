@@ -1,4 +1,4 @@
-import { AGENT_ASK_ALLOW, AGENT_ASK_KEEP, agentAskWords, type AgentAsk } from "../contracts/agent-asks.js"
+import { AGENT_ASK_ALLOW, AGENT_ASK_KEEP, PROPOSAL_ELSEWHERE, agentAskWords, personOnlyAsk, type AgentAsk } from "../contracts/agent-asks.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LivePermissionResponse } from "../contracts/providers-acp.js"
 import type { LiveAccess } from "./live-runtime.js"
@@ -17,7 +17,10 @@ export class LiveAsks {
   /** An answer to the ask, as an approval's choice names it: `allow` lets it go. */
   async answer(id: string, ask: string, response: LivePermissionResponse): Promise<void> {
     if (!this.answering) throw new Error("This host can't answer an agent's ask yet.")
-    await this.answering(id, ask, response.kind === "choice" && response.optionId === AGENT_ASK_ALLOW)
+    const allow = response.kind === "choice" && response.optionId === AGENT_ASK_ALLOW
+    // A proposal is approved where its change is shown, never through its ask: an allow here applies nothing.
+    if (allow && this.open(id).find((each) => each.id === ask)?.want.kind === "automation-proposal") throw new Error(PROPOSAL_ELSEWHERE)
+    await this.answering(id, ask, allow)
   }
 
   /** The ask as a harness's approval reads to a Fin's Apex and the person: the card's two answers. */
@@ -25,7 +28,10 @@ export class LiveAsks {
     const ask = this.open(id)[0]
     if (!ask) return undefined
     const words = agentAskWords(ask.want, "")
-    return { request: ask.id, kind: "approval", options: [{ optionId: AGENT_ASK_ALLOW, name: words.allow, kind: "allow_once" }, { optionId: AGENT_ASK_KEEP, name: words.keep, kind: "reject_once" }], questions: [], named: true }
+    // A proposal only declines here; it's approved in Automations or its Inbox card, where its change is shown.
+    if (ask.want.kind === "automation-proposal")
+      return { request: ask.id, kind: "approval", options: [{ optionId: AGENT_ASK_KEEP, name: words.keep, kind: "reject_once" }], questions: [], named: true, personOnly: true, review: { project: ask.want.cwd, automation: ask.want.id, proposal: ask.want.proposal } }
+    return { request: ask.id, kind: "approval", options: [{ optionId: AGENT_ASK_ALLOW, name: words.allow, kind: "allow_once" }, { optionId: AGENT_ASK_KEEP, name: words.keep, kind: "reject_once" }], questions: [], named: true, ...(personOnlyAsk(ask.want) && { personOnly: true as const }) }
   }
 
   open(id: string): readonly AgentAsk[] {

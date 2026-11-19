@@ -1,13 +1,13 @@
 import { createServer, type Server } from "node:http"
 import type { BrowserWindow } from "electron"
 
-interface AutomationObject {
-  [property: string]: AutomationValue
+interface EvalObject {
+  [property: string]: EvalValue
 }
 
-type AutomationValue =
-  | AutomationObject
-  | AutomationValue[]
+type EvalValue =
+  | EvalObject
+  | EvalValue[]
   | string
   | number
   | bigint
@@ -16,7 +16,7 @@ type AutomationValue =
   | null
   | undefined
 
-type AutomationFailure = Error | AutomationValue
+type EvalFailure = Error | EvalValue
 
 /**
  * A way to drive the window without touching the mouse.
@@ -43,7 +43,7 @@ type AutomationFailure = Error | AutomationValue
 
 let server: Server | null = null
 
-export function installAutomation(window: BrowserWindow, isDev: boolean) {
+export function installDevEval(window: BrowserWindow, isDev: boolean) {
   const port = Number(process.env.MAKO_AUTOMATION)
   // One endpoint for the first window that asks; a second would find the port taken.
   if (!isDev || !Number.isInteger(port) || port <= 0 || server) return
@@ -61,11 +61,11 @@ export function installAutomation(window: BrowserWindow, isDev: boolean) {
         // `true` marks it as a user gesture, which some handlers require and
         // which a real click would have carried.
         .executeJavaScript(source, true)
-        .then((value: AutomationValue) => {
+        .then((value: EvalValue) => {
           response.writeHead(200, { "content-type": "application/json" })
           response.end(JSON.stringify({ ok: true, value: value ?? null }))
         })
-        .catch((error: AutomationFailure) => {
+        .catch((error: EvalFailure) => {
           response.writeHead(200, { "content-type": "application/json" })
           response.end(
             JSON.stringify({ ok: false, error: error instanceof Error ? error.message : String(error) })
@@ -75,7 +75,7 @@ export function installAutomation(window: BrowserWindow, isDev: boolean) {
   })
 
   server.listen(port, "127.0.0.1", () => {
-    console.log(`[automation] listening on 127.0.0.1:${port}`)
+    console.log(`[dev-eval] listening on 127.0.0.1:${port}`)
   })
   window.once("closed", () => {
     server?.close()

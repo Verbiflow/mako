@@ -43,7 +43,7 @@ import { desktopUpdates, type DesktopUpdates } from "./desktop-updates-electron.
 import { packagedDistribution } from "@mako/host/application/distribution"
 import { deskUrlPolicy } from "@mako/host/control/desk-policy"
 import { guardDeskNavigation } from "./desk-browser-navigation.js"
-import { installAutomation } from "./automation.js"
+import { installDevEval } from "./dev-eval.js"
 import { AppshotShortcutHolder } from "./appshot-shortcut-electron.js"
 import { AppshotFeedbackWindows } from "./appshot-feedback-electron.js"
 
@@ -403,7 +403,7 @@ async function openWindow(options: { preview?: boolean; agentView?: string; id?:
   })
   window.once("closed", () => { client.dispose(); clients.delete(rendererId); agentViews.delete(rendererId); watchAgentViewsIdle(); finishClientShutdown() })
   window.webContents.setWindowOpenHandler(({ url }) => { if (/^https?:\/\//i.test(url)) void shell.openExternal(url); return { action: "deny" } })
-  if (!agentView) installAutomation(window, isDev)
+  if (!agentView) installDevEval(window, isDev)
   const query = new URLSearchParams()
   if (process.env.MAKO_PROFILE) query.set("profile", process.env.MAKO_PROFILE)
   if (options.preview) query.set("preview", id)
