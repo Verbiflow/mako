@@ -1,5 +1,6 @@
 import { z } from "zod"
 import { ACCESS_TIER_NAMES } from "./access.js"
+import { sha256Hex } from "./sha256.js"
 import { BriefSchema, PlaceSchema, ReportStatusSchema, type Brief } from "./agents.js"
 import { knownTimezone, parseCron } from "./automation-cron.js"
 import { automationClientKey, scheduleOccurrence } from "@mako/protocol/automations-cloud"
@@ -265,8 +266,14 @@ export type AutomationPause = z.infer<typeof AutomationPauseSchema>
 /** What this Mac keeps of one automation: never in the shared file. */
 export const AutomationLocalSchema = z.object({
   enabled: z.boolean(),
-  /** The definition's fingerprint (`automationFingerprint`) when it was turned on. */
+  /**
+   * The fingerprint (`automationFingerprint`) of the definition the person approved: turning it on, saving it in Mako,
+   * approving an agent's proposal, or reviewing a change before Run now. Nothing runs any other definition: one whose
+   * file says something else is paused until the person approves what it says now, seeing the change first.
+   */
   approved: z.string().max(80).optional(),
+  /** The definition itself as they approved it, so every card shows what changed since: the approved, then the current. */
+  approvedDefinition: z.json().optional(),
   paused: AutomationPauseSchema.optional(),
   /** Failed runs in a row; a completed run sets it back to 0. */
   failures: z.number().int().min(0).default(0),
@@ -353,6 +360,11 @@ export const AutomationRunSchema = z.object({
   why: z.string().max(2000).optional(),
   /** A skipped run merged into the one that was going. */
   mergedInto: z.string().max(200).optional(),
+  /**
+   * The fingerprint of the approved definition it runs, fixed when it was recorded: a queued or recovered run starts only
+   * while that is still the approved one, from the approved definition, never from what the file says by then.
+   */
+  approved: z.string().max(80).optional(),
   /** Its trigger's `runWhen`, checked: a skip keeps status `skipped` with `why` its reason; a pass says it was checked. */
   runWhen: z.object({ verdict: z.enum(["run", "skip"]), reason: z.string().max(400), model: z.string().max(80).optional() }).optional(),
   /** What its gate said: its dedupe key and the JSON object it printed. */
@@ -410,10 +422,15 @@ export const AutomationProposalSchema = z.object({
   project: z.string().min(1).max(4096),
   automation: AutomationIdSchema,
   change: AutomationChangeSchema,
-  /** The definition as it stood when proposed (absent for create). */
+  /**
+   * What its card shows the change from (absent for create): the definition the person approved, when there is one, so
+   * an edit to the file before the proposal shows in its diff too; else the file's as it stood when proposed.
+   */
   before: z.json().optional(),
-  /** The definition it would write (absent for delete). */
+  /** The definition it would write (absent for delete); for enable, the file's, which turning it on approves. */
   after: z.json().optional(),
+  /** The fingerprint of the file's definition when proposed: one the file no longer has makes the proposal stale. */
+  base: z.string().max(80).optional(),
   /** The agent's reason, in its words. */
   why: z.string().max(2000).optional(),
   by: z.object({
@@ -572,10 +589,10 @@ export interface AutomationDraft {
  * | --- | --- | --- |
  * | `read` | `(project?: string)` | `AutomationsReading`: one project, or every one |
  * | `runs` | `(project: string, id?: string, limit?: number)` | `AutomationRun[]`, newest first |
- * | `save` | `(project: string, definition: JsonValue, replaces?: string)` | `AutomationProjectReading`: the person's edit, applied at once; `replaces` renames |
+ * | `save` | `(project: string, definition: JsonValue, replaces?: string, approve?: string)` | `AutomationProjectReading`: the person's edit, applied at once; `replaces` renames; `approve` (its fingerprint) approves it where the file had changed since their approval |
  * | `delete` | `(project: string, id: string)` | `AutomationProjectReading` |
- * | `enabled` | `(project: string, id: string, enabled: boolean)` | `AutomationProjectReading` |
- * | `run-now` | `(project: string, id: string, clientKey: string)` | `AutomationRunNowResult`; a repeat of `clientKey` is the same run |
+ * | `enabled` | `(project: string, id: string, enabled: boolean, approve?: string)` | `AutomationProjectReading`; on again after a change needs `approve`, the current fingerprint, once the person saw the change |
+ * | `run-now` | `(project: string, id: string, clientKey: string, approve?: string)` | `AutomationRunNowResult`; a repeat of `clientKey` is the same run; an unapproved definition runs only with `approve`, which approves it |
  * | `decide` | `(proposal: string, approve: boolean)` | `AutomationProposal` as decided |
  * | `draft` | `(conversationId: string)` | `AutomationDraft` |
  * | `templates` | `()` | `AutomationTemplate[]` |
@@ -618,10 +635,20 @@ export type AutomationEvent = { type: "automations-changed"; reading: Automation
 /* helpers both sides share                                             */
 /* ------------------------------------------------------------------ */
 
-/** A definition's fingerprint: its JSON with keys in order, hashed small. Unchanged definition, unchanged fingerprint. */
+/**
+ * A definition's fingerprint: SHA-256 of its JSON with keys in order, 64 hex characters. Unchanged definition,
+ * unchanged fingerprint, and no edit to the file can keep it: the person's approval rests on it.
+ */
 export function automationFingerprint(definition: AutomationDefinition): string {
+  return sha256Hex(stableJson(JsonSchema.parse(JSON.parse(JSON.stringify(definition)))))
+}
+
+/**
+ * The fingerprint before SHA-256 (two 32-bit FNV-1a hashes, 16 hex characters), read only to take an older approval
+ * forward: one that still matches the file is that definition, approved; any other stays unapproved.
+ */
+export function legacyAutomationFingerprint(definition: AutomationDefinition): string {
   const text = stableJson(JsonSchema.parse(JSON.parse(JSON.stringify(definition))))
-  // FNV-1a, 64 bits as two halves: enough to tell an edit, and nothing secret rests on it.
   let a = 0x811c9dc5
   let b = 0x01000193
   for (let index = 0; index < text.length; index++) {

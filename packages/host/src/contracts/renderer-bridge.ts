@@ -1018,10 +1018,10 @@ export function createMakoBridge(transport: BridgeTransport) {
     automations: (project?: string) => invokeTrustedHost<AutomationsReading>("mako:automations-read", project),
     automationRuns: (project: string, id?: string, limit?: number) => invokeTrustedHost<AutomationRun[]>("mako:automations-runs", project, id, limit),
     /** The person's own edit, applied at once; `replaces` is the id it had, when renamed. */
-    saveAutomation: (project: string, definition: JsonValue, replaces?: string) => invokeTrustedHost<AutomationProjectReading>("mako:automations-save", project, definition, replaces),
+    saveAutomation: (project: string, definition: JsonValue, replaces?: string, approve?: string) => invokeTrustedHost<AutomationProjectReading>("mako:automations-save", project, definition, replaces, approve),
     deleteAutomation: (project: string, id: string) => invokeTrustedHost<AutomationProjectReading>("mako:automations-delete", project, id),
-    setAutomationEnabled: (project: string, id: string, enabled: boolean) => invokeTrustedHost<AutomationProjectReading>("mako:automations-enabled", project, id, enabled),
-    runAutomation: (project: string, id: string, clientKey: string) => invokeTrustedHost<AutomationRunNowResult>("mako:automations-run-now", project, id, clientKey),
+    setAutomationEnabled: (project: string, id: string, enabled: boolean, approve?: string) => invokeTrustedHost<AutomationProjectReading>("mako:automations-enabled", project, id, enabled, approve),
+    runAutomation: (project: string, id: string, clientKey: string, approve?: string) => invokeTrustedHost<AutomationRunNowResult>("mako:automations-run-now", project, id, clientKey, approve),
     decideAutomationProposal: (proposal: string, approve: boolean) => invokeTrustedHost<AutomationProposal>("mako:automations-decide", proposal, approve),
     draftAutomation: (conversationId: string) => invokeTrustedHost<AutomationDraft>("mako:automations-draft", conversationId),
     automationTemplates: () => invokeTrustedHost<AutomationTemplate[]>("mako:automations-templates"),

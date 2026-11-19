@@ -913,7 +913,7 @@ const inputs = {
   "mako:automations-delete": () => z.tuple([z.string(), z.string()]),
   "mako:automations-draft": () => z.tuple([z.string()]),
   "mako:automations-enabled": () =>
-    z.tuple([z.string(), z.string(), z.boolean()]),
+    z.tuple([z.string(), z.string(), z.boolean(), z.string().optional()]),
   "mako:automations-forward-settle": () =>
     z.tuple([
       z.string(),
@@ -939,12 +939,17 @@ const inputs = {
     ]),
   "mako:automations-read": () => z.tuple([z.string().optional()]),
   "mako:automations-run-now": () =>
-    z.tuple([z.string(), z.string(), z.string()]),
+    z.tuple([z.string(), z.string(), z.string(), z.string().optional()]),
   "mako:automations-run-of": () => z.tuple([z.string()]),
   "mako:automations-runs": () =>
     z.tuple([z.string(), z.string().optional(), z.number().optional()]),
   "mako:automations-save": () =>
-    z.tuple([z.string(), z.json(), z.string().optional()]),
+    z.tuple([
+      z.string(),
+      z.json(),
+      z.string().optional(),
+      z.string().optional(),
+    ]),
   "mako:automations-templates": () => z.tuple([]),
   "mako:boot": () => z.tuple([]),
   "mako:browser-control-connect": () => z.tuple([z.string()]),

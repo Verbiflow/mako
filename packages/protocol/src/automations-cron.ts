@@ -153,9 +153,7 @@ function wallKey(wall: Wall): number {
  */
 export function instantOf(wall: Wall, zone: string): number {
   const naive = wallKey(wall)
-  // The zone's offset a day either side brackets any change near this wall time.
-  const offsets = [...new Set([naive - 36 * 3_600_000, naive, naive + 36 * 3_600_000].map((at) => wallKey(wallAt(at, zone)) - Math.floor(at / MINUTE) * MINUTE))]
-  const candidates = offsets.map((offset) => naive - offset).filter((at) => wallKey(wallAt(at, zone)) === naive).sort((a, b) => a - b)
+  const { offsets, candidates } = instancesOf(wall, zone)
   if (candidates[0] !== undefined) return candidates[0]
   // Skipped: the first instant whose wall clock is past it.
   let low = naive - Math.max(...offsets)
@@ -167,6 +165,28 @@ export function instantOf(wall: Wall, zone: string): number {
     else low = middle
   }
   return high
+}
+
+/** The zone's offsets near a wall time, and the instants the wall time names, in order. */
+interface WallInstances {
+  offsets: number[]
+  candidates: number[]
+}
+
+/** Every instant `wall` names in `zone`, in order: none when the clocks skip it, two when they repeat it. */
+function instancesOf(wall: Wall, zone: string): WallInstances {
+  const naive = wallKey(wall)
+  // The zone's offset a day either side brackets any change near this wall time.
+  const offsets = [...new Set([naive - 36 * 3_600_000, naive, naive + 36 * 3_600_000].map((at) => wallKey(wallAt(at, zone)) - Math.floor(at / MINUTE) * MINUTE))]
+  const candidates = offsets.map((offset) => naive - offset).filter((at) => wallKey(wallAt(at, zone)) === naive).sort((a, b) => a - b)
+  return { offsets, candidates }
+}
+
+/** Whether the clocks go back during this day in `zone`, so an hour of its wall times happens twice. */
+function repeatsAnHour(year: number, month: number, day: number, zone: string): boolean {
+  const offsetAt = (at: number) => wallKey(wallAt(at, zone)) - Math.floor(at / MINUTE) * MINUTE
+  const start = Date.UTC(year, month - 1, day)
+  return offsetAt(start + 36 * 3_600_000) < offsetAt(start - 12 * 3_600_000)
 }
 
 function daysIn(year: number, month: number): number {
@@ -187,14 +207,27 @@ function dayMatches(spec: CronSpec, year: number, month: number, day: number): b
 /** Leap years come every four years but for three in four centuries: eight years always reaches a 29 February. */
 const SEARCH_DAYS = 8 * 366 + 2
 
-/** The first instant after `after` that `spec` names in `zone`, or undefined when none within eight years. */
+/**
+ * The first instant after `after` that `spec` names in `zone`, or undefined when none within eight years. A wall time the
+ * clocks repeat (01:30 as they fall back) is its first instance for a schedule of particular hours, which runs once a day
+ * as written; one that runs every hour or more often runs in the repeated hour too, at both instances, so the hour isn't
+ * a gap in it.
+ */
 export function nextCron(spec: CronSpec, zone: string, after: number): number | undefined {
   const start = wallAt(after, zone)
   const hours = [...spec.hours].sort((a, b) => a - b)
   const minutes = [...spec.minutes].sort((a, b) => a - b)
+  const everyHour = hours.length === 24
   let { year, month, day } = start
   for (let index = 0; index < SEARCH_DAYS; index++) {
-    if (dayMatches(spec, year, month, day)) {
+    if (everyHour && dayMatches(spec, year, month, day) && repeatsAnHour(year, month, day, zone)) {
+      // Every instance of every wall time this day, the soonest after `after`: the repeated hour's second ones included.
+      let soonest: number | undefined
+      for (const hour of hours)
+        for (const minute of minutes)
+          for (const at of instancesOf({ year, month, day, hour, minute }, zone).candidates) if (at > after && (soonest === undefined || at < soonest)) soonest = at
+      if (soonest !== undefined) return soonest
+    } else if (dayMatches(spec, year, month, day)) {
       for (const hour of hours) {
         for (const minute of minutes) {
           const wall = { year, month, day, hour, minute }

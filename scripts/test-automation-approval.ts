@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url"
 import { AgentAskGate } from "@mako/host/conversations/agent-ask-gate"
 import { AutomationTool } from "@mako/host/conversations/automation-tool"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
+import { AutomationDefinitionSchema, automationFingerprint } from "@mako/host/contracts/automations"
 import { AutomationStore } from "@mako/host/workspaces/automation-store"
 import { Automations } from "@mako/host/workspaces/automations"
 import { AgentsWorld } from "./lib/agents-world"
@@ -50,6 +51,13 @@ function fixture() {
   mkdirSync(join(root, ".mako"))
   writeFileSync(join(root, ".mako", "automations.json"), JSON.stringify({ version: 2, automations: ["one", "two"].map((id) => ({ id, name: id, prompt: { objective: "Synthetic fixture" } })) }))
   writeFileSync(join(root, "launches.log"), "")
+  // The person approved both (as turning them on would): an agent's run is of the definition they approved, or none.
+  const approved = (id: string) => {
+    const definition = AutomationDefinitionSchema.parse({ id, name: id, prompt: { objective: "Synthetic fixture" } })
+    return [id, { local: { enabled: false, failures: 0, approved: automationFingerprint(definition), approvedDefinition: definition }, runs: [] }]
+  }
+  mkdirSync(join(root, "automations"))
+  writeFileSync(join(root, "automations", "state.json"), JSON.stringify({ version: 1, projects: { [root]: { automations: Object.fromEntries(["one", "two"].map(approved)) } }, proposals: [] }))
   return root
 }
 const launches = (root: string) => readFileSync(join(root, "launches.log"), "utf8").split("\n").filter(Boolean)
