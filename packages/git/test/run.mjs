@@ -80,6 +80,42 @@ await test("an idle read leaves two slots to reads someone waits on, and never g
   reads.close()
 })
 
+await test("an urgent read (a turn's checkpoint) takes the next free slot ahead of every read already waiting", async () => {
+  const { PassThrough } = await import("node:stream")
+  const reads = new Git()
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 50))
+  const held = (options) => {
+    const input = new PassThrough()
+    const done = reads.run({ cwd: scratch, args: ["hash-object", "--stdin"], input, read: true, ...options })
+    return { done, end: () => input.end("x") }
+  }
+  const full = Array.from({ length: 6 }, () => held({}))
+  await settle()
+  // Windows' statuses waiting, then a turn's checkpoint, then more of them.
+  const waiting = [held({}), held({}), held({ idle: true })]
+  await settle()
+  const urgent = [held({ urgent: true }), held({ urgent: true })]
+  const later = held({})
+  await settle()
+  assert.equal(reads.activity().queued, 6)
+  const order = []
+  for (const [name, read] of [["waiting0", waiting[0]], ["waiting1", waiting[1]], ["idle", waiting[2]], ["urgent0", urgent[0]], ["urgent1", urgent[1]], ["later", later]])
+    void read.done.then(() => order.push(name))
+  full[0].end()
+  full[1].end()
+  await settle()
+  assert.equal(reads.activity().running.length, 6)
+  assert.equal(reads.activity().queued, 4, "both urgent reads took the two freed slots")
+  urgent[0].end()
+  urgent[1].end()
+  await Promise.all(urgent.map((read) => read.done))
+  assert.deepEqual(order, ["urgent0", "urgent1"], "the urgent reads ran before every read that waited longer")
+  for (const read of [...full.slice(2), ...waiting, later]) read.end()
+  await Promise.all([...full, ...waiting, later].map((read) => read.done))
+  assert.equal(reads.activity().queued, 0)
+  reads.close()
+})
+
 await test("an idle read that waited too long takes a slot kept for the others, one at a time and never ahead of a waiting read", async () => {
   const { PassThrough } = await import("node:stream")
   // The test says when each idle read's wait has run out, in the order they began waiting: no clock decides it.

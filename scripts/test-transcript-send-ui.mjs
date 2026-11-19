@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
- * A long Apex Thread (`?mock&app=apex&turns=260`, windowed rows, the crew card and the Fins' reports below them) on
+ * A long Apex Thread (`?mock&app=apex&turns=260`, windowed rows, the Shiver card and the Fins' reports below them) on
  * the desk, the web app and the phone, with the Apex between turns (`idle=1`: a message starts one) and in one (it
  * steers or waits). It opens at its end with no blank room below its last line. Then a message is sent: from the
  * keypress until the answer has landed, no two rows of the transcript overlap in any frame, nor the last row and what
@@ -47,7 +47,7 @@ if (process.versions.electron) {
 
 /**
  * Installed in the page: each frame, every painted turn's box in document order, and the first thing after the
- * transcript's rows (the footer: activity, crew card). Two neighbours overlapping by more than a pixel is a fault.
+ * transcript's rows (the footer: activity, Shiver card). Two neighbours overlapping by more than a pixel is a fault.
  */
 const WATCH = `(() => {
   const faults = window.__overlaps = []

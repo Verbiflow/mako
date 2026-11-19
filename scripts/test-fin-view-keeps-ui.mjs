@@ -10,7 +10,7 @@ import { atSize, withMotion } from "./lib/test-window.mjs"
  * What an Apex's Thread shows stays through whatever its session does (`npm run test:fin-view-keeps-ui`): the person
  * writes in the composer of an Apex at rest, which wakes it ("Starting …"), and its session then runs a turn, drops
  * and reconnects, starts again, fails and comes back, with its harness each of Mako's in turn. Through all of it,
- * sampled every frame, the crew card and the transcript's messages never leave the screen.
+ * sampled every frame, the Shiver card and the transcript's messages never leave the screen.
  */
 if (process.versions.electron) {
   void check().catch(async (error) => {
@@ -43,21 +43,21 @@ if (process.versions.electron) {
 
 const HARNESSES = ["claude", "codex", "cursor", "opencode", "grok", "devin"]
 
-/** Every frame: whether the crew card and its rows are drawn, and how many of the transcript's messages are. */
+/** Every frame: whether the Shiver card and its rows are drawn, and how many of the transcript's messages are. */
 const SAMPLER = `(() => {
-  const seen = { frames: 0, crewMissing: 0, fewestRows: Infinity, fewestMessages: Infinity, statuses: new Set() }
+  const seen = { frames: 0, shiverMissing: 0, fewestRows: Infinity, fewestMessages: Infinity, statuses: new Set() }
   const look = () => {
     seen.frames += 1
-    const crew = document.querySelector("[data-crew]")
-    if (!crew) seen.crewMissing += 1
-    seen.fewestRows = Math.min(seen.fewestRows, document.querySelectorAll("[data-crew-row]").length)
+    const shiver = document.querySelector("[data-shiver]")
+    if (!shiver) seen.shiverMissing += 1
+    seen.fewestRows = Math.min(seen.fewestRows, document.querySelectorAll("[data-shiver-row]").length)
     seen.fewestMessages = Math.min(seen.fewestMessages, document.querySelectorAll("[data-message-avatar], [data-fin-report]").length)
     window.__keeps.raf = requestAnimationFrame(look)
   }
   window.__keeps = { seen, raf: requestAnimationFrame(look) }
   return true
 })()`
-const READ = `(() => { cancelAnimationFrame(window.__keeps.raf); const { seen } = window.__keeps; return { frames: seen.frames, crewMissing: seen.crewMissing, fewestRows: seen.fewestRows, fewestMessages: seen.fewestMessages } })()`
+const READ = `(() => { cancelAnimationFrame(window.__keeps.raf); const { seen } = window.__keeps; return { frames: seen.frames, shiverMissing: seen.shiverMissing, fewestRows: seen.fewestRows, fewestMessages: seen.fewestMessages } })()`
 
 async function check() {
   const { app, BrowserWindow } = await import("electron")
@@ -92,8 +92,8 @@ async function check() {
   await until("Boolean(document.querySelector('[data-composer] .composer-input'))", "the Apex's composer")
   // At rest: its turn over, its provider put away, as a host hibernates one idle a while.
   await evaluate("window.apexScene.setRunning(false); window.apexScene.setSession({ connection: 'hibernated', status: 'ready' }); true")
-  await until("document.querySelectorAll('[data-crew-row]').length > 0", "the crew card at rest")
-  const rows = await evaluate("document.querySelectorAll('[data-crew-row]').length")
+  await until("document.querySelectorAll('[data-shiver-row]').length > 0", "the Shiver card at rest")
+  const rows = await evaluate("document.querySelectorAll('[data-shiver-row]').length")
   const messages = await evaluate("document.querySelectorAll('[data-message-avatar], [data-fin-report]').length")
   assert.ok(rows > 0 && messages > 0, `the Apex shows its Fins and its conversation: ${rows} rows, ${messages} messages`)
   await capture("rest")
@@ -106,7 +106,7 @@ async function check() {
   await capture("starting")
   await wait(1_600)
   const woke = await evaluate(READ)
-  assert.equal(woke.crewMissing, 0, `the crew card stays while the Apex starts: missing in ${woke.crewMissing} of ${woke.frames} frames`)
+  assert.equal(woke.shiverMissing, 0, `the Shiver card stays while the Apex starts: missing in ${woke.shiverMissing} of ${woke.frames} frames`)
   assert.equal(woke.fewestRows, rows, "every row of it stays")
   assert.ok(woke.fewestMessages >= messages, `the transcript stays: ${woke.fewestMessages} of ${messages} messages at the least`)
 
@@ -132,11 +132,11 @@ async function check() {
     }
     const seen = await evaluate(READ)
     assert.ok(seen.frames > 20, `${harness}: frames were painted through its transitions (${seen.frames})`)
-    assert.equal(seen.crewMissing, 0, `${harness}: the crew card stays through every transition: missing in ${seen.crewMissing} of ${seen.frames} frames`)
+    assert.equal(seen.shiverMissing, 0, `${harness}: the Shiver card stays through every transition: missing in ${seen.shiverMissing} of ${seen.frames} frames`)
     assert.equal(seen.fewestRows, rows, `${harness}: every row of it stays`)
     assert.ok(seen.fewestMessages >= messages, `${harness}: the transcript stays (${seen.fewestMessages} of ${messages} messages at the least)`)
   }
   assert.deepEqual(errors, [], "the page said nothing went wrong")
-  console.log(`Fin view keeps: the crew card (${rows} rows) and the transcript stay through the composer's wake and ${steps.length} transitions on ${HARNESSES.length} harnesses`)
+  console.log(`Fin view keeps: the Shiver card (${rows} rows) and the transcript stay through the composer's wake and ${steps.length} transitions on ${HARNESSES.length} harnesses`)
   app.exit(0)
 }

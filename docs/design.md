@@ -68,7 +68,7 @@ Use these; don't redraw them.
 | A menu, a popover, a dialog | `ui/menu.tsx`, `ui/popover.tsx`, `ui/dialog.tsx` |
 | A tooltip | `ui/tooltip.tsx`, or `title` naming the action ("Send", "Copy") |
 | Loading | `Skeleton` for a shape to come, `Shimmer` for words at work, `Spinner` only inside a control that waits |
-| A list of an Apex's Fins | the crew card (`viewer/crew-card.tsx`): needs you, working, queued, failed; done and idle folded. A row's time is how long the Fin has stood as it does (`since`): a working one's current turn, never its age |
+| A list of an Apex's Fins | the Shiver card (`viewer/shiver-card.tsx`): needs you, working, queued, failed; done and idle folded. A row's time is how long the Fin has stood as it does (`since`): a working one's current turn, never its age |
 | A row of a rail's fixed top | `RailRow` (`rail/rail-row.tsx`): the left rail's New thread and Inbox, the right rail's Changes and Files |
 | A message | `Prompt` and `FinReports` (`transcript/`), the avatar beside the message's last line |
 | The composer | one square raised box, no outline, a short field and one row: plus, model, access glyph, send |
@@ -81,8 +81,8 @@ the left's twin: `SideRail`'s rows, one a surface in a fixed order, each with a 
 no Fins and nothing running, no row. Changes is a list; what's read at length opens as a tab.
 
 A tab is what someone opened on purpose: a file, a diff, a plan, a Session, the one Fin opened in place. Nothing gets a
-tab by starting. An Apex's Fins stand in the crew card and the rail; opened, a Fin gets one tab, and closing it is the
-Apex again. The phone's the same: a count in the bar and the crew card, no chip a Fin.
+tab by starting. An Apex's Fins stand in the Shiver card and the rail; opened, a Fin gets one tab, and closing it is the
+Apex again. The phone's the same: a count in the bar and the Shiver card, no chip a Fin.
 
 ## Words
 

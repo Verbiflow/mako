@@ -193,10 +193,11 @@ const inputs = {
           .union([
             z.literal("children"),
             z.literal("tree"),
-            z.literal("crew"),
+            z.literal("shiver"),
             z.literal("apexes"),
             z.literal("threads"),
             z.literal("all"),
+            z.literal("crew"),
           ])
           .optional(),
         query: z.string().optional(),

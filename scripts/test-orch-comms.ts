@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { AGENT_TOOLS, ORCHESTRATION_INSTRUCTIONS, type AgentsApexes, type AgentsCrew } from "@mako/host/contracts/agent-tools"
+import { z } from "zod"
+import { AGENT_TOOLS, LEGACY_SHIVER_SCOPE, ORCHESTRATION_INSTRUCTIONS, type AgentsApexes, type AgentsShiver } from "@mako/host/contracts/agent-tools"
 import type { AgentCaller, Report } from "@mako/host/contracts/agents"
 import { agentWords, apexNote, FROM_AGENTS, fromAgent, fromApex, YOUR_APEX } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
@@ -17,7 +18,7 @@ import { AgentsWorld } from "./lib/agents-world.ts"
  * every field kept; a finished Fin's digest line carries its first paragraph
  * and every artifact's ref, and says how much more `agents_read` gives; and
  * a Fin reads its Apex and the other Fins it started (`agents_list` with
- * `scope: crew`), from typed state, as its brief tells it it can; and an Apex
+ * `scope: shiver`), from typed state, as its brief tells it it can; and an Apex
  * reads the person's other Apexes (`scope: apexes`) without waking them, and
  * messages one, which hears it as Mako's words, queued, and replies once.
  */
@@ -62,9 +63,9 @@ function finishedLines(): void {
   assert.match(text, /1 finished:\n {2}• "docs" \(Codex\) done: Opened the PR\. Its CI is green\.\n {4}pull-request: https:\/\/example\.com\/acme\/pull\/7 \(PR #7\)\n {4}file: docs\/report\.md\n/, "every artifact by its ref, its label beside it")
 }
 
-async function crew(): Promise<void> {
+async function shiver(): Promise<void> {
   const world = new AgentsWorld({
-    root: join(root, "crew"),
+    root: join(root, "shiver"),
     script: async (turn) => {
       if (turn.text.includes("hold")) await turn.world.hold(turn.conversation)
       return "ok"
@@ -87,38 +88,42 @@ async function crew(): Promise<void> {
     })
 
     const brief = world.prompts.find((prompt) => prompt.conversation === docs)!.text
-    assert.ok(brief.includes("agents_list with scope crew shows it and the other Fins it started."), "its brief says it can read its crew")
+    assert.ok(brief.includes("agents_list with scope shiver shows your Shiver: your Apex and the other Fins it started."), "its brief says it can read its Shiver")
+    const oldBrief = `${fromAgent(YOUR_APEX)}\nYou're fin:docs, a Fin: another Thread, your Apex, started you for one piece of work. It reads your reports, not this conversation. agents_list with scope ${LEGACY_SHIVER_SCOPE} shows it and the other Fins it started.\n\nWrite the router's docs.`
+    assert.equal(agentWords(oldBrief)?.body, "Write the router's docs.", "a brief from before the Shiver reads the same")
     assert.equal(agentWords(brief.slice(brief.indexOf(fromAgent(YOUR_APEX))))?.body, "Write the router's docs.", "the person's card of the brief leaves its lines for the Fin out")
     const earlier = `${fromAgent(YOUR_APEX)}\nYou're fin:docs, a Fin: another Thread, your Apex, started you for one piece of work. It reads your reports, not this conversation.\n\nWrite the router's docs.`
     assert.equal(agentWords(earlier)?.body, "Write the router's docs.", "a brief an earlier build wrote reads the same")
 
     world.say(apex.conversation, "hold while they work")
     await until("the Apex's turn to run", async () => {
-      const seen = await world.agents.list(world.caller(docs), { scope: "crew" })
-      return "crew" in seen && seen.apex.working
+      const seen = await world.agents.list(world.caller(docs), { scope: "shiver" })
+      return "shiver" in seen && seen.apex.working
     })
-    const seen = await world.agents.list(world.caller(docs), { scope: "crew" })
-    if (!("crew" in seen)) throw new Error(`no crew: ${JSON.stringify(seen)}`)
-    const view: AgentsCrew = seen
+    const seen = await world.agents.list(world.caller(docs), { scope: "shiver" })
+    if (!("shiver" in seen)) throw new Error(`no shiver: ${JSON.stringify(seen)}`)
+    const view: AgentsShiver = seen
     assert.equal(view.you, "docs")
     assert.equal(view.apex.working, true, "its Apex's turn is running")
     assert.equal(view.apex.harness, "Codex")
     assert.equal(view.apex.asked, undefined, "a top Apex was asked nothing by an Apex")
-    assert.deepEqual(view.crew.map((mate) => mate.name), ["api", "review"], "the others, not itself")
-    const port = view.crew.find((mate) => mate.name === "api")!
+    assert.deepEqual(view.shiver.map((mate) => mate.name), ["api", "review"], "the others, not itself")
+    const port = view.shiver.find((mate) => mate.name === "api")!
     assert.equal(port.harness, "Claude")
     assert.equal(port.branch, "router-port")
     assert.equal(port.topic, "Port the handlers to the new router (hold).")
     assert.equal(port.state.kind, "working", "the port still works")
     assert.ok(!("direct" in port), "the person's words to a Fin stay its own")
-    const crewText = agentToolText({ ...view })
-    assert.ok(crewText.length < 900, `the crew of two in ${crewText.length} characters`)
+    const shiverText = agentToolText({ ...view })
+    assert.ok(shiverText.length < 900, `the Shiver of two in ${shiverText.length} characters`)
+    // An agent of a build before the Shiver still asks with scope crew, and reads the same view.
+    assert.deepEqual(await world.agents.list(world.caller(docs), { scope: LEGACY_SHIVER_SCOPE }), seen, "scope crew is scope shiver")
 
     world.release(apex.conversation)
     world.release(api)
     await world.settle(600, 20_000, "ignore")
-    const done = await world.agents.list(world.caller(docs), { scope: "crew" })
-    assert.ok("crew" in done && done.apex.working === false && done.crew.find((mate) => mate.name === "api")!.state.kind === "ended", "read again, it stands as they stand now")
+    const done = await world.agents.list(world.caller(docs), { scope: "shiver" })
+    assert.ok("shiver" in done && done.apex.working === false && done.shiver.find((mate) => mate.name === "api")!.state.kind === "ended", "read again, it stands as they stand now")
 
     // A message to a sibling it can't send goes to its Apex instead, waking it, and reaches the sibling only as the
     // Apex passes it on. Before, the send was refused and the message went nowhere: handoffs stalled until someone
@@ -184,12 +189,12 @@ async function crew(): Promise<void> {
     const reviewer = await world.agents.start(world.caller(lead), { brief: { objective: "Review the router port for API compatibility." }, harness: "cursor", name: "compat", clientKey: "compat", cwd: world.root })
     assert.ok(!("refused" in reviewer) && reviewer.conversation)
     await world.settle(600, 20_000, "ignore")
-    const below = await world.agents.list(world.caller(reviewer.conversation!), { scope: "crew" })
-    assert.ok("crew" in below && below.you === "compat" && below.crew.length === 0, "a Fin with no others has an empty crew")
+    const below = await world.agents.list(world.caller(reviewer.conversation!), { scope: "shiver" })
+    assert.ok("shiver" in below && below.you === "compat" && below.shiver.length === 0, "a Fin with no others has an empty shiver")
     assert.equal(below.apex.asked, "Lead the review of the router port.", "an Apex that is a Fin too says what it was asked")
 
-    const top = await world.agents.list(apex.caller, { scope: "crew" })
-    assert.ok("refused" in top && top.refused === "no-parent", "a Thread with no Apex has no crew")
+    const top = await world.agents.list(apex.caller, { scope: "shiver" })
+    assert.ok("refused" in top && top.refused === "no-parent", "a Thread with no Apex has no Shiver")
   } finally {
     await world.close()
   }
@@ -297,9 +302,13 @@ async function apexes(): Promise<void> {
 
 function doors(): void {
   const list = AGENT_TOOLS.find((tool) => tool.verb === "list")!
-  assert.deepEqual(agentToolSchema(list).parse({ scope: "crew" }), { scope: "crew" }, "the MCP door takes scope crew")
+  assert.deepEqual(agentToolSchema(list).parse({ scope: "shiver" }), { scope: "shiver" }, "the MCP door takes scope shiver")
   assert.deepEqual(agentToolSchema(list).parse({ scope: "apexes" }), { scope: "apexes" }, "and scope apexes")
-  assert.match(list.mcp.fields.scope!, /crew/)
+  assert.deepEqual(agentToolSchema(list).parse({ scope: LEGACY_SHIVER_SCOPE }), { scope: LEGACY_SHIVER_SCOPE }, "and scope crew, from agents of older builds")
+  assert.throws(() => agentToolSchema(list).parse({ scope: "everyone" }), "but no other word")
+  const advertised = JSON.stringify(z.toJSONSchema(agentToolSchema(list), { io: "input" }))
+  assert.ok(advertised.includes('"shiver"') && !advertised.includes(`"${LEGACY_SHIVER_SCOPE}"`), `the schema advertises shiver alone: ${advertised}`)
+  assert.match(list.mcp.fields.scope!, /shiver/)
   assert.match(ORCHESTRATION_INSTRUCTIONS, /scope: apexes.*reading never wakes them/)
 }
 
@@ -394,9 +403,9 @@ try {
   doors()
   digestTwins()
   await manyReports()
-  await crew()
+  await shiver()
   await apexes()
-  console.log("test:orch-comms: compact answers, finished lines, every digest entry's structured twin, bursts past one wake's cards, the crew view and its brief line, and other Apexes read and messaged pass")
+  console.log("test:orch-comms: compact answers, finished lines, every digest entry's structured twin, bursts past one wake's cards, the Shiver view and its brief line, and other Apexes read and messaged pass")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
