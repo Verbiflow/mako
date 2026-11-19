@@ -43,7 +43,7 @@ import {
   type ScheduleTrigger,
 } from "../contracts/automations.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
-import { eventMarker, untrustedEventText, type CloudRun } from "@mako/protocol/automations-cloud"
+import { CloudRunStartSchema, eventMarker, untrustedEventText, type CloudRun, type CloudRunStart } from "@mako/protocol/automations-cloud"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { readAutomationFile, writeAutomationFile, type AutomationFileReading } from "./automation-file.js"
 import type { AutomationStore } from "./automation-store.js"
@@ -171,6 +171,11 @@ export interface AutomationsDeps {
   relaysProposals?: boolean
   /** The person's Mac: tells a cloud Thread's host how a proposal forwarded from it went (`mako:automations-forward-settle`). */
   forward?(): { settle(thread: string, proposal: string, outcome: ForwardedOutcome): Promise<void> } | undefined
+  /**
+   * Starts a cloud run on this host (a cloud Thread's), asked by the account: harness, rule, model, reasoning and mode
+   * settled as a run here settles them, and refused, saying why, where they can't be (`mako:automations-cloud-start`).
+   */
+  cloudStart?(launch: CloudRunStart): Promise<{ harness: string; modeId: string }>
   /** The account's webhooks (`AutomationCloud.hook`), once this Mac is signed in to one with the cloud. */
   hooks?(): { hook(name: string, provider?: AutomationHook["provider"], rotate?: boolean, secret?: string): Promise<AutomationHook> } | undefined
   now?(): number
@@ -1051,6 +1056,15 @@ export class Automations {
     await this.#deps.store.save()
   }
 
+  /** A cloud run's start, asked by the account of this cloud Thread's host (`AutomationsDeps.cloudStart`). */
+  async cloudStart(launch: JsonValue): Promise<{ harness: string; modeId: string }> {
+    const start = this.#deps.cloudStart
+    if (!start) throw new Error("This host doesn't start cloud runs.")
+    const asked = CloudRunStartSchema.safeParse(launch)
+    if (!asked.success) throw new Error(`A cloud run's start isn't one: ${asked.error.issues.slice(0, 3).map((issue) => `${issue.path.join(".")}: ${issue.message}`).join("; ")}`)
+    return start(asked.data)
+  }
+
   /** On a cloud machine's host: its agents' proposals the person's Mac hasn't settled, pending or decided here. */
   forwarded(): AutomationProposal[] {
     return this.#deps.store.proposals().filter((proposal) => proposal.status === "pending" || proposal.relay === "awaiting")
@@ -1202,6 +1216,7 @@ export function declareAutomationMethods(methods: MethodTable, automations: Auto
   methods.handle("mako:automations-draft", (conversationId: string) => automations.draft(conversationId))
   methods.handle("mako:automations-templates", () => automations.templates())
   methods.handle("mako:automations-run-of", (conversation: string) => automations.runOf(conversation))
+  methods.handle("mako:automations-cloud-start", (launch: JsonValue) => automations.cloudStart(launch))
   methods.handle("mako:automations-forwarded", async () => {
     await automations.start()
     return automations.forwarded()

@@ -6,9 +6,10 @@ import type { RecordsLink } from "@mako/sessions/record-sync"
 import { z } from "zod"
 import { decodeRuntimeValue, encodeRuntimeValue, type RuntimeEvent } from "./contracts/runtime-value.js"
 import { sessionAccessTier } from "./contracts/access.js"
-import { childMode, listedUnderApex } from "./contracts/agents.js"
+import { listedUnderApex } from "./contracts/agents.js"
 import type { LiveStartOptions } from "./contracts/live-conversations.js"
-import { resolveFinTuning } from "./contracts/fin-tuning.js"
+import { FinTargetSchema } from "./contracts/fin-tuning.js"
+import type { CloudRunStart } from "@mako/protocol/automations-cloud"
 import { harnessOrder } from "./contracts/harness-defaults.js"
 import { listedFins } from "./contracts/children.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
@@ -40,7 +41,7 @@ import { StreamMismatches } from "./base/stream-mismatches.js"
 import type { HostChannel } from "./contracts/host-call-inputs.js"
 import { detachedSecrets, type HostSecretStore } from "./base/host-secrets.js"
 import { ATTRIBUTION_SETTLE_MS, declareAttributionMethods, harnessStores, openAttribution, writtenPaths, type Attribution } from "./attribution/index.js"
-import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, WatchedTrees, Automations, AutomationStore, AutomationCloud, projectKey, AutomationNotStartedError, type AutomationLaunch, type AutomationThreadReading, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareRemoteAppMethods, ViewHints, declareViewHints, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
+import { childProcessReader, CheckoutLeave, cloudHasAll, cloneRepository, MediaRenditions, OwnedFiles, readSignedFile, readWindowFile, WorkspaceClients, WatchedTrees, Automations, AutomationStore, AutomationCloud, projectKey, planAutomationStart, type AutomationStartPorts, AutomationNotStartedError, type AutomationLaunch, type AutomationThreadReading, childBackend, probeDelivery, administratorPrompt, declareFileEventsMethods, FileEventsServiceWatch, readFseventsd, WatchReadings, type FileHistory, watchTree, watchOutsideGitDir, ConversationFiles, ArtifactPreviews, checkoutConversations, openWorkspaces, openWorkspaceMovers, declareRemoteAppMethods, ViewHints, declareViewHints, BuildSlots, declareWorkspaceMethods, RecipeAccounts, CloudCarriedFiles, declareCarriedFilesMethods, readProjectRecipe, answeredElsewhere, elsewhereRefusal, type HostPool, type AgentHost, type WorkspaceMovers, declareSetupMethods, SetupViews } from "./workspaces/index.js"
 import { hostClient, withHostClient } from "./base/host-client.js"
 import { ProviderChildren, readMakoProcesses } from "./base/provider-children.js"
 import { commonDirOf } from "@mako/git"
@@ -1874,6 +1875,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     changed: (project) => void automationCloud?.sync(project),
     hooks: () => automationCloud,
     forward: () => automationCloud?.forward,
+    cloudStart: (launch) => startCloudRun(launch),
     // A cloud machine's host: what its agents propose is applied on the person's Mac, which reads it from here.
     relaysProposals: config.machineAgentFd !== undefined,
     scheduler: { start: (due) => shell.jobs.every("automations due", AUTOMATIONS_TICK_MS, () => due(Date.now()), { firstAfterMs: 10_000 }) },
@@ -1963,6 +1965,17 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         return { state: "working" }
     }
   }
+  /** What the start of an automation's run reads of this host (`planAutomationStart`). */
+  const automationStartPorts: AutomationStartPorts = {
+    harnesses: () => {
+      const drivers = new Set(providerHost.liveDrivers.list().map((driver) => driver.provider))
+      return harnessOrder(SavedOrderSchema.parse(preferences.value("harnessOrder")), providerHost.profiles.list().map((loader) => loader.provider)).filter((each) => drivers.has(each))
+    },
+    modes: (harness) => providerHost.liveDrivers.get(harness)?.modes,
+    profile: (harness, cwd) => harnesses.profiles.forSend(harness, cwd),
+    reading: () => finDefaults.reading(),
+    label: (harness) => harnessLabel(providerHost, harness),
+  }
   /** A run's Thread, started as `agents_start` starts a Fin's, but at the top: no Apex, the person's own. */
   const startAutomationThread = async (launch: AutomationLaunch): Promise<{ thread?: string; place?: string }> => {
     if (fixtureDesk) throw new AutomationNotStartedError("The fixture desk runs no automations.")
@@ -1972,55 +1985,45 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       live.submit(launch.conversationId, launch.requestId, launch.text)
       return {}
     }
-    const policy = finDefaults.reading().policy
-    const ruled = start.rule === undefined ? undefined : policy?.rules[start.rule - 1]
-    if (start.rule !== undefined && !ruled) throw new AutomationNotStartedError(`The person has no rule ${start.rule} for Fins now.`)
-    const order = harnessOrder(SavedOrderSchema.parse(preferences.value("harnessOrder")), providerHost.profiles.list().map((loader) => loader.provider))
-    const drivers = new Set(providerHost.liveDrivers.list().map((driver) => driver.provider))
-    let harness = start.harness ?? ruled?.target.harness
-    if (!harness) {
-      for (const candidate of order.filter((each) => drivers.has(each))) {
-        if ((await harnesses.profiles.forSend(candidate, project).catch(() => undefined))?.available) {
-          harness = candidate
-          break
-        }
-      }
-    }
-    if (!harness || !drivers.has(harness)) throw new AutomationNotStartedError(`No harness named ${harness ?? "(none)"} runs here.`)
-    const profile = await harnesses.profiles.forSend(harness, project)
-    if (!profile.available) throw new AutomationNotStartedError(`${harnessLabel(providerHost, harness)} isn't ready on this Mac: sign in to it in Settings › Agents.`)
-    const reading = finDefaults.reading()
-    const tuned = resolveFinTuning({
-      label: harnessLabel(providerHost, harness),
-      models: profile.models,
-      asked: { ...(start.model && { model: start.model }), ...(start.reasoning && { reasoning: start.reasoning }) },
-      ...(ruled?.target.settings && ruled.target.harness === harness && { rule: { who: `Rule ${start.rule}`, settings: ruled.target.settings } }),
-      ...(reading.chosen[harness] && { chosen: reading.chosen[harness] }),
-      ...(reading.used[harness] && { used: reading.used[harness] }),
-      ...(profile.settings && { recommended: profile.settings }),
+    const planned = await planAutomationStart(automationStartPorts, {
+      cwd: project,
+      start,
+      title: `${definition.name} · ${launch.run.occurrence}`,
+      conversationId: launch.conversationId,
+      requestId: launch.requestId,
+      text: launch.text,
+      ...(definition.limits.tokenBudget && { tokenBudget: definition.limits.tokenBudget }),
     })
-    if ("refused" in tuned) throw new AutomationNotStartedError(tuned.refused)
-    const mode = childMode(providerHost.liveDrivers.get(harness)?.modes, start.access)
-    if (!mode) throw new AutomationNotStartedError(`${harnessLabel(providerHost, harness)} has no access level at or below ${start.access}.`)
     const workspace = start.workspace
     const branch = launch.branch
     const options: LiveStartOptions = {
-      conversationId: launch.conversationId,
-      title: `${definition.name} · ${launch.run.occurrence}`.slice(0, 120),
-      modeId: mode.id,
-      ...(tuned.settings && { tuning: tuned.settings }),
-      ...(definition.limits.tokenBudget
-        ? { goal: { objective: launch.text, tokenBudget: definition.limits.tokenBudget } }
-        : { initialRequest: { id: launch.requestId, text: launch.text, attachments: [] } }),
+      ...planned.options,
       ...(workspace && {
         worktree: true,
         ...(branch ? { worktreeStart: { kind: "branch" as const, branch } } : workspace.base ? { worktreeStart: { kind: "from" as const, ref: workspace.base } } : {}),
       }),
       ...(start.place === "cloud" && { cloud: {} }),
     }
-    telemetry.feature("automation.ran", harness)
-    await methods.invoke("mako:live-start", [harness, project, options])
+    telemetry.feature("automation.ran", planned.harness)
+    await methods.invoke("mako:live-start", [planned.harness, project, options])
     return start.place === "cloud" ? { place: "cloud" } : {}
+  }
+  /** A cloud run's start on this machine's host (`mako:automations-cloud-start`): the same mapping as a run on the person's Mac. */
+  const startCloudRun = async (asked: CloudRunStart): Promise<{ harness: string; modeId: string }> => {
+    if (fixtureDesk) throw new AutomationNotStartedError("The fixture desk runs no automations.")
+    const planned = await planAutomationStart(automationStartPorts, {
+      cwd: asked.cwd,
+      start: { access: asked.access, ...(asked.harness && { harness: asked.harness }), ...(asked.model && { model: asked.model }), ...(asked.reasoning && { reasoning: asked.reasoning }), ...(asked.rule !== undefined && { rule: asked.rule }) },
+      ...(asked.ruled && { ruled: FinTargetSchema.parse(asked.ruled) }),
+      title: asked.title,
+      conversationId: asked.conversationId,
+      requestId: asked.requestId,
+      text: asked.text,
+      ...(asked.tokenBudget && { tokenBudget: asked.tokenBudget }),
+    })
+    telemetry.feature("automation.ran", planned.harness)
+    await methods.invoke("mako:live-start", [planned.harness, asked.cwd, planned.options])
+    return { harness: planned.harness, modeId: planned.options.modeId ?? "" }
   }
   late.automations = workspaceAutomations
   if (!fixtureDesk && config.machineAgentFd === undefined) {
@@ -2031,6 +2034,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       threadCall: (thread, channel, args, passive) => threads.call({ kind: "cloud", thread }, channel, args, { passive }),
       automations: workspaceAutomations,
       store: automationStore,
+      // A rule a cloud run follows is the person's, here: what it names goes with the registration.
+      ruleTarget: (rule) => finDefaults.reading().policy?.rules[rule - 1]?.target,
       demand: automationsLinked,
       // The project's stable key: its GitHub repository and the folder in it, never this Mac's path.
       repository: async (project) => {

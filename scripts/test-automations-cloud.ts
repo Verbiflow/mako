@@ -4,12 +4,15 @@ import { tmpdir } from "node:os"
 import { z } from "zod"
 import { join } from "node:path"
 import { AccountEventSchema } from "@mako/protocol/account-events"
-import { AutomationsChangedEventSchema, CloudAutomationSchema, type CloudAutomation, type CloudClaim, type CloudRun } from "@mako/protocol/automations-cloud"
+import { AutomationsChangedEventSchema, CloudAutomationSchema, type CloudAutomation, type CloudClaim, type CloudRun, type CloudRunStart } from "@mako/protocol/automations-cloud"
 import { automationBriefText, ForwardedOutcomeSchema, type AutomationDefinitionInput, type AutomationProposal, type ForwardedOutcome } from "@mako/host/contracts/automations"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
 import { AutomationCloud, cloudRunRecord, projectKey, registrationOf, wantsCloud, type AutomationCloudApi } from "@mako/host/workspaces/automation-cloud"
 import { AutomationStore } from "@mako/host/workspaces/automation-store"
-import { Automations, type AutomationLaunch, type AutomationThreadReading } from "@mako/host/workspaces/automations"
+import { AutomationNotStartedError, Automations, type AutomationLaunch, type AutomationThreadReading } from "@mako/host/workspaces/automations"
+import { planAutomationStart, type AutomationStartInput, type AutomationStartPorts } from "@mako/host/workspaces/automation-start"
+import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
+import type { LiveSessionMode } from "@mako/host/contracts/providers-acp"
 import { AutomationDefinitionSchema } from "@mako/host/contracts/automations"
 
 /**
@@ -474,6 +477,83 @@ await test("a cloud run's pending proposal waits in the Mac's Automations; decid
   await mac.cloud.feed()
   assert.deepEqual(mac.settled.map((each) => each.outcome.status), ["declined", "declined"])
   assert.equal(JSON.parse(await readFile(join(folder, ".mako", "automations.json"), "utf8")).automations.length, 1, "declined: nothing changed")
+})
+
+/* ------------------------------------------------------------------ a cloud run's start, mapped as a run here */
+
+/** A host's harnesses, faked: Claude with a mode at each access, a harness whose one mode is full, and one unready. */
+function startPorts(policy: FinPolicy = { rules: [] }): AutomationStartPorts {
+  const model = (id: string) => ({ id, label: id, options: [] })
+  const ladders = new Map<string, LiveSessionMode[]>([
+    ["claude", [{ id: "default", name: "Ask", access: "ask" }, { id: "acceptEdits", name: "Edits", access: "edits" }, { id: "bypassPermissions", name: "Full", access: "full" }]],
+    ["cursor", [{ id: "full-access", name: "Full access", access: "full" }]],
+    ["codex", [{ id: "read-only", name: "Read", access: "ask" }]],
+  ])
+  return {
+    harnesses: () => ["claude", "cursor", "codex"],
+    modes: (harness) => ladders.get(harness),
+    profile: async (harness) => ({ id: harness, label: harness, available: harness !== "codex", transport: "sdk", models: [model("opus"), model("sonnet")] }),
+    reading: () => ({ chosen: {}, used: {}, policy, moveOnLimit: true }),
+    label: (harness) => harness,
+  }
+}
+const asked = (start: AutomationStartInput["start"], extra: Partial<AutomationStartInput> = {}): AutomationStartInput => ({ cwd: "/work/app", start, title: "Nightly · x", conversationId: "c-1", requestId: "r-1", text: "Do it.", ...extra })
+
+await test("a cloud run's access maps to the harness's own mode at it, or the strictest below it, as a run here does", async () => {
+  const ports = startPorts()
+  assert.equal((await planAutomationStart(ports, asked({ harness: "claude", access: "edits" }))).options.modeId, "acceptEdits")
+  assert.equal((await planAutomationStart(ports, asked({ harness: "claude", access: "auto" }))).options.modeId, "acceptEdits", "auto has no mode of its own: the strictest below, never full")
+  assert.equal((await planAutomationStart(ports, asked({ harness: "claude", access: "full" }))).options.modeId, "bypassPermissions")
+  const planned = await planAutomationStart(ports, asked({ harness: "claude", model: "sonnet", access: "ask" }))
+  assert.equal(planned.options.tuning?.model, "sonnet")
+  assert.deepEqual(planned.options.initialRequest, { id: "r-1", text: "Do it.", attachments: [] })
+})
+
+await test("what can't be applied refuses the run, saying why: never a looser mode, another harness, or without its rule", async () => {
+  const ports = startPorts()
+  await assert.rejects(planAutomationStart(ports, asked({ harness: "cursor", access: "edits" })), (error: Error) => error instanceof AutomationNotStartedError && /no access level at or below edits/.test(error.message), "cursor's one mode is full: refused, not loosened")
+  await assert.rejects(planAutomationStart(ports, asked({ harness: "grok", access: "edits" })), /No harness named grok runs here/)
+  await assert.rejects(planAutomationStart(ports, asked({ harness: "codex", access: "ask" })), /isn't ready here/)
+  await assert.rejects(planAutomationStart(ports, asked({ harness: "claude", model: "gpt-9", access: "edits" })), AutomationNotStartedError)
+  await assert.rejects(planAutomationStart(ports, asked({ rule: 2, access: "edits" })), /no rule 2/, "a rule this host doesn't have, with none given, refuses")
+})
+
+await test("a rule follows what the person's Mac resolved it to; here, their own policy", async () => {
+  const planned = await planAutomationStart(startPorts(), asked({ rule: 1, access: "edits" }, { ruled: { harness: "claude", settings: { model: "opus" } } }))
+  assert.equal(planned.harness, "claude")
+  assert.equal(planned.options.tuning?.model, "opus")
+  const local = await planAutomationStart(startPorts({ rules: [{ id: "r1", when: "anything", target: { harness: "claude", settings: { model: "sonnet" } } }] }), asked({ rule: 1, access: "edits" }))
+  assert.equal(local.options.tuning?.model, "sonnet")
+})
+
+await test("mako:automations-cloud-start: the account's launch is read strictly, then started by this host's mapping", async () => {
+  const started: CloudRunStart[] = []
+  const store = new AutomationStore(join(scratch, "cloud-start-state"))
+  const automations = new Automations({
+    store, scheduler: { start: () => () => {} }, emit: () => {}, openProjects: () => [], startThread: async () => ({}), threadOf: () => ({ state: "unknown" }), stopThread: async () => {},
+    runGate: async () => ({ exit: 0, stdout: "", stderr: "" }), head: async () => undefined, tell: async () => {}, asks: { raise: () => "a", settle: () => {} },
+    cloudStart: async (launch) => {
+      started.push(launch)
+      return { harness: "claude", modeId: (await planAutomationStart(startPorts(), { cwd: launch.cwd, start: { access: launch.access, ...(launch.harness && { harness: launch.harness }) }, title: launch.title, conversationId: launch.conversationId, requestId: launch.requestId, text: launch.text })).options.modeId ?? "" }
+    },
+  })
+  const launch = { cwd: "/home/mako/app", harness: "claude", access: "edits", conversationId: "c", requestId: "r", text: "Do it.", title: "Nightly · x" }
+  assert.deepEqual(await automations.cloudStart(launch), { harness: "claude", modeId: "acceptEdits" })
+  await assert.rejects(automations.cloudStart({ ...launch, access: "root" }), /isn't one/, "an access this host doesn't know is refused, not defaulted")
+  await assert.rejects(automations.cloudStart({ ...launch, harness: "cursor" }), /no access level at or below edits/)
+  assert.equal(started.length, 2)
+})
+
+await test("registration carries the start as a run here maps it: reasoning, the rule, and what the rule names; a rule the person doesn't have isn't registered", async () => {
+  const definition = AutomationDefinitionSchema.parse({ ...onRelease, start: { harness: "claude", reasoning: "high", rule: 1, access: "edits" } })
+  const registered = registrationOf(definition, { enabled: true, failures: 0 }, { key: KEY, repository: { url: "https://github.com/acme/app" } }, 1, { harness: "claude", settings: { model: "opus" } })
+  assert.deepEqual([registered.start.reasoning, registered.start.rule, registered.start.ruled, registered.start.access], ["high", 1, { harness: "claude", settings: { model: "opus" } }, "edits"])
+  const folder = await project([{ ...onRelease, start: { rule: 3 } }])
+  const w = makeWorld([folder])
+  await w.automations.setEnabled(folder, "on-release", true)
+  await w.cloud.sync()
+  assert.equal(w.account.registered.size, 0)
+  assert.match((await w.automations.reading(folder)).automations[0]!.issues.join(" "), /rule 3 for Fins, which you don't have/)
 })
 
 await rm(scratch, { recursive: true, force: true })

@@ -57,6 +57,13 @@ export const CloudTriggerSchema = z.discriminatedUnion("kind", [
 ])
 export type CloudTrigger = z.infer<typeof CloudTriggerSchema>
 
+/** A rule's target: the harness it names and the settings it gives it, as the person's Mac holds their rule. */
+export const RuleTargetSchema = z.object({
+  harness: z.string().min(1).max(64),
+  /** A harness's session settings: its model, and options each a word or a switch. */
+  settings: z.object({ model: z.string().min(1).max(200).optional(), options: z.record(z.string().max(80), z.union([z.string().max(200), z.boolean()])).optional() }).optional(),
+})
+
 /** One automation as a Mac registers it with the account. */
 export const CloudAutomationSchema = z.object({
   /**
@@ -75,6 +82,10 @@ export const CloudAutomationSchema = z.object({
   start: z.object({
     harness: z.string().min(1).max(40).optional(),
     model: z.string().min(1).max(200).optional(),
+    reasoning: z.string().min(1).max(40).optional(),
+    /** The number of the person's rule for Fins it follows, with what it names, as their Mac resolved it. */
+    rule: z.number().int().positive().max(64).optional(),
+    ruled: RuleTargetSchema.optional(),
     access: z.string().min(1).max(40).default("edits"),
     /** `here` (the owning Mac), `cloud`, or `device:<name>`. */
     place: z.string().min(1).max(120).default("here"),
@@ -164,6 +175,29 @@ export const CloudHookSchema = z.object({
   url: z.string(),
 })
 export type CloudHook = z.infer<typeof CloudHookSchema>
+
+/**
+ * `mako:automations-cloud-start`: a cloud run's start, asked of its cloud Thread's host by the account once its machine
+ * is up, in `cwd` (its clone, from `mako:boot`). The host settles harness, model, reasoning, rule and the mode for
+ * `access` exactly as a run on the person's Mac, and refuses (the run fails, saying why) what it can't apply; it never
+ * starts a looser mode. Repeated, the same conversation: started once.
+ */
+export const CloudRunStartSchema = z.object({
+  cwd: z.string().min(1).max(4096),
+  harness: z.string().min(1).max(40).optional(),
+  model: z.string().min(1).max(200).optional(),
+  reasoning: z.string().min(1).max(40).optional(),
+  rule: z.number().int().positive().max(64).optional(),
+  ruled: RuleTargetSchema.optional(),
+  /** One of the host's access tiers (`ACCESS_TIER_NAMES`): `plan`, `chat`, `ask`, `edits`, `auto`, `full` or `deny`. */
+  access: z.enum(["plan", "chat", "ask", "edits", "auto", "full", "deny"]),
+  conversationId: z.string().min(1).max(200),
+  requestId: z.string().min(1).max(200),
+  text: z.string().min(1).max(400_000),
+  title: z.string().min(1).max(200),
+  tokenBudget: z.number().int().positive().optional(),
+})
+export type CloudRunStart = z.infer<typeof CloudRunStartSchema>
 
 /** The client key every repeat of one occurrence starts under. */
 export function automationClientKey(id: string, occurrence: string): string {

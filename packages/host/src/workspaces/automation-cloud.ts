@@ -13,6 +13,7 @@ import {
   type AutomationTrigger,
   type ForwardedOutcome,
 } from "../contracts/automations.js"
+import type { FinTarget } from "../contracts/fin-tuning.js"
 import type { JsonValue } from "../contracts/json.js"
 import type { AutomationClaims, Automations } from "./automations.js"
 import type { AutomationStore } from "./automation-store.js"
@@ -59,6 +60,8 @@ export interface AutomationCloudDeps {
   repository(project: string): Promise<ProjectRepository | undefined>
   /** On while any automation here is registered: what the runs feed's job needs. */
   demand?: { set(on: boolean): void }
+  /** What the person's rule for Fins number `rule` names now; undefined when they have no such rule. */
+  ruleTarget?(rule: number): FinTarget | undefined
   /** A sync that couldn't reach the account is tried again after this long. */
   retryMs?: number
   /**
@@ -104,8 +107,11 @@ function cloudTriggers(triggers: readonly AutomationTrigger[]): CloudTrigger[] {
   })
 }
 
-/** What this Mac registers of an automation that's on. */
-export function registrationOf(definition: AutomationDefinition, local: AutomationLocal, project: ProjectRepository, now: number): CloudAutomation {
+/**
+ * What this Mac registers of an automation that's on: with its start as a run here starts (harness, model, reasoning,
+ * access, and its rule with what the rule names now, `ruled`), so its cloud Thread's host maps them the same way.
+ */
+export function registrationOf(definition: AutomationDefinition, local: AutomationLocal, project: ProjectRepository, now: number, ruled?: FinTarget): CloudAutomation {
   const { start, limits } = definition
   return CloudAutomationSchema.parse({
     project: project.key,
@@ -114,7 +120,16 @@ export function registrationOf(definition: AutomationDefinition, local: Automati
     fingerprint: automationFingerprint(definition),
     brief: automationBriefText(definition.prompt),
     repository: project.repository,
-    start: { ...(start.harness && { harness: start.harness }), ...(start.model && { model: start.model }), access: start.access, place: start.place, whenAway: start.whenAway },
+    start: {
+      ...(start.harness && { harness: start.harness }),
+      ...(start.model && { model: start.model }),
+      ...(start.reasoning && { reasoning: start.reasoning }),
+      ...(start.rule !== undefined && { rule: start.rule }),
+      ...(ruled && { ruled }),
+      access: start.access,
+      place: start.place,
+      whenAway: start.whenAway,
+    },
     triggers: cloudTriggers(definition.triggers),
     limits: { overlap: limits.overlap, ...(limits.maxRunsPerDay !== undefined && { maxRunsPerDay: limits.maxRunsPerDay }), timeoutMin: limits.timeoutMin },
     enabledAt: local.enabledAt ?? now,
@@ -224,12 +239,23 @@ export class AutomationCloud {
           wanted.delete(definition.id)
           continue
         }
+        const rule = definition.start.rule
+        const ruled = rule === undefined ? undefined : this.#deps.ruleTarget?.(rule)
+        if (rule !== undefined && !ruled) {
+          // Never registered without what its rule names: its cloud run would start on something the rule doesn't say.
+          await this.#unregister(api, project, definition.id)
+          await automations.setCloudRegistered(project, definition.id, { issue: `It follows rule ${rule} for Fins, which you don't have now.` })
+          wanted.delete(definition.id)
+          continue
+        }
+        // What's registered changes with the definition and with what its rule names.
+        const sent = ruled ? `${view.fingerprint}:${JSON.stringify(ruled)}` : view.fingerprint
         const held = this.#registration(project, definition.id)
-        if (held && held.key === repository.key && held.fingerprint === view.fingerprint && local.cloudRegistered) continue
+        if (held && held.key === repository.key && held.fingerprint === sent && local.cloudRegistered) continue
         if (held && held.key !== repository.key) await api.unregister(held.key, definition.id)
-        const answer = await api.register(registrationOf(definition, local, repository, Date.now()))
+        const answer = await api.register(registrationOf(definition, local, repository, Date.now(), ruled))
         if ("ok" in answer) {
-          store.setCloudRegistration(project, definition.id, { key: repository.key, fingerprint: view.fingerprint })
+          store.setCloudRegistration(project, definition.id, { key: repository.key, fingerprint: sent })
           await automations.setCloudRegistered(project, definition.id, { ok: true })
           hostLog("automations", "registered with the cloud account", { automation: definition.id })
         } else {
@@ -247,6 +273,13 @@ export class AutomationCloud {
     }
     await store.save()
     this.#deps.demand?.set(store.cloudRegistrations().length > 0)
+  }
+
+  async #unregister(api: AutomationCloudApi, project: string, id: string): Promise<void> {
+    const held = this.#registration(project, id)
+    if (!held) return
+    await api.unregister(held.key, id)
+    this.#deps.store.setCloudRegistration(project, id, undefined)
   }
 
   /** Reads the account's runs on from the last this Mac took; one read at a time, a second joining it. */

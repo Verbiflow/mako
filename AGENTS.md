@@ -3920,6 +3920,11 @@ this Mac's cap, overlap and gate, then claimed (`POST /claim`) or declined; a re
 claimed before it runs here, and a 409 or an unreachable account means it doesn't. A cloud run's agent's proposals stay
 on its machine's host (`relaysProposals`) until the Mac reads them (`mako:automations-forwarded`), applies the
 person's decision to the project's file here, and says how it went (`mako:automations-forward-settle`).
+A cloud run starts on its cloud Thread's host through `mako:automations-cloud-start`, which settles its harness,
+rule, model, reasoning and mode with the same planner as a run here (`planAutomationStart`, `workspaces/automation-start.ts`):
+its mode is the harness's own at its access or the strictest below, and anything it can't apply fails the run, never a
+looser start. A rule a registered automation follows goes with it as what the person's rule names (`ruled`); one they
+don't have isn't registered. A cloud run past its limit is stopped on its Thread (`mako:live-cancel`), not only failed.
 `mako:automations-run-of` names the run a Thread is, from an index of every kept run by conversation.
 `npm run test:automations` holds all of it.
 

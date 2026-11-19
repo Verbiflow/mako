@@ -65,6 +65,7 @@ export { ArtifactPreviews, type ProviderArtifactPreview } from "./artifact-previ
 export { Automations, AutomationNotStartedError, automationUuid, decisionNote, gateContext, type AutomationLaunch, type AutomationScheduler, type AutomationThreadReading, type AutomationsDeps, type RunWhenJudge, type ThreadDraftSource } from "./automations.js"
 export { AutomationStore } from "./automation-store.js"
 export { AutomationCloud, projectKey, type AutomationCloudApi } from "./automation-cloud.js"
+export { planAutomationStart, type AutomationStartInput, type AutomationStartPorts } from "./automation-start.js"
 export { parseAutomationFile, readAutomationFile } from "./automation-file.js"
 export { checkoutConversations } from "./checkout-conversations.js"
 export { WorkspaceClients } from "./clients.js"
