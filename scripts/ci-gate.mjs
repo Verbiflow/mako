@@ -488,7 +488,22 @@ const NEEDS_NOTHING = [/scripts\/test-mcp\.ts\b/, /scripts\/test-computer-tools\
 const NEEDS_BY_FILE = [[/scripts\/test-(native-recording|control-recording|control-recording-idle|control-recording-stream|browser-recording|browser-video)\.ts\b/, "ffmpeg"]]
 const INSTALL = {
   // Recording reads ffmpeg and ffprobe on PATH; the runner's image has neither.
-  ffmpeg: process.platform === "darwin" ? "command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg" : "command -v ffmpeg >/dev/null || (sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends ffmpeg)",
+  ffmpeg: process.platform === "darwin" ? "command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg" : `command -v ffmpeg >/dev/null || ${aptInstall("ffmpeg")}`,
+}
+
+/**
+ * Installs an apt package without waiting on a mirror that doesn't answer. The runner's own mirror once let
+ * `apt-get update` hang for the whole install budget on every shard that recorded (2026-11-19). The package is tried
+ * from the lists the image already has; then the lists are refreshed with each network step bounded and retried; then
+ * from Ubuntu's own archive in place of the runner's mirror.
+ */
+function aptInstall(name) {
+  const net = "-o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
+  const install = `sudo timeout 120 apt-get install -y -qq --no-install-recommends ${net} ${name}`
+  const refresh = (extra = "") => `sudo timeout 90 apt-get update -qq ${net} ${extra}`
+  const archive = "-o Dir::Etc::sourcelist=/tmp/apt-archive.list -o Dir::Etc::sourceparts=-"
+  const archiveList = 'echo "deb http://archive.ubuntu.com/ubuntu $(. /etc/os-release; echo $VERSION_CODENAME) main universe" | sudo tee /tmp/apt-archive.list >/dev/null'
+  return `(${install} || (${refresh()} && ${install}) || (${archiveList} && ${refresh(archive)} && sudo timeout 120 apt-get install -y -qq --no-install-recommends ${net} ${archive} ${name}))`
 }
 
 /**
