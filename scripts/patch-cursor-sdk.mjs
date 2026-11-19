@@ -59,221 +59,327 @@
 // before each retry, and when the hook gives words, sends them as a user
 // message on that checkpoint instead (on a resend of the turn's own message,
 // after its words), so the model goes on from what happened.
+//
+// Each replacement is written against 1.4.0's ESM bytes and found in any release, in either build, by its shape
+// (`lib/anchored-patch.mjs`): the bundler's short names may change and chunks may be renumbered; the code an anchor
+// stands on may not. A release that changed it fails the install, naming the patch and the anchor that is gone.
+// The patch's own locals are `mako$` names, which no bundle uses, so they can't capture one of the bundle's.
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
+import { gunzipSync, gzipSync } from "node:zlib"
+import { z } from "zod"
 import { fileURLToPath } from "node:url"
+import { applyAnchored, bind, locate } from "./lib/anchored-patch.mjs"
 
-const VERSION = "1.4.0"
-const MARKER = "/*mako:patched:12*/"
+/** The release the anchors below were written against. Any other is patched by shape, or refused naming why. */
+export const CURSOR_SDK_ANCHORED_ON = "1.4.0"
+const MARKER = "/*mako:patched:13*/"
 const ANY_MARKER = "/*mako:patched"
 
 /**
- * `s` is one transcript file's record: how many root messages it holds, how
- * many summary archives the state had, and the id of its last message. A
- * count of 0 makes the SDK's incremental writer write in full. A full write
- * drops the first of two leading user messages, so a file is rewritten until
- * it holds 16 messages: both are written by then unless 15 are system prompts.
+ * `s` is one transcript file's record: how many root messages it holds, how many summary archives the state had,
+ * and the id of its last message. A count of 0 makes the SDK's incremental writer write in full. A full write drops
+ * the first of two leading user messages, so a file is rewritten until it holds 16 messages: both are written by then
+ * unless 15 are system prompts. `Ij` is the transcript writer's class.
  */
-const appendTranscript = writer => [
-  "appendTranscript(e,t,r,n,o){",
-  `const i=e.resolveFilePath(n,"jsonl"),s=${writer}.transcripts.get(i)??{count:0,archives:0,last:void 0,chain:Promise.resolve()};${writer}.transcripts.set(i,s);`,
-  "const k=x=>null==x?void 0:\"string\"==typeof x?x:Buffer.from(x).toString(\"hex\"),a=()=>r.summaryArchives?.length??0;",
-  "return s.chain=s.chain.then((()=>{const m=r.rootPromptMessagesJson,c=s.count>=16&&a()===s.archives&&m.length>=s.count&&k(m[s.count-1])===s.last?s.count:0;",
-  "return e.writeFromStateIncremental(t,r,n,c,o)})).then((c=>{s.count=c||0,s.archives=a(),s.last=s.count>0?k(r.rootPromptMessagesJson[s.count-1]):void 0}),(()=>{s.count=0})),s.chain}",
+const APPEND_TRANSCRIPT = [
+  "appendTranscript(mako$e,mako$t,mako$r,mako$n,mako$o){",
+  'const mako$i=mako$e.resolveFilePath(mako$n,"jsonl"),mako$s=Ij.transcripts.get(mako$i)??{count:0,archives:0,last:void 0,chain:Promise.resolve()};Ij.transcripts.set(mako$i,mako$s);',
+  'const mako$k=mako$x=>null==mako$x?void 0:"string"==typeof mako$x?mako$x:Buffer.from(mako$x).toString("hex"),mako$a=()=>mako$r.summaryArchives?.length??0;',
+  "return mako$s.chain=mako$s.chain.then((()=>{const mako$m=mako$r.rootPromptMessagesJson,mako$c=mako$s.count>=16&&mako$a()===mako$s.archives&&mako$m.length>=mako$s.count&&mako$k(mako$m[mako$s.count-1])===mako$s.last?mako$s.count:0;",
+  "return mako$e.writeFromStateIncremental(mako$t,mako$r,mako$n,mako$c,mako$o)})).then((mako$c=>{mako$s.count=mako$c||0,mako$s.archives=mako$a(),mako$s.last=mako$s.count>0?mako$k(mako$r.rootPromptMessagesJson[mako$s.count-1]):void 0}),(()=>{mako$s.count=0})),mako$s.chain}",
 ].join("")
 
-const STORE_LOCK_WAIT = [["PRAGMA busy_timeout = 5000;", "PRAGMA busy_timeout = 60000;"]]
-
-/** The blob store has the same names in 1.4.0's ESM and CJS builds. */
-const BLOB_STORE = [
-  [
-    "class R{constructor(t){this.persistBlob=t,this.blobs=new Map}",
-    `${MARKER}class R{constructor(t,r){this.persistBlob=t,this.loadBlob=r,this.blobs=new Map}`,
-  ],
+/** The blob store: `i.nj` keys a blob id, `g` loads every blob of an agent, `R` holds them. */
+const CHECKPOINT_BLOBS = [
+  ["class R{constructor(t){this.persistBlob=t,this.blobs=new Map}", `${MARKER}class R{constructor(t,mako$r){this.persistBlob=t,this.loadBlob=mako$r,this.blobs=new Map}`],
   [
     "async getBlob(t,r){return this.blobs.get((0,i.nj)(r))}",
-    "async getBlob(t,r){const e=(0,i.nj)(r),s=this.blobs.get(e);return void 0===s&&this.loadBlob?await this.loadBlob(e):s}",
+    "async getBlob(t,r){const mako$e=(0,i.nj)(r),mako$s=this.blobs.get(mako$e);return void 0===mako$s&&this.loadBlob?await this.loadBlob(mako$e):mako$s}",
   ],
-  [
-    "this.blobs.set(n,s),await(this.persistBlob?.(n,s))}",
-    "this.blobs.set(n,s),await(this.persistBlob?.(n,s)),this.loadBlob&&this.blobs.get(n)===s&&this.blobs.delete(n)}",
-  ],
+  ["this.blobs.set(n,s),await(this.persistBlob?.(n,s))}", "this.blobs.set(n,s),await(this.persistBlob?.(n,s)),this.loadBlob&&this.blobs.get(n)===s&&this.blobs.delete(n)}"],
   [
     "const e=await this.getScopedAgentDocument(t);return e?.latestCheckpoint?this.setBlobStore(t,await g(this.localStore,t,e.latestCheckpoint)):this.createPersistingBlobStore(t)}",
     "return await this.getScopedAgentDocument(t),this.createPersistingBlobStore(t)}",
   ],
   [
     "createPersistingBlobStore(t){const r=new R(this.createPersistBlob(t));return this.blobStores.set(t,r),r}",
-    "createPersistingBlobStore(t){const r=new R(this.createPersistBlob(t),this.createLoadBlob(t));return this.blobStores.set(t,r),r}createLoadBlob(t){return async r=>{const e=await this.localStore.checkpoints.get({agentId:t,blobId:r});return e??void 0}}",
+    "createPersistingBlobStore(t){const r=new R(this.createPersistBlob(t),this.createLoadBlob(t));return this.blobStores.set(t,r),r}createLoadBlob(mako$t){return async mako$r=>{const mako$e=await this.localStore.checkpoints.get({agentId:mako$t,blobId:mako$r});return mako$e??void 0}}",
   ],
   [
     "const e=await g(this.localStore,t,r.latestCheckpoint),n=this.setBlobStore(t,e),s=await n.getBlob((0,o.q6)(),T(e.rootBlobId));",
     "const n=this.createPersistingBlobStore(t),s=await n.getBlob((0,o.q6)(),T(r.latestCheckpoint.rootBlobId));",
   ],
-  [
-    "const e=await g(this.localStore,t,r.latestCheckpoint),i=new s.We;",
-    "const e=r.latestCheckpoint,i=new s.We;",
-  ],
-  [
-    "const u=new n.pH(this.setBlobStore(t,e),i);",
-    "const u=new n.pH(this.createPersistingBlobStore(t),i);",
-  ],
+  ["const e=await g(this.localStore,t,r.latestCheckpoint),i=new s.We;", "const e=r.latestCheckpoint,i=new s.We;"],
+  ["const u=new n.pH(this.setBlobStore(t,e),i);", "const u=new n.pH(this.createPersistingBlobStore(t),i);"],
 ]
 
 /**
- * The same in the esm and cjs builds. `y` rejects when an append fails, `J`
- * when the stream is aborted. One subscription on `y` rejects every read
- * still waiting, not only the latest: two outstanding `next()` calls both
- * reject in the unpatched SDK. A read after the failure rejects at once.
+ * `y` rejects when an append fails, `J` when the stream is aborted. One subscription on `y` rejects every read still
+ * waiting, not only the latest: two outstanding `next()` calls both reject in the unpatched SDK. A read after the
+ * failure rejects at once.
  */
-export const BIDI_READS = [
+const BIDI_READS = [
   [
     "I={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();return{next:()=>Promise.race([t.next(),y]),",
-    "I={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();let f;const o=[];y.catch((t=>{f=[t];for(const r of o)r(t);o.length=0}));return{next:()=>f?Promise.reject(f[0]):new Promise(((r,e)=>{o.push(e),t.next().then((t=>{const n=o.indexOf(e);n<0||o.splice(n,1),r(t)}),(t=>{const n=o.indexOf(e);n<0||o.splice(n,1),e(t)}))})),",
+    "I={[Symbol.asyncIterator](){const t=B[Symbol.asyncIterator]();let mako$f;const mako$o=[];y.catch((mako$t=>{mako$f=[mako$t];for(const mako$r of mako$o)mako$r(mako$t);mako$o.length=0}));return{next:()=>mako$f?Promise.reject(mako$f[0]):new Promise(((mako$r,mako$e)=>{mako$o.push(mako$e),t.next().then((mako$t=>{const mako$n=mako$o.indexOf(mako$e);mako$n<0||mako$o.splice(mako$n,1),mako$r(mako$t)}),(mako$t=>{const mako$n=mako$o.indexOf(mako$e);mako$n<0||mako$o.splice(mako$n,1),mako$e(mako$t)}))})),",
   ],
-  [
-    "let g,_;const J=new Promise(((t,r)=>{_=()=>r(new d)}));",
-    "let g,_,z;const J=new Promise(((t,r)=>{_=()=>{const t=new d;r(t),z?.(t)}}));",
-  ],
-  [
-    "const r=await Promise.race([m.next(),J]);",
-    "const r=await new Promise(((t,r)=>{z=r,m.next().then(t,r)}));",
-  ],
+  ["let g,_;const J=new Promise(((t,r)=>{_=()=>r(new d)}));", "let g,_,mako$z;const J=new Promise(((t,r)=>{_=()=>{const mako$t=new d;r(mako$t),mako$z?.(mako$t)}}));"],
+  ["const r=await Promise.race([m.next(),J]);", "const r=await new Promise(((mako$t,mako$r)=>{mako$z=mako$r,m.next().then(mako$t,mako$r)}));"],
 ]
 
+/** The transcript store's file writer, which binds `fo` (node:fs/promises) and `s` (node:path) where it is. */
+const TRANSCRIPT_WRITE = 'async function Pj(e,t){const r=(0,s.dirname)(e);await(0,fo.mkdir)(r,{recursive:!0}),await(0,fo.writeFile)(e,t,"utf-8")}'
+/** The streamed writer's head, which binds the file it writes as `r`. */
+const STREAMED_HEAD = "async writeJsonlStreamed(e,t){const{filePath:r,appendFile:n}=t;let o=[],s=0,i=0,"
+/** The transcript writer's class, `Ij`. */
+const WRITER_CLASS = "class Ij{constructor(e){this.writeChain=Promise.resolve(),"
+const STAGED = '+".mako-"+process.pid+".tmp"'
 /**
- * `writer` is the transcript writer's class, `store` the transcript store's, `write` its file writer, `fs`
- * node:fs/promises, `child` the variable holding each subagent's state where the writer writes their transcripts,
- * `chunks` the streamed writer's count of chunks written.
  * The bundle's `fs` only carries the functions it already calls, so `appendFile` is not among them: passing
  * `fs.appendFile` stores `undefined`, and every transcript write then hydrates the whole conversation at once.
  * `writeFile` with flag `a` is the same call.
  */
-function transcripts({ writer, store, write, fs, child, chunks, flush }) {
-  const lock = "makoLock"
-  const options = `writeText:!1,writeJsonl:!0,appendFile:(p,d)=>${lock}(p,(()=>${fs}.writeFile(p,d,{flag:"a"}))),streamFullJsonlWrites:!0,`
-  const staged = `+".mako-"+process.pid+".tmp"`
-  return [
-    [
-      `async function ${write}(e,t){const r=(0,s.dirname)(e);await(0,${fs}.mkdir)(r,{recursive:!0}),await(0,${fs}.writeFile)(e,t,"utf-8")}`,
-      `async function ${write}(e,t){return ${lock}(e,(async()=>{const r=(0,s.dirname)(e);await(0,${fs}.mkdir)(r,{recursive:!0});const n=e${staged},o=await(0,${fs}.open)(n,"w");try{await o.writeFile(t,"utf-8"),await o.sync()}finally{await o.close()}await(0,${fs}.rename)(n,e),await makoSyncDir(e)}))}` +
-        // Runs `work` inside the process's transcript lock (`transcript-lock.ts`); outside Mako's child there is none.
-        `function ${lock}(p,w){const k=globalThis[Symbol.for("mako:cursor-transcript-lock")];return k?k(p,w):w()}` +
-        // A rename is durable once its folder is synced. Windows can't open a folder as a file (EISDIR, or EPERM),
-        // and makes a rename durable without it; a file system that can't sync a folder says so (EINVAL, ENOTSUP,
-        // EOPNOTSUPP). Any other failure is a rename that may not last, so the write fails.
-        `async function makoSyncDir(p){const d=(0,s.dirname)(p);let h;try{h=await(0,${fs}.open)(d,"r")}catch(e){if("win32"===process.platform&&("EISDIR"===e?.code||"EPERM"===e?.code))return;throw e}try{await h.sync()}catch(e){if(!["EINVAL","ENOTSUP","EOPNOTSUPP"].includes(e?.code))throw e}finally{await h.close()}}`,
-    ],
-    [
-      `async writeJsonlStreamed(e,t){const{filePath:r,appendFile:n}=t;let o=[],s=0,${chunks}=0,`,
-      // The whole rewrite runs under the file's lock. Its chunks go to a file of its own, so they need no lock of theirs.
-      `async writeJsonlStreamed(e,t){return ${lock}(t.filePath,(()=>this.makoWriteJsonlStreamed(e,t)))}async makoWriteJsonlStreamed(e,t){const{filePath:f}=t,r=f${staged};let o=[],s=0,${chunks}=0,`,
-    ],
-    [
-      `0===${chunks}?await this.writeFile(r,e):await n(r,e),${chunks}++`,
-      `await(0,${fs}.writeFile)(r,e,{flag:0===${chunks}?"w":"a"}),${chunks}++`,
-    ],
-    [
-      `await ${flush}(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",${chunks}),`,
-      `await ${flush}(),${chunks}>0&&await(async()=>{const t=await(0,${fs}.open)(r,"r+");try{await t.sync()}finally{await t.close()}await(0,${fs}.rename)(r,f),await makoSyncDir(f)})(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",${chunks}),`,
-    ],
-    [
-      `class ${writer}{constructor(e){this.writeChain=Promise.resolve(),`,
-      `${MARKER}class ${writer}{static transcripts=new Map;constructor(e){this.writeChain=Promise.resolve(),`,
-    ],
-    [
-      `this.transcriptStore=new ${store}(this.projectDir,e.blobStore,${write},{writeText:!1,writeJsonl:!0,...t?`,
-      `this.transcriptStore=new ${store}(this.projectDir,e.blobStore,${write},{${options}...t?`,
-    ],
-    [
-      `this.nestedSubagentTranscriptStore=new ${store}(this.projectDir,e.blobStore,${write},{writeText:!1,writeJsonl:!0,`,
-      `this.nestedSubagentTranscriptStore=new ${store}(this.projectDir,e.blobStore,${write},{${options}`,
-    ],
-    [
-      "await this.transcriptStore.writeFromStateFull(e,t,this.conversationId);",
-      "await this.appendTranscript(this.transcriptStore,e,t,this.conversationId);",
-    ],
-    [
-      `await this.nestedSubagentTranscriptStore.writeFromStateFull(e,${child}.conversationState,t)`,
-      `await this.appendTranscript(this.nestedSubagentTranscriptStore,e,${child}.conversationState,t)`,
-    ],
-    [
-      "await this.transcriptStore.writeFromStateFull(e,t,this.conversationId,{turnEnded:r})",
-      "await this.appendTranscript(this.transcriptStore,e,t,this.conversationId,{turnEnded:r})",
-    ],
-    [
-      "waitForPendingWrites(){return this.writeChain}",
-      appendTranscript(writer) + "waitForPendingWrites(){return this.writeChain}",
-    ],
-  ]
-}
+const WRITER_OPTIONS = 'writeText:!1,writeJsonl:!0,appendFile:(mako$p,mako$d)=>makoLock(mako$p,(()=>fo.writeFile(mako$p,mako$d,{flag:"a"}))),streamFullJsonlWrites:!0,'
 
-/** `logger` is the backend every local run's context logs to. */
-const runLog = logger => [`${logger}={log(){}}`, `${logger}={log(e,t){process.emit("mako:cursor-sdk-log",t)}}`]
+/** `rO` is the transcript store's class, `n` the subagent whose transcript the nested store writes. */
+const TRANSCRIPTS = [
+  [
+    TRANSCRIPT_WRITE,
+    `async function Pj(e,t){return makoLock(e,(async()=>{const r=(0,s.dirname)(e);await(0,fo.mkdir)(r,{recursive:!0});const mako$n=e${STAGED},mako$o=await(0,fo.open)(mako$n,"w");try{await mako$o.writeFile(t,"utf-8"),await mako$o.sync()}finally{await mako$o.close()}await(0,fo.rename)(mako$n,e),await makoSyncDir(e)}))}` +
+      // Runs `work` inside the process's transcript lock (`transcript-lock.ts`); outside Mako's child there is none.
+      'function makoLock(mako$p,mako$w){const mako$k=globalThis[Symbol.for("mako:cursor-transcript-lock")];return mako$k?mako$k(mako$p,mako$w):mako$w()}' +
+      // A rename is durable once its folder is synced. Windows can't open a folder as a file (EISDIR, or EPERM),
+      // and makes a rename durable without it; a file system that can't sync a folder says so (EINVAL, ENOTSUP,
+      // EOPNOTSUPP). Any other failure is a rename that may not last, so the write fails.
+      'async function makoSyncDir(mako$p){const mako$d=(0,s.dirname)(mako$p);let mako$h;try{mako$h=await(0,fo.open)(mako$d,"r")}catch(mako$e){if("win32"===process.platform&&("EISDIR"===mako$e?.code||"EPERM"===mako$e?.code))return;throw mako$e}try{await mako$h.sync()}catch(mako$e){if(!["EINVAL","ENOTSUP","EOPNOTSUPP"].includes(mako$e?.code))throw mako$e}finally{await mako$h.close()}}',
+  ],
+  [
+    STREAMED_HEAD,
+    // The whole rewrite runs under the file's lock. Its chunks go to a file of its own, so they need no lock of theirs.
+    `async writeJsonlStreamed(e,t){return makoLock(t.filePath,(()=>this.makoWriteJsonlStreamed(e,t)))}async makoWriteJsonlStreamed(e,t){const{filePath:mako$f}=t,r=mako$f${STAGED};let o=[],s=0,i=0,`,
+  ],
+  ["0===i?await this.writeFile(r,e):await n(r,e),i++", 'await(0,fo.writeFile)(r,e,{flag:0===i?"w":"a"}),i++', { binds: [TRANSCRIPT_WRITE] }],
+  [
+    'await c(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",i),',
+    'await c(),i>0&&await(async()=>{const mako$t=await(0,fo.open)(r,"r+");try{await mako$t.sync()}finally{await mako$t.close()}await(0,fo.rename)(r,mako$f),await makoSyncDir(mako$f)})(),e.span.setAttribute("streamed",!0),e.span.setAttribute("chunkCount",i),',
+    { binds: [TRANSCRIPT_WRITE, STREAMED_HEAD] },
+  ],
+  [WRITER_CLASS, `${MARKER}class Ij{static transcripts=new Map;constructor(e){this.writeChain=Promise.resolve(),`],
+  [
+    "this.transcriptStore=new rO(this.projectDir,e.blobStore,Pj,{writeText:!1,writeJsonl:!0,...t?",
+    `this.transcriptStore=new rO(this.projectDir,e.blobStore,Pj,{${WRITER_OPTIONS}...t?`,
+    { binds: [TRANSCRIPT_WRITE] },
+  ],
+  [
+    "this.nestedSubagentTranscriptStore=new rO(this.projectDir,e.blobStore,Pj,{writeText:!1,writeJsonl:!0,",
+    `this.nestedSubagentTranscriptStore=new rO(this.projectDir,e.blobStore,Pj,{${WRITER_OPTIONS}`,
+    { binds: [TRANSCRIPT_WRITE] },
+  ],
+  ["await this.transcriptStore.writeFromStateFull(e,t,this.conversationId);", "await this.appendTranscript(this.transcriptStore,e,t,this.conversationId);"],
+  [
+    "await this.nestedSubagentTranscriptStore.writeFromStateFull(e,n.conversationState,t)",
+    "await this.appendTranscript(this.nestedSubagentTranscriptStore,e,n.conversationState,t)",
+  ],
+  [
+    "await this.transcriptStore.writeFromStateFull(e,t,this.conversationId,{turnEnded:r})",
+    "await this.appendTranscript(this.transcriptStore,e,t,this.conversationId,{turnEnded:r})",
+  ],
+  ["waitForPendingWrites(){return this.writeChain}", APPEND_TRANSCRIPT + "waitForPendingWrites(){return this.writeChain}", { binds: [WRITER_CLASS] }],
+]
+
+/** `oB` is the backend every local run's context logs to. */
+const RUN_LOG = [["oB={log(){}}", 'oB={log(mako$e,mako$t){process.emit("mako:cursor-sdk-log",mako$t)}}']]
 
 /**
- * `proto` is the agent protocol module the retry loop builds its actions
- * from: `QFf` a conversation action, `Vtf` a user message action, `RGk` a user
- * message, `xyI` its mode. The hook (`CURSOR_SDK_RESUME_HOOK` in the Cursor
- * child) is asked with the attempt, the action the SDK would send and the
- * run's request id (`Run.requestId`), and answers `{ text, plan }` or
- * nothing; a hook that throws changes nothing.
+ * In the retry loop `y` is the attempt, `w` the action it sends, `g` the checkpoint, `c` the run's request id
+ * (`Run.requestId`), and `i` the agent protocol module the loop builds its actions from: `QFf` a conversation action,
+ * `Vtf` a user message action, `RGk` a user message, `xyI` its mode. The hook (`CURSOR_SDK_RESUME_HOOK` in the Cursor
+ * child) is asked with the attempt, the action the SDK would send and the request id, and answers `{ text, plan }` or
+ * nothing; a hook that throws changes nothing. The anchor holds only the action and the checkpoint, so the probes bind
+ * the rest: 1.4.1 moved the attempt off `y` and put the action there.
  */
-const resumeAccount = (proto, requestId) => [
-  "try{return await s.runAttempt({state:g,action:w,",
-  `try{return await s.runAttempt({state:g,action:y>0?await(async()=>{let t;try{t=await globalThis[Symbol.for("mako:cursor-sdk-resume")]?.({attempt:y,action:w.action.case,requestId:${requestId}})}catch{}` +
-    `if("string"!=typeof t?.text||!t.text)return w;const u=e=>new ${proto}.QFf({action:{case:"userMessageAction",value:new ${proto}.Vtf(e)}});` +
-    `if("resumeAction"===w.action.case)return u({userMessage:new ${proto}.RGk({text:t.text,mode:t.plan?${proto}.xyI.PLAN:${proto}.xyI.AGENT})});` +
-    `if("userMessageAction"===w.action.case){const e=w.action.value;return u({...e,userMessage:new ${proto}.RGk({...e.userMessage,text:(e.userMessage?.text??"")+"\\n\\n"+t.text})})}return w})():w,`,
+const RESUME_ACCOUNT = [
+  [
+    "try{return await s.runAttempt({state:g,action:w,",
+    'try{return await s.runAttempt({state:g,action:y>0?await(async()=>{let mako$t;try{mako$t=await globalThis[Symbol.for("mako:cursor-sdk-resume")]?.({attempt:y,action:w.action.case,requestId:c})}catch{}' +
+      'if("string"!=typeof mako$t?.text||!mako$t.text)return w;const mako$u=mako$e=>new i.QFf({action:{case:"userMessageAction",value:new i.Vtf(mako$e)}});' +
+      'if("resumeAction"===w.action.case)return mako$u({userMessage:new i.RGk({text:mako$t.text,mode:mako$t.plan?i.xyI.PLAN:i.xyI.AGENT})});' +
+      'if("userMessageAction"===w.action.case){const mako$e=w.action.value;return mako$u({...mako$e,userMessage:new i.RGk({...mako$e.userMessage,text:(mako$e.userMessage?.text??"")+"\\n\\n"+mako$t.text})})}return w})():w,',
+    { binds: ["s.beginAttempt?.({attempt:y,originalRequestId:c})", 'new i.QFf({action:{case:"resumeAction"'] },
+  ],
 ]
 
-/** The minified names in each build of 1.4.0's local executor. */
-export const TRANSCRIPT_BUILDS = {
-  esm: { target: "dist/esm/993.js", writer: "Ij", store: "rO", write: "Pj", fs: "fo", child: "n", chunks: "i", flush: "c" },
-  cjs: { target: "dist/cjs/993.js", writer: "Aj", store: "sO", write: "Tj", fs: "go", child: "n", chunks: "i", flush: "c" },
+const STORE_LOCK_WAIT = [["PRAGMA busy_timeout = 5000;", "PRAGMA busy_timeout = 60000;"]]
+
+/** Each patch once: what it is for, the 1.4.0 chunk it was written in (where to look first) and its replacements. */
+const PATCHES = [
+  { id: "checkpoint-blobs", change: "read-through checkpoint blobs", chunk: "index.js", replacements: CHECKPOINT_BLOBS },
+  { id: "bidi-reads", change: "bidi reads that let go of each message", chunk: "index.js", replacements: BIDI_READS },
+  { id: "transcripts", change: "incremental, locked transcript writes", chunk: "993.js", replacements: TRANSCRIPTS },
+  { id: "run-log", change: "the run log", chunk: "993.js", replacements: RUN_LOG },
+  { id: "resume-account", change: "the resume account", chunk: "993.js", replacements: RESUME_ACCOUNT },
+  { id: "store-lock-wait", change: "a minute's wait for the agent store's lock", chunk: "18.js", replacements: STORE_LOCK_WAIT },
+]
+
+/** Every patch for each build. `target` is where it was in 1.4.0; `sites` its replacements as anchored sites. */
+export const CURSOR_SDK_PATCHES = ["esm", "cjs"].flatMap((build) =>
+  PATCHES.map(({ id, change, chunk, replacements }) => ({
+    id,
+    build,
+    change,
+    target: `dist/${build}/${chunk}`,
+    sites: replacements.map(([from, to, { binds } = {}], at) => ({ from, to, binds, label: `${change} (${build}, replacement ${at + 1} of ${replacements.length})` })),
+  })),
+)
+
+/** The files of each build, from a folder or an archive's listing. */
+export const folderFiles = (root) => (build) => readdirSync(join(root, "dist", build)).filter((file) => file.endsWith(".js"))
+
+/**
+ * The file of `patch`'s build holding every one of its sites, by their unpatched text or, with `patched`, by what
+ * the patch wrote: the one file that holds them all, or the 1.4.0 chunk's name when several do.
+ */
+export function patchFile(read, files, patch, patched = false) {
+  const holders = files(patch.build).filter((file) => {
+    const source = read(`dist/${patch.build}/${file}`)
+    return patch.sites.every((site) => locate(source, patched ? site.to : site.from).count === 1 && (patched || site.binds?.every((probe) => locate(source, probe).count === 1) !== false))
+  })
+  const chunk = patch.target.split("/").pop()
+  const file = holders.length === 1 ? holders[0] : holders.includes(chunk) ? chunk : undefined
+  return file && `dist/${patch.build}/${file}`
 }
 
-export const CURSOR_SDK_PATCHES = [
-  { target: "dist/esm/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
-  { target: "dist/cjs/index.js", replacements: [...BLOB_STORE, ...BIDI_READS], change: "read-through checkpoint blobs and bidi reads" },
-  { target: "dist/esm/993.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.esm), runLog("oB"), resumeAccount("i", "c")], change: "incremental transcripts, the run log and the resume account" },
-  { target: "dist/cjs/993.js", replacements: [...transcripts(TRANSCRIPT_BUILDS.cjs), runLog("aB"), resumeAccount("c", "a")], change: "incremental transcripts, the run log and the resume account" },
-  { target: "dist/esm/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
-  { target: "dist/cjs/18.js", replacements: STORE_LOCK_WAIT, change: "a minute's wait for the agent store's lock" },
-]
+/**
+ * Where `patch` is in an installed, patched SDK, with each site's names in this release (1.4.0's name to this
+ * one's), its anchor's and its probes'. Tests run the patched code through these.
+ */
+export function installedPatch(read, files, id, build) {
+  const patch = CURSOR_SDK_PATCHES.find((entry) => entry.id === id && entry.build === build)
+  const file = patchFile(read, files, patch, true)
+  if (!file) throw new Error(`@cursor/sdk ${build} lacks Mako's ${patch.change} patch; run scripts/patch-cursor-sdk.mjs`)
+  const source = read(file)
+  // A probe's text in a patched file may be what the patch wrote over it: find it either way.
+  const sites = patch.sites.map((site) => {
+    const at = locate(source, site.to)
+    for (const probe of site.binds ?? []) {
+      const bound = [probe, ...patch.sites.concat(CURSOR_SDK_PATCHES.filter((other) => other.build === build).flatMap((other) => other.sites)).filter((other) => other.from === probe).map((other) => other.to)]
+        .map((text) => locate(source, text))
+        .find((hit) => hit.count === 1)
+      if (!bound) throw new Error(`${site.label}: probe gone: ${probe.slice(0, 100)}`)
+      for (const [old, now] of bound.names) if (!at.names.has(old)) at.names.set(old, now)
+    }
+    return { ...site, index: at.index, length: at.length, names: at.names }
+  })
+  return { file, source, sites }
+}
 
-function assertVersion(read) {
+function noteVersion(read) {
   const { version } = JSON.parse(read("package.json"))
-  if (version !== VERSION)
-    throw new Error(`scripts/patch-cursor-sdk.mjs targets @cursor/sdk ${VERSION}, found ${version}. Check checkpoint blobs, bidi reads, transcript writes, the store's lock wait, the run log and the resume account, then port or delete this patch.`)
+  if (version !== CURSOR_SDK_ANCHORED_ON) console.log(`@cursor/sdk ${version}: Mako's patches were written against ${CURSOR_SDK_ANCHORED_ON}; finding them by shape`)
+  return version
 }
 
-/** Checks every replacement, including the SDK bytes inside the built archive. */
-export function assertCursorSdkPatched(read) {
-  assertVersion(read)
-  for (const { target, replacements, change } of CURSOR_SDK_PATCHES) {
-    const source = read(target)
-    if (!replacements.every(([, patched]) => source.includes(patched)))
-      throw new Error(`@cursor/sdk ${target} lacks Mako's complete ${change} patch; rebuild with scripts/patch-cursor-sdk.mjs`)
+/** Checks every patch, including the SDK bytes inside the built archive, whose files `files` lists. */
+export function assertCursorSdkPatched(read, files) {
+  const version = noteVersion(read)
+  const missing = CURSOR_SDK_PATCHES.filter((patch) => !patchFile(read, files, patch, true))
+  if (missing.length)
+    throw new Error(`@cursor/sdk ${version} lacks Mako's complete ${missing.map((patch) => `${patch.change} (${patch.build})`).join(", ")} patch; rebuild with scripts/patch-cursor-sdk.mjs`)
+}
+
+/** Beside the package: the bytes of each file before Mako first patched it, so a patch can start again from them. */
+export const PRISTINE_FOLDER = ".mako-pristine"
+/** The store's record: the package version its bytes are of, and each kept file's sha256. */
+const PristineManifest = z.object({ version: z.string(), files: z.record(z.string(), z.string()) })
+const sha256 = (text) => createHash("sha256").update(text).digest("hex")
+
+/**
+ * What the installed files were before any patch, kept the first time each is patched (`.mako-pristine`, gzipped, with
+ * the package's version and each file's hash). Kept for another version, or with bytes that don't hash to what was
+ * kept, they are not there: `missing` says why.
+ */
+export function pristineStore(root, version) {
+  const folder = join(root, PRISTINE_FOLDER)
+  const manifestFile = join(folder, "manifest.json")
+  const load = () => {
+    if (!existsSync(manifestFile)) return { manifest: { version, files: {} }, why: `nothing is kept in ${PRISTINE_FOLDER}` }
+    try {
+      const parsed = PristineManifest.safeParse(JSON.parse(readFileSync(manifestFile, "utf8")))
+      if (!parsed.success) return { manifest: { version, files: {} }, why: `${PRISTINE_FOLDER}/manifest.json isn't a manifest` }
+      const manifest = parsed.data
+      if (manifest.version !== version) return { manifest: { version, files: {} }, why: `${PRISTINE_FOLDER} holds @cursor/sdk ${manifest.version}'s bytes, not ${version}'s` }
+      return { manifest }
+    } catch (error) {
+      return { manifest: { version, files: {} }, why: `${PRISTINE_FOLDER}/manifest.json can't be read: ${error.message}` }
+    }
+  }
+  let state = load()
+  return {
+    get(target) {
+      const hash = state.manifest.files[target]
+      if (!hash) return { why: state.why ?? `${PRISTINE_FOLDER} keeps nothing of ${target}` }
+      try {
+        const text = gunzipSync(readFileSync(join(folder, `${target}.gz`))).toString("utf8")
+        return sha256(text) === hash ? { text } : { why: `${PRISTINE_FOLDER}'s copy of ${target} doesn't hash to what was kept` }
+      } catch (error) {
+        return { why: `${PRISTINE_FOLDER}'s copy of ${target} can't be read: ${error.message}` }
+      }
+    },
+    save(target, text) {
+      if (text.includes(ANY_MARKER)) throw new Error(`refusing to keep a patched ${target} as its pristine bytes`)
+      const file = join(folder, `${target}.gz`)
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(`${file}.tmp`, gzipSync(text))
+      renameSync(`${file}.tmp`, file)
+      state = { manifest: { version, files: { ...state.manifest.files, [target]: sha256(text) } } }
+      writeFileSync(`${manifestFile}.tmp`, `${JSON.stringify(state.manifest, null, 2)}\n`)
+      renameSync(`${manifestFile}.tmp`, manifestFile)
+    },
   }
 }
 
+/** The lockfile's record of the installed package: npm writes it into `node_modules/.package-lock.json`. */
+const LockEntry = z.object({ version: z.string(), integrity: z.string() })
+const HiddenLock = z.object({ packages: z.record(z.string(), z.unknown()) })
+
 /**
- * Each target's bytes as npm ships them, from npm's cache when it holds the package: where a target carrying an older
- * or incomplete patch starts again, since a patch can't be undone in place. A checkout whose modules were installed
- * before this patch changed (the updater copies the person's own) has exactly those.
+ * The package's files as npm shipped them, from the tarball npm's own cache on this machine holds, found by the
+ * integrity the install recorded and checked against it; no npm request and no network. For modules a build before
+ * `.mako-pristine` patched, which a local update's `npm install` keeps as they are. A failure says what was looked for.
  */
-function npmCopy() {
+export function npmCacheCursorSdk(root, version) {
   let folder
+  const tarball = () => {
+    const lockFile = join(root, "..", "..", ".package-lock.json")
+    if (!existsSync(lockFile)) throw new Error(`no ${lockFile} names the installed tarball`)
+    const entry = LockEntry.safeParse(HiddenLock.parse(JSON.parse(readFileSync(lockFile, "utf8"))).packages["node_modules/@cursor/sdk"])
+    if (!entry.success || entry.data.version !== version) throw new Error(`${lockFile} records no @cursor/sdk ${version}`)
+    const [algorithm, digest] = entry.data.integrity.split(/-(.*)/s)
+    const hex = Buffer.from(digest, "base64").toString("hex")
+    // npm says where its cache is to the scripts it runs; asked otherwise, it answers from its configuration alone.
+    let cache = process.env.npm_config_cache
+    if (!cache) try {
+      cache = execFileSync("npm", ["config", "get", "cache"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+    } catch (error) {
+      throw new Error(`npm couldn't say where its cache is (exited ${error.status ?? error.signal}: ${`${error.stderr ?? ""}`.trim().split("\n").pop()})`)
+    }
+    const file = join(cache, "_cacache", "content-v2", algorithm, hex.slice(0, 2), hex.slice(2, 4), hex.slice(4))
+    if (!existsSync(file)) throw new Error(`npm's cache at ${cache} holds no tarball with @cursor/sdk ${version}'s integrity ${entry.data.integrity.slice(0, 24)}…`)
+    const bytes = readFileSync(file)
+    if (createHash(algorithm).update(bytes).digest("base64") !== digest) throw new Error(`npm's cached tarball for @cursor/sdk ${version} doesn't match its integrity`)
+    return file
+  }
   return {
     read(target) {
       if (!folder) {
+        const file = tarball()
         folder = mkdtempSync(join(tmpdir(), "mako-cursor-sdk-"))
-        const packed = execFileSync("npm", ["pack", `@cursor/sdk@${VERSION}`, "--prefer-offline", "--silent", "--pack-destination", folder], { encoding: "utf8" }).trim().split("\n").pop()
-        execFileSync("tar", ["-xzf", join(folder, packed), "-C", folder])
+        execFileSync("tar", ["-xzf", file, "-C", folder], { stdio: ["ignore", "ignore", "pipe"] })
       }
       return readFileSync(join(folder, "package", target), "utf8")
     },
@@ -281,35 +387,123 @@ function npmCopy() {
   }
 }
 
-export function patchCursorSdk(root, shipped = npmCopy()) {
+/**
+ * Patches every build, with no network. A file that needs a patch takes every patch that lives in it at once, each
+ * found in its unpatched bytes before any is written: the installed bytes when it carries no patch (kept then in
+ * `.mako-pristine` before the first write), else what `.mako-pristine` kept, else npm's local cache (`cache`), else
+ * it fails saying why and how to get the bytes back. Answers the files left patched with nothing kept, and why.
+ */
+export function patchCursorSdk(root, cache) {
   const read = (target) => readFileSync(join(root, target), "utf8")
-  assertVersion(read)
+  const files = folderFiles(root)
+  const version = noteVersion(read)
+  const pristine = pristineStore(root, version)
+  cache ??= npmCacheCursorSdk(root, version)
+  const failures = []
+  const unkept = new Map()
   try {
-    for (const target of CURSOR_SDK_PATCHES) patchTarget(root, read, target, shipped)
+    for (const build of ["esm", "cjs"]) {
+      const patches = CURSOR_SDK_PATCHES.filter((patch) => patch.build === build)
+      const done = new Map(patches.map((patch) => [patch, patchFile(read, files, patch, true)]).filter(([, file]) => file))
+      if (done.size === patches.length) continue
+      // A file holding a patch, this one complete or any earlier one, starts again from its unpatched bytes, with every
+      // patch that lives in it: a patch can't be undone in place, and some (the lock wait) leave no marker.
+      const holding = new Set(done.values())
+      const original = new Map()
+      const unpatched = (target) => {
+        if (!original.has(target)) {
+          const source = read(target)
+          if (!source.includes(ANY_MARKER) && !holding.has(target)) original.set(target, { text: source, keep: true })
+          else {
+            const kept = pristine.get(target)
+            if (kept.text !== undefined) original.set(target, { text: kept.text })
+            else {
+              let text
+              try {
+                text = cache.read(target)
+              } catch (error) {
+                throw new Error(`@cursor/sdk ${version}'s ${target} carries an earlier Mako patch, and its unpatched bytes are neither kept beside it (${kept.why}) nor in npm's cache (${error.message}). Reinstall the package to get them back: rm -rf node_modules/@cursor/sdk && npm install`)
+              }
+              original.set(target, { text, keep: true })
+            }
+          }
+        }
+        return original.get(target).text
+      }
+      // Where a patch lives is looked for in each file's bytes as they are, unless an earlier patch's marker says they
+      // were rewritten: a file holding only a finished patch (the lock wait) still holds every other anchor it had.
+      // A marked file whose unpatched bytes can't be had is searched as it is: that only matters if the patch lives there.
+      const blocked = new Map()
+      const searched = (target) => {
+        if (!read(target).includes(ANY_MARKER)) return read(target)
+        try {
+          return unpatched(target)
+        } catch (error) {
+          blocked.set(target, error)
+          return read(target)
+        }
+      }
+      const byFile = new Map()
+      for (const patch of patches) {
+        const file = done.get(patch) ?? patchFile(searched, files, patch)
+        if (file) byFile.set(file, [...(byFile.get(file) ?? []), patch])
+        else if (blocked.size) throw blocked.get(patch.target) ?? [...blocked.values()][0]
+        else failures.push(explain(searched, files, patch))
+      }
+      if (failures.length) continue
+      for (const [file, here] of byFile) {
+        if (here.every((patch) => done.get(patch) === file)) continue
+        const base = unpatched(file)
+        const { source, renamed } = applyAnchored(base, here.flatMap((patch) => patch.sites))
+        if (original.get(file).keep) pristine.save(file, base)
+        writeFileSync(join(root, file), source)
+        console.log(`patched @cursor/sdk ${file}: ${here.map((patch) => patch.change).join(", ")}${renamed.length ? ` (here ${renamed.join(" ")})` : ""}`)
+      }
+    }
+    // Every file holding a patch keeps its unpatched bytes, so the next patch of it needs nothing else: one an earlier
+    // build patched, and this one left as it was, takes them from npm's cache when it holds them. One it can't is said
+    // and answered (`unkept`): the patch stands, and only a later patch of that file will need the package reinstalled.
+    if (!failures.length)
+      for (const patch of CURSOR_SDK_PATCHES) {
+        const file = patchFile(read, files, patch, true)
+        if (!file || unkept.has(file) || pristine.get(file).text !== undefined) continue
+        try {
+          const text = cache.read(file)
+          if (text.includes(ANY_MARKER)) unkept.set(file, "npm's cache gave patched bytes")
+          else pristine.save(file, text)
+        } catch (error) {
+          unkept.set(file, error instanceof Error ? error.message : String(error))
+        }
+      }
   } finally {
-    shipped.close?.()
+    cache.close?.()
   }
-  assertCursorSdkPatched(read)
+  if (failures.length)
+    throw new Error(`@cursor/sdk ${version} changed the code Mako's patches stand on (written against ${CURSOR_SDK_ANCHORED_ON}):\n${failures.join("\n")}\nPort each of those patches, or delete it where ${version} does the same itself.`)
+  assertCursorSdkPatched(read, files)
+  for (const [file, why] of unkept)
+    console.log(`@cursor/sdk ${file} is patched, but its unpatched bytes aren't kept (${why}); a later patch of it will need the package reinstalled: rm -rf node_modules/@cursor/sdk && npm install`)
+  return { unkept: [...unkept].map(([file, why]) => ({ file, why })) }
 }
 
-function patchTarget(root, read, { target, replacements, change }, shipped) {
-  let source = read(target)
-  if (replacements.every(([, patched]) => source.includes(patched))) return
-  if (source.includes(ANY_MARKER)) {
-    source = shipped.read(target)
-    console.log(`@cursor/sdk ${target} had an older or incomplete Mako patch; patching npm's copy instead`)
+/** Why no file holds `patch`: its sites' problems in the file that still holds the most of them. */
+function explain(read, files, patch) {
+  const problems = (file) => {
+    const source = read(file)
+    return patch.sites.flatMap((site) => {
+      const hit = bind(source, site)
+      return hit.problems ? hit.problems.map((problem) => `  ${site.label}: ${problem}`) : []
+    })
   }
-  for (const [from, to] of replacements) {
-    const count = source.split(from).length - 1
-    if (count !== 1) throw new Error(`@cursor/sdk ${target}: expected one match, found ${count}: ${from.slice(0, 80)}`)
-    source = source.replace(from, () => to)
-  }
-  writeFileSync(join(root, target), source)
-  console.log(`patched @cursor/sdk ${target}: ${change}`)
+  const nearest = files(patch.build)
+    .map((file) => `dist/${patch.build}/${file}`)
+    .map((file) => ({ file, problems: problems(file) }))
+    .sort((a, b) => a.problems.length - b.problems.length)[0]
+  return `- ${patch.change} (${patch.build}; ${patch.target} in ${CURSOR_SDK_ANCHORED_ON}), nearest ${nearest.file}:\n${nearest.problems.join("\n") || "  every site is there, but more than one file holds them"}`
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const root = join(dirname(createRequire(import.meta.url).resolve("@cursor/sdk")), "..", "..")
-  if (process.argv.includes("--check")) assertCursorSdkPatched((target) => readFileSync(join(root, target), "utf8"))
+  if (process.argv.includes("--check")) assertCursorSdkPatched((target) => readFileSync(join(root, target), "utf8"), folderFiles(root))
   else patchCursorSdk(root)
 }
