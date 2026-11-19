@@ -7,7 +7,7 @@ import type { JsonValue } from "@mako/host/contracts/json"
 import { agentAskLine, agentAskWords } from "@mako/host/contracts/agent-asks"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { AUTOMATION_TOOL, HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
-import type { AutomationRun } from "@mako/host/contracts/automations"
+import { automationFingerprint, type AutomationDefinition, type AutomationRun } from "@mako/host/contracts/automations"
 import { z } from "zod"
 import type { AutomationToolApi } from "@mako/host/conversations/automation-tool"
 import { AgentAskGate, AutomationTool, HarnessTool, registerThreadTools, SettingsTool, ThreadActTool, ThreadMoveAnswerSchema } from "@mako/host/conversations"
@@ -413,7 +413,12 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
   })
   let tier: "full" | "auto" = "auto"
   let runStatus: AutomationRun["status"] = "fired"
-  const view = (id: string, enabled: boolean) => ({ project: "/fixture/workspace", definition: { id, name: id, prompt: { objective: "x" }, start: { access: "edits" as const, place: "here" as const, whenAway: "queue" as const }, thread: "new" as const, triggers: [{ kind: "manual" as const }], limits: { overlap: "skip" as const, timeoutMin: 60 }, result: "report" as const }, local: { enabled, failures: 0 }, standing: enabled ? "on" as const : "off" as const, fingerprint: "f", issues: [] })
+  // An automation the person approved: its kept definition matches the file, so an agent's run_now may ask.
+  const view = (id: string, enabled: boolean) => {
+    const definition: AutomationDefinition = { id, name: id, prompt: { objective: "x" }, start: { access: "edits", place: "here", whenAway: "queue" }, thread: "new", triggers: [{ kind: "manual" }], limits: { overlap: "skip", timeoutMin: 60 }, result: "report" }
+    const fingerprint = automationFingerprint(definition)
+    return { project: "/fixture/workspace", definition, local: { enabled, failures: 0, approved: fingerprint, approvedDefinition: definition }, standing: enabled ? "on" as const : "off" as const, fingerprint, issues: [] }
+  }
   let enabled = true
   const reading = () => ({ project: "/fixture/workspace", automations: [view("nightly", enabled)], proposals: [], file: { exists: true } })
   const runs = new Map<string, AutomationRun>()
