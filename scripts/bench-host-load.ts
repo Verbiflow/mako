@@ -59,7 +59,7 @@ import { followHostLoadOutputs } from "./lib/host-load-output.ts"
  * `--send` times each message from the call until its harness asks the model, reporting p50, p95, p99 and every
  * sample (`sendSamples`, and per send `sendDetails`: its request, when the host accepted it and when the model heard
  * it); `--harness claude`, `--harness opencode` or `--harness grok` sends through a sealed Claude Code, OpenCode or Grok instead of Codex,
- * while the Fins stay on Codex.
+ * while the Fins stay on Codex. `--person-hook` gives that Claude Code a hook of the person's own (UserPromptSubmit).
  *
  * `--record <dir>` keeps what the host's own thread did all through, by stretch of the run: its start (spawn until its
  * catalog and rail answer), a quiet baseline (`--idle`), the measured seconds, and a burst after them (`--burst
@@ -91,6 +91,7 @@ const { values } = parseArgs({
     keep: { type: "boolean", default: false },
     send: { type: "boolean", default: false },
     harness: { type: "string", default: "codex" },
+    "person-hook": { type: "boolean", default: false },
     "tool-heavy": { type: "boolean", default: false },
     "model-port": { type: "string" },
     "send-quiet": { type: "boolean", default: false },
@@ -333,7 +334,10 @@ if (model) {
   writeFileSync(join(world.home, ".codex", "auth.json"), JSON.stringify({ auth_mode: "apikey", OPENAI_API_KEY: "mako-host-load" }), { mode: 0o600 })
   // And a sealed Claude Code, through the settings its own login reads (`--harness claude`), as `pointAt` points it.
   mkdirSync(join(world.home, ".claude"), { recursive: true })
-  writeFileSync(join(world.home, ".claude", "settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: model.url, ANTHROPIC_API_KEY: "mako-host-load", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" } }), { mode: 0o600 })
+  // `--person-hook`: a hook of the person's own, as most people's setups have one (a notifier on UserPromptSubmit), which
+  // Mako can't hold, so the launch holds every tool instead (`WriteHolds`).
+  const personHook = values["person-hook"] ? { hooks: { UserPromptSubmit: [{ hooks: [{ type: "command", command: "true" }] }] } } : {}
+  writeFileSync(join(world.home, ".claude", "settings.json"), JSON.stringify({ env: { ANTHROPIC_BASE_URL: model.url, ANTHROPIC_API_KEY: "mako-host-load", CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: "1" }, ...personHook }), { mode: 0o600 })
   writeFileSync(join(world.home, ".claude.json"), "{}")
 }
 
@@ -596,6 +600,10 @@ if (model) {
   // A message the person sends, timed from the call until its harness asks the model: what waits behind the load
   // (its checkpoint's Git reads, the loop) is in it, the harness's own start isn't (it's running already). Codex's,
   // unless `--harness claude`: harnesses wait on their turn's checkpoint in different places, so each is timed.
+  // The mode the send's session starts in, by the id its harness offers: Claude names its own modes (`CLAUDE_MODES`), so
+  // `access:ask` isn't one of them and its first message failed before reaching the model ("The saved agent mode is no
+  // longer available").
+  const sendMode = () => harness === "claude" ? (values["tool-heavy"] ? "bypassPermissions" : "default") : values["tool-heavy"] ? "access:full" : "access:ask"
   const sends: [number, number | null][] = []
   const sendDetails: { tag: string; request: string; acceptedMs: number | null; modelMs: number | null }[] = []
   let conversation: string | undefined
@@ -621,7 +629,7 @@ if (model) {
     const churned = (index: number) => world.checkouts[index]!.fin || index < scale.fins.length
     const quietAt = world.checkouts.findLastIndex((_, index) => !churned(index))
     const cwd = world.checkouts[values["send-quiet"] && quietAt >= 0 ? quietAt : 0]!.path
-    await call("mako:live-start", harness, cwd, { conversationId: conversation, modeId: values["tool-heavy"] ? "access:full" : "access:ask", title: "Host load send", initialRequest: { id: randomUUID(), text: "BENCH-S0 start", attachments: [] } })
+    await call("mako:live-start", harness, cwd, { conversationId: conversation, modeId: sendMode(), title: "Host load send", initialRequest: { id: randomUUID(), text: "BENCH-S0 start", attachments: [] } })
     for (const deadline = Date.now() + 180_000; !(values["tool-heavy"] ? completedTools : heardAt).has("S0"); await delay(100))
       if (Date.now() > deadline) throw new Error(`the bench's ${harness} never asked the stand-in model`)
     if (finCount > 0) {

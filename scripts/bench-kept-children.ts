@@ -38,7 +38,7 @@ import { RecordStore } from "../packages/sessions/src/record-store.ts"
  *   captured into a scratch store with their links taken out.
  *
  * The harnesses' stores are only read; everything written goes under
- * `$MAKO_THREAD_DATA_DIR` (or `~/.mako/tmp`) and is removed unless `--keep`.
+ * `$MAKO_THREAD_SCRATCH_DIR`, then `$MAKO_THREAD_DATA_DIR` (or `~/.mako/tmp`) and is removed unless `--keep`.
  */
 
 const { values: options } = parseArgs({ options: {
@@ -53,7 +53,7 @@ const { values: options } = parseArgs({ options: {
 const per = Number(options.per)
 const MIB = 1024 ** 2
 const say = (text: string) => { if (!options.json) console.log(text) }
-const base = process.env["MAKO_THREAD_DATA_DIR"] ?? join(homedir(), ".mako", "tmp")
+const base = process.env["MAKO_THREAD_SCRATCH_DIR"] ?? process.env["MAKO_THREAD_DATA_DIR"] ?? join(homedir(), ".mako", "tmp")
 const scratch = join(base, `bench-kept-children-${Date.now()}`)
 mkdirSync(scratch, { recursive: true })
 const home = homedir()

@@ -50,7 +50,7 @@ export class ClaudeSettingsReader {
 
   /**
    * Whether the person's own code runs in a session started with `config`, as Claude Code resolves its settings
-   * (`settingsRunCode`). A check that fails or takes too long says it does: the launch then holds no writes.
+   * (`settingsRunCode`). A check that fails or takes too long says it does: the launch then holds every tool.
    */
   personCodeRuns(config: Options): Promise<boolean> {
     return this.ask(config, "personCode", true)
