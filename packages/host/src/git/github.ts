@@ -1,6 +1,7 @@
 import { hostCommand } from "../base/host-command.js"
 import { hostFetch, hostStopping, type HostStopping } from "../base/host-stopping.js"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { GitHubReads, GitHubRateLimitError, GitHubRepositoryLookupError, githubRateLimit } from "./github-reads.js"
 import { hostLog } from "../base/host-log.js"
@@ -932,11 +933,21 @@ export async function createPull(cwd: string, options: CreatePullOptions, env?: 
   await gh(cwd, args, env).catch((cause) => { throw ghFailure(cause) })
 }
 
+/**
+ * Change an open pull request's title or body over REST. Not `gh pr edit`: it reads the pull request's classic
+ * Projects through GraphQL first, so it fails for any token without `read:project`, which a REST PATCH never needs.
+ * The fields go as a JSON file (`--input`), so a long body never rides on the command line.
+ */
 export async function editPull(cwd: string, number: number, edit: { title?: string; body?: string }, env?: Readonly<Record<string, string>>): Promise<void> {
-  const args = ["pr", "edit", String(number)]
-  if (edit.title !== undefined) args.push("--title", edit.title)
-  if (edit.body !== undefined) args.push("--body", edit.body)
-  await gh(cwd, args, env).catch((cause) => { throw ghFailure(cause) })
+  const fields = { ...edit.title !== undefined && { title: edit.title }, ...edit.body !== undefined && { body: edit.body } }
+  const folder = await mkdtemp(join(tmpdir(), "mako-pull-edit-"))
+  try {
+    const input = join(folder, "fields.json")
+    await writeFile(input, JSON.stringify(fields))
+    await gh(cwd, ["api", "-X", "PATCH", `repos/{owner}/{repo}/pulls/${number}`, "--input", input], env).catch((cause) => { throw ghFailure(cause) })
+  } finally {
+    await rm(folder, { recursive: true, force: true })
+  }
 }
 
 export async function mergePull(cwd: string, number: number, method: MergeMethod, env?: Readonly<Record<string, string>>): Promise<void> {

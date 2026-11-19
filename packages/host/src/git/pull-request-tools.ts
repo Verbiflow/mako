@@ -112,17 +112,20 @@ export function pullRequestTools(deps: Deps): PullRequestTools {
   }
   /**
    * In a project folder of several repositories with none named: the one
-   * that `wanted` fits. Several or none is refused with where each one
-   * stands, before anything is pushed or merged.
+   * that `wanted` fits. `work` is commits to push or a pull request to open;
+   * `edit` is that, else, when none has any, an open pull request whose title
+   * or body is to change with nothing to push. Several or none is refused with
+   * where each one stands, before anything is pushed or merged.
    */
-  const onlyOne = async (place: RepositoryPlace, wanted: "work" | "pull"): Promise<ReachableRepository> => {
+  const onlyOne = async (place: RepositoryPlace, wanted: "work" | "edit" | "pull"): Promise<ReachableRepository> => {
     const reports = await Promise.all(place.repositories.map(async (repository) => ({ repository, report: await report(repository) })))
-    const fits = reports.filter(({ report: read }) => wanted === "pull"
-      ? read.pullRequest
-      : read.pullRequest?.unpushedCommits || (read.opening && !read.opening.blocked))
+    const working = reports.filter(({ report: read }) => read.pullRequest?.unpushedCommits || (read.opening && !read.opening.blocked))
+    const fits = wanted === "pull" || (wanted === "edit" && !working.length)
+      ? reports.filter(({ report: read }) => read.pullRequest)
+      : working
     if (fits.length === 1) return fits[0]!.repository
     const lines = reports.map(({ repository, report: read }) => `- ${repository.name}: ${standing(read)}`).join("\n")
-    if (wanted === "work") {
+    if (wanted !== "pull") {
       throw new Error(fits.length
         ? `Several of this project's repositories have work to open, and each takes its own pull request. Nothing was pushed. Call pull_request_open once for each, passing repository and a title and body for that repository's own change:\n${lines}`
         : `None of this project's repositories has work to open a pull request for:\n${lines}`)
@@ -145,7 +148,9 @@ export function pullRequestTools(deps: Deps): PullRequestTools {
     },
     async open(conversationId, { repository, ...draft }) {
       const place = await deps.place(conversationId)
-      const one = meant(place, repository) ?? await onlyOne(place, "work")
+      // A title or body to change is work of its own on an open pull request, whether or not there are commits to push.
+      const editing = Boolean(draft.title?.trim()) || draft.body !== undefined
+      const one = meant(place, repository) ?? await onlyOne(place, editing ? "edit" : "work")
       const result = await openPullRequest(deps.git, one.root, draft, one.startedFrom, deps.person)
       deps.changed()
       const left = result.uncommitted
