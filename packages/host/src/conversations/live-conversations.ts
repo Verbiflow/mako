@@ -1908,16 +1908,6 @@ export class LiveConversations {
     return resident ? Boolean(this.transfers.pending(resident)) : false
   }
 
-  /** Whether `id` holds work for a sign-in, without reading its journal in when it's on disk. */
-  leftSignInHold(id: string): boolean {
-    return this.records.leftSignInHold(id)
-  }
-
-  /** Whether `id`'s last request that ran was cut short (`cutLast`), without reading its journal in when it's on disk. */
-  turnCut(id: string): boolean {
-    return this.records.turnCut(id)
-  }
-
   /** Whether the host before this one left a message of `id` waiting, paused or running: an exit pauses them, a crash cuts the turn. */
   leftUnsettled(id: string): boolean {
     return this.records.leftUnsettled(id)
