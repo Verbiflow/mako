@@ -194,7 +194,7 @@
     "test:account-threads-ui": "node scripts/test-account-threads-ui.mjs",
     "test:cloud-archive-ui": "node scripts/test-cloud-archive-ui.mjs",
     "test:telemetry": "tsx scripts/test-telemetry.ts",
-    "test:host": "tsx scripts/test-host.ts && tsx scripts/test-device-cli.ts && tsx scripts/test-repeated-calls.ts && tsx scripts/test-heap-watch.ts && tsx scripts/test-reader-history.ts && tsx scripts/test-storage.ts",
+    "test:host": "tsx scripts/test-host.ts && tsx scripts/test-device-cli.ts && tsx scripts/test-repeated-calls.ts && tsx scripts/test-heap-watch.ts && tsx scripts/test-reader-history.ts && tsx scripts/test-storage.ts && tsx scripts/test-storage-reclaim.ts",
     "test:host-linux": "npm run build:control-runtime && node scripts/test-host-linux.mjs",
     "test:control-media-sources": "node scripts/test-control-media-sources.mjs",
     "test:harness-builds": "node scripts/test-harness-builds.mjs",

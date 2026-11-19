@@ -25,7 +25,7 @@ import { storeReader } from "./decode-compare.ts"
 
 const [harness = "", path = "", prefixArgument] = process.argv.slice(2)
 if (!["codex", "cursor"].includes(harness) || !path) throw new Error("Usage: bench-record-forks.ts codex <rollout> [prefix MiB] | cursor <agent store.db>")
-const data = process.env["MAKO_THREAD_DATA_DIR"] ?? "/tmp"
+const data = process.env["MAKO_THREAD_SCRATCH_DIR"] ?? process.env["MAKO_THREAD_DATA_DIR"] ?? "/tmp"
 const root = join(data, "bench-record-forks")
 const home = homedir()
 const destination = join(root, "destination")
