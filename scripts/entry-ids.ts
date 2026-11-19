@@ -15,7 +15,7 @@ import { createHash } from "node:crypto"
 import { open } from "node:fs/promises"
 import { homedir } from "node:os"
 import { parseArgs } from "node:util"
-import { SessionCatalog, translatorBuild, type SessionProvider } from "@mako/sessions"
+import { SessionCatalog, translatorBuilds, type SessionProvider } from "@mako/sessions"
 import { storeReader } from "./decode-compare"
 
 const { values: options } = parseArgs({
@@ -45,7 +45,7 @@ interface Finding {
 }
 
 const home = homedir()
-const translator = translatorBuild()
+const translator = translatorBuilds()
 const findings: Finding[] = []
 
 for (const reader of READERS) {

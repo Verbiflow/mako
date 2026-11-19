@@ -120,7 +120,7 @@ export interface SessionView {
   readonly total: number
   /** Their characters (`entryChars`), where a view on disk counted them. */
   readonly chars?: number
-  /** `translatorBuild()` of the decoder that made it. */
+  /** `translatorBuild` of the decoder that made it, for its harness. */
   readonly translator: string
   page(before: number | undefined, limit: number, options: ThreadPageOptions): ViewPage
   entry(id: string): Entry | null
@@ -470,7 +470,8 @@ export class ViewCache {
   /** `folder` null keeps the views in memory. `unread` is told each view's unread records as it's written (`UnreadIndex`). */
   constructor(
     private readonly folder: string | null,
-    private readonly translator: () => string,
+    /** Each harness's `translatorBuild`: a view another build's decoder of its harness made isn't current. */
+    private readonly translator: (harness: string) => string,
     private readonly budget = VIEW_CACHE_BYTES,
     private readonly unread: UnreadIndex | null = null
   ) {}
@@ -479,7 +480,7 @@ export class ViewCache {
   async view(path: string, stamp: ViewStamp, current = true): Promise<View | WholeView | null> {
     const view = await this.opened(path)
     if (!view) return null
-    if (!sameStamp(view.meta, stamp) || (current && view.meta.translator !== this.translator())) return null
+    if (!sameStamp(view.meta, stamp) || (current && view.meta.translator !== this.translator(view.meta.ref.harness))) return null
     const open = this.open.get(path)
     if (open) {
       this.open.delete(path)
@@ -503,7 +504,7 @@ export class ViewCache {
     return (await this.view(path, stamp))?.thread() ?? null
   }
 
-  /** The view of `path` made from exactly `stamp` by whichever build made it, whole, and that build's `translatorBuild()`. */
+  /** The view of `path` made from exactly `stamp` by whichever build made it, whole, and that build's `translatorBuild` of its harness. */
   async readAny(path: string, stamp: ViewStamp): Promise<{ thread: Thread; translator: string } | null> {
     const view = await this.view(path, stamp, false)
     return view && { thread: view.thread(), translator: view.meta.translator }
@@ -512,7 +513,7 @@ export class ViewCache {
   /** Keeps `thread`, decoded from `stamp` in `decodeMs`, once the writes before it are done. */
   write(path: string, stamp: ViewStamp, thread: Thread, decodeMs: number): Promise<void> {
     const meta: Omit<ViewMeta, "total" | "chars"> = {
-      format: FORMAT, path, bytes: stamp.bytes, mtimeMs: stamp.mtimeMs, translator: this.translator(), decodeMs: Math.round(decodeMs), at: Date.now(), ref: thread.ref,
+      format: FORMAT, path, bytes: stamp.bytes, mtimeMs: stamp.mtimeMs, translator: this.translator(thread.ref.harness), decodeMs: Math.round(decodeMs), at: Date.now(), ref: thread.ref,
     }
     if (stamp.revision !== undefined) meta.revision = stamp.revision
     if (thread.checkpoint !== undefined) meta.checkpoint = thread.checkpoint
@@ -536,7 +537,7 @@ export class ViewCache {
     await this.writes
     const previous = await this.opened(path)
     const from = previous?.meta.resume
-    if (!previous || !from || previous.meta.translator !== this.translator() || stamp.bytes < previous.meta.bytes || sameStamp(previous.meta, stamp)) return null
+    if (!previous || !from || previous.meta.translator !== this.translator(previous.meta.ref.harness) || stamp.bytes < previous.meta.bytes || sameStamp(previous.meta, stamp)) return null
     const started = performance.now()
     const tail = await read(from, from.entry > 0 ? previous.at(from.entry - 1)?.id : undefined)
     if (!tail || previous.holdsBefore(tail.entries, from.entry)) return null

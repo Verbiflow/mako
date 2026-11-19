@@ -3,7 +3,12 @@
  * child process of its own, which writes the record's view and exits, so
  * what a decode holds while it runs (a whole session, uncapped) never counts
  * against the catalog's heap: the sync daemon runs in 128 MB. The child is
- * `decode-aside-main.js`; one runs at a time.
+ * `decode-aside-main.js`; one runs at a time, a person's first: a decode
+ * someone waits on (a Thread opening) goes before every decode in the
+ * background (views rebuilt for a new decoder, copies), and stops one that is
+ * running, which goes again after it. After an update to a decoder the
+ * background rebuilt every large Thread one by one, and the Thread the person
+ * opened waited behind them all (13 to 18 s, 2026-11-19).
  */
 import { fork } from "./processes.js"
 import type { ChildProcess } from "node:child_process"
@@ -41,26 +46,93 @@ export type AsideReply = z.infer<typeof AsideReplySchema>
 /** A decode aside's end. `started` is false where no child could run, so the caller decodes in its own process instead. */
 export type AsideOutcome = { ok: true; entries: number; decodeMs: number } | { ok: false; started: boolean; error: string }
 
+/** A decode asked for and not yet done: `background` when nobody waits on it. */
+interface Asked {
+  job: AsideJob
+  background: boolean
+  settle: (outcome: AsideOutcome) => void
+}
+
+/** The decode running, its child once it started, and whether it was stopped for one someone waits on. */
+interface Running {
+  asked: Asked
+  child?: ChildProcess
+  yielded?: boolean
+}
+
 export class DecodeAside {
-  private queue: Promise<unknown> = Promise.resolve()
+  /** Decodes someone waits on, then the rest, each in the order asked. */
+  private readonly sooner: Asked[] = []
+  private readonly later: Asked[] = []
+  private running: Running | null = null
   private children = new Set<ChildProcess>()
+  private stopped = false
   private readonly script = fileURLToPath(new URL("./decode-aside-main.js", import.meta.url))
 
   /** `executable` runs the child as Node: Electron's Helper inside the app, which shows no Dock icon. */
   constructor(readonly executable = process.execPath) {}
 
-  /** Decodes `job`'s record into its view, after the decodes asked before it. */
-  decode(job: AsideJob): Promise<AsideOutcome> {
-    const run = this.queue.then(() => this.run(job))
-    this.queue = run.catch(() => undefined)
-    return run
+  /**
+   * Decodes `job`'s record into its view: after the decodes someone waits on asked before it, and, unless it's
+   * `background`, before every decode in the background, stopping one that runs (it goes again next).
+   */
+  decode(job: AsideJob, background = false): Promise<AsideOutcome> {
+    return new Promise((settle) => {
+      const asked = { job, background, settle }
+      if (background) this.later.push(asked)
+      else {
+        this.sooner.push(asked)
+        this.yieldRunning()
+      }
+      this.next()
+    })
+  }
+
+  /** Someone waits now on the decode of `path` asked in the background: it goes before the rest. */
+  promote(path: string): void {
+    const at = this.later.findIndex((asked) => asked.job.path === path)
+    if (at >= 0) {
+      const [asked] = this.later.splice(at, 1)
+      this.sooner.push({ ...asked!, background: false })
+      this.yieldRunning()
+      this.next()
+    } else if (this.running?.asked.job.path === path) this.running.asked.background = false
+  }
+
+  /** The decodes waiting, someone's first: for a diagnostic, and a test. */
+  waiting(): { path: string; background: boolean }[] {
+    return [...this.sooner, ...this.later].map((asked) => ({ path: asked.job.path, background: asked.background }))
   }
 
   stop(): void {
+    this.stopped = true
+    for (const asked of [...this.sooner.splice(0), ...this.later.splice(0)]) asked.settle({ ok: false, started: false, error: "the catalog stopped" })
     for (const child of this.children) child.kill()
   }
 
-  private run(job: AsideJob): Promise<AsideOutcome> {
+  /** A decode in the background running while someone waits on another is stopped, and asked again first of the rest. */
+  private yieldRunning(): void {
+    const running = this.running
+    if (!running?.asked.background || !running.child || running.yielded) return
+    running.yielded = true
+    running.child.kill()
+  }
+
+  private next(): void {
+    if (this.running || this.stopped) return
+    const asked = this.sooner.shift() ?? this.later.shift()
+    if (!asked) return
+    const running: Running = { asked }
+    this.running = running
+    void this.run(asked.job, (child) => { running.child = child }).then((outcome) => {
+      this.running = null
+      if (running.yielded && !this.stopped) this.later.unshift(asked)
+      else asked.settle(outcome)
+      this.next()
+    })
+  }
+
+  private run(job: AsideJob, started: (child: ChildProcess) => void): Promise<AsideOutcome> {
     if (!existsSync(this.script)) return Promise.resolve({ ok: false, started: false, error: `no ${this.script}` })
     return new Promise((resolve) => {
       let child: ChildProcess
@@ -77,6 +149,7 @@ export class DecodeAside {
         return
       }
       this.children.add(child)
+      started(child)
       let reply: AsideReply | undefined
       let stderr = ""
       let spawned = false

@@ -45,7 +45,7 @@ import { parseArgs } from "node:util"
 import type { ThreadPage } from "@mako/sessions"
 import { mergedBase } from "@mako/host/conversations/stream-merging"
 import { z } from "zod"
-import { SessionCatalog, translatorBuild, VIEWER_PAGE } from "@mako/sessions"
+import { SessionCatalog, translatorBuilds, VIEWER_PAGE } from "@mako/sessions"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { reduceLiveUpdates, type LiveUpdate } from "@mako/sessions/live-content"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
@@ -270,7 +270,7 @@ if (wantedFamily("merge large") && !values.only) {
 }
 
 const scratch = await mkdtemp(join(tmpdir(), "mako-perf-decoders-"))
-const translator = translatorBuild()
+const translator = translatorBuilds()
 for (const store of wantedFamily("saved open") ? await keptPairStores(join(scratch, "pairs"), values.fixtures) : []) {
   const harness = store.reader === "devin-ide" ? "devin" : store.reader
   const measure = store.reader === harness ? "saved open" : `saved open (${store.reader})`

@@ -34,6 +34,10 @@ const MERGE_ATTEMPTS = 3
 
 /** `settleBases` lets the host breathe this long between journals, and checks this often whether work it waits on finished. */
 const SETTLE_PAUSE_MS = 2_000
+/** How long after a window last read a conversation `settleBases` reads none in: what the person opens goes first. */
+const PERSON_QUIET_MS = 10_000
+/** The sweep, as the host's work is named (`HostWork.run`): who it reads in is counted to it. */
+export const SETTLE_WORK = "move journals' copies onto their sessions' records"
 
 /** What `settleBases` did: each journal that kept a copy, how long it took, and why the copy stays when it does. */
 export interface SettledBases {
@@ -81,6 +85,9 @@ export class LiveSources {
    */
   private readonly settledAt = new Map<string, { journal: string; session?: { source: BaseSource; stamp: string } }>()
   private settling: Promise<SettledBases> | undefined
+  /** Windows' reads of conversations under way (`windowSnapshot`), and when one last began or ended. */
+  private personReads = 0
+  private personReadAt = -Infinity
 
   constructor(access: SourcesAccess) {
     this.access = access
@@ -410,7 +417,8 @@ export class LiveSources {
    * while that session is unchanged too; one sweep runs at a time.
    */
   settleBases(pauseMs = SETTLE_PAUSE_MS): Promise<SettledBases> {
-    this.settling ??= this.settleNow(pauseMs).finally(() => { this.settling = undefined })
+    const work = this.access.dependencies.work
+    this.settling ??= (work?.run ? work.run(SETTLE_WORK, () => this.settleNow(pauseMs)) : this.settleNow(pauseMs)).finally(() => { this.settling = undefined })
     return this.settling
   }
 
@@ -463,8 +471,10 @@ export class LiveSources {
     copies.sort((a, b) => b.changed - a.changed)
     const journals: SettledBases["journals"] = []
     for (const [index, { id, bytes }] of copies.entries()) {
-      while (!this.access.admission.closed && this.access.hasActiveWork())
-        await new Promise((resolve) => setTimeout(resolve, SETTLE_PAUSE_MS))
+      // A window reading a conversation goes first: each journal read in here weighs on the memory what it opens holds,
+      // and its session's read waits on the same catalog.
+      while (!this.access.admission.closed && (this.access.hasActiveWork() || this.personReading(pauseMs ? PERSON_QUIET_MS : 0)))
+        await new Promise((resolve) => setTimeout(resolve, Math.min(SETTLE_PAUSE_MS, pauseMs || 50)))
       if (this.access.admission.closed) break
       const began = performance.now()
       const loaded = Boolean(this.access.resident(id))
@@ -550,6 +560,46 @@ export class LiveSources {
     let applied = false
     await this.refreshedSnapshot(resident.snapshot.session.id, undefined, { id: recovery.id, bindingId: recovery.bindingId, applied: () => { applied = true } })
     return applied
+  }
+
+  /**
+   * What a window opening conversation `id` is answered with: `refreshedSnapshot`, unless its history is still to be
+   * read from its session (`readBase`), which reads every page of it and merges it whole: seconds for a long one, and
+   * the window showed nothing meanwhile (13 to 18 s for 15 to 23 thousand entries, 2026-11-19). Then the window is
+   * answered as soon as the newest page is read (`newestBase`), as a cold view of it is; the whole read goes on, and
+   * once it lands the conversation's next revision says its history changed, which the window reads again.
+   */
+  async windowSnapshot(id: string): Promise<LiveSnapshot | null> {
+    this.personReads += 1
+    this.personReadAt = performance.now()
+    try {
+      const resident = this.access.resident(id) ? this.access.load(id) : await this.access.loadSliced(id)
+      if (!resident) return null
+      const source = resident.snapshot.baseSource
+      if (!source || !baseUnread(resident.snapshot)) return await this.refreshedSnapshot(id)
+      const whole = this.refreshedSnapshot(id)
+      // Whichever comes first: a history read whole from a view at hand is as quick as its newest page.
+      type First = { snapshot: LiveSnapshot | null } | { page: ThreadPage } | undefined
+      const first = await Promise.race<First>([
+        whole.then((snapshot) => ({ snapshot }), () => undefined),
+        this.newestBase(source).then((page): First | Promise<First> => (page ? { page } : whole.then((snapshot) => ({ snapshot })))),
+      ])
+      if (!first) return await whole
+      if ("snapshot" in first) return first.snapshot
+      void whole.catch(() => undefined)
+      // Read whole meanwhile, or another conversation now: answered as it stands.
+      if (this.access.resident(id) !== resident || !baseUnread(resident.snapshot) || resident.snapshot.baseSource !== source) return await whole
+      hostLog("live", "a window shows a history's newest page while the rest is read", { conversation: id, harness: source.harness, entries: first.page.entries.length, of: first.page.total })
+      return { ...this.access.stamp(resident.snapshot), base: first.page }
+    } finally {
+      this.personReads -= 1
+      this.personReadAt = performance.now()
+    }
+  }
+
+  /** Whether a window read a conversation within `ms`, or is reading one: background work waits for it. */
+  personReading(ms: number): boolean {
+    return this.personReads > 0 || performance.now() - this.personReadAt < ms
   }
 
   async refreshedSnapshot(id: string, completion?: { request: LiveRequest; applied(): void }, recovery?: { id: string; bindingId: string; applied(): void }): Promise<LiveSnapshot | null> {

@@ -1,6 +1,6 @@
 import { dirname, join } from "node:path"
 import { isDeepStrictEqual } from "node:util"
-import { buildTranscript, ChildSidecars, toolIdsOf, transcriptNote, transcriptTurns, translatorBuild, withTranscriptNote, writeTranscript } from "@mako/sessions"
+import { buildTranscript, ChildSidecars, toolIdsOf, transcriptNote, transcriptTurns, translatorBuilds, withTranscriptNote, writeTranscript } from "@mako/sessions"
 import type { BundledChildren, ChildParent, ChildSource, Thread, ThreadRef } from "@mako/sessions"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import type { ContextManifest } from "../contracts/conversation-control.js"
@@ -37,8 +37,6 @@ export class ContextBundles {
   /** A harness's id as people read it; the id when the host gave no registry. */
   readonly label: (harness: string) => string
   private readonly folders = new Map<string, ChildSidecars>()
-  private build?: string
-
   constructor(native?: ChildSource, label: (harness: string) => string = (harness) => harness) {
     this.native = native
     this.label = label
@@ -50,8 +48,11 @@ export class ContextBundles {
     return sidecars
   }
 
-  translator(): string {
-    return (this.build ??= translatorBuild())
+  private readonly builds = translatorBuilds()
+
+  /** `harness`'s decoder in this build (`translatorBuild`). */
+  translator(harness: string): string {
+    return this.builds(harness)
   }
 }
 
@@ -74,7 +75,7 @@ interface ContextInput {
 async function withCurrentBase(snapshot: LiveSnapshot, bundles: ContextBundles): Promise<LiveSnapshot> {
   const base = snapshot.base
   const native = bundles.native
-  if (!base || !native || base.translator === bundles.translator()) return snapshot
+  if (!base || !native || base.translator === bundles.translator(base.ref.harness)) return snapshot
   const fresh = await native.open(base.ref.path).catch(() => null)
   if (!fresh || fresh.ref.nativeId !== base.ref.nativeId || fresh.ref.harness !== base.ref.harness) return snapshot
   const byId = new Map<string, Entry | null>()

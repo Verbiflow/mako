@@ -14,7 +14,7 @@ import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import type { ReportedEffect } from "@mako/protocol"
-import { SessionCatalog, translatorBuild } from "@mako/sessions"
+import { SessionCatalog, translatorBuilds } from "@mako/sessions"
 import type { PathVerdict } from "@mako/host/attribution/footprint-reader"
 import { harnessScratch, harnessStores, sessionFolders, sessionIds, type CataloguedSession } from "@mako/host/attribution/index"
 import { nodeFileSystem, watcherEvents } from "@mako/host/attribution/ports"
@@ -42,7 +42,7 @@ const roots = [home, "/private/tmp"]
  * moved (tens of milliseconds), so a long run can stay as current as a host.
  */
 function sessionCatalogs(): () => Promise<CataloguedSession[]> {
-  const translator = translatorBuild()
+  const translator = translatorBuilds()
   const catalogs = ["claude", "codex", "cursor", "devin", "devin-ide", "grok", "opencode"].map((reader) => new SessionCatalog([storeReader(reader, home)], { translator, readOnly: true }))
   return async () => {
     const out: CataloguedSession[] = []
