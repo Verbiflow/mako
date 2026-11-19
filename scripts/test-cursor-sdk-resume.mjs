@@ -1,16 +1,13 @@
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
-import { createRequire } from "node:module"
-import { dirname, join } from "node:path"
-import { CURSOR_SDK_PATCHES, TRANSCRIPT_BUILDS } from "./patch-cursor-sdk.mjs"
+import { installedPatch, readSdk, sdkFiles } from "./lib/cursor-sdk-sites.mjs"
 
 /**
  * The SDK's retry loop, as `scripts/patch-cursor-sdk.mjs` patches it, asks the
  * process's resume hook before each retry and sends its words as a user
  * message on the checkpoint instead of the empty resume; on a resend of the
- * turn's own message, after its words. The patched expression runs here
- * against stand-ins for the protocol classes, and the installed SDK must
- * carry it in both builds.
+ * turn's own message, after its words. The patched expression, as the
+ * installed SDK carries it in each build and with the names that release gives
+ * the loop's variables, runs here against stand-ins for the protocol classes.
  */
 const HOOK = Symbol.for("mako:cursor-sdk-resume")
 
@@ -21,14 +18,15 @@ class Message {
 }
 const proto = { QFf: class extends Message {}, Vtf: class extends Message {}, RGk: class extends Message {}, qKo: class extends Message {}, xyI: { AGENT: 1, PLAN: 2 } }
 
-for (const target of [TRANSCRIPT_BUILDS.esm.target, TRANSCRIPT_BUILDS.cjs.target]) {
-  const { replacements } = CURSOR_SDK_PATCHES.find((patch) => patch.target === target)
-  const [original, patched] = replacements.find(([from]) => from.startsWith("try{return await s.runAttempt("))
-  const name = target.includes("esm") ? "i" : "c"
-  const request = target.includes("esm") ? "c" : "a"
+for (const build of ["esm", "cjs"]) {
+  // Throws when the installed SDK lacks the patch.
+  const { file: target, source, sites } = installedPatch(readSdk, sdkFiles, "resume-account", build)
+  const [{ from: original, to: patched, index, length, names }] = sites
   assert.ok(patched.startsWith(original.slice(0, -"action:w,".length)), `${target}: the patch keeps the attempt's call`)
-  // 1.4.0's loop: `y` the attempt, `w` the action, `g` the checkpoint; the run's request id differs by build.
-  const attempt = new Function("y", "w", "g", request, "s", name, `return (async()=>{${patched}x:0})}catch(e){throw e}})()`)
+  // 1.4.0's loop: `y` the attempt, `w` the action, `g` the checkpoint, `c` the run's request id, `s` the attempt's
+  // runner and `i` the protocol module; each by the name this release gives it.
+  const name = (old) => names.get(old) ?? assert.fail(`${target}: the resume account binds no ${old}`)
+  const attempt = new Function(name("y"), name("w"), name("g"), name("c"), name("s"), name("i"), `return (async()=>{${source.slice(index, index + length)}x:0})}catch(e){throw e}})()`)
   const sent = async (w, g, hook) => {
     globalThis[HOOK] = hook
     try {
@@ -72,10 +70,4 @@ for (const target of [TRANSCRIPT_BUILDS.esm.target, TRANSCRIPT_BUILDS.cjs.target
   assert.equal(await sent(1, summarize, async () => words), summarize, `${target}: any other action goes as the SDK would send it`)
 }
 
-const installed = join(dirname(createRequire(import.meta.url).resolve("@cursor/sdk")), "../..")
-for (const target of [TRANSCRIPT_BUILDS.esm.target, TRANSCRIPT_BUILDS.cjs.target]) {
-  const { replacements } = CURSOR_SDK_PATCHES.find((patch) => patch.target === target)
-  const [, patched] = replacements.find(([from]) => from.startsWith("try{return await s.runAttempt("))
-  assert.equal(readFileSync(join(installed, target), "utf8").split(patched).length - 1, 1, `${target}: the installed SDK asks the resume hook`)
-}
 console.log("Cursor SDK resume: each retry asks the hook, and its words go as a user message on the checkpoint, of the turn's mode, after a resent message's own; nothing, a throw or no hook resumes as the SDK would; both installed builds carry it")

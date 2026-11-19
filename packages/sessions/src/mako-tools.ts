@@ -211,7 +211,8 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
     group: "agents",
     say: ({ args, answer }) => {
       const scope = text(args["scope"])
-      if (scope === "crew") return { verb: READ, what: "the crew" }
+      // "crew": the scope's name before the Shiver, as transcripts kept from those builds still hold it.
+      if (scope === "shiver" || scope === "crew") return { verb: READ, what: "the Shiver" }
       if (scope === "apexes") return { verb: READ, what: "other Apexes" }
       const children = answer?.["children"]
       return { verb: READ, what: "Fins", ...Array.isArray(children) && { done: count(children.length, "Fin", "Fins") } }
@@ -295,9 +296,14 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
   ["pull_request_status", {
     group: "pull-request",
     say: ({ args, text: answer }) => {
-      const number = pullNumber(answer)
+      const asked = text(args["number"])
+      const jobId = text(args["job"])
+      const runId = text(args["run"])
+      const job = jobId ? `job ${jobId}'s log` : runId ? `run ${runId}'s log` : undefined
+      if (job && !asked) return { verb: READ, what: `${job}${inRepository(args)}` }
+      const number = pullNumber(answer) ?? asked
       const link = pullLink(answer)
-      return { verb: READ, what: pullRequest(undefined, args), done: number ? pullRequest(number, args) : `the PR's status${inRepository(args)}`, ...link && { link } }
+      return { verb: READ, what: pullRequest(asked, args), done: number ? pullRequest(number, args) : `the PR's status${inRepository(args)}`, ...link && { link } }
     },
   }],
   ["pull_request_merge", {

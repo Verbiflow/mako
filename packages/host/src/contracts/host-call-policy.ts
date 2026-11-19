@@ -96,6 +96,8 @@ const reads = [
   "mako:thread-scratch",
   /** Measures Mako's folders with `du`; writes nothing. */
   "mako:storage",
+  /** Previews what each store could give back, measuring with `du`; removes nothing. */
+  "mako:storage-plan",
   "mako:worktree-review",
   "mako:worktree-review-diffs",
   "mako:worktree-branches",
@@ -269,6 +271,8 @@ const replays = [
   "mako:file-events-dismiss",
   /** `MakoStorage.free`: a pass asked for while one runs is that pass, and a second finds nothing more to free. */
   "mako:storage-free",
+  /** Sets the same low-disk switch. */
+  "mako:storage-budget-set",
   /** `LiveConversations.submit`: the request id; content is fingerprinted. */
   "mako:live-prompt",
   "mako:live-continue",

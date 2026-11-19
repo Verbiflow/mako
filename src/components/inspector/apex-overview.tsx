@@ -9,11 +9,11 @@ import { harnessLabel } from "@/components/rail/harness-meta"
 import { FinMark } from "@/components/stage/child-tabs"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { useTickingText } from "@/components/ui/second-clock"
-import { CrewElapsed } from "@/components/viewer/crew-card"
+import { ShiverElapsed } from "@/components/viewer/shiver-card"
 import { FinAnswerButtons } from "@/components/viewer/fin-answer-buttons"
 import { useFinAnswer } from "@/components/viewer/use-fin-answer"
 import { FinRowActions } from "@/components/viewer/fin-row-actions"
-import { waitsOutside } from "@/lib/crew-rows"
+import { waitsOutside } from "@/lib/shiver-rows"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { acp } from "@/state/acp"
@@ -233,7 +233,7 @@ const FinRow = memo(function FinRow({
         <span className="flex min-w-0 flex-1 flex-col">
           <span className="flex h-5 min-w-0 items-center gap-2">
             <span className={cn("min-w-0 flex-1 truncate text-ui", needs ? "font-medium text-foreground" : group === "done" ? "text-foreground/70" : "text-foreground")}>{agent.title}</span>
-            {ticking ? null : <CrewElapsed agent={agent} className="text-label text-faint" />}
+            {ticking ? null : <ShiverElapsed agent={agent} className="text-label text-faint" />}
           </span>
           <span className={cn("truncate text-label", needs ? "text-foreground/90" : group === "failed" ? "text-negative" : "text-muted-foreground")}>{line}</span>
           <FinMovedLine agent={agent} />
@@ -250,7 +250,7 @@ const FinRow = memo(function FinRow({
   )
 })
 
-/** A needing Fin's answers under its row: the crew card's own buttons, so an answer here is the one given there. */
+/** A needing Fin's answers under its row: the Shiver card's own buttons, so an answer here is the one given there. */
 function FinAnswers({ agent, conversation, apexTitle }: { agent: NativeAgent; conversation: string; apexTitle: string }) {
   const { sent, send } = useFinAnswer(agent, conversation)
   const ask = openAsk(childStateOf(agent))?.ask

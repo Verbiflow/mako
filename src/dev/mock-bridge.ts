@@ -420,10 +420,10 @@ export function installMockBridge() {
   const returnCalls: string[] = []
   let refuseNextAgentAnswer = false
   const continueCalls: string[] = []
-  const crewContinueCalls: { conversation: string; request: string; choice: LimitNoticeChoice }[] = []
-  let crewLimitRoom = true
-  let crewNextCalls = 0
-  const crewWait = crypto.randomUUID()
+  const shiverContinueCalls: { conversation: string; request: string; choice: LimitNoticeChoice }[] = []
+  let shiverLimitRoom = true
+  let shiverNextCalls = 0
+  const shiverWait = crypto.randomUUID()
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -616,15 +616,15 @@ export function installMockBridge() {
         emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], control })) })
       },
       continues: () => [...continueCalls],
-      crewContinues: () => [...crewContinueCalls],
-      crewReads: () => crewNextCalls,
-      crewLimitRoom(value: boolean) {
-        crewLimitRoom = value
+      shiverContinues: () => [...shiverContinueCalls],
+      shiverReads: () => shiverNextCalls,
+      shiverLimitRoom(value: boolean) {
+        shiverLimitRoom = value
         setChildren((liveSnapshots.get(APEX_CONVERSATION)?.nativeAgents?.agents ?? []).map(agent => ({ ...agent, ...(agent.child && { child: { ...agent.child } }) })))
       },
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
-       * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
+       * dispatching request (the digest it was reading), so the Shiver card draws in its place, the Fins in the
        * roster untouched.
        */
       /** The Apex's session goes through a transition as its host would say it: starting, reconnecting, hibernated, failed. */
@@ -1155,12 +1155,6 @@ export function installMockBridge() {
       ]
     },
     worktreeAhead: async () => null,
-    snapshotBudget: async () => ({ settings: { mode: "preview", maxBytes: 8 * 1024 ** 3 }, at: Date.now(), payloadBytes: 0, selectedBytes: 0, remainingBytes: 0, untrackedBytes: 0, inventoryKnown: true, entries: [] }),
-    setSnapshotBudget: async settings => ({ settings, at: Date.now(), payloadBytes: 0, selectedBytes: 0, remainingBytes: 0, untrackedBytes: 0, inventoryKnown: true, entries: [] }),
-    threadScratch: async () => ({ settings: { mode: "preview", idleDays: 7, kept: [] }, at: Date.now(), everyMs: 3_600_000, entries: [] }),
-    setThreadScratch: async (settings) => ({ settings, at: Date.now(), everyMs: 3_600_000, entries: [] }),
-    worktreeRetention: async () => ({ settings: { mode: "preview", days: 7, kept: [] }, everyMs: 3_600_000, minimumPassMs: 600_000, repositoryFetches: 0, at: Date.now(), checkouts: [] }),
-    setWorktreeRetention: async (settings) => ({ settings, everyMs: 3_600_000, minimumPassMs: 600_000, repositoryFetches: 0, at: Date.now(), checkouts: [] }),
     worktreeInventory: async () => (scene === "rail" ? railInventory(removedWorktrees) : { worktrees: [], spares: { count: 0, bytes: null } }),
     ...mockStorage(),
     worktreeReview: async (path: string): Promise<WorktreeReview> => {
@@ -3735,15 +3729,15 @@ export function installMockBridge() {
     },
     agentsNextPlace: async (conversation: string, notice?: string) => {
       if (!notice) return { label: "Codex", harness: "codex" }
-      crewNextCalls++
+      shiverNextCalls++
       const agent = liveSnapshots.get(conversation)?.nativeAgents?.agents.find(agent => agent.child?.limitNotice?.id === notice && agent.child.limitNotice.waiting)
-      return crewLimitRoom && agent?.child ? { label: "Codex", harness: "codex", choice: { notice, place: "codex", waits: [{ thread: agent.child.thread, request: agent.child.limitNotice!.waiting!.version ?? crewWait }] } } : null
+      return shiverLimitRoom && agent?.child ? { label: "Codex", harness: "codex", choice: { notice, place: "codex", waits: [{ thread: agent.child.thread, request: agent.child.limitNotice!.waiting!.version ?? shiverWait }] } } : null
     },
     agentsContinueNext: async (conversation: string, request: string, choice?: LimitNoticeChoice) => {
       if (!choice) { continueCalls.push(conversation); return true }
-      crewContinueCalls.push({ conversation, request, choice })
+      shiverContinueCalls.push({ conversation, request, choice })
       const snapshot = liveSnapshots.get(conversation)
-      if (!snapshot?.nativeAgents || !crewLimitRoom) return false
+      if (!snapshot?.nativeAgents || !shiverLimitRoom) return false
       const agents = snapshot.nativeAgents.agents.map(agent => {
         if (agent.child?.limitNotice?.id !== choice.notice) return agent
         const child = { ...agent.child }; delete child.limitNotice

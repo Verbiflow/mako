@@ -25,13 +25,13 @@ import { RecordStore } from "../packages/sessions/src/record-store.ts"
  * of every version without the lock, and the turn it holds to judge and
  * drop), the sweep that drops what waited out its grace, and a repack with
  * nothing to look for. The store given is only read; the copy goes under
- * `$MAKO_THREAD_DATA_DIR` (or ~/.mako/tmp) and is removed unless `--keep`.
+ * `$MAKO_THREAD_SCRATCH_DIR`, then `$MAKO_THREAD_DATA_DIR` (or ~/.mako/tmp) and is removed unless `--keep`.
  */
 
 const { values: options } = parseArgs({ options: { store: { type: "string" }, mib: { type: "string", default: "160" }, json: { type: "boolean", default: false }, keep: { type: "boolean", default: false } } })
 if (!options.store) throw new Error("--store <records folder>: a store to copy, as `npm run bench:backfill -- --keep` leaves one")
 const say = (text: string) => { if (!options.json) console.log(text) }
-const base = process.env.MAKO_THREAD_DATA_DIR ?? join(homedir(), ".mako", "tmp")
+const base = process.env.MAKO_THREAD_SCRATCH_DIR ?? process.env.MAKO_THREAD_DATA_DIR ?? join(homedir(), ".mako", "tmp")
 const scratch = join(base, `bench-orphans-${Date.now()}`)
 const folder = join(scratch, "records")
 const home = join(scratch, "home")

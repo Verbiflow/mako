@@ -7,7 +7,7 @@ import type { Virtualizer } from "@tanstack/react-virtual"
  * A row's ref runs as React attaches it, in its commit. A row measured at other than its estimate moves the scroll to
  * keep what's read in place (at the list's end, or above the view), and react-virtual then renders at once with
  * `flushSync`. Inside a commit React refuses that ("flushSync was called from inside a lifecycle method") and renders
- * after the commit anyway: crew-card-ui said so in 5 runs of 8 under load (2026-11-16), from the crew card's rows.
+ * after the commit anyway: shiver-card-ui said so in 5 runs of 8 under load (2026-11-16), from the Shiver card's rows.
  *
  * Here a change the measurement makes is held until it ends, then said as an ordinary one (`sync: false`). An update
  * made in the commit is one React renders before the frame is painted, which is what the flush was for, and

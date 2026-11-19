@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.13.4"
+    "version": "3000.14.30821"
   },
   "about": "Read log.md with your file read tool, once and without an offset or limit, then tell me the last line you were shown. Don't run commands. One read of a file longer than a harness shows at once, then the answer.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#rumbling-impala",
+      "path": ".local/share/devin/cli/sessions.db#rigorous-dryosaurus",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/75437575-420a-4b73-80c7-cf818366a117.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/422c373e-9736-4da0-be2e-cbed66897b1c.db",
       "known": [
         {
           "side": "-",

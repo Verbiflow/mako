@@ -126,7 +126,7 @@ export function ActivityPill() {
   )
 }
 
-/** What a row says of its work: a Fin's line as its crew row says it, anything else its last step. */
+/** What a row says of its work: a Fin's line as its Shiver row says it, anything else its last step. */
 function stateWords(agent: NativeAgent): string {
   if (agent.child) return childLine(childStateOf(agent)) ?? ""
   return (agent.state.kind === "working" ? readableStep(agent.state.activity) : undefined) ?? ""

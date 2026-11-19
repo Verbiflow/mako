@@ -1,6 +1,7 @@
 import { hostCommand } from "../base/host-command.js"
 import { hostFetch, hostStopping, type HostStopping } from "../base/host-stopping.js"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { GitHubReads, GitHubRateLimitError, GitHubRepositoryLookupError, githubRateLimit } from "./github-reads.js"
 import { hostLog } from "../base/host-log.js"
@@ -461,7 +462,8 @@ function toCheck(raw: RawCheck): CheckSummary {
   ) {
     return { name, state: "running", url }
   }
-  if (verdict === "SUCCESS" || verdict === "NEUTRAL" || verdict === "SKIPPED") {
+  if (verdict === "SKIPPED") return { name, state: "passed", skipped: true, url }
+  if (verdict === "SUCCESS" || verdict === "NEUTRAL") {
     return { name, state: "passed", url }
   }
   if (verdict === "FAILURE" || verdict === "ERROR" || verdict === "TIMED_OUT") {
@@ -531,6 +533,19 @@ export async function pullForBranch(cwd: string): Promise<PullRequest | null> {
     parseRawPull
   )
   return raw ? toPull(raw) : null
+}
+
+/**
+ * A pull request of the folder's repository by its number, whatever branch it's on, with its head commit; null when
+ * the repository has none of that number. Read only.
+ */
+export async function pullByNumber(cwd: string, number: number): Promise<(PullRequest & { headCommit?: string }) | null> {
+  const raw = await ghJson(cwd, ["pr", "view", String(number), "--json", `${PULL_FIELDS},headRefOid`], (value) => {
+    const pull = parseRawPull(value)
+    return pull && { pull, head: isJsonObject(value) ? stringValue(value.headRefOid) : undefined }
+  })
+  if (!raw) return null
+  return { ...toPull(raw.pull), ...(raw.head && { headCommit: raw.head }) }
 }
 
 export async function listPulls(
@@ -932,11 +947,21 @@ export async function createPull(cwd: string, options: CreatePullOptions, env?: 
   await gh(cwd, args, env).catch((cause) => { throw ghFailure(cause) })
 }
 
+/**
+ * Change an open pull request's title or body over REST. Not `gh pr edit`: it reads the pull request's classic
+ * Projects through GraphQL first, so it fails for any token without `read:project`, which a REST PATCH never needs.
+ * The fields go as a JSON file (`--input`), so a long body never rides on the command line.
+ */
 export async function editPull(cwd: string, number: number, edit: { title?: string; body?: string }, env?: Readonly<Record<string, string>>): Promise<void> {
-  const args = ["pr", "edit", String(number)]
-  if (edit.title !== undefined) args.push("--title", edit.title)
-  if (edit.body !== undefined) args.push("--body", edit.body)
-  await gh(cwd, args, env).catch((cause) => { throw ghFailure(cause) })
+  const fields = { ...edit.title !== undefined && { title: edit.title }, ...edit.body !== undefined && { body: edit.body } }
+  const folder = await mkdtemp(join(tmpdir(), "mako-pull-edit-"))
+  try {
+    const input = join(folder, "fields.json")
+    await writeFile(input, JSON.stringify(fields))
+    await gh(cwd, ["api", "-X", "PATCH", `repos/{owner}/{repo}/pulls/${number}`, "--input", input], env).catch((cause) => { throw ghFailure(cause) })
+  } finally {
+    await rm(folder, { recursive: true, force: true })
+  }
 }
 
 export async function mergePull(cwd: string, number: number, method: MergeMethod, env?: Readonly<Record<string, string>>): Promise<void> {
@@ -983,7 +1008,17 @@ export async function failedRuns(cwd: string, branch: string, commit: string): P
 
 /** What a failed run's failed steps printed, as `job  step  line`; the last `lines` only. */
 export async function failedRunLog(cwd: string, id: number, lines: number): Promise<string> {
-  const log = await gh(cwd, ["run", "view", String(id), "--log-failed"]).catch((cause) => { throw ghFailure(cause) })
+  return logTail(await gh(cwd, ["run", "view", String(id), "--log-failed"]).catch((cause) => { throw ghFailure(cause) }), lines)
+}
+
+/** What one job printed, as `job  step  line`: its failed steps, or all of it when none failed; the last `lines` only. */
+export async function jobLog(cwd: string, job: number, lines: number): Promise<string> {
+  const read = (which: "--log-failed" | "--log") => gh(cwd, ["run", "view", "--job", String(job), which]).catch((cause) => { throw ghFailure(cause) })
+  const failed = await read("--log-failed")
+  return logTail(failed.trim() ? failed : await read("--log"), lines)
+}
+
+function logTail(log: string, lines: number): string {
   // Each line is "job\tstep\ttimestamp text"; the timestamp says nothing a reader needs.
   const rows = log.split("\n").filter(Boolean).map((line) => line.replace(/\t\uFEFF?\d{4}-\d\d-\d\dT[\d:.]+Z /, "\t"))
   return rows.slice(-lines).join("\n")

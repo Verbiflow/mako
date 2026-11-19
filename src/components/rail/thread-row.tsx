@@ -7,7 +7,7 @@ import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
 import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
-import { ApexCrewLine } from "@/components/rail/fin-pips"
+import { ApexShiverLine } from "@/components/rail/fin-pips"
 import { useIsApex } from "@/state/fin-pips"
 import { ApexAsks } from "@/components/rail/apex-asks"
 import {
@@ -83,7 +83,7 @@ export const ROW_SURFACE =
 export const ROW_ACTIONS =
   "pointer-events-none absolute inset-y-0 right-0 z-[1] flex items-center pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 [.group:has(:focus-visible)_&]:pointer-events-auto [.group:has(:focus-visible)_&]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
-/** An Apex's row is two lines, its crew's pips under its title (`ApexCrewLine`). */
+/** An Apex's row is two lines, its Shiver's pips under its title (`ApexShiverLine`). */
 export const APEX_SURFACE = "h-11 flex-col items-stretch justify-center gap-[3px]"
 
 /**
@@ -368,7 +368,7 @@ export const ThreadRow = memo(function ThreadRow({
         {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
         <ThreadStatusEnd status={status} updatedAt={ref.updatedAt} />
         </RowLine>
-        {apex ? <ApexCrewLine thread={thread} /> : null}
+        {apex ? <ApexShiverLine thread={thread} /> : null}
       </div>
     </ThreadContextMenu>
     {apex ? <ApexAsks apex={thread} apexTitle={title} indent={indent} /> : null}
