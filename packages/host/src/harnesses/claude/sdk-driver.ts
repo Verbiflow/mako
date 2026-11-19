@@ -209,7 +209,7 @@ export interface ClaudeSdkDependencies {
   streams?: string
   /** Kept copies of what background commands printed, for when Claude Code's output files are gone. */
   outputs?: KeptOutputs
-  /** Where each tool that may write asks whether its turn's checkpoint holds the workspace yet (`HarnessContext.writeHolds`). */
+  /** Where each tool asks whether its turn's checkpoint holds the workspace yet (`HarnessContext.writeHolds`). */
   writeHolds?: WriteHolds
   /** Whether the person's own code runs in a session started with these options (`ClaudeSettingsReader.personCodeRuns`). */
   personCodeRuns?: (config: Options) => Promise<boolean>
@@ -827,14 +827,20 @@ export function createClaudeSdkDriver(
         const configured = await trace.step("configuration", () => dependencies.configure(cwd, options, trace))
         config = configured.options
         account = configured.account
-        // This launch's writes are held only where nothing in the settings Claude Code resolves for it runs the person's
-        // own code beside Mako's hook (`settingsRunCode`). Unasked, it may. A stdio MCP server of theirs doesn't stop it:
-        // Claude Code calls a server's tool only after the PreToolUse callback answers, which holds every tool not known
-        // to only read (`claudeCallHooks`), so what such a tool writes waits for the checkpoint like an edit. The two
-        // messages that reach a server with no tool call, its prompt as a command and a mention of its resource, wait
-        // for the checkpoint themselves (`claudeSubmitRunsServer`).
+        // Every launch holds its writes, so the message goes at once. Where the person's own code may run beside Mako's
+        // hook (anything in the settings Claude Code resolves for it, `settingsRunCode`; unasked, it may), every tool
+        // waits, reads included. Their code that runs with no tool or beside Mako's hook (a SessionStart,
+        // UserPromptSubmit or Stop hook, their own hook on a tool) isn't held: what it writes before the checkpoint holds
+        // the workspace lands in the checkpoint, not the turn's changes (`WriteHolds`). A stdio MCP server of theirs
+        // doesn't count: Claude Code calls a server's tool only after the PreToolUse callback answers, which holds every
+        // tool not known to only read (`claudeCallHooks`), so what such a tool writes waits for the checkpoint like an
+        // edit. The two messages that reach a server with no tool call, its prompt as a command and a mention of its
+        // resource, wait for the checkpoint themselves (`claudeSubmitRunsServer`).
         // Traced as Codex's and OpenCode's same check is (`settings`): the first one starts the settings reader's worker.
-        if (dependencies.writeHolds) dependencies.writeHolds.attend(conversationId, Boolean(dependencies.personCodeRuns) && !await trace.step("settings", () => dependencies.personCodeRuns!(config)))
+        if (dependencies.writeHolds) {
+          const personCode = !dependencies.personCodeRuns || await trace.step("settings", () => dependencies.personCodeRuns!(config))
+          dependencies.writeHolds.attend(conversationId, true, { everyTool: personCode })
+        }
         toolApprovals = await trace.step("observation", async () => {
           try {
             return await dependencies.prepareApprovals?.({ config, sessionId: nativeId,
@@ -904,7 +910,7 @@ export function createClaudeSdkDriver(
         teams,
         conversation: conversationId,
       }
-      const callHooks = claudeCallHooks(new CallBounds(conversationId), routing, dependencies.writeHolds && ((signal) => dependencies.writeHolds!.beforeWrite(conversationId, signal)))
+      const callHooks = claudeCallHooks(new CallBounds(conversationId), routing, dependencies.writeHolds && ((signal, mayWrite) => mayWrite ? dependencies.writeHolds!.beforeWrite(conversationId, signal) : dependencies.writeHolds!.beforeTool(conversationId, signal)))
       let query: ClaudeQuery
       // The Agent SDK's package, which the first query of a host loads: traced apart from the query, which spawns.
       if (dependencies.loadSdk) await trace.step("sdk-load", () => dependencies.loadSdk!())
