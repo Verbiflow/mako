@@ -84,7 +84,7 @@ import type { DiscoveryProcesses } from "./discovery-process.js"
 import { SessionUsage, type UsageObservation } from "./session-usage.js"
 import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "./acp-usage.js"
 import type { JsonObject } from "../contracts/json.js"
-import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
+import { environmentForExecutable } from "../base/executable.js"
 import { acpMcpServers } from "../tools/index.js"
 import type { McpTransport } from "../contracts/mcp-skills-integrations.js"
 import type { LiveInputQuestion, LivePermissionRequest, LivePermissionResponse, PromptAttachment, LiveSessionState } from "../contracts/providers-acp.js"
@@ -382,7 +382,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     spec.configureEnvironment(env)
     applyControlEnvironment(env, options.conversationTools?.control)
     applyThreadEnvironment(env, options.threadEnvironment)
-    const executable = resolveExecutable(spec.command, env)
+    const executable = await dependencies.processes.executables.find(spec.command, env)
     if (!executable) throw new Error(`${harness} is not installed`)
     // Before MCP preparation: a native fork only copies the session, so it starts none of the conversation's servers.
     const forkEnvironment = options.fork ? environmentForExecutable(executable, env) : undefined
@@ -392,7 +392,13 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const preparedServers = acpMcpServers(mcpSnapshot, harness, ["stdio", "http", "sse"])
     const makoMcp = adapter.apply(layerOf({ conversationTools: options.conversationTools }), options.conversationId).servers
     preparedServers.push(...makoMcp)
-    const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env))
+    const makoServers = new Set(makoMcp.map((server) => server.name))
+    const launchServers = preparedServers.map((server) => ({ name: server.name, process: "command" in server && !makoServers.has(server.name) }))
+    // A source whose own config carries Mako's hook says whether this launch holds writes before that config is written.
+    const hookHolds = dependencies.writeHolds && options.nativeCalls && spec.holdsWrites
+      ? await trace.step("settings", () => spec.holdsWrites!({ env, cwd: workingDir, servers: launchServers }))
+      : false
+    const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env, hookHolds))
     const approvals = await trace.step("observation", () => spec.prepareApprovals?.({
       root: dependencies.approvalRoot, env,
       previous: options.observedApprovals ?? [],
@@ -400,11 +406,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     }))
     // This launch's writes are held only where Mako's hooks gate them and nothing the person set up runs beside them.
     const writes = dependencies.writeHolds && options.nativeCalls ? source.callHooks?.writes : undefined
-    const makoServers = new Set(makoMcp.map((server) => server.name))
-    const holdsWrites = writes ? !await writes.personCodeRuns({
-      executable, env, cwd: workingDir,
-      servers: preparedServers.map((server) => ({ name: server.name, process: "command" in server && !makoServers.has(server.name) })),
-    }, personCodeAnswers) : false
+    const holdsWrites = hookHolds || (writes ? !await writes.personCodeRuns({ executable, env, cwd: workingDir, servers: launchServers }, personCodeAnswers) : false)
     const child = trace.sync("spawn", () => spawnProviderProcess(executable, spec.args, {
       cwd: workingDir,
       env: environmentForExecutable(executable, env),

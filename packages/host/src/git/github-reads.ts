@@ -160,8 +160,14 @@ export class GitHubReads {
     for (const [key, entry] of this.entries) if (!this.keepRepositoryRead(entry)) this.entries.delete(key)
   }
 
+  /**
+   * A repository's record outlives `forget`: one being read, one that answered (who the repository is on GitHub and
+   * how it merges doesn't change when a ref moves or a pull request is written), and a failed lookup's cooldown.
+   * Forgotten with the rest, it was asked for again after every push, fetch and mutation: 1.15 requests a minute
+   * where its five minutes would allow 0.4.
+   */
   private keepRepositoryRead(entry: Entry): boolean {
-    return entry.repository === true && (entry.until === Infinity || entry.repositoryFailed === true && entry.until > this.deps.now())
+    return entry.repository === true && (entry.until === Infinity || entry.until > this.deps.now())
   }
 
   private rememberRepository(common: string, auth: string, repository: RepositoryIdentity): void {

@@ -104,7 +104,7 @@ async function scenario(name: string, options: { elsewhere: boolean; busyWhileMa
     source: (id) => moveSource(world.live, id),
     companions: (id) => threadMoves.companions(id),
     place: async (id, cwd) => ({ project: threadMoves.project(id) ?? cwd, changed: 0 }),
-    move: async (id) => (await threadMoves.carry(id, { lead: true, tell: true })).session.id,
+    move: async (id) => (await threadMoves.carry(id, { lead: true, tell: true, waitTurn: true })).session.id,
     follow: async (id, told, lead) => { await threadMoves.carry(id, { lead: false, tell: told, after: lead }) },
     announce: () => {},
     failed: (_id, message) => failures.push(message),

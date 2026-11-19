@@ -392,6 +392,8 @@ export function sessionOrderIn(sessions: readonly string[] | undefined, session:
 
 /** Whether two rows show the same but for when they last moved. */
 function sameShown(left: ReportedSession, right: ReportedSession): boolean {
+  // A row no report reworked is the one the link holds: nothing of it is compared, and its Fins aren't written out.
+  if (left === right) return true
   return left.session === right.session && left.thread === right.thread && left.threadTitle === right.threadTitle && left.conversation === right.conversation &&
     left.harness === right.harness && left.title === right.title && left.state === right.state && left.waitingOn === right.waitingOn && left.waitingFor === right.waitingFor &&
     left.folder === right.folder && left.createdAt === right.createdAt && left.generation === right.generation &&
@@ -399,7 +401,7 @@ function sameShown(left: ReportedSession, right: ReportedSession): boolean {
     left.project?.folder === right.project?.folder && sameHead(left.project?.head, right.project?.head) &&
     left.worktree?.branch === right.worktree?.branch && (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0") &&
     left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere && left.forkOf === right.forkOf && left.order === right.order &&
-    JSON.stringify(left.asking) === JSON.stringify(right.asking) && JSON.stringify(left.fins) === JSON.stringify(right.fins)
+    (left.asking === right.asking || JSON.stringify(left.asking) === JSON.stringify(right.asking)) && (left.fins === right.fins || JSON.stringify(left.fins) === JSON.stringify(right.fins))
 }
 
 /**
@@ -507,6 +509,22 @@ export const FINS_COALESCE_MS = 250
  */
 const SHOWN_PER_SECOND = 10
 /**
+ * A report is followed by a rest of this many times what it took less one, so however slow a report gets, reports take
+ * at most one part in this many of the host's one thread. The counts above pace by the clock alone: a report that
+ * took two seconds, allowed ten times a second, was all the loop did.
+ */
+export const REPORT_COST_TIMES = 5
+/**
+ * A report quicker than this is followed by no rest: at the rates above it takes a twentieth of the thread at most,
+ * and a quiet host's change goes on the next turn of the loop as before.
+ */
+export const REPORT_FREE_MS = 5
+/**
+ * No rest outlasts this. A report's cost is read off the wall clock, which a Mac asleep through one, or its clock
+ * set, moves by hours: the rest that would earn ends here instead.
+ */
+export const REPORT_REST_MAX_MS = 60_000
+/**
  * A watched conversation's updates are kept this much, from the last the gateway said it relayed (`watch`'s `after`), to
  * be sent again on a new link: what went into a link's last moments, or wasn't sent while it was down. Past it, the
  * watchers are told to read the conversation again instead.
@@ -524,7 +542,8 @@ export const REPORT_WORK = "tell the account this host's Sessions"
 /**
  * What a host tells the cloud of its Sessions, on whichever link it serves: the list's rows when they change (a change a
  * list shows, on the next turn of the event loop; any other within `SOON_MS` of the first, then at most once a second;
- * nothing while nothing does; a whole reconcile every `SWEEP_MS` catches what moves without an event), and a conversation's live
+ * nothing while nothing does; a whole reconcile every `SWEEP_MS` catches what moves without an event; and none before
+ * the rest the last one's cost earned, `REPORT_COST_TIMES`), and a conversation's live
  * updates while another device watches it. A Mac and a cloud machine run the same one. What's watched belongs to the link it was
  * said on, so a reconnect never carries an old link's watchers onto a new one.
  */
@@ -534,6 +553,8 @@ export class SessionPublisher {
   readonly #appsFollowing: (() => ReadonlySet<string> | undefined) | undefined
   readonly #threadPassing: ((event: RuntimeEvent) => void) | undefined
   readonly #rows: () => readonly ReportedSession[] | undefined
+  /** When the rest after the last report ends (`#paced`): none starts before. */
+  #restUntil = Number.NEGATIVE_INFINITY
   readonly #rowsOf: ((conversations: ReadonlySet<string>) => readonly ReportedSession[] | undefined) | undefined
   readonly #rowsOfNative: ((paths: ReadonlySet<string>) => NativeRowsOf | undefined) | undefined
   readonly #now: () => number
@@ -567,8 +588,11 @@ export class SessionPublisher {
   #deadline: { at: number; cancel(): void } | undefined
   #soonAsked = false
   readonly #shown: ((conversation: string) => ConversationShown | undefined) | undefined
-  /** What a list shows of each conversation as its last batch left it, so a batch that moved it is told from one that didn't. */
-  readonly #shownOf = new Map<string, { key: string; base: string; promptedAt: string | undefined }>()
+  /**
+   * What a list shows of each conversation as its last batch left it, so a batch that moved it is told from one that
+   * didn't: all but its Fins as one string (`base`), and its Fins as the list they were and that list written out.
+   */
+  readonly #shownOf = new Map<string, { base: string; fins: ConversationShown["fins"]; finsKey: string; promptedAt: string | undefined }>()
   /** A change a list shows is waiting for its report: the next report goes whatever the second's pacing says. */
   #urgent = false
   #shownAsked = false
@@ -701,12 +725,29 @@ export class SessionPublisher {
   #publish(): void {
     if (this.#closed || !this.#reportNow || !this.#current) return
     try { this.#work.run(REPORT_WORK, this.#reportNow) }
-    catch (error) {
-      this.#reporter.forget()
-      this.#reportedLink = undefined
-      this.#dirty = true
-      hostWarn("sessions", "the account's Session report failed", { error: error instanceof Error ? error.message : String(error) })
-      this.#reportAfter(REPORT_MS)
+    catch (error) { this.#failed(error instanceof Error ? error.message : String(error)) }
+  }
+
+  /** A report threw: the next one starts over, as on a new link, on its retry deadline. */
+  #failed(error: string): void {
+    this.#reporter.forget()
+    this.#reportedLink = undefined
+    this.#dirty = true
+    hostWarn("sessions", "the account's Session report failed", { error })
+    this.#reportAfter(REPORT_MS)
+  }
+
+  /**
+   * Runs a report and starts the rest its cost earns: `REPORT_COST_TIMES` times what it took, from
+   * its start. A report quicker than `REPORT_FREE_MS` earns none.
+   */
+  #paced(run: () => void): void {
+    const began = this.#now()
+    try { run() }
+    finally {
+      const ended = this.#now()
+      const cost = ended - began
+      if (cost >= REPORT_FREE_MS) this.#restUntil = Math.max(this.#restUntil, ended + (REPORT_COST_TIMES - 1) * cost)
     }
   }
 
@@ -777,12 +818,23 @@ export class SessionPublisher {
   /** Reports on the owning link what changed since the last report there, from a change or deadline. */
   report(current: SessionLink | undefined): void {
     if (this.#closed) return
+    this.#paced(() => this.#reportOn(current))
+  }
+
+  #reportOn(current: SessionLink | undefined): void {
     // A link reported on before, served again after a moment without one, already holds the rows.
     if (current && current.link !== this.#reportedLink) this.#dirty = true
     this.#current = current
     this.#cancelDeadline()
     if (!current || current.served.version < SESSIONS_VERSION) return
     const now = this.#now()
+    // The rest the last report earned by its cost isn't over: this one waits it out, a change a list shows too, and
+    // goes on the deadline set here as the rest ends, with no other event.
+    if (this.#restUntil - now > REPORT_REST_MAX_MS) this.#restUntil = now + REPORT_REST_MAX_MS
+    if (this.#restUntil > now) {
+      this.#reportAfter(this.#restUntil - now)
+      return
+    }
     const changed = this.#dirty || this.#touched.size > 0 || this.#touchedNative.size > 0
     if (!this.#urgent && now - this.#reportedAt < REPORT_MS) {
       this.#reportAfter(this.#reportedAt + REPORT_MS - now)
@@ -1050,15 +1102,23 @@ export class SessionPublisher {
     this.#reportAfter(REPORT_MS)
   }
 
-  /** A conversation's batch came: whether it moved what a list shows of it, which then goes at once (`showsChanged`). */
+  /**
+   * A conversation's batch came: whether it moved what a list shows of it, which then goes at once (`showsChanged`).
+   * Its Fins are written out to compare only when they're another list than its last batch's (`listedFins` gives the
+   * same one while its roster stands): an Apex's every batch once wrote all of its Fins, 226 of them, to find none moved.
+   */
   #sawBatch(conversation: string, trace: string | undefined): void {
     const shown = this.#shown?.(conversation)
     if (!shown) return
     const base = `${shown.state}\0${shown.waitingFor ?? ""}\0${shown.waitingOn ?? ""}\0${shown.title ?? ""}\0${shown.background ?? ""}\0${shown.promptedAt ?? ""}\0${shown.asking ? JSON.stringify(shown.asking) : ""}`
-    const key = `${base}\0${shown.fins ? JSON.stringify(shown.fins) : ""}`
     const before = this.#shownOf.get(conversation)
-    if (before?.key === key) return
-    this.#shownOf.set(conversation, { key, base, promptedAt: shown.promptedAt })
+    const fins = before && before.fins === shown.fins ? before.finsKey : shown.fins ? JSON.stringify(shown.fins) : ""
+    if (before?.base === base && before.finsKey === fins) {
+      // Another list that says the same: the next batch with it compares nothing.
+      before.fins = shown.fins
+      return
+    }
+    this.#shownOf.set(conversation, { base, fins: shown.fins, finsKey: fins, promptedAt: shown.promptedAt })
     // Only its Fins moved (a step, a place in line): said within FINS_COALESCE_MS, once for all that move meanwhile.
     if (before?.base === base) {
       this.#changedAt.set(conversation, this.#now())

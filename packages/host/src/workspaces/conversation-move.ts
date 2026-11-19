@@ -78,10 +78,11 @@ async function intoWorktree<T>(deps: ConversationMoveDeps, id: string, owner: st
  * Relocate the conversation into `cwd`, the worktree its move just made. A turn it began while the worktree was made
  * (its queued message, a Fin's next word from its Apex) is waited out, and the worktree, with the branch its agent
  * asked for, is kept for it: given back, the branch went with it, and the fork that followed archived the Session a
- * Fin's work was in (2026-11-18, model-load and transcript-render). Undefined when it still can't go as itself.
+ * Fin's work was in (2026-11-18, model-load and transcript-render). A move in haste waits only until its deadline, as
+ * its Mac is going off. Undefined when it still can't go as itself.
  */
-async function relocateOnceIdle(deps: ConversationMoveDeps, id: string, cwd: string): Promise<{ from: string } | undefined> {
-  const deadline = Date.now() + TURN_MS
+async function relocateOnceIdle(deps: ConversationMoveDeps, id: string, cwd: string, haste?: MoveHaste): Promise<{ from: string } | undefined> {
+  const deadline = haste ? haste.by : Date.now() + TURN_MS
   let told = false
   for (;;) {
     const from = await deps.conversations.relocate(id, cwd)
@@ -103,9 +104,11 @@ async function relocateOnceIdle(deps: ConversationMoveDeps, id: string, cwd: str
  * rather than splitting the conversation. Otherwise, or when that resume
  * fails, as a fork from `input`'s point with its transcript, the conversation
  * left as it was in its own folder. With no `input`, as when it has no answer
- * of its own yet, it moves only as itself.
+ * of its own yet, it moves only as itself. `waitTurn`: the agent asked to
+ * move and Mako moves it once it's idle, so a turn it began while its
+ * worktree was made is waited out rather than forked around.
  */
-export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, input: ForkInput | undefined, project?: string, bring = false, haste?: MoveHaste): Promise<MovedConversation> {
+export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, input: ForkInput | undefined, project?: string, bring = false, haste?: MoveHaste, waitTurn = false): Promise<MovedConversation> {
   /** Fork it into the worktree instead, since it couldn't go as itself because it `why`. */
   const fork = async (why: string, project?: string) => {
     if (!input) throw new Error(`It has no answer of its own to fork from, and it ${why}.`)
@@ -124,7 +127,13 @@ export async function moveIntoWorktree(deps: ConversationMoveDeps, id: string, i
     const forked = await fork(relocation?.reason ?? "was asked to fork", project)
     return { conversation: forked.entered, moved: forked.moved, outcome: forked.outcome, relocated: false }
   }
-  const placed = await intoWorktree(deps, id, id, project, bring, (cwd) => relocateOnceIdle(deps, id, cwd), haste)
+  // Only a move Mako makes for the agent waits out a turn begun meanwhile (`relocateOnceIdle`); the person asked for
+  // theirs now, so it forks at once, as it always did.
+  const placed = await intoWorktree(deps, id, id, project, bring, async (cwd) => {
+    if (waitTurn) return relocateOnceIdle(deps, id, cwd, haste)
+    const from = await deps.conversations.relocate(id, cwd)
+    return from === undefined ? undefined : { from }
+  }, haste)
   if (!placed) {
     deps.warn("the conversation couldn't go on in its worktree as itself, so it was forked there", { conversation: id, reason: "busy before it moved" })
     const forked = await fork("got busy while its worktree was made", project)

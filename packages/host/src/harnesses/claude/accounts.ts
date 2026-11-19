@@ -1,3 +1,4 @@
+import { unheld, type CredentialHold } from "../credential-revisions.js"
 import { HostFailureError } from "../../contracts/provider-failure.js"
 import { hostFetch } from "../../base/host-stopping.js"
 import { z } from "zod"
@@ -33,6 +34,7 @@ import {
   deleteKeychain,
   ensureSharedLinks,
   jsonFields,
+  keychainUnchangedSince,
   keychainWrittenAt,
   numberValue,
   parseUsageReset,
@@ -339,6 +341,20 @@ async function readCredentialSource(scope: CredentialScope): Promise<CredentialS
   }
 }
 
+/**
+ * Who the sign-in `env` reads is for, as `credentialRevision` compares it (`readCredentialSource`'s precedence). The
+ * Keychain item costs a `security` process to read, so that read alone goes through `hold`, kept as the fingerprint
+ * and never the tokens; the file read without one is read every time.
+ */
+async function signedInPrincipal(env: NodeJS.ProcessEnv, hold: CredentialHold): Promise<string> {
+  const scope = credentialScope(env)
+  const stored = await hold(`keychain\0${scope.service}\0${scope.account}`, async () => {
+    const keychain = await readKeychain(scope.service, scope.account, "required")
+    return keychain === null ? null : principalFingerprint(keychain, ClaudePrincipal)
+  }, (fingerprint, readAt) => keychainUnchangedSince(scope.service, scope.account, fingerprint !== null, readAt))
+  return stored ?? principalFingerprint(await readOptionalFile(join(scope.dir, ".credentials.json")), ClaudePrincipal)
+}
+
 async function readCredentials(env: NodeJS.ProcessEnv): Promise<string | null> {
   return (await readCredentialSource(credentialScope(env)))?.contents ?? null
 }
@@ -573,10 +589,14 @@ export async function claudeOAuthUsage(
   }
 }
 
-async function usageEnv(root: AccountRoot, name: string, base: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
+function accountBase(root: AccountRoot, name: string, base: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
   const env = nativeEnv(base)
   if (name !== "default") env.CLAUDE_CONFIG_DIR = root.dir("claude", name)
   return env
+}
+
+async function usageEnv(root: AccountRoot, name: string, base: NodeJS.ProcessEnv = process.env): Promise<NodeJS.ProcessEnv> {
+  return accountBase(root, name, base)
 }
 
 function claudeState(env: NodeJS.ProcessEnv): string {
@@ -706,11 +726,11 @@ export function claudeAccountCapability(root: AccountRoot): SelectableAccountCap
       read: async (name) => usageForEnv(await usageEnv(root, name), false),
     },
     cloudSignIn: claudeCloudSignIn,
-    credentialRevision: async (name, base = process.env) => {
-      const env = await usageEnv(root, name, base)
+    credentialRevision: async (name, base = process.env, hold = unheld) => {
+      const env = accountBase(root, name, base)
       const state = await readOptionalFile(claudeState(env))
       return credentialFingerprint([defaultHome(env), env.USER ?? null,
-        principalFingerprint(await readCredentials(env), ClaudePrincipal),
+        await signedInPrincipal(env, hold),
         // A first startup creates non-auth state; absent identity and an empty projection are the same principal.
         principalFingerprint(state ?? "{}", ClaudeAccount),
         await homeSettings(defaultHome(env))])

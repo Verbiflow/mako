@@ -1,4 +1,5 @@
 import { approvalWords } from "@mako/host/contracts/children"
+import { everyWhileShown } from "@/lib/window-shown"
 import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
 import { memo, useEffect, useRef, useState } from "react"
 import { CheckIcon, ChevronRightIcon, XIcon } from "lucide-react"
@@ -38,8 +39,7 @@ function sameModel(left: InboxModel, right: InboxModel): boolean {
 function useMinute(): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), 60_000)
-    return () => window.clearInterval(timer)
+    return everyWhileShown(60_000, () => setNow(Date.now()))
   }, [])
   return now
 }

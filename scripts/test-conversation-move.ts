@@ -41,7 +41,7 @@ function snapshot(id: string, cwd: string): LiveSnapshot {
 
 const now: Relocation = { kind: "now" }
 
-function world(options: { relocation: Relocation; relocates?: boolean; refuses?: string; busyFor?: number }) {
+function world(options: { relocation: Relocation; relocates?: boolean; refuses?: string; busyFor?: number; turnMs?: number }) {
   const calls: Calls = []
   const id = randomUUID()
   const conversations = new Map<string, LiveSnapshot>([[id, snapshot(id, join(project, "app"))]])
@@ -55,6 +55,8 @@ function world(options: { relocation: Relocation; relocates?: boolean; refuses?:
       relocation: () => busy > 0 ? { kind: "wait", reason: "is running a turn" } : options.relocation,
       relocationWithin: async () => {
         if (busy > 0) {
+          // Each turn takes `turnMs` to end: a move waiting on it waits that long.
+          if (options.turnMs) await new Promise((resolve) => setTimeout(resolve, options.turnMs))
           calls.push("turn ends")
           busy -= 1
         }
@@ -139,11 +141,26 @@ try {
     "a conversation that can't go as itself, and isn't waiting on a turn, gives its worktree back and forks")
 
   const turning = world({ relocation: now, busyFor: 2 })
-  const waited = await moveIntoWorktree(turning.deps, turning.id, turning.input, project)
+  const waited = await moveIntoWorktree(turning.deps, turning.id, turning.input, project, false, undefined, true)
   assert.equal(waited.relocated, true, "a conversation whose turns began while its worktree was made moves as itself once they end")
   assert.equal(waited.conversation.session.id, turning.id)
   assert.deepEqual(turning.calls, ["prepare self", `relocate ${join(worktree, "app")}`, "turn ends", `relocate ${join(worktree, "app")}`, "turn ends", `relocate ${join(worktree, "app")}`, "move changes", "attach", "resume"],
     "its worktree, and the branch its agent asked for, are kept for it: nothing given back, nothing forked")
+
+  // The person's own move, from the composer, with a turn begun while its worktree was made that runs an hour: it
+  // forks at once, as it always did, rather than holding the Thread "already moving" until the turn ends.
+  const asked = world({ relocation: now, busyFor: 1, turnMs: 60 * 60_000 })
+  const began = Date.now()
+  const prompt = await moveIntoWorktree(asked.deps, asked.id, asked.input, project)
+  assert.ok(Date.now() - began < 2_000, `the person's move ends within seconds, not after the turn: ${Date.now() - began} ms`)
+  assert.equal(prompt.relocated, false)
+  assert.deepEqual(asked.calls.slice(0, 5), ["prepare self", `relocate ${join(worktree, "app")}`, "abandon", "warn busy before it moved", "prepare fork"], "it gives the worktree back and forks, waiting on nothing")
+
+  // A move made as its Mac goes off waits for nothing past its deadline: it forks as before.
+  const hasty = world({ relocation: now, busyFor: 2 })
+  const hurried = await moveIntoWorktree(hasty.deps, hasty.id, hasty.input, project, false, { by: Date.now() - 1 }, true)
+  assert.equal(hurried.relocated, false, "a move in haste doesn't wait out a turn past its deadline")
+  assert.deepEqual(hasty.calls.slice(0, 4), ["prepare self", `relocate ${join(worktree, "app")}`, "abandon", "warn busy before it moved"])
 
   const earlier = world({ relocation: now })
   const fromEarlier = await moveIntoWorktree(earlier.deps, earlier.id, { ...earlier.input, point: { kind: "run", requestId: "an earlier answer" } }, project)

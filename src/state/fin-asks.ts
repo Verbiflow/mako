@@ -2,7 +2,7 @@ import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { toast } from "sonner"
 import type { LimitNoticeChoice, AgentsRespondInput } from "@mako/host/contracts/agents"
 import { askWords, finAskWaiting, openAsk, rosterChildren } from "@mako/host/contracts/children"
-import type { FinAsk, NativeAgent } from "@mako/host/contracts/native-agents"
+import type { FinAsk, NativeAgent, NativeAgentRoster } from "@mako/host/contracts/native-agents"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { conversationRoster, type AcpState, type LiveAcpConversation } from "@/state/acp-state"
 
@@ -39,9 +39,19 @@ export function personAsks(children: readonly NativeAgent[]): PersonAsk[] {
  * npm ci". Its Thread's Fins as they stand (`conversationRoster`), whichever of its Sessions it is.
  */
 export function finAskLine(state: AcpState, conversation: Pick<LiveAcpConversation, "threadId" | "nativeAgents">): string | undefined {
-  const ask = personAsks(rosterChildren(conversationRoster(state, conversation))).find(ask => !ask.limit?.waiting)
-  return ask && finAskWaiting(ask.ask, ask.title, askWords(ask)).line
+  const roster = conversationRoster(state, conversation)
+  if (!roster) return undefined
+  let held = askLines.get(roster)
+  if (!held) {
+    const ask = personAsks(rosterChildren(roster)).find(ask => !ask.limit?.waiting)
+    held = { line: ask && finAskWaiting(ask.ask, ask.title, askWords(ask)).line }
+    askLines.set(roster, held)
+  }
+  return held.line
 }
+
+/** A roster's line, read once: an Apex's row asks for it on every change the rail hears, over a few hundred Fins. */
+const askLines = new WeakMap<NativeAgentRoster, { line: string | undefined }>()
 
 /** How the person answers: one of its options by its place, their own words, or for an approval, allow or refuse. */
 export type FinAnswer = Pick<AgentsRespondInput, "option" | "answer" | "allow">

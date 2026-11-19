@@ -1,6 +1,6 @@
 import type { Git } from "@mako/git"
 import { existsSync, readdirSync, realpathSync } from "node:fs"
-import { homedir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join, relative, resolve, sep } from "node:path"
 import { chatsRoot } from "../base/chats.js"
 import { QUIET_FOLDERS } from "../base/quiet-folders.js"
@@ -61,6 +61,29 @@ export function quietFoldersOf(root: string): string[] {
   return found
 }
 
+/** The machine's temporary folders as real paths: this process's `$TMPDIR` and the shared `/tmp` (`/private/tmp` on a Mac). */
+function temporaryFolders(): string[] {
+  const real = (path: string) => {
+    try {
+      return realpathSync(path)
+    } catch {
+      return resolve(path)
+    }
+  }
+  return [...new Set([real(tmpdir()), real("/tmp")])]
+}
+
+/**
+ * Whether `real` (a real path) is a temporary folder or a folder holding one. A folder inside one, such as a scratch
+ * checkout, is not. Every process and test on the machine makes and deletes trees there, and @parcel/watcher's
+ * FSEvents backend keeps each path a watch hears created in one map, walking all of it for every folder deleted: a
+ * watch of the temporary folders (2026-11-18) spent a whole core in those walks, dropped the events it fell behind
+ * on, and grew past a gigabyte in an hour and a half. `scripts/bench-temp-watch.ts` measures it.
+ */
+export function holdsTemporaryFolder(real: string): boolean {
+  return temporaryFolders().some((folder) => folder === real || folder.startsWith(real === sep ? sep : real + sep))
+}
+
 /**
  * Report changes under `root`, as paths relative to it, without hearing
  * dependency or build folders at all: on macOS FSEvents drops the eight
@@ -70,7 +93,8 @@ export function quietFoldersOf(root: string): string[] {
  *
  * A quiet folder created after the watch starts (the first install) makes it
  * start over so the folder is excluded too. The filesystem root, the home
- * folder and the Chats folder aren't watched: their churn is never one
+ * folder, the Chats folder and the temporary folders (or a folder holding
+ * one, see `holdsTemporaryFolder`) aren't watched: their churn is never one
  * project's.
  *
  * When the system drops events (FSEvents under load says "must be
@@ -95,6 +119,7 @@ export function watchTree(
   } catch {
     return undefined
   }
+  if (holdsTemporaryFolder(real)) return undefined
   let closed = false
   let excluded: string[] = []
   let subscription: Promise<WatchSubscription | undefined> = Promise.resolve(undefined)

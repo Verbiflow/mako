@@ -29,6 +29,8 @@ export interface SurfaceDefinition {
    * selects what it shows itself, so a change elsewhere repaints neither the rail nor the panel.
    */
   reading?: ComponentType<NoProps>
+  /** What its row is called now, a hook, where that follows what's on screen; left out, `label`. */
+  useLabel?: () => string
   /** Whether the right rail offers this surface now, a hook; left out, always. The open surface keeps its row. */
   useOffered?: () => boolean
 }

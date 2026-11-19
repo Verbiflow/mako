@@ -17,7 +17,8 @@ import { fileURLToPath } from "node:url"
  * - memory: the JS heap after a collection, and the document's nodes, once open;
  * - scroll: frame intervals while a wheel climbs through its history for four seconds, and the long tasks;
  * - stream: frame intervals while 120 batches of words land through the window's batch path, one a frame, and the
- *   main thread's task and script time for each batch;
+ *   main thread's task and script time for each batch; with `--answer long`, 240 batches of a 7,000-character answer
+ *   with prose, a code block and a table, as a long reply streams;
  * - send: from Enter to the frame that paints the sent message.
  *
  * Numbers only, the median of `--runs` (default 3); nothing here passes or fails. `--json <file>` writes them.
@@ -47,7 +48,7 @@ if (process.versions.electron) {
     await server.listen()
   }
   const query = option("journal") ? `&journal=${encodeURIComponent(option("journal"))}` : `&turns=${option("turns") ?? 260}`
-  const env = { ...process.env, MAKO_BENCH_ROOT: root, MAKO_BENCH_URL: given ?? server.resolvedUrls.local[0], MAKO_BENCH_QUERY: query, MAKO_BENCH_RUNS: option("runs") ?? "3", MAKO_BENCH_JSON: option("json") ?? "" }
+  const env = { ...process.env, MAKO_BENCH_ROOT: root, MAKO_BENCH_URL: given ?? server.resolvedUrls.local[0], MAKO_BENCH_QUERY: query, MAKO_BENCH_RUNS: option("runs") ?? "3", MAKO_BENCH_JSON: option("json") ?? "", MAKO_BENCH_ANSWER: option("answer") ?? "short" }
   delete env.ELECTRON_RUN_AS_NODE
   try {
     const child = spawn(resolve("node_modules/.bin/electron"), ["--js-flags=--expose-gc", root], { stdio: "inherit", env })
@@ -209,11 +210,19 @@ async function once(BrowserWindow) {
     const gaps = [], tasks = []
     new PerformanceObserver((list) => { for (const entry of list.getEntries()) tasks.push(entry.duration) }).observe({ type: 'longtask' })
     let previous = 0
-    for (let batch = 0; batch < 120; batch += 1) {
+    // A long reply: paragraphs, then a code block and a table, and paragraphs again, about 7,000 characters in all.
+    const paragraph = (n) => 'Paragraph ' + n + ' of a long answer says what was found and why it matters, in plain words that run on for a few lines so the transcript wraps them as it would a real reply. '.repeat(3) + '\\n\\n'
+    const code = '\`\`\`ts\\n' + Array.from({ length: 24 }, (_, line) => 'export const value' + line + ' = compute(' + line + ', { cached: true, retries: 3 })').join('\\n') + '\\n\`\`\`\\n\\n'
+    const table = '| File | Lines | What changed |\\n| --- | --- | --- |\\n' + Array.from({ length: 12 }, (_, row) => '| src/file-' + row + '.ts | ' + (row * 17 + 4) + ' | The reader keeps its place while the rows above it settle |').join('\\n') + '\\n\\n'
+    const long = [1, 2, 3, 4, 5].map(paragraph).join('') + code + [6, 7].map(paragraph).join('') + table + [8, 9, 10].map(paragraph).join('')
+    const batches = ${JSON.stringify(process.env.MAKO_BENCH_ANSWER)} === 'long' ? 240 : 120
+    const size = Math.ceil(long.length / batches)
+    for (let batch = 0; batch < batches; batch += 1) {
       const at = await new Promise((done) => requestAnimationFrame(done))
       if (previous) gaps.push(at - previous)
       previous = at
-      applyLiveBatch({ id, revision: revision() + 1, updates: [{ kind: 'text', text: batch % 12 === 11 ? ' and the next paragraph.\\n\\nNew ' : ' streamed words ' }] })
+      const text = batches === 240 ? long.slice(batch * size, (batch + 1) * size) : batch % 12 === 11 ? ' and the next paragraph.\\n\\nNew ' : ' streamed words '
+      applyLiveBatch({ id, revision: revision() + 1, updates: [{ kind: 'text', text }] })
     }
     applyLiveBatch({ id, revision: revision() + 1, updates: [], session: { ...session, status: 'ready' } })
     return { gaps, tasks }
@@ -270,8 +279,8 @@ async function once(BrowserWindow) {
     streamFrameP95Ms: percentile(stream.gaps, 0.95),
     streamFrameMaxMs: Math.max(...stream.gaps),
     streamLongTaskMs: stream.tasks.reduce((sum, ms) => sum + ms, 0),
-    streamTaskMsPerBatch: ((after.TaskDuration - before.TaskDuration) * 1000) / 120,
-    streamScriptMsPerBatch: ((after.ScriptDuration - before.ScriptDuration) * 1000) / 120,
+    streamTaskMsPerBatch: ((after.TaskDuration - before.TaskDuration) * 1000) / (process.env.MAKO_BENCH_ANSWER === "long" ? 240 : 120),
+    streamScriptMsPerBatch: ((after.ScriptDuration - before.ScriptDuration) * 1000) / (process.env.MAKO_BENCH_ANSWER === "long" ? 240 : 120),
     sendPaintMs: sent,
   }
 }
