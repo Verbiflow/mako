@@ -2,7 +2,7 @@ import { childGroup, childStateOf, openAsk, type ChildGroup } from "@mako/host/c
 import type { ChildState } from "@mako/host/contracts/agents"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 
-export type CrewRow =
+export type ShiverRow =
   | { kind: "heading"; group: ChildGroup; count: number }
   | { kind: "child"; agent: NativeAgent; group: ChildGroup }
   | { kind: "settled"; done: number; idle: number; open: boolean }
@@ -15,11 +15,11 @@ const SETTLED: ReadonlySet<ChildGroup> = new Set(["idle", "done"])
  * as one "24 done · 1 idle" line, their groups under it once it's open. A done Fin with a decision still open, its
  * Apex's to make, is never folded: it stays listed under its own Done heading.
  */
-export function buildRows(children: readonly NativeAgent[], settledOpen: boolean): CrewRow[] {
-  const live: CrewRow[] = []
-  const settled: CrewRow[] = []
+export function buildRows(children: readonly NativeAgent[], settledOpen: boolean): ShiverRow[] {
+  const live: ShiverRow[] = []
+  const settled: ShiverRow[] = []
   const counts = { done: 0, idle: 0 }
-  const headings = new Map<CrewRow[], Extract<CrewRow, { kind: "heading" }>>()
+  const headings = new Map<ShiverRow[], Extract<ShiverRow, { kind: "heading" }>>()
   for (const agent of children) {
     const state = childStateOf(agent)
     const next = childGroup(state)

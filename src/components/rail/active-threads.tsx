@@ -3,7 +3,7 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { attentionLine } from "@mako/host/contracts/notifications"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
-import { ApexCrewLine } from "@/components/rail/fin-pips"
+import { ApexShiverLine } from "@/components/rail/fin-pips"
 import { useIsApex } from "@/state/fin-pips"
 import { ApexAsks } from "@/components/rail/apex-asks"
 import { harnessLabel } from "@/components/rail/harness-meta"
@@ -196,7 +196,7 @@ export const LiveAgentRow = memo(function LiveAgentRow({
           <ThreadStatusEnd status={status} updatedAt={presence.movedAt === undefined ? undefined : new Date(presence.movedAt).toISOString()} />
         )}
         </RowLine>
-        {apex ? <ApexCrewLine thread={thread} /> : null}
+        {apex ? <ApexShiverLine thread={thread} /> : null}
       </div>
     </ThreadContextMenu>
     {apex ? <ApexAsks apex={thread} apexTitle={title} indent={indent} /> : null}

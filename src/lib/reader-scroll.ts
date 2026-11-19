@@ -1,6 +1,6 @@
 /**
  * Sent to a transcript's scroller (`data-transcript-viewport`) just before the app scrolls it for the reader: the
- * crew card's "Fins need you" line bringing the card back, a failure row shown. The transcript takes what follows as
+ * Shiver card's "Fins need you" line bringing the card back, a failure row shown. The transcript takes what follows as
  * the reader's movement, as it takes a wheel's, so it keeps it. Unannounced, a scroll it doesn't own reads as layout
  * moving under the reader, and holding their place put the old place back over it, windowed or not.
  */
