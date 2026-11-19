@@ -4,6 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
+import { DatabaseSync } from "node:sqlite"
 import { join } from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
@@ -11,7 +12,8 @@ import { Git } from "@mako/git"
 import type { ActivityMark, ReportedEffect } from "@mako/protocol"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
 import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
-import { turnChanges, type JournalView } from "@mako/host/attribution/queries"
+import { JournalReader } from "@mako/host/attribution/journal-reader"
+import { storedView, turnChanges, type JournalView } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { runningIn, turnOnlyPair, turnWriters, undoPlan } from "@mako/host/attribution/turn-lines"
 import type { LiveRequest, LiveSnapshot } from "@mako/host/contracts/live-conversations"
@@ -480,4 +482,51 @@ test("a save after the turn began, before it first wrote the file, is named on t
   assert.deepEqual(runsOf(turnWriters(f.view, "T1", R1, file, shown)), ["-1 maybe", "+1 maybe", "-4 turn", "+4 turn"])
   await f.tracker.close()
   rmSync(f.base, { recursive: true, force: true })
+})
+
+test("the journal's reader answers a turn's writers, its own lines and an undo's plan as the journal read on its caller's thread does", async () => {
+  const f = await fixture("reader")
+  await turns(f)
+  await f.tracker.settled()
+  const store = f.tracker.store
+  const stored = storedView(store)
+  // The Thread's second and third turns, as the journal has them.
+  const [, second = "", third = ""] = store.activityOfThread("T1").filter((activity) => activity.kind === "turn").map((activity) => activity.id)
+  const reader = new JournalReader(store.path)
+  try {
+    const file = appRecord(turnChanges(stored, "T1", second))
+    const shown = { before: app.r1.split(/(?<=\n)/), after: ["header by you\n", ...final.split(/(?<=\n)/)] }
+    const writers = turnWriters(stored, "T1", second, file)
+    assert.deepEqual(writers, turnWriters(f.view, "T1", second, file), "the journal as committed reads as the tracker's own view does")
+    assert.ok(writers?.some((run) => run.writer === "other" && run.thread === "T2"))
+    assert.deepEqual(await reader.turnWriters("T1", second, file), writers)
+    assert.deepEqual(await reader.turnWriters("T1", second, file, shown), turnWriters(stored, "T1", second, file, shown), "on the checkpoints' sides, walked from the turn's start")
+    assert.deepEqual(await reader.turnWriters("T1", second, file, { before: null, after: shown.after }), turnWriters(stored, "T1", second, file, { before: null, after: shown.after }), "a side with no file")
+    assert.deepEqual(await reader.turnOnly("T1", second, file), turnOnlyPair(stored, "T1", second, file))
+    for (const scope of [{ kind: "turn", requestId: second }, { kind: "turn", requestId: third }, { kind: "thread" }] as const) {
+      const plan = undoPlan(stored, "T1", scope, f.repo)
+      assert.ok(plan.writes.length && plan.token, "there is something to undo")
+      assert.deepEqual(await reader.undoPlan("T1", scope, f.repo), plan, `the same writes, lines kept and token for ${scope.kind === "turn" ? scope.requestId : "the Thread"}`)
+    }
+
+    // The first entry on a file since a turn began, by the file's own index: what reading every entry since then found.
+    const began = store.turn("T1", second)!.start
+    const since = store.entriesBetween(began, Number.MAX_SAFE_INTEGER)
+    for (const path of ["app.ts", "util.ts", "never.ts"])
+      for (const before of [1, file.entries.first, file.entries.last, store.lastSeq() + 1])
+        assert.equal(store.firstOfPathFrom("repo", path, began, before), since.find((entry) => entry.root === "repo" && entry.path === path && entry.seq < before)?.seq, `${path} before ${before}`)
+    assert.equal(store.firstOfPathFrom("repo", "app.ts", began, store.lastSeq() + 1), file.entries.first)
+    assert.ok(store.firstOfPathFrom("repo", "app.ts", 0, store.lastSeq() + 1)! < file.entries.first, "an earlier turn's entry counts once the time reaches back to it")
+
+    // Versions the journal no longer keeps: no answer, on the reader as here.
+    const rows = new DatabaseSync(store.path)
+    rows.exec("DELETE FROM blobs")
+    rows.close()
+    assert.equal(turnWriters(storedView(store), "T1", second, file), undefined)
+    assert.deepEqual([await reader.turnWriters("T1", second, file), await reader.turnOnly("T1", second, file)], [undefined, undefined], "no answer stays no answer")
+  } finally {
+    await reader.close()
+    await f.tracker.close()
+    rmSync(f.base, { recursive: true, force: true })
+  }
 })

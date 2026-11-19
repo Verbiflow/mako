@@ -7,7 +7,7 @@ import "./lib/scratch-git.mjs"
 // the next process doesn't ask again.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -20,6 +20,7 @@ import { acpReadable, acpWritable } from "@mako/host/harnesses/acp-stream"
 import type { JsonObject } from "@mako/host/contracts/json"
 import { acpClientCapabilities } from "@mako/host/harnesses/acp-source"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
+import { removeScratch } from "./lib/scratch-processes.mjs"
 
 const grokAcpSource = createGrokAcpSource()
 
@@ -122,6 +123,7 @@ else {
     console.log(`Grok folder trust: asked only a client that can answer (${request!.afterOpen ? "after" : "before"} session/new answered), saved the grant, and didn't ask again`)
   } finally {
     for (const done of after) done()
-    rmSync(root, { recursive: true, force: true })
+    // Grok writes its session as it exits: wait for nothing to hold the folder, then remove it.
+    await removeScratch(root)
   }
 }

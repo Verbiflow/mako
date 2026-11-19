@@ -6,7 +6,7 @@ import "./lib/scratch-git.mjs"
 // confirms nothing it can't tell apart.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { createServer } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -18,6 +18,7 @@ import type { NativeApprovalDecision } from "@mako/host/contracts/approval-respo
 import { acpReadable, acpWritable } from "@mako/host/harnesses/acp-stream"
 import { approvalAnswerDigest } from "@mako/host/harnesses/approval-evidence"
 import { GrokApprovalObserver, grokPermissionFile } from "@mako/host/harnesses/grok/approval-observer"
+import { removeScratch } from "./lib/scratch-processes.mjs"
 
 const installed = (() => {
   try { execFileSync("grok", ["--version"], { stdio: "ignore" }); return true } catch { return false }
@@ -94,6 +95,7 @@ else {
     console.log("Grok approvals: always-allow, allow-once, reject-once and reject-always each confirmed from Grok's own run, refusal and permission.toml")
   } finally {
     models.close()
-    rmSync(root, { recursive: true, force: true })
+    // Grok writes its session as it exits: wait for nothing to hold the folder, then remove it.
+    await removeScratch(root)
   }
 }

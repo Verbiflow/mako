@@ -1,7 +1,8 @@
 import type { Git } from "@mako/git"
-import { createReadStream, readdirSync, realpathSync } from "node:fs"
-import { lstat, readdir, readFile } from "node:fs/promises"
-import { join } from "node:path"
+import { readdirSync, realpathSync } from "node:fs"
+import { lstat, readFile } from "node:fs/promises"
+import { physicalFileSystem } from "../base/physical-files.js"
+import { join, resolve } from "node:path"
 import { z } from "zod"
 import type { RootPath, TrackerChangeListener, TrackerEventSource, TrackerFileStat, TrackerFileSystem } from "@mako/protocol"
 import type { TrackerRepository } from "./tracker.js"
@@ -16,11 +17,17 @@ const Errno = z.object({ code: z.string() })
 /** Nothing there, or not a file or folder the path can reach. */
 const MISSING = new Set(["ENOENT", "ENOTDIR", "ELOOP"])
 
+/**
+ * The disk as it is: under Electron's Node, `node:fs` opens an `.asar` it meets as an archive, and one being written
+ * (another app's update staged in the temporary folder, a Mako build an agent was packaging) failed the whole read of
+ * a turn's footprint with "Invalid package" (17 times on 2026-11-18).
+ */
 export function nodeFileSystem(): TrackerFileSystem {
+  const disk = physicalFileSystem()
   return {
     async stat(path) {
       try {
-        const stat = await lstat(path, { bigint: true })
+        const stat = await (await disk).promises.lstat(path, { bigint: true })
         const kind: TrackerFileStat["kind"] = stat.isFile() ? "file" : stat.isDirectory() ? "directory" : stat.isSymbolicLink() ? "symlink" : "other"
         return { kind, dev: Number(stat.dev), ino: Number(stat.ino), size: Number(stat.size), mode: Number(stat.mode), mtimeNs: stat.mtimeNs, ctimeNs: stat.ctimeNs }
       } catch (error) {
@@ -30,20 +37,21 @@ export function nodeFileSystem(): TrackerFileSystem {
     },
     async read(path) {
       try {
-        return await readFile(path)
+        return await (await disk).promises.readFile(path)
       } catch (error) {
         const code = Errno.safeParse(error).data?.code ?? ""
         if (MISSING.has(code) || code === "EISDIR") return null
         throw error
       }
     },
-    stream: (path) => createReadStream(path, { highWaterMark: 1024 * 1024 }),
+    stream: (path) => streamOf(disk, path),
     async walk(root, skip) {
+      const files = (await disk).promises
       const out: RootPath[] = []
       const visit = async (folder: string, prefix: string) => {
         let entries
         try {
-          entries = await readdir(folder, { withFileTypes: true })
+          entries = await files.readdir(folder, { withFileTypes: true })
         } catch (error) {
           if (MISSING.has(Errno.safeParse(error).data?.code ?? "")) return
           throw error
@@ -59,6 +67,11 @@ export function nodeFileSystem(): TrackerFileSystem {
       return out
     },
   }
+}
+
+/** A file's pieces from the disk as it is, once the module that reads it is loaded. */
+async function* streamOf(disk: ReturnType<typeof physicalFileSystem>, path: string): AsyncGenerator<Uint8Array> {
+  for await (const piece of (await disk).createReadStream(path, { highWaterMark: 1024 * 1024 })) yield piece
 }
 
 /**
@@ -131,6 +144,49 @@ export function watcherEvents(watch: TreeWatcher, history: SystemHistory | undef
   }
 }
 
+const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/
+/** Refs each worktree keeps for itself; every other is in the repository's common folder. */
+const OWN_REF = /^(?:[A-Z_]+|refs\/(?:bisect|worktree|rewritten)\/.*)$/
+
+/**
+ * The commit a checkout's HEAD names, read from Git's own files: its `.git` folder (a linked worktree's `.git` file
+ * says where that is), HEAD there, and the branch it names as a file of its own or a line of `packed-refs`. Null
+ * before the first commit. Undefined when the files can't say (no `.git`, a ref store kept as a reftable, a ref that
+ * reads as neither): the caller asks Git. The tracker reads HEAD after every move of Git's files and around each
+ * shell reconciliation, and asking Git each time was a process each time.
+ */
+export async function headFromFiles(root: string): Promise<string | null | undefined> {
+  const text = (path: string) => readFile(path, "utf8").then((found) => found.trim(), () => undefined)
+  try {
+    let folder = join(root, ".git")
+    if ((await lstat(folder)).isFile()) {
+      const linked = /^gitdir: (.+)$/.exec((await text(folder)) ?? "")
+      if (!linked) return undefined
+      folder = resolve(root, linked[1]!)
+    }
+    const shared = await text(join(folder, "commondir"))
+    const common = shared === undefined ? folder : resolve(folder, shared)
+    if (await lstat(join(common, "reftable")).then(() => true, () => false)) return undefined
+    let ref = await text(join(folder, "HEAD"))
+    for (let hops = 0; ref !== undefined && hops < 5; hops++) {
+      if (OID.test(ref)) return ref
+      const name = /^ref: (.+)$/.exec(ref)?.[1]
+      if (!name || name.includes("..")) return undefined
+      const loose = await text(join(OWN_REF.test(name) ? folder : common, name))
+      if (loose !== undefined) {
+        ref = loose
+        continue
+      }
+      const packed = (await text(join(common, "packed-refs")))?.split("\n").find((line) => line.endsWith(` ${name}`) && !line.startsWith("#") && !line.startsWith("^"))
+      const oid = packed?.slice(0, packed.indexOf(" "))
+      return oid === undefined ? null : OID.test(oid) ? oid : undefined
+    }
+    return undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Git's view of a repository for the tracker, through the host's `Git`. */
 export function gitRepository(git: Git, root: string, watchGitDir?: (folder: string, moved: () => void) => { close(): void }): TrackerRepository {
   const opened = git.openRepository(root)
@@ -139,6 +195,8 @@ export function gitRepository(git: Git, root: string, watchGitDir?: (folder: str
     return result.stdout.toString("utf8").split("\0").filter(Boolean)
   }
   const head = async () => {
+    const found = await headFromFiles(root)
+    if (found !== undefined) return found
     const result = await git.run({ cwd: root, args: ["rev-parse", "--verify", "-q", "HEAD"], codes: [1], read: true })
     return result.code === 0 ? result.stdout.toString("utf8").trim() : null
   }
@@ -146,10 +204,17 @@ export function gitRepository(git: Git, root: string, watchGitDir?: (folder: str
     head,
     async inventory(includeTracked = true) {
       const commit = await head()
-      const [tracked, untracked] = await Promise.all([!includeTracked && commit ? Promise.resolve([]) : list(["ls-files", "-z"]), list(["ls-files", "-z", "--others", "--exclude-standard"])])
       // Before the first commit there's no base: everything there is new.
-      if (!commit) return { tracked: [], untracked: [...tracked, ...untracked], changed: [] }
-      const changed = await list(["diff", "--name-only", "-z", "--no-renames", "HEAD", "--"])
+      if (!commit) {
+        const [tracked, untracked] = await Promise.all([list(["ls-files", "-z"]), list(["ls-files", "-z", "--others", "--exclude-standard"])])
+        return { tracked: [], untracked: [...tracked, ...untracked], changed: [] }
+      }
+      // One reading of the index and one walk for both lists: `ls-files --others` and `diff HEAD` each made their own.
+      // A path staged and then put back is listed as changed here though it holds HEAD's content; reading it finds no change.
+      const [tracked, status] = await Promise.all([includeTracked ? list(["ls-files", "-z"]) : Promise.resolve([]), list(["status", "--porcelain=v1", "-z", "--no-renames", "--untracked-files=all"])])
+      const untracked: string[] = []
+      const changed: string[] = []
+      for (const entry of status) (entry.startsWith("?? ") ? untracked : changed).push(entry.slice(3))
       return { tracked, untracked, changed }
     },
     async ignored(paths) {

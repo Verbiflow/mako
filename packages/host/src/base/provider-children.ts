@@ -111,6 +111,15 @@ export class ProviderChildren {
     return this.records
   }
 
+  /**
+   * When `pid` started, as the host read it once after spawning it; undefined for a pid that isn't this host's
+   * running child, or whose start hasn't been read yet. A child the host spawned and hasn't seen exit can't have had
+   * its pid reused, so this answers a liveness check without another process listing (`HostStopping.spawnedAt`).
+   */
+  observedStart(pid: number): number | undefined {
+    return this.records.find((entry) => entry.pid === pid)?.processStartedAt
+  }
+
   /** A recorded process taken over by another owner (a child spawned ahead, adopted by a session); its birth stays. */
   reown(info: { pid: number; owner: string }): void {
     if (!this.records.some((entry) => entry.pid === info.pid && entry.owner !== info.owner)) return
@@ -393,6 +402,13 @@ type ProviderChildEvent =
 
 /** Spawns and exits, published by whoever starts a provider process and kept by the host's registry. */
 const events = topic<ProviderChildEvent>("mako:provider-child")
+
+/** Hears each provider process Mako starts or sees end, whoever started it: what watches for harnesses at work looks then. */
+export function onProviderChildChange(listener: () => void): () => void {
+  return events.subscribe((event) => {
+    if ("spawned" in event || "exited" in event) listener()
+  })
+}
 
 /** Report a spawned provider process until it exits. */
 export function trackProviderChild(

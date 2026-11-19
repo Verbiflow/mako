@@ -55,4 +55,39 @@ try {
 } finally {
   during.stop()
 }
-console.log("Wake: clock gaps, the desktop's resume and unlock, one wake for several notices, stopping, and a long start being no wake passed")
+// With nothing that needs it, the watch holds no timer; a sleep in that stretch is found when a need turns on, by the
+// wall clock having run on while the monotonic one stopped.
+{
+  const jobs = new HostJobs()
+  const watching = jobs.demand("a client is subscribed")
+  let wall = 1_000_000
+  let mono = 0
+  const idleWakes: WakeSource[] = []
+  const idle = watchWake(jobs, (source) => idleWakes.push(source), { tickMs: 20, gapMs: 200, quietMs: 1_000, now: () => wall, monotonic: () => mono, needs: [watching] })
+  try {
+    assert.equal(jobs.list().find((job) => job.name === "watch for the machine waking")?.paused, true, "nothing needs it: no timer")
+    wall += 10_000
+    mono += 10_000
+    watching.set(true)
+    assert.deepEqual(idleWakes, [], "time awake with nothing watching is no wake")
+    watching.set(false)
+    wall += 3_600_000
+    mono += 1_000
+    watching.set(true)
+    assert.deepEqual(idleWakes, ["clock"], "an hour asleep while nothing watched is a wake once something does")
+    assert.equal(jobs.list().find((job) => job.name === "watch for the machine waking")?.paused, false, "and the watch ticks while it does")
+    // A launch looks first, whether or not anything ticks: a sleep with nothing watching is a wake before it starts.
+    watching.set(false)
+    idle.check()
+    assert.equal(idleWakes.length, 1, "a look with no time away is no wake")
+    wall += 7_200_000
+    mono += 500
+    // Past the last wake's quiet window, so this one counts as its own.
+    idle.check()
+    assert.deepEqual(idleWakes, ["clock", "clock"], "two hours asleep with nothing watching is a wake at the launch's look")
+  } finally {
+    idle.stop()
+    jobs.stop()
+  }
+}
+console.log("Wake: clock gaps, the desktop's resume and unlock, one wake for several notices, stopping, a long start being no wake, and a sleep while nothing needed the watch, and a launch's own look passed")

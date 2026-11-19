@@ -462,6 +462,10 @@ borrowGit.run = async (options: RunOptions) => {
   if (options.args.includes("add") && options.env?.GIT_OBJECT_DIRECTORY) {
     const objects = options.env.GIT_OBJECT_DIRECTORY
     const loose = readdirSync(objects).filter((name) => /^[a-f0-9]{2}$/.test(name)).flatMap((name) => readdirSync(join(objects, name)).map((file) => name + file))
+    // A checkpoint's add streams its blobs into a pack (`STREAMED_BLOBS`): those are written too.
+    const packs = existsSync(join(objects, "pack")) ? readdirSync(join(objects, "pack")).filter((name) => name.endsWith(".idx")) : []
+    for (const pack of packs)
+      loose.push(...execFileSync("git", ["show-index"], { input: readFileSync(join(objects, "pack", pack)), encoding: "utf8" }).trim().split("\n").filter(Boolean).map((line) => line.split(" ")[1]!))
     // Saved staging can also write a tree before add: count blobs, not unrelated tree objects.
     const types = loose.length ? execFileSync("git", ["cat-file", "--batch-check=%(objecttype)"], { cwd: borrowCwd, env: { ...process.env, ...options.env }, input: `${loose.join("\n")}\n`, encoding: "utf8" }).trim().split("\n") : []
     looseWrites.push(types.filter((type) => type === "blob").length)
@@ -486,6 +490,9 @@ try {
   writeFileSync(join(borrowCwd, "new"), "other\n")
   const third = await borrowStore.capture(borrowCwd)
   assert.equal(looseWrites[2], 1, "a same-size edit is read again and writes its new blob")
+  const sealed = readdirSync(join(borrowRoot, "store", third.id, "git", "objects", "pack"))
+  assert.deepEqual(sealed.filter((name) => name.endsWith(".pack")).length, 1, `a sealed checkpoint keeps one pack, not the one its add streamed into as well: ${sealed.join(", ")}`)
+  assert.equal(readdirSync(join(borrowRoot, "store", third.id, "git", "objects")).some((name) => /^[a-f0-9]{2}$/.test(name)), false, "and no loose object")
   assert.equal(existsSync(join(borrowRoot, "store", second.id)), false)
   const saved = (...args: string[]) => borrowCommand(`--git-dir=${join(borrowRoot, "store", third.id, "git")}`, ...args)
   assert.equal(saved("show", `refs/mako/checkpoints/${third.id}:tracked`), "working", "the new pack holds the borrowed body without its predecessor")

@@ -1,12 +1,12 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { createHash, randomUUID } from "node:crypto"
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, stat, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { performance } from "node:perf_hooks"
-import { Git } from "@mako/git"
+import { Git, type RunOptions } from "@mako/git"
 import type { HistoryMark } from "@mako/host/contracts/watcher-child"
 import type { FileHistory, HistoryOptions } from "@mako/host/workspaces/watch-backend"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
@@ -49,7 +49,19 @@ const edit = (path: string, content: string, told = true) => {
   if (told) heard.push({ at: ++count, path: join(cwd, path) })
 }
 
-const store = new WorkspaceSnapshots(new Git(), join(root, "store"))
+/** What a checkpoint's record says it holds, as the store saved it. */
+const SavedCheckpoint = z.object({ tree: z.string(), head: z.string(), files: z.number(), indexDigest: z.string() })
+const SavedRow = z.object({ value: z.string() })
+
+// Every Git command the store runs, to tell a capture from the last checkpoint (it lists nothing whole) from a whole one.
+const commands: (readonly string[])[] = []
+const runner = new Git()
+const run = runner.run.bind(runner)
+runner.run = (options: RunOptions) => {
+  commands.push(options.args)
+  return run(options)
+}
+const store = new WorkspaceSnapshots(runner, join(root, "store"))
 store.followHistory(history)
 const turn = async () => {
   const id = randomUUID()
@@ -176,7 +188,69 @@ try {
   const savedAt = performance.now() - began
   assert.equal(savedWhenTold, savedBefore, "the turn was told before its checkpoint was saved")
   assert.equal(treeOf(join(root, "store"), startedOn.id), expected, "the checkpoint is the workspace as the turn started, the agent's writes left out")
-  await store.endRun(racing)
+  // Its end follows on from its start too: only what the watcher heard change during the turn is read, and the
+  // checkpoint is tree for tree a whole capture of the workspace as the turn ended.
+  commands.length = 0
+  // As the host ends a turn: told once the closing files are read (`LiveCheckpoints.settle`).
+  const ended = await store.endRun(racing, () => {})
+  const listedWhole = commands.some((args) => args.includes("--others"))
+  const added = commands.filter((args) => args.includes("add"))
+  const atEnd = new WorkspaceSnapshots(new Git(), join(root, "whole-end"))
+  const expectedEnd = treeOf(join(root, "whole-end"), (await atEnd.capture(cwd)).id)
+  atEnd.close()
+  assert.equal(listedWhole, false, "a turn's end alone in its workspace reads only what changed since its start")
+  assert.ok(added.length === 1 && added[0]!.includes("--pathspec-from-file=-"), "its add takes the paths the watcher heard, not the whole working tree")
+  assert.equal(treeOf(join(root, "store"), ended.id), expectedEnd, "the end checkpoint is the workspace as the turn ended")
+  // A turn that changed nothing still has its own end, read from its start with nothing to add.
+  const still = randomUUID()
+  const stillStart = await store.beginRun(still, cwd)
+  commands.length = 0
+  const stillEnd = await store.endRun(still, () => {})
+  assert.notEqual(stillEnd.id, stillStart.id, "a quiet turn's end is its own checkpoint")
+  assert.equal(commands.some((args) => args.includes("add") || args.includes("--others")), false, "and costs no read of the working tree")
+  assert.equal(treeOf(join(root, "store"), stillEnd.id), treeOf(join(root, "store"), stillStart.id), "holding what its start held")
+
+  // Two turns at once in one checkout (two Threads in the main checkout): each checkpoint, start and end, still follows
+  // on from the last one, names the runs it shared the workspace with, and is tree for tree a whole capture.
+  const wholeNow = async (name: string) => {
+    const whole = new WorkspaceSnapshots(new Git(), join(root, name))
+    try {
+      return treeOf(join(root, name), (await whole.capture(cwd)).id)
+    } finally {
+      whole.close()
+    }
+  }
+  const followed = () => !commands.some((args) => args.includes("--others"))
+  const one = randomUUID(), two = randomUUID()
+  edit("a.txt", "before both\n")
+  commands.length = 0
+  const firstStart = await store.beginRun(one, cwd, () => {})
+  assert.ok(followed(), "the first turn's start follows on")
+  assert.equal(firstStart.shared, undefined, "alone so far, it names no other run")
+  edit("one.txt", "the first turn's file\n")
+  commands.length = 0
+  const secondStart = await store.beginRun(two, cwd, () => {})
+  assert.ok(followed(), "a turn starting beside another follows on too, rather than reading the whole working tree")
+  assert.deepEqual(secondStart.shared, [one], "and names the run it shares the workspace with")
+  assert.equal(treeOf(join(root, "store"), secondStart.id), await wholeNow("whole-shared-start"), "holding what a whole capture of that moment holds")
+  edit("two.txt", "the second turn's file\n")
+  edit("a.txt", "the first turn's edit\n")
+  commands.length = 0
+  const firstEnd = await store.endRun(one, () => {})
+  assert.ok(followed(), "the first turn's end follows on")
+  assert.deepEqual(firstEnd.shared, [two], "naming the run that shared it")
+  assert.equal(treeOf(join(root, "store"), firstEnd.id), await wholeNow("whole-shared-one-end"), "and holds the workspace as that turn ended")
+  edit("two.txt", "the second turn's last edit\n")
+  commands.length = 0
+  const secondEnd = await store.endRun(two, () => {})
+  assert.ok(followed(), "the second turn's end follows on")
+  assert.deepEqual(secondEnd.shared, [one], "naming the run that shared it")
+  assert.equal(treeOf(join(root, "store"), secondEnd.id), await wholeNow("whole-shared-two-end"), "and holds the workspace as it ended")
+  // A turn alone after them starts on what they left without naming them.
+  const later = await turn()
+  assert.equal(later.before.shared, undefined, "a turn alone afterwards names neither")
+  assert.notEqual(later.before.id, secondEnd.id, "and never takes as its own a checkpoint that names other runs")
+  assert.equal(treeOf(join(root, "store"), later.before.id), treeOf(join(root, "store"), secondEnd.id), "though it holds the same workspace")
   console.log(JSON.stringify({ toldMs: Math.round(toldAt), savedMs: Math.round(savedAt) }))
 
   // Reused, the wait is the history's read and two Git reads, not a capture.
@@ -227,6 +301,196 @@ try {
     }
   }
   console.log(JSON.stringify({ captureMs: Math.round(settled.ms), reusedMs: Math.round(again.ms), historyReads: reads }))
+  // The host's loop was busy past the history's deadline with the reply already delivered: the late timer runs first,
+  // and must give the reply its turn rather than throw it away ("slow file history bypassed", with history on time).
+  {
+    const prompt = history.mark
+    let stalls = 0
+    history.mark = () => new Promise<HistoryMark>((resolve, reject) => {
+      // Held outside the loop's timers, as a long message handler holds it: once it's free, the timers that came due
+      // run before the I/O that arrived meanwhile is read.
+      setImmediate(() => {
+        stalls++
+        // The reply arrives as I/O while the loop is held.
+        stat(cwd, () => { prompt().then(resolve, reject) })
+        const until = performance.now() + 700
+        while (performance.now() < until);
+      })
+    })
+    try {
+      const held = await turn()
+      history.mark = prompt
+      const next = await turn()
+      assert.ok(stalls >= 1)
+      assert.equal(next.before.id, held.after.id, "a reply that arrived while the host was busy is used, however late the deadline's timer ran")
+    } finally {
+      history.mark = prompt
+    }
+    console.log("PASS: a history reply already delivered is never discarded by a late timer")
+  }
+  // The listing a reuse check reads fails (Git killed, a read slot's timeout): the check says nothing, and the turn
+  // falls through to a whole capture, which lists the index itself. Only that capture's own failure fails a turn's
+  // checkpoint, since a turn without one has nothing to rewind to.
+  {
+    const settledBefore = await turn()
+    const listings = () => commands.filter((args) => args.includes("ls-files") && args.includes("-v")).length
+    const underneath = runner.run
+    let failed = 0
+    runner.run = (options: RunOptions) => {
+      if (!failed && options.args.includes("ls-files") && options.args.includes("-v")) {
+        failed++
+        commands.push(options.args)
+        return Promise.reject(new Error("the listing failed"))
+      }
+      return underneath(options)
+    }
+    try {
+      commands.length = 0
+      const id = randomUUID()
+      const before = await store.beginRun(id, cwd)
+      assert.equal(failed, 1, "the reuse check's listing was the one that failed")
+      assert.notEqual(before.id, settledBefore.after.id, "nothing is reused on a check that couldn't read the index")
+      assert.equal(listings(), 2, "the whole capture listed the index again itself")
+      assert.ok(commands.some((args) => args.includes("--others")), "and read the whole working tree")
+      const whole = new WorkspaceSnapshots(new Git(), join(root, "whole-after-failed-listing"))
+      try {
+        assert.equal(treeOf(join(root, "store"), before.id), treeOf(join(root, "whole-after-failed-listing"), (await whole.capture(cwd)).id), "holding the workspace as it is")
+      } finally {
+        whole.close()
+      }
+      await store.endRun(id)
+    } finally {
+      runner.run = underneath
+    }
+    console.log("PASS: a listing that fails in the reuse check falls through to a whole capture")
+  }
+  // What a capture costs in Git processes, and that it holds what the path before held. Before: 24 for a whole
+  // capture (28 with history), 27 to 29 from the last checkpoint, 8 to find nothing changed.
+  {
+    const folder = join(root, "cost")
+    mkdirSync(folder)
+    const at = (...args: string[]) => execFileSync("git", args, { cwd: folder, encoding: "utf8" }).trim()
+    at("init", "-q", "-b", "main")
+    at("config", "user.email", "test@localhost")
+    at("config", "user.name", "Test")
+    for (const name of ["kept", "skipped"]) mkdirSync(join(folder, name))
+    writeFileSync(join(folder, "kept/a"), "a\n")
+    writeFileSync(join(folder, "skipped/b"), "b\n")
+    writeFileSync(join(folder, "tracked"), "c\n")
+    writeFileSync(join(folder, ".gitignore"), "ignored\n")
+    at("add", ".")
+    at("commit", "-qm", "first")
+    at("sparse-checkout", "set", "--no-cone", "/*", "!/skipped/")
+    writeFileSync(join(folder, "tracked"), "staged\n")
+    at("add", "tracked")
+    writeFileSync(join(folder, "tracked"), "unstaged\n")
+    writeFileSync(join(folder, "untracked"), "u\n")
+    writeFileSync(join(folder, "ignored"), "i\n")
+    const ran: (readonly string[])[] = []
+    const counted = new Git()
+    const underneath = counted.run.bind(counted)
+    counted.run = (options: RunOptions) => {
+      ran.push(options.args)
+      return underneath(options)
+    }
+    const storeRoot = join(root, "cost-store")
+    const costs = new WorkspaceSnapshots(counted, storeRoot)
+    const record = (id: string) => {
+      const db = new DatabaseSync(join(storeRoot, "snapshots.sqlite"), { readOnly: true })
+      try {
+        return SavedCheckpoint.parse(JSON.parse(SavedRow.parse(db.prepare("SELECT value FROM snapshots WHERE id = ?").get(id)).value))
+      } finally {
+        db.close()
+      }
+    }
+    // What Git itself takes of the checkout now, with nothing of Mako's: the same add into a copy of the index.
+    const expected = (sparse: boolean) => {
+      const scratch = join(root, "cost-index")
+      copyFileSync(join(folder, ".git/index"), scratch)
+      const env = { ...process.env, GIT_INDEX_FILE: scratch }
+      execFileSync("git", ["add", "-A", ...(sparse ? ["--sparse"] : []), "--", "."], { cwd: folder, env })
+      return {
+        tree: execFileSync("git", ["write-tree"], { cwd: folder, env, encoding: "utf8" }).trim(),
+        head: `refs/heads/main:${at("rev-parse", "HEAD")}`,
+        files: at("ls-files", "-z").split("\0").filter(Boolean).length + at("ls-files", "--others", "--exclude-standard", "-z").split("\0").filter(Boolean).length,
+      }
+    }
+    // The index a checkpoint keeps is the checkout's, entry for entry and flag for flag (Git rewrites the copy whole,
+    // so its bytes are its own), and the record's digest is of the file kept.
+    const holds = (id: string, sparse: boolean, message?: string) => {
+      const { indexDigest, ...saved } = record(id)
+      assert.deepEqual(saved, expected(sparse), message)
+      const kept = join(storeRoot, id, "index")
+      assert.equal(indexDigest, createHash("sha256").update(readFileSync(kept)).digest("hex"))
+      const listing = (index?: string) => execFileSync("git", ["ls-files", "--stage", "-v", "-z"], { cwd: folder, encoding: "utf8", env: { ...process.env, ...(index && { GIT_INDEX_FILE: index }) } })
+      assert.equal(listing(kept), listing(), "the kept index stages what the checkout's does")
+    }
+    const spent = (label: string, most: number, never: readonly string[] = ["symbolic-ref", "--show-toplevel", "--show-object-format", "config", "--verify"]) => {
+      const names = ran.map((args) => args.filter((arg) => arg !== "-c" && !arg.includes("=")).slice(0, 2).join(" "))
+      assert.ok(ran.length <= most, `${label} ran ${ran.length} Git processes, more than ${most}: ${names.join(", ")}`)
+      for (const word of never) assert.ok(!ran.some((args) => args.includes(word)), `${label} asked Git again for what it knew: ${word}`)
+      const count = ran.length
+      ran.length = 0
+      return count
+    }
+    let changes = 0
+    const changed: { at: number; path: string }[] = []
+    const one = randomUUID(), two = randomUUID()
+    try {
+      // Opening the repository and the checkout's facts are asked once a checkout; every capture after is what is counted.
+      const first = await costs.capture(folder)
+      assert.ok(ran.length <= 20, `the first capture of a checkout ran ${ran.length} Git processes`)
+      ran.length = 0
+      // The tree the path before this one took of this fixture: staged, unstaged, untracked, ignored and sparse.
+      assert.equal(record(first.id).tree, "94bf6774cf9b051a52e62feea899689248c2314e")
+      holds(first.id, true, "a whole capture holds what Git takes of the checkout: tree, HEAD and files")
+      const whole = await costs.capture(folder)
+      holds(whole.id, true)
+      const wholeCost = spent("a whole capture", 15)
+      costs.followHistory({
+        mark: async () => ({ id: String(changes), at: "0" }),
+        since: async (mark) => ({ paths: changed.filter((change) => change.at > Number(mark.id)).map((change) => change.path), lost: [], ignored: [] }),
+      })
+      // Sparse off is the checkout's own configuration changing: its facts are read again, once.
+      at("sparse-checkout", "disable")
+      const begun = await costs.beginRun(one, folder, () => {})
+      holds(begun.id, false, "a changed configuration is seen by the next capture")
+      assert.ok(ran.some((args) => args.includes("core.sparseCheckout")) && !ran.some((args) => args.includes("--sparse")))
+      spent("a whole capture after its configuration changed", 18, [])
+      const quietEnd = await costs.endRun(one, () => {})
+      holds(quietEnd.id, false)
+      const quietCost = spent("a turn's end with nothing changed", 14)
+      const same = await costs.beginRun(two, folder, () => {})
+      assert.equal(same.id, quietEnd.id)
+      const sameCost = spent("finding nothing changed", 1)
+      writeFileSync(join(folder, "untracked"), "u2\n")
+      changed.push({ at: ++changes, path: join(folder, "untracked") })
+      const followed = await costs.endRun(two, () => {})
+      assert.equal(record(followed.id).tree, "dca395edcc8a1ad0e3d40dd8c297ab3ee2704e1b")
+      holds(followed.id, false, "a capture from the last checkpoint holds what a whole one would")
+      const followCost = spent("a capture from the last checkpoint", 16)
+      // HEAD read from Git's files says what Git says: a packed branch, a detached HEAD, a linked worktree's own.
+      at("pack-refs", "--all")
+      assert.ok(!existsSync(join(folder, ".git/refs/heads/main")))
+      assert.equal(record((await costs.capture(folder)).id).head, `refs/heads/main:${at("rev-parse", "HEAD")}`, "a packed branch")
+      at("commit", "-qm", "second", "--allow-empty")
+      assert.equal(record((await costs.capture(folder)).id).head, `refs/heads/main:${at("rev-parse", "HEAD")}`, "a commit after packing")
+      at("checkout", "-q", "--detach")
+      assert.equal(record((await costs.capture(folder)).id).head, `detached:${at("rev-parse", "HEAD")}`, "a detached HEAD")
+      at("checkout", "-q", "main")
+      const linked = join(root, "cost-linked")
+      at("worktree", "add", "-q", "-b", "linked", linked)
+      assert.equal(record((await costs.capture(linked)).id).head, `refs/heads/linked:${at("rev-parse", "linked")}`, "a linked worktree's branch")
+      assert.ok(!ran.some((args) => args.includes("symbolic-ref")), "none of them asked Git where HEAD is")
+      console.log(JSON.stringify({ gitProcesses: { whole: wholeCost, fromLast: followCost, fromLastQuiet: quietCost, unchanged: sameCost } }))
+      console.log("PASS: a capture asks Git once for each thing it needs, and holds what the longer path held")
+    } finally {
+      costs.abandonRun(one)
+      costs.abandonRun(two)
+      costs.close()
+      await counted.close()
+    }
+  }
   // Without a user index, an incremental capture must retain its updated private index.
   {
     const folder = join(root, "unborn")
@@ -258,7 +522,7 @@ try {
       whole.close()
     }
   }
-  console.log("checkpoint reuse: a quiet workspace's turn starts on its last checkpoint; a change, a staged path, a moved HEAD, a lost or unread history, or a shared workspace is captured")
+  console.log("checkpoint reuse: a quiet workspace's turn starts on its last checkpoint; a change, a staged path, a moved HEAD, or a lost or unread history is captured; a turn beside another follows on too, naming the runs it shares the workspace with")
 } finally {
   store.close()
   rmSync(root, { recursive: true, force: true })

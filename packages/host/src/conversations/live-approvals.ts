@@ -5,6 +5,7 @@ import { ANSWERED_DIFFERENTLY, ApprovalSubmissionSchema, NativeApprovalDecisionS
 import type { LivePermissionRequest, LivePermissionResponse } from "../contracts/providers-acp.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import type { ConversationControl } from "../contracts/conversation-control.js"
+import { stagedCall } from "../base/live-steps.js"
 
 /** Recovery reads unresolved evidence first, but observers also need answered
  * identities to recognize callbacks replayed by a replacement connection. */
@@ -197,7 +198,7 @@ export class LiveApprovals {
     this.save(resident, receipt)
     const evidence: SubmissionEvidence = {}
     try {
-      await driver.permission(request.origin.bindingId, request.origin.nativeRequestId, response, {
+      await stagedCall(id, "driver.permission", () => driver.permission(request.origin!.bindingId, request.origin!.nativeRequestId, response, {
         report: result => {
           if (!evidence.state) evidence.state = ApprovalSubmissionSchema.parse(result)
         },
@@ -207,7 +208,7 @@ export class LiveApprovals {
             !this.pendingHere(resident, receipt.origin))
             throw new Error("That approval is no longer pending on this connection")
         },
-      })
+      }))
     } catch {
       // Provider errors can contain answers; keep them out of the durable receipt.
     }

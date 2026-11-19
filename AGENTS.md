@@ -53,7 +53,14 @@ Inside the package, `contracts/` is the wire and imports only itself;
 reports, the platform, secrets, the lifecycle, the scheduler, the lock, heavy
 packages) and imports only itself and the contracts. Each domain is a folder
 that reaches another domain only through its entry, `<domain>/index.ts`, and
-files directly in `src/` compose the host. `transport/` is how a host is
+files directly in `src/` compose the host. A domain too large to read and
+run in one stretch of the host's thread has a second entry for those files
+alone, `<domain>/load.ts`: its modules in parts, the last its `index.ts`,
+which `create-host.ts` imports a part a turn of the loop before the core
+opens (workspaces, harnesses, conversations: with the compile cache warm no
+part holds the loop 50 ms, where each whole held it 60 to 90). A part is
+only modules the entry imports anyway; a harness added to the host is a
+part of `harnesses/load.ts`. `transport/` is how a host is
 reached: the socket server and the method table, and the wire's client end
 (`connection.ts`, and `service.ts` for where a host lives and how it starts),
 which the desktop imports by file and another host through the entry.
@@ -160,9 +167,12 @@ conversations?.live`) rather than a domain importing another's files.
   failure as `jobs <name> failed`, and stops with the host.
 - **A held loop says what held it.** `loop event loop held` names every piece
   of work open at a hold, most of it waiting on a process or a reply; a hold
-  of a second or more starts a 10-second profile of the host's own thread
-  (`HeldLoopProfiler`, at most one per 10 minutes), logged as `held loop
-  profiled` with its longest slices by the host's own functions. On a day of
+  of five seconds or more (one second with `MAKO_HELD_LOOP_PROFILE=1`) starts
+  a 10-second profile of the host's own thread once the loop turns freely
+  (`HeldLoopProfiler`, at most one per 10 minutes; its start is itself a
+  hold of a few hundred milliseconds, V8 listing its compiled functions),
+  logged as `held loop profiled` with its longest slices by the host's own
+  functions. On a day of
   many Fins the log blamed worktree summaries and live reads while Git
   spawns held the thread. `npm run bench:host-load` runs a real host on a
   world of that day's size (52 Threads' worktrees, 95 apps, Fins editing,
@@ -172,6 +182,113 @@ conversations?.live`) rather than a domain importing another's files.
   it fails only on a clear regression (a loop held for seconds, or several
   times the yardstick's waits), never on a fixed number of milliseconds, and
   writes every number to the job's summary. CI runs it as `host-load`.
+- **A flush costs its own conversation's change.** What `LiveConversations.write`
+  calls (`relocations.changed` and its `settled` listeners, `emit` and its)
+  never reads every conversation, Fin, Thread or worktree: who works is kept
+  as conversations change (`WorkingSet`), the person's asks of a tree until an
+  edge, a report, an answer or a Fin's own ask changes (`Agents.personAsk`),
+  and a roster takes the one entry that moved. `npm run test:flush-costs`
+  holds each to what must change it at once and what must not;
+  `bench:host-load --scale person --record` says where the thread's time
+  went by source (`host-load-sources.ts`), and `npm run bench:host-person`
+  (local, with `MAKO_BENCH_OUT` naming a folder) fails when the steady busy
+  share or a hold outside start and stop passes its budget. What walks a
+  whole journal or every journal isn't on the thread either: a cold open's
+  count and turn lines come from a reader (`JournalReaders.scan`), the
+  start's listing, the stop's closes, the sweep that measures each journal's
+  copy and the one that lets conversations go over the memory budget go a
+  slice at a time (`listJournals`, `LiveClosing.stop`, `settleNow`,
+  `unloadOverBudget`), and a whole catalog is placed a batch a turn
+  (`ThreadStore.placeAll`). Awaiting a step that finishes within its slice
+  doesn't leave the thread: a loop over many such steps keeps one slice's
+  time for all of them.
+- **A journal keeps a turn index** (`turn_index`, `turnRowOf`): a line for
+  each block that begins a turn or names a request, written in the
+  transaction that writes the block, on the journal's connection and on the
+  writer's, and removed with it at a rewind. A cold open reads the index and
+  the newest blocks (`readTurnIndex`) and never walks `blocks`, on the host's thread and with
+  no reader (`turnIndexWhole`): 35 to 50 ms in slices for a 150 MB
+  conversation of 5,330 requests that took 2.3 s to walk, 8 to 10 s with its
+  pages out of the disk's cache. The index is whole only once built from a walk
+  (`buildTurnIndex`, on the reader's thread at a journal's first cold open);
+  each commit then says so again by writing its revision in `progress` row
+  2, so a commit by a build that knows no index leaves the two rows apart
+  and the journal is walked and indexed again. `test:journal-writer` holds
+  the index equal to the walk through appends, a block changing kind, a
+  rewind, an older build's commit and a host killed mid-stream.
+- **The Thread store keeps what a commit didn't change.** The parent edges,
+  each Thread's record and its conversations stand through a commit that
+  wrote none of the tables they're read from, and are read again after one
+  that did, another process's commit, a rollback, and the store's opening.
+  Every table says what its writes can change (`HELD_BY_TABLE`); a statement
+  `sql` hands out goes by its table (`heldBy`), and a table without a line or
+  a statement that can't be read drops everything, so what is added
+  unclassified is slow, never stale. Read again at every commit, 30 Fins
+  ending their turns at once re-read every Fin's for each of their commits.
+  After its opening the store writes only through `sql`: `test:flush-costs`
+  fails on a table of the schema without a line, and on the connection used
+  directly outside the opening.
+- **A running turn's streamed flushes are written off the thread**
+  (`JournalWriter`, `LiveJournal.streamed`). A flush that is only blocks new
+  or grown and the revision, of a turn running before and after it, goes to
+  the writer's connection, in order, one transaction a message, and what
+  comes while one is written waits as one message more. Every other flush (a
+  request, the session's state, a permission, the base, the controls, Mako's
+  log, a turn's start and end) the journal commits on its own connection
+  before the batch goes out, after waiting for the writer (`settleWrites`),
+  as does every read of its rows (`db`). So what a window or a harness is
+  told happened is committed first, as it always was, and a host killed
+  mid-stream may lose the last streamed frames the writer hadn't written
+  (one transaction under way and one waiting), which the provider's own
+  record still holds. A write that fails on the writer is made good by the
+  journal from memory, block by block, and failing that is a
+  `JournalWriteError` like any commit. `MAKO_JOURNAL_WRITER=0` has each
+  journal write its own. `npm run test:journal-writer` holds it (a reader
+  following a write, close and stop with writes waiting, a failed write, a
+  host killed mid-stream).
+- **A hold says whether the thread ran.** `bench:host-load --record` keeps
+  the thread's own CPU time for each hold: one that used little of its gap
+  waited (a file call, or not being run), and no function on its stack
+  explains it. `--max-run-ms` budgets what the thread computed,
+  `--max-hold-ms` any hold. File calls a flush or a recurring job makes go
+  off the thread where they can: the process log appends what is pending as
+  one awaited write, the Git index lock's steps are awaited, `docker context
+  inspect` runs in the probe child, whether this host holds a session
+  (`SessionMemory.owns`) is answered from what was read until that session's
+  hold is written (another host's commits looked for once a turn of the
+  loop), and a launch, a discovery query and the advertised tools find
+  their executable awaited and kept (`Executables`, held by
+  `DiscoveryProcesses`), `gh` and an MCP server's command awaited each time
+  (`findExecutable`); `resolveExecutable` waits on the thread and is for
+  code that runs once or at the person's own action. Codex processes' output is handled a turn's worth at
+  a time (`StdoutPace`): what one turn of the loop has no time for waits,
+  its pipe paused, for the next. The rollout a Codex message's handling
+  reads is read ahead, awaited (`CodexRolloutTail.load`, the pace's
+  `before`), with that process's output queued behind it in order; `read`
+  takes what was loaded and goes to the file itself only for what wasn't.
+  The writer holds a journal's connection only while it streams: opened at
+  its first streamed flush, let go at rest, and a journal's close lets go of
+  it without waiting on the thread (`JournalWrites.release`, awaited before
+  the file is tidied); waited on the thread, a close sat behind every other
+  journal's writes. As the host stops, the journal writer closes every
+  journal's writes awaited (`JournalWriter.closeAll`) before the journals
+  close.
+- **A journal at rest gives back its pages** (`LiveJournal.rest`): SQLite
+  keeps up to 2 MB of pages for each connection, and every conversation in
+  memory has one. Read in, or quiet after its turn, a journal frees them.
+  A conversation in memory weighs its content and `RESIDENT_HELD_BYTES`
+  beside it (its connection, statements and log index, about 160 KB outside
+  the heap), so a few hundred small ones at rest count against the budget
+  and are let go to their listing's line; reading one back takes about a
+  millisecond. What waits on the person (an approval, a question, an
+  agent's ask) keeps a conversation in memory, so a row never reads one back
+  to say what it waits on.
+  A worker that parses much (a journal reader, the catalog's) has its young
+  generation held to 32 MB (`maxYoungGenerationSizeMb`): V8 grew each to 76
+  to 122 MB while it read and kept it at rest with a few MB in use.
+  `bench:host-load --memory` writes what the host's memory is made of
+  (`regions-*.txt`, each thread's heap, a sample of the live heap by the
+  function that allocated it).
 - **Follow, don't poll.** What only says where something stands (a line a
   window shows) reads what each owner already holds, and is woken by the
   owner's own change (its event or callback). That read never sets off the
@@ -229,7 +346,7 @@ messages it was read from (`source`); the host stamps `startedAt` and
 counted as the larger of the roster's active non-ambient entries and the
 provider's own level (`backgroundTasks`), which can't wedge on a missed end.
 The window shows it as an hourglass on the row and tab, a quiet line at the
-transcript's end and the Agents panel; ambient watchers are listed and never
+transcript's end and the Agents panel (an Apex's Overview lists it as Background work); ambient watchers are listed and never
 counted there. What a provider still holds that wakes it, ambient watchers such
 as Claude's Monitor included, is `pendingWake`: a Fin's turn that ends on it
 waits on it, and a session holding it is never hibernated (`canHibernate`),
@@ -331,7 +448,11 @@ record (`<key>.stopping`), so the next host counts it and goes on with the stop.
 those same two rules, and finding it ends nothing. It's counted before any
 slot goes out, and a read of it that fails holds them all (`recoverSlots`). The person
 can fix a number per device instead of Auto (Settings › Fins), and
-`FinCapacity` reads the machine on the engine's 10 s tick. The cloud, a
+`FinCapacity` reads the machine on the engine's 10 s tick, which runs only
+while a Fin here holds a place or a start waits (`roomNeeded`, a `HostJobs`
+demand): an idle host reads no load and no process table. The one other
+reader is the warm providers' watch, which reads memory pressure alone while
+more than two idle providers are warm (`FinCapacity.look`). The cloud, a
 machine per Fin, is bounded by the plan and the daily spend ceiling only
 (`cloudCapacity`, `AgentsDeps.cloudLimits`), for when placement lands. Over
 every place the person's ceiling (`FIN_CEILING`, 64) is a safety net, and a
@@ -378,6 +499,62 @@ its files (`branchSince`). Its turns report and wake the Apex again, and a
 repeat of the message resumes it once. Archiving its Thread is the one
 end: one at work stops in those words, once (`Agents.archived`), and
 nothing resumes it until the person restores it (`test:fin-resume`). A
+finished Fin's edge closes by itself (`Agents.closeFinished`, `closedFinished`):
+six hours after its last report (`FINISHED_CLOSE_MS`), when that report is
+`done`, or `failed` asking nothing, and nothing is pending. Until 2026-11-17
+only a stop or an archive closed an edge, and the person's store held 113
+open Fins, 98 of them done, each in every prompt's note, every list and
+every start's read of its journal. A closed edge is passed over by what
+looks for open questions and waits, so it closes only with none: no open
+question, decision or action (`openReportAsks`, `pendingActionThreads`), no
+answer owed either way, no report, answer or pull request's outcome
+undelivered, its result taken by its Apex's harness, no queued start or
+armed wait naming it, no open Fin of its own, no pull request its report
+waits on, and its conversations in memory, idle and empty-handed (no turn,
+no message queued, held or being sent, nothing asked, no work its harness
+left running, no cut turn, no armed wait). `keptOpen` and
+`conversationHolds` read all of it in the same step as the write; a
+conversation not in memory is read in first, a slice at a time, and one
+this host can't read stays open. A Fin placed on another device, or whose
+Apex is, is left alone. Closing is bookkeeping: its reason is
+`FINISHED_CLOSE`, a stop's reason on the wire, so an older build shows it
+as any closed edge and opens it as it opens a stopped one; this build reads
+it as done or failed (`childState`), never stopped. Nothing is cancelled,
+stopped or reported, and it leaves the front door's note, the crew view,
+the `apexes` digest, `personAsk`'s walk and the list (counted in `folded`).
+It never cuts a Fin off: whatever reaches it opens it again in the same
+Session (`reopen`), and the Fin above it with it when that one is closed
+the same way: `agents_send` however delivered, `agents_answer`, the
+person in its own Thread or by `@`, a pull request's outcome, a digest of
+its own Fins, any input its harness takes (`inputDelivered`), any message in
+its queue (`moved`) and any report of its (`keepReport`). Only a stop is a
+pause Mako's own notes don't lift. Its six hours start over at its next
+report, and a stop or an archive of it closes it in those words
+(`test:fin-close`). The sweep runs on the job `close finished Fins`, only
+while an open Fin has finished, as a turn settles and as a host starts. Its
+worktree goes after it: the retention pass (`WorktreeRetention`, Settings ›
+Worktrees), preview-only for every other checkout until the person chooses
+removal, retires the checkout of a Fin closed as finished by default, under
+every guard a checkout's retirement has (nothing uncommitted, its HEAD on a
+fetched remote ref, no private ignored files, no process, terminal, app or
+open file in it, not shared, not kept, quiet for the setting's days), and
+only one repository's worktree, which Mako can make again. The person turns
+it off with one switch, kept in a file of its own
+(`worktree-retention-fins.json`) because a build from before it reads the
+settings strictly and writes them whole. What the worktree was is kept
+(`retired_worktrees`, `ThreadStore.retireWorktree`), its conversations stay
+in their folder, and whatever next reaches the Fin makes it again at the
+same path before its harness is sent anything
+(`ThreadWorktreeService.restoreRetired`, from `Agents.deliver` and from the
+live engine's wake and transfer, `restoreRetiredWorktree`): on its branch;
+on that branch made again at the commit it was at when it was deleted
+since; detached at its tip when another checkout holds it. The Fin reads
+which beneath the message, and that installed packages and build output are
+gone (`worktreeRemadeText`); its sender reads it in the receipt. When it
+can't be made again (its project or its commit gone) the message is
+delivered all the same, saying exactly why, and the start goes on as for any
+removed worktree (`test-worktree-retention-fins.ts`, in
+`test:thread-worktrees`). A
 stop also pauses what was queued for the Fin (`halt`), and a stop of one
 stopped already ends whatever still runs there. A paused message first in
 line holds the ones behind it (the person editing it keeps its place), and
@@ -408,9 +585,25 @@ when the Fin said so, when its Apex left it to them, or when its spawn's
 `wake` isn't `decisions`. Its result wakes the Apex as any done report does,
 its line in the digest, the front door and the `apexes` digest one
 (`decisionWords`: "done; decide: Merge #371? (Merge · Leave open, recommends
-Merge)"). One its Apex leaves for `APEX_ANSWER_MS` goes to the person too, as
-a done report of the same decision (`escalateDecision`, on `AgentsDeps.later`,
-which a test fakes). The person's counts under needs you (`childGroup`) and
+Merge)"). One its Apex leaves for `APEX_ANSWER_MS` after hearing it goes to
+the person too, as a done report of the same decision (`escalateDecision`, on
+`AgentsDeps.later`, which a test fakes). The minute starts when the Apex's
+harness takes the digest or the steer that carries it (`decisionHeardAt`: that
+request's handoff, or the store's receipt for a steer), never when the Fin
+reported: on 2026-11-16 two of three escalations fired while the Apex was
+mid-turn on a harness that hears a digest only at its turn's end, and couldn't
+have answered. One it still hasn't heard `DECISION_HEARD_BY_MS` after the
+report (three minutes: `FOCUS_MS`, as long as Mako lets a working Apex go
+before it steers in what waits, and the minute to answer) goes to the person
+as before, so none waits behind a long turn; heard just before that, it has
+its minute. Both times are read from what's kept (the report, the Apex's
+queue, the store), so a restart keeps them. The digest's decision block and
+`agents_answer`'s description say the rule where the Apex reads it: answered
+with `agents_answer` even when already acted on, the person's otherwise
+(`ORCHESTRATION_INSTRUCTIONS` has no room for it under the 4,096 characters
+Claude Code shows of a server's instructions, `test:mako-instructions`). A
+plain `agents_send` to a Fin with one open decision answers nothing
+(`test-fin-decision-window.ts`, in `test:orch-answer`). The person's counts under needs you (`childGroup`) and
 reads "Done · needs you: <question>" (`askWords`) wherever asks are answered
 (`openAsk`, `personAsks`); the Apex's counts as done. An answer claims the
 question before it's delivered, so of two at once (its Apex's and the
@@ -651,8 +844,18 @@ reads "Ended without a result" in the list, its row, the phone and the digest
 once with its last words (`unfinishedSummary`), and asks nobody, so nothing
 reaches the person's Inbox; its Apex sends it on (the row's Continue) or takes
 the reply as its result. What was to start `after` it waits on (the digest
-says so) and starts once it reports done; a stop drops it. An idle Apex waits
-`WAKE_COALESCE_MS` and takes ONE turn with the digest; a busy one is left to
+says so) and starts once it reports done; a stop drops it. An idle Apex hears the
+first report at once, not after the burst's two seconds, which a lone report
+paid for nothing (`bench:orch-wake-latency`: 2,006 ms to 37). What follows is
+ONE digest: at the end of the Apex's turn on the first, or `WAKE_COALESCE_MS`
+after the last digest went (`RESULT_COALESCE_MS` for a result it waited on)
+when that turn is already over, its provider waking through that wait when it
+sleeps (`AgentWakes.start`). Some wait the window even so: reports a previous
+host left unheard (a receipt read back as the Apex is taken up, a steer its
+harness had, takes them back rather than the Apex hearing them twice), and a
+digest for an Apex moving off a harness that ran out (sent at once, it knocks
+on that limit). A result a `wait` start still waits on waits
+`RESULT_COALESCE_MS`, for that call's answer to take it back. A busy one is left to
 think: only a question or decision it can answer is steered into its running
 turn, at its next step where its harness steers there, and what else its
 Fins report waits for the turn's end as one digest, unless the turn is still
@@ -696,11 +899,20 @@ exit paused go on. So does an Apex's own turn while it has open Fins
 (`inTree`, `continueCrashed`), under the same loop guard. The next host reads
 every journal that resume looks at in first, one at a time and a slice at a
 time (`Agents.resumeInSlices`, `LiveConversations.readIn`): read whole, a
-day's Fins held its loop 4.8 s as it started (`test:resume-holds`). Reading
+day's Fins held its loop 4.8 s as it started (`test:resume-holds`). It
+looks at open delegations only: a Fin closed, stopped or finished, isn't
+read, nor is its Apex for it, nor an Apex for the reviewer runs its harness
+once ran under it (`internalRuns`, each closed as it's classified, and at
+the store's next open for rows an older build left, `closeInternalRuns`),
+unless the last host left that Apex's own queue unsettled. Reading
 one in commits the restart's changes, the first frame into a WAL its last
 host closed, whose header SQLite syncs even at `synchronous=NORMAL`: 100 to
 300 ms on a busy disk, on the host's thread, until a worker wrote it first
-(`WalPrimer`). A crash's
+(`WalPrimer`). The same worker checkpoints a journal while a turn of it runs
+and no longer (`LiveJournal.checkpointWhile`; held by every conversation in
+memory, its 32 places went to the first read in and the ones at work
+checkpointed inside their own commits), once its log runs `CHECKPOINT_PAGES`
+ahead of the last checkpoint. A crash's
 cut reads as `uncertain`. A Fin's cut turn that nothing picks up within
 `STRANDED_AFTER_MS` (`strandedTurn`) becomes a question for its Apex
 (`reportCut`). That covers the loop guard being spent, a sign-out, a reason
@@ -849,10 +1061,17 @@ deployed cloud.
 What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line
 (`agentToolText`), every field kept. `agents_list` lists what an Apex can act on (`foldList`): a Fin that ended over a day ago with
-nothing open is counted in `folded`, not listed; past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
+nothing open, or was closed as finished, is counted in `folded`, not listed, its row never built (`Agents.unlisted`); past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
 their pull requests, then fold, oldest first. A Fin needing attention (a question, an action, a decision, at work,
 waiting or blocked) is never folded, past the budget if it must be; `scope: all` lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens, a
-call (`test-agents-list-fold.ts`). Each Fin has a change mark the host keeps
+call (`test-agents-list-fold.ts`). Neither a list nor a prompt reads a Fin's
+reports again while none is new: the engine keeps, by Fin, what a row takes
+from them (`Agents.reportsOf`: the pull requests they name and each one's
+mark for `owesApex`), added to as each report is kept (`reportKept`) and read
+again only when its newest isn't the store's, and the store keeps which
+reports ask while a Fin's reports are the same rows (`openReportAsks`).
+Before, each read every report of every Fin, 11 MB parsed a call for an Apex
+whose Fins held 6,520 (`test-fin-reports-held.ts`). Each Fin has a change mark the host keeps
 (`FinChanges`): when its state, report, open questions or pull requests last
 changed as the host read them, a working Fin's step and a queued one's place in
 line not counting, on the host's own clock (a tick never earlier than the
@@ -1283,7 +1502,10 @@ or one from before this rule, is stopped inside SQLite. Inserts name their
 columns and nothing writes with `INSERT OR REPLACE`, so a column a newer
 build added keeps its values through an older build's writes. Every
 SQLite store rereads its format after any other build's commit (`PRAGMA
-data_version`), so one raised under a running host turns read-only there:
+data_version`; the host's Thread store looks once in each turn of the event
+loop for its reads and inside every write, `versionPerTurn`, since read at
+every read the pragma was a third of the thread with 30 Fins at work), so one
+raised under a running host turns read-only there:
 the Thread store and the session ledger; the record store's `access`, so
 capture and the backfill stop, said once (`RecordCapture.declined`); the
 unread index (still counted by diagnostics) and the kept outputs
@@ -1294,10 +1516,11 @@ catalog and the sync daemon (`MAKO_STORE_WRITER`) stamp formats with the
 host's `storeWriter`. A view in a newer format is neither removed nor
 written over, and this build keeps its own in memory; JSON files keep
 `version` (and `reads` once a newer build sets it, `jsonStoreAccess`):
-`runtime-updates.json` and `provider-profiles.json` aren't written by an
-older build, and every rewrite of `runtime-updates.json`,
-`worktree-origins.json` and `utility-work.json` writes back the fields and
-entries it doesn't name (`unknownFields`); an account lease whose accounts
+`runtime-updates.json`, `provider-profiles.json` and `mcp-listings.json`
+aren't written by an older build, and every rewrite of
+`runtime-updates.json`, `mcp-listings.json`, `worktree-origins.json`,
+`utility-work.json` and `provider-profiles.json` writes back the fields and
+entries it doesn't name (`unknownFields`, or a loose schema); an account lease whose accounts
 an older build can't read holds them. `mako:store-formats` reports every
 store's standing; the rail shows the Thread store's line above its footer
 and Settings › Diagnostics one per store, each with Update, which installs
@@ -1883,6 +2106,56 @@ failure only while no later call of the same kind with the same normalized
 arguments (a command's in the same folder) succeeded, by the exit facts its
 row shows (`unfixedFailures`); the failed row still says failed.
 
+A row opens only onto what its one line can't say (`toolOpens` in
+`src/lib/tools.ts`): a command's output, a diff, what a search or a page gave
+back, words handed to someone, a program's steps, an unknown tool's arguments
+and answer, a picture. A search, a listing, a fetched page and a web search
+say what was asked in the row, so their body is the result alone, with no
+arguments above it (`bodyIsResult`). A read (its file opens from the row's
+end), a tool search, a mode change and a stopped shell say all they have in
+the row, so they draw no chevron and mount no body; one that failed, or that
+carries a detail or an attachment, opens. Every row keeps its glyph: a command's row
+is its command alone, so the glyph is what says it is one, and the column the
+glyphs share is where a fold's chevron and an event's mark stand. A stretch's
+summary is generated from its counts (`workHeadline`): what failed and stayed
+failed first, in the failure's hue ("2 commands failed (exit 1)"), then one
+phrase a kind of work, three phrases at most ("made 3 edits · 9 more steps").
+
+A turn is drawn from rows made in the data (`turnRows` in
+`src/lib/turn-rows.ts`, the desk and the phone alike): between two messages,
+everything that isn't one stands behind ONE line worded from its parts
+("Docs pass finished · worked for 48s", "4 Fins finished · Context
+compacted · worked for 2m 10s"): a wake's reports, Mako's and the provider's
+lines where a prompt would stand, notices, a compaction, an Apex's own
+messages to its Fins, the work and the words on the way to the answer.
+Opened, each member draws as it does on its own, and the open state is kept
+per turn (`turn-folds.ts`). Never folded: a report that asks or waits on the
+person, failed, ended without a result or whose decision the roster still
+holds open (`reportStays`), drawn as a block in the answer's column held to
+four lines (`ReportBlock`); and what `stillDrawn` names (a failure, a
+warning, a usage limit, a stop, what the agent showed or made, where the
+person's own message went), drawn under the closed line. The line stands out
+only while a call behind it failed and it hasn't been opened. A running turn
+folds only what opened it (`mode: "head"`), under the id its settled fold
+keeps, so settling adds the work to a row that is already there. Reports that
+arrive inside another message (a steer, a joined prompt) take the same two
+forms (`FinReports`), their open state kept in the same store. A stretch of
+Mako's own tools alone is worded from what they did (`FoldRow.did`:
+"Messaged Sheet motion on iPad"), never counted as other tools. `scripts/test-turn-rows.ts` holds the rules,
+`npm run test:turn-fold-ui` that a settled fold renders nothing again while a
+later turn streams.
+
+An Apex's transcript ends, once its turn has, on what it waits on by name
+(`WaitingLine`: "Waiting on Docs pass, Token sweep, and 4 other Fins", the
+first two past three, each opening its Fin; "Queued since 3:42 PM" for a
+message a minute unsent), above the crew card; a Thread with no Fins says its
+background work on `BackgroundWorkLine` and a turn's own wait on
+`TurnWaitLineView`. Beside "Jump to latest", which counts what arrived below
+a reader who left the end ("· 3 new"), a pill counts what is at work and
+opens onto a row each (`ActivityPill`). Both read `src/state/waiting.ts`
+through the rail's store, kept by the roster they were read from, so no
+streamed batch builds them again (`scripts/test-waiting.ts`).
+
 What a call did to the machine is read once too, in
 `@mako/sessions/tool-effect-reading`: its `ToolEffect`s
 (`@mako/sessions/tool-effects`: files created, modified with a patch or an
@@ -1913,6 +2186,10 @@ Exact external activity is also provider-owned. A process probe returns a typed
 store path; an error is never interpreted as zero active sessions. The activity
 engine polls each provider independently, prevents overlap, bounds stale data,
 and emits narrow activity events instead of resending or re-sorting the catalog.
+A harness with nothing open is looked at every 30 s (`idlePollMs`), not at its
+3–5 s cadence; a provider process Mako starts or sees end looks at once
+(`onProviderChildChange`, `nudge`), and one started in a terminal shows within
+the half minute.
 
 A probe sees a process, not a turn: Cursor's `cursor-agent` and another Mako
 host hold their stores open whether or not anything is running, so a reopened
@@ -1966,7 +2243,24 @@ on (past `LONG_ANSWER_CHARS`, 1,500, with nothing else changed) waits up to
 `LONG_ANSWER_FLUSH_MS` (400 ms) or a paragraph's end instead
 (`conversations/answer-pace.ts`): sent each frame, its batches were mostly
 envelope, 156 bytes a token to a phone with 7 of them its words. Status changes,
-questions and approvals don't wait for it. A batch says `activityAt` only when
+questions and approvals don't wait for it. A turn's first words (its first
+text or thinking) flush at once whatever flushed before them: the turn's own
+status flushes had just started a frame, and its first token waited that frame
+out, 46 to 51 ms in every turn `npm run bench:vs-bare` measured. A window on the
+host's own machine doesn't wait for the batches' pace at all: every paint frame
+(`LIVE_AHEAD_MS`, 16 ms) it hears the text that waits for the next batch
+(`LiveAhead`, `LiveConversations.ahead`), all of it each time, said of the
+revision the last batch made, and draws it over its last block until that batch
+lands (`shownBlocks`); the batch then carries the same text to everyone. Nothing
+of it is journaled or numbered, no other device, outlet or reader of the compact
+form hears it (`windowEvent` in `transport/server.ts`), and a window whose
+stream holds more than 64 KB unread is told nothing ahead until it has caught
+up, nor is a window that said nobody can see it (`mako:window-shown`, kept on
+its stream; a stream that never says is shown, as an older window's is). Only text going on with the last block is said ahead; a new block or a call
+waits for its batch, a frame at most. Held to the batches' pace, a token reached
+the window 30 ms after the host had it at the median and 400 ms at worst;
+`scripts/test-live-ahead.ts` holds the batches to what they were and the
+window to its frame. A batch says `activityAt` only when
 it moved into another second, and carries a whole value (a control, a request,
 a roster) only when its content changed (`sharedFields`); a message whose
 record lands on what streamed travels as its frames alone
@@ -1974,26 +2268,89 @@ record lands on what streamed travels as its frames alone
 renderer side components subscribe through selectors, so a token wakes the one
 turn rendering it — not the rail, the stage strip, or the titlebar's readings.
 
-Three rules hold this together, and each has a specific failure it prevents:
+**A hidden window draws nothing, so it does nothing for drawing**
+(`lib/window-shown.ts`, `state/window-hidden.ts`). While
+`document.visibilityState` is hidden (minimized, covered, another Space) a
+window still takes every batch in, so its revisions stay continuous and
+nothing is read again when it's back, but the conversation on screen isn't
+projected (its projection stays the object it was, `undrawnWhileHidden`),
+text said ahead is dropped, and every clock that only ages a label is gone,
+timer and all (`everyWhileShown`: the second clocks, the rail's and the
+tabs' minutes, the wait and quiet clocks, the layout watch). It tells its
+host, which sends it no `live-ahead`. Shown again, it tells the host, draws
+the conversation once from what it last drew (`drawUndrawn`) and reads each
+clock at once. `test-window-hidden.ts` holds a hidden window to no
+projection and no tick, and to the same state on return as a window that was
+visible throughout; `test-window-shown-host.ts` holds the host's side. Text
+said ahead of a conversation that isn't on screen sets nothing either, and
+what follows only the rail's facts of the live store (which folders run,
+what's on screen for notifications, the first-run agent) hears the rail's
+store, not every batch.
+
+Four rules hold this together, and each has a specific failure it prevents:
 
 - **Select the narrowest slice.** `useSession((s) => s.meta)` in the transcript
   re-renders the whole list whenever a token count moves. Take `s.meta?.cwd`.
+  A selector on `useAcp` runs on every streamed batch of every conversation,
+  so the rail's rows read `useRailAcp` (`railAcpStore` in `acp-state.ts`): the
+  same state, said only when a fact a row shows moved. What's derived from
+  every conversation (`selectAcpPresence`, the Fin indexes) is kept across the
+  batches that move none (`railDerived`, `sayings`), and a list of
+  conversations goes in as one change (`admitAcpConversations`). A
+  transcript's rows read their own conversation through `useAcpConversation`
+  (`keyedSubscriptions` in `store.ts`), which another conversation's batch
+  doesn't wake, and find a turn's request with `requestOf`, a map made once
+  for the requests as they stand; the maps a row is handed from the requests
+  keep the values that say the same (`keptEntries`).
 - **Reconcile message identity** (`src/lib/reconcile.ts`). The host rebuilds
   the entire message array whenever a tool returns, so every object arrives
   new; without reconciliation one tool result re-parses the markdown of every
-  turn in the session.
+  turn in the session. Entries that are the same objects are told so by
+  identity, and only ones read again are serialized to compare. A batch
+  re-projects the tail from its last turn's start (`projectLive`), through a
+  change of requests or status too, where the prompts they name stand. A
+  conversation that isn't shown isn't projected at each batch: what it last
+  drew waits (`behind`), and opening it projects from that, so an open costs
+  what its batches changed and every turn before them is the object it was
+  (`test-warm-open.ts`). Opening one this window holds reads one snapshot,
+  its own (`acp.openThread`), never its owner's as well; one it holds nothing
+  of is read at its newest page, and a place a pane was reading further back
+  is read after that page is drawn, in one read (`loadEarlierLive`).
 - **Long lists are virtualized, long content uses `content-visibility`.** The
-  rail is windowed with `@tanstack/react-virtual`; transcript turns and
+  rail isn't windowed: it draws only the rows of open folders, a few per
+  folder behind "More" (`FolderSection`), and a closed folder's rows aren't
+  in the page; transcript turns and
   surface-panel rows carry `.contain-turn`. Timelines above 40 turns or 120
   messages and calls (a few prompts can hold thousands of calls), and
   navigators above 100 prompts, additionally window measured rows; a timeline
-  stays windowed while it's shown. A row coming in restyles itself, never the
+  stays windowed while it's shown. A window keeps two turns mounted each side
+  of the pane, and each of those is skipped, at the height it was laid out at,
+  until it's read (`data-sized`). A row measured before stands at that size
+  again, for the window's life and across a reload (`RowHeights`, twelve
+  conversations in `localStorage`, a row dropped when what it holds or the
+  window's width changed), and one never measured is estimated from its
+  words and calls at the pixels a character has been taking in this window,
+  not at one constant: scrolling a 300-turn transcript end to end corrected
+  its column by 243,000 px with the constant, and by nothing once measured
+  (`test-row-heights.ts`). Below the window, an open draws the turns
+  that fill the pane and a pane's worth above them before it paints, and the
+  rest in idle moments (`FIRST_TURNS`); the answers of turns about to mount
+  are parsed ahead in the prose worker (`warmSettledProse`), a text block
+  at a time as a reply's parts draw them (`drawnProse`), so mounting one
+  builds elements from a tree and parses nothing. A row coming in restyles itself, never the
   page: no `group-has-[…]`, whose universal last part restyles all of `main` for
   any element added, so write `[.group:has(…)_&]:…`
   (`test-transcript-rows-ui.mjs` counts it). Its mounted rows are also held against the
   virtualizer before each paint (`row-check.ts`), so an observer that goes quiet
   never shows, and a correction it didn't report is logged with what was found
-  (`Transcript row corrected` in the host's log). A conversation keeps at most 24 MB of
+  (`Transcript row corrected` in the host's log): the rows something changed
+  in for that change, and every row when rows come or go, the reader scrolls,
+  and each second, since a stream changes one row a frame apart and reading
+  every row's box for each was its cost. What a pane is reading (the report
+  memory cleanup and bookmarks go by) is set up once per pane and said on the
+  reader's input and when the turns on the page change, at most once a second
+  while a followed answer grows: nothing measures the page for a streamed
+  frame but the end being followed. A conversation keeps at most 24 MB of
   finished turns (`CONVERSATION_MEMORY` in `live-residency.ts`), the one being
   read included: what's on screen, near it, read in the last minute or still
   at work stays, and the rest come back as the reader nears them. Preserve
@@ -2011,7 +2368,13 @@ Three rules hold this together, and each has a specific failure it prevents:
   with no `scrollend`: left standing, the next layout shift would read as the
   reader's. Focus resting in a turn keeps that turn, and only a selection or
   moving input postpones what's released; `test-follow-ui.mjs` holds all of it
-  through bursts of reports on every form. Under a finger the end
+  through bursts of reports on every form. A message the person just sent is
+  placed 24 px below the pane's top with its answer growing under it
+  (`sentTurn`): still the end being followed, over room kept after the
+  column (`data-send-room`) that is as tall as it takes and shorter by every
+  line the answer adds, so nothing moves while it fills, and once the turn
+  fills the pane the room is nothing and the end is followed as ever. The
+  room isn't kept past the transcript being shown. Under a finger the end
   waits for it to lift, and a `scrollend` there (the browser sends one for the
   page's own writes too) doesn't end the gesture;
   `test-phone-scroll-ui.mjs` holds both by touch and by wheel. A Thread
@@ -2031,10 +2394,21 @@ Three rules hold this together, and each has a specific failure it prevents:
   one's do (mounted only once they'd arrived, a 260-turn one jumped 48 px).
   `test-phone-open-ui.mjs` reads every frame for it, a Thread and an Apex,
   cold and warm, on a Mac and on a machine.
-- **Streamed prose is throttled, not debounced.** `useThrottled` in
-  `markdown.tsx` paints through `StreamFrames` (`src/lib/stream-frames.ts`):
-  the first token of a burst at once, then at most every 50 ms, up to 90 ms
-  for a long piece, whose re-parse costs about 1.2 ms per 1,000 characters.
+- **Streamed prose is throttled, not debounced.** `useStreamedText`
+  (`use-live-answer.ts`) paints through `StreamFrames`
+  (`src/lib/stream-frames.ts`): the first token of a burst at once, then at
+  most every 32 ms for a paragraph, up to 90 ms for a long piece, by how much
+  a paint parses (`streamFrameMs`, about 1.2 ms per 1,000 characters). A
+  reply being written reads its words from its conversation itself, outside
+  React, as each batch and each line said ahead lands: a paint renders that
+  prose alone, never the turn or the timeline, so a word is drawn a frame or
+  two after the window hears it however long the answer has grown. The turn
+  around it is drawn again once a second while only words arrive
+  (`ExchangePacer`, `STREAM_PACE_MS`), and at once for anything else. Words
+  once reached the page only through the turn's draw, which a long answer
+  paced at 400 ms: a long answer's prose was drawn 57 ms after the window was
+  told of it at the median and 368 at the 95th percentile, against 29 and 44
+  now (`npm run bench:window`).
   A pending frame survives further tokens (cancelling it per token would
   never fire under a steady stream). Only unmount stops it, and stopping must
   forget it was pending: StrictMode's simulated remount once ran that cleanup,
@@ -2042,7 +2416,24 @@ Three rules hold this together, and each has a specific failure it prevents:
   every answer sat on its first character until the turn ended ("I", then the
   tool rows). `test-streaming-markdown.ts` holds `StreamFrames` to both, and
   `test-workspace-ui.mjs` streams a reply and requires the prose to catch up
-  while the turn is still running.
+  while the turn is still running. What a paint brings is revealed at a
+  steady pace and fades in (`useStreamReveal`, `RevealPace`): each lump over
+  about the gap the lumps come at, whole words at a time, never more than
+  120 ms behind the page (`REVEAL_MAX_MS`, past the longest gap between two
+  paints) and all of it within 160 ms of the stream's end; at once
+  in a hidden tab or with reduced motion. It adds nothing to the page: the
+  text is there as it's painted, and CSS custom highlights (`mako-reveal-*`)
+  draw what isn't revealed yet transparent and what just was part-way to
+  the text colour, so the parse runs no more often and a row is as tall as
+  it would be without it. `test-reveal-pace.ts` holds the pace.
+- **Heavy content is made once, off the page.** A code block's tokens come
+  from a worker and are kept by language and source (`codeHighlights`), so a
+  block mounting again draws its colours in its first render and an answer's
+  blocks colour a frame apart, not in the tick it settles. An opened Edit or
+  Write reads its lines once per content (`editLines`) and draws 400 of them,
+  the rest on "Show all", a part at a time as each nears the viewport: every
+  line is four elements, and a 5,000-line Write was 25,000 in one click.
+  `test-render-caches.ts` holds each to once.
 
 The rail bounds mounted rows through folder pagination and an explicit search
 result cap; it never renders the full catalog. Components that genuinely use
@@ -2139,8 +2530,27 @@ row-check's warnings are. `test:stage-panes-ui` holds both.
 
 The stage's surfaces — Changes, Files, Terminal, Control, Agents —
 are all registered through `registerSurface` on exactly the same footing as
-anything a plugin would add. One reading surface opens in the right rail at
-a fixed, draggable width; the independent Terminal dock can remain open below it
+anything a plugin would add. Agents is one surface with two names
+(`useLabel`): for a Thread that leads Fins it is the **Overview**
+(`ApexOverview` in `inspector/apex-overview.tsx`), and an Apex's right rail
+opens on it, over whatever the rail last showed, until the person picks
+another surface while that Thread is on screen; the pick is that Thread's
+(`apexCompanions` in the prefs, `shownCompanion` in `state/stage.ts`), and a
+Thread with no Fins keeps the tab's own surface. The Overview's sections draw
+only while they hold something, in this order: Needs you (each ask in a line,
+with the crew card's own answer buttons), Working, Waiting (the idle and the
+queued, what a Fin waits on first), Failed, Done (newest first), Pull requests
+(each Thread of the tree's worktree branch's, from the worktree summaries the
+rail keeps, and any a Fin says it waits on: nothing is read for it), then
+Background work, the Apex's own provider's entries. A section shows ten rows
+until it's opened, and past a hundred draws the ones in view
+(`overview-window.tsx`); its heading folds it, kept for the Thread while the
+window is. Each section reads its own Fins from the roster through the rail's
+store (`useOverviewSection`), divided once per roster, so a token streaming
+anywhere runs none of them and a Fin's step draws that Fin's row
+(`test-apex-overview.ts`; `apex-overview-screenshots.mjs` draws it). One
+reading surface opens in the right rail at a fixed, draggable width (the
+divider writes the width in a frame and the pref on release); the independent Terminal dock can remain open below it
 at a fixed, draggable height. Neither uses percentage splits. The central workbench
 stays mounted under a covering sidebar so transcripts and file tabs keep their state.
 
@@ -2966,11 +3376,11 @@ panel and viewer over a folder's index, and `scripts/files-ui-shots.mjs` draws t
 
 ## Git
 
-Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `Git` class is the one spawner, and the package holds no state outside it: each host makes one in `createHost` (`hostGit`) and hands it to everything that runs Git, and a test makes its own. `run` strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of the instance's six read slots. `background: true` runs below agents through the `background` hook `hostGit` gives the instance. Stopping the host closes it (`git.close()`), which closes every repository it opened. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) is Mako's product logic in `packages/host/src/workspaces/`, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
+Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `Git` class is the one spawner, and the package holds no state outside it: each host makes one in `createHost` (`hostGit`) and hands it to everything that runs Git, and a test makes its own. `run` strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of the instance's six read slots; an idle one (`idle: true`) leaves two of them to reads someone waits on, and after `IDLE_READ_WAIT_MS` may take one of those two, one at a time and never ahead of a waiting read, so it can't starve. A `status` is always a read. `git diff` of the working tree rewrites the index whatever `--no-optional-locks` says, so one that only counts lines takes `NO_INDEX_REFRESH`. What sits in Git's own files (HEAD, a ref, the repository's `config`) is read from them (`files.ts`: `storedRef`, `parseGitConfig`), not asked of a process, and a folder Git said is in no repository isn't asked about again until a `.git` is above it (`Repositories`). `background: true` runs below agents through the `background` hook `hostGit` gives the instance. Stopping the host closes it (`git.close()`), which closes every repository it opened. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) is Mako's product logic in `packages/host/src/workspaces/`, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
 
 A move into a Thread's worktree takes only the Thread's own uncommitted changes (`workspaces/worktree-move.ts`), never a stash of the whole checkout. The attribution journal (`attribution/`, `partition`) names each changed line's last writer: the worktree gets the base plus the Thread's lines and the files it created, deleted or renamed; the main checkout keeps everyone else's. Lines that might be the Thread's (`window`, `ambiguous`, and a `window` found only after lost events, `entrySide`) and changes nobody can be named for (there before tracking, `unattributed`) stay unless the person chooses Bring these, on the move card before or on the toast after. A hunk that can't be split by line goes whole to whoever wrote most of it and is named. Without the journal nothing is attributed, so nothing moves unless brought. The move is all-or-nothing: it reads each file, checks it is what the journal holds and that the two sides add back up to it line for line, stores every version in the repository's objects, keeps the main checkout's whole state (files and index) as a commit under `refs/mako/moves/<id>` for 14 days, saves its plan (`<worktrees>/moves/<id>.json`, the receipt's `moving`), writes each file by a rename after checking it is still what it read, then reads both sides back. Anything off rolls back. A host that dies mid-move finishes it on the next start (`tidy`) when every file is as it was or as planned, and otherwise rolls back around whatever changed since. Each step is logged under `worktree-move`. `worktree_status` reports whose the main checkout's changes are; the move's result and the agent's message in the worktree say what came and what stayed. `npm run test:attribution` ends with `test-worktree-attribution-moves.ts`: three writers in one file, renames, deletes, binary and untracked files, staging, two repositories, and a process killed at each step.
 
-What a turn changed has one source: the attribution journal, keyed by the request the turn answers (`LiveRequest.id` is the `turn` on every activity mark and entry; the harness's own run id rides along as `run`, metadata only). When a request's turn ends, `LiveTurnChanges` marks it `pending`, counts it from the journal once every change heard is in (`settling`), and again once the journal settles them (`settled`), into `LiveRequest.changes` (`contracts/turn-changes.ts`, `queries.ts` `turnChanges`: per file, first entry's before to last entry's after, each line counted for its last writer, the Thread's own apart from what only might be its). A count reads the journal a step at a time (`countingTurn`, run in slices, one count at a time), through the newest entry when it began, and letting go of idle roots reads it the same way (`JournalStore.recency`): each read at once held the host's loop over a second (`test:attribution-holds`). The same record is kept beside the entries (`turn_changes`). The line under an answer, its file links' "Changed in this answer" and "Changes made by the thread" (the sum of those records) all read it, so they agree, and a reopened conversation reads the stored record instead of counting again. A turn from before the record falls back to its checkpoints. The work summary counts steps ("made 2 edits"), never files. What Git put back (a checkout, pull, rebase, reset or stash no call named the file for) is journaled with `git` set, or not at all when a file holds exactly the new commit's content; no turn, "changes made", others' count, rewind writer, move or `worktree_status` share counts it, and a version Git puts back keeps the writers it had (a whole file's, too: `lastEntry`). A change a rescan finds after lost events is placed by its file's modification time: content older than the gap names nobody, and a file the journal holds as created though HEAD has it as it is (a commit took it before the journal read it) is settled as clean on the next start or rescan (`settleCommitted`). A Fin's roster entry on its Apex is no background work of the Apex's: the Fin is a Thread of its own, and its Sessions mark their own work. A call's exact bounds from a harness's hooks (`harnesses/call-bounds.ts`) go through `LiveActivity.bounds`, under the same request-keyed turn as the call's marks, so the journal has one record of each call.
+What a turn changed has one source: the attribution journal, keyed by the request the turn answers (`LiveRequest.id` is the `turn` on every activity mark and entry; the harness's own run id rides along as `run`, metadata only). When a request's turn ends, `LiveTurnChanges` marks it `pending`, counts it from the journal once every change heard is in (`settling`), and again once the journal settles them (`settled`), into `LiveRequest.changes` (`contracts/turn-changes.ts`, `queries.ts` `turnChanges`: per file, first entry's before to last entry's after, each line counted for its last writer, the Thread's own apart from what only might be its). A count reads the journal a step at a time (`countingTurn`, run in slices, one count at a time), through the newest entry when it began: read at once it held the host's loop over a second (`test:attribution-holds`). Which roots are idle is read from what the journal keeps as it writes, a row a root and a row a folder by triggers (`JournalStore.recency`); a journal from before those is read once, in slices, and the same test holds that reading. The journal keeps 14 days, the window stored content already had: the hourly collection also drops, a short transaction at a time, the entries, calls, turn counts, footprints, commits' line writers and gaps past it (`LaptopTracker.prune`), keeping every entry an uncommitted line or file needs and everything of a Thread worked in since, and notes a Thread whose records went (`pruned_threads`), so a window reads "no longer kept" rather than "changed nothing" (`test-attribution-retention.ts`). The same record is kept beside the entries (`turn_changes`). The line under an answer, its file links' "Changed in this answer" and "Changes made by the thread" (the sum of those records) all read it, so they agree, and a reopened conversation reads the stored record instead of counting again. A turn from before the record falls back to its checkpoints. The work summary counts steps ("made 2 edits"), never files. What Git put back (a checkout, pull, rebase, reset or stash no call named the file for) is journaled with `git` set, or not at all when a file holds exactly the new commit's content; no turn, "changes made", others' count, rewind writer, move or `worktree_status` share counts it, and a version Git puts back keeps the writers it had (a whole file's, too: `lastEntry`). A change a rescan finds after lost events is placed by its file's modification time: content older than the gap names nobody, and a file the journal holds as created though HEAD has it as it is (a commit took it before the journal read it) is settled as clean on the next start or rescan (`settleCommitted`). A Fin's roster entry on its Apex is no background work of the Apex's: the Fin is a Thread of its own, and its Sessions mark their own work. A call's exact bounds from a harness's hooks (`harnesses/call-bounds.ts`) go through `LiveActivity.bounds`, under the same request-keyed turn as the call's marks, so the journal has one record of each call.
 
 Changes › Turn reviews any turn of the open conversation, live or reopened (`conversations/live-turn-review.ts`). Its files are the request's record; each diff is the turn's checkpoints when both were saved, else the journal's versions either side of the turn's entries, so Review on the turn line works without checkpoints, and a conversation nobody has open is read from its journal without loading it (`storedRequest`). Who wrote each changed line comes from the same walk the record counts with (`attribution/line-walk.ts`, `turn-lines.ts`), as runs per side (`mako:live-turn-writers`), drawn in the diff's annotation slot only where another writer shares a change block; "Only this thread's lines" redraws each diff with every other writer's change on both sides. "Undo this turn" (and "undo this thread") takes the scope's own lines back out of the files as they are now and puts back the lines it removed, keeping everyone else's; a stretch someone edited on top of since, or where a writer put back a line the scope removed, is left whole and named; what Git or Mako wrote is nobody's and stays. It's refused while a turn or background work runs in the checkout (the journal's open activity, on any host, and this host's own runs), and when the files changed after the preview (`token`). It writes with the move's writer (`rewriteInPlace` in `worktree-move.ts`): every version stored, the checkout kept under `refs/mako/moves/<id>` for 14 days, the plan saved in `<conversations>/undos`, each file checked and renamed into place, then read back; a failure puts every file back, and a host that dies mid-write finishes or undoes it on the next start (`resumeMove`). The index is left as it is. Rewind stays the whole-workspace restore. `scripts/test-turn-review.ts` covers it, and `scripts/turn-review-screenshots.mjs` draws it.
 
@@ -2982,11 +3392,11 @@ The agent's Git tools work in a project folder of several repositories, whose Th
 
 `git.openRepository(cwd)` returns one `Repository` per working tree (an LRU of 64 that never evicts a watched one). It keeps status in memory. `packages/host/src/git/workspace-git.ts` calls `watch()` when the repository is at or under the watched workspace and passes changed paths to `changed()`. The next `status()` then reads only those paths (`status -- :(literal)<path>`) and merges them in. Git's object store, locks, `FETCH_HEAD` and the package's own index copies are noise. Any other `.git` path, `.gitignore`, `.gitattributes`, `.gitmodules` or more than 500 paths means a full read, and so does a failed partial read. An unwatched repository (a linked worktree, or one above the workspace) is read in full every time. Entries come in Git's order: changes, then untracked files, each in byte order. Status runs with `--no-renames`: a rename reads as a deletion and an addition. Writes run one at a time per repository; `settled()` waits for them. Each repository keeps one `cat-file --batch-command` reader, closed after 30 idle seconds. Previews are cached per repository within one 64 MB budget per `Git`, least recently used first; worktree previews are cached only while watched. Commit drafting reuses piece summaries only from the `DraftSummaries` a caller passes; the host keeps one in `GitDrafting`.
 
-A spare belongs to a project, whatever a start comes from: a Fin started from its Apex's worktree takes one of the real project's (`homeOf`), at the commit it asked for, and its start asks for more there. Keyed by the folder asked from, 27 of 30 starts with no spare on 2026-11-06 were these, looking for spares of a worktree, which has none.
+A spare belongs to a project, whatever a start comes from: a Fin started from its Apex's worktree takes one of the real project's (`homeOf`), at the commit it asked for, and its start asks for more there. Keyed by the folder asked from, 27 of 30 starts with no spare on 2026-11-06 were these, looking for spares of a worktree, which has none. One taken is made again at once, behind the rest of that start (`fromSpare`), and a spare whose cloned install outputs were made for a lockfile the main checkout has since changed is made again when its project is next filled (`outdated`: a start there, a composer set to Worktree, or the hourly `tidy`), where it used to be handed over and its packages thrown away on the send. A start with a spare ready runs six Git processes and one without, five once its repository's start point is known (`test-worktree-start-cost.ts`): the main checkout's ignored files are listed once a start rather than once a carried entry, the hook's path is asked once per repository, and a name is reserved by making its branch, with no listing first.
 
 A spare's tracked files are cloned from the main checkout wherever it holds the same file (`cloneTracked`), so a worktree shares their blocks rather than writing them: 59 MB of its own for `mako-backend` where a checkout wrote 694 MB, with a stale main checkout too, since only what differs is written. It's a hint for Git: the index is refreshed, which hashes every clone, and `reset --hard` writes what's missing or came out different. That costs time, 7.3 s against 3.3 s for `mako-backend` on a busy Mac, so only a spare's fill does it, in the background: a start with no spare ready writes its checkout as Git does. Node's `COPYFILE_FICLONE` copies on macOS, reporting success, and `FICLONE_FORCE` is `ENOSYS` there, so this calls `clonefile` itself.
 
-Every spawn holds the host's thread for a moment, so what windows poll reads what a repository shares once, not once per worktree. `summaries` (every window's rail, every half minute and on focus) runs one pass at a time, shared by everyone who asked while the last ran; each pass reads a repository's branch tips with one `for-each-ref`, its start point once, and each worktree's `status` at most every 15 s, a wait that doubles to 5 minutes while nothing changes there unless a conversation is at work in it or its index changed (a spawn on Linux forks the whole host and held its thread for 300-450 ms, and 180 worktrees read every pass took 5 cores on this Mac), and keeps landing, ahead and behind by the commits they were read at. Before, each worktree spawned about seventeen processes outside the read slots: 1,800 a pass at 104 worktrees.
+Every spawn holds the host's thread for a moment, so a worktree's summary is asked of Git only where what it was read at moved. A window asking (`mako:worktree-summaries`) is answered at once with what's held (`heldNow`), marked with what is still being read, and never waits for a pass; each summary follows as it's read, in an event that carries only those that changed (`worktree-summary-changes`), and the whole list (`worktree-summaries`) is said only while a window that knows no other form may listen. One pass runs at a time (`readListed`): the main checkout's branch and each branch's commit are read from Git's files (`storedFacts`), the start point once per change of what it depends on (`WorktreeStarts.pointKey`: HEAD, the branch's and upstream's commits, the configuration files), and a summary stands while those commits and its index's time are as they were. A worktree's `status` is read on what says its files may have changed: its index or HEAD moving, a turn in it ending, a tool call reporting a write there (`mako:tool-effects`, `wrote`), and a file changing in it while a window shows its row or has it open (`filesHeard`). File events come from the tree watches the host already keeps, through the one backend they all use (`WatchedTrees`): the folder a tab has open, each checkout attribution follows while a Thread works in it, a conversation's files, an automation's folder. The summaries start no watch of their own and walk no tree. Writes are waited out (`FILES_SETTLE_MS`, 3 s after the last, the wait between reads doubling to 30 s while they keep coming), so a turn editing two hundred files is a handful of reads; a file event in a worktree nobody shows only marks it (`unseen`), read once a window shows it. A window coming to focus says so, and the worktrees it shows that no tree watch covers are read then, each at most once a minute. A worktree a delivering tree watch covers, with nothing heard, is never read on a timer; one nothing covers is read again past an hour (`STATUS_BACKSTOP_MS`), since nothing would say an editor changed a file there. A shared ref moving reads no status. `ahead` and `behind` for every worktree of a repository are one `for-each-ref` (`ahead-behind`, `countBranches`), and a landing only a merge in memory can tell is an idle read, made first for the worktrees a window shows or a conversation works in and one at a time for the rest (`laterLandings`), whose `behind` and `ahead` are current meanwhile and whose landing follows. Landings, counts, each worktree's summary with its index time, each repository's pull requests and start point are kept in `<worktrees>/summaries.json` (`WorktreeSummaryCache`, the store-format rule), so the first pass after a start with nothing moved starts no Git process; cold, 107 worktrees were about 700 processes four at a time, and one ask stayed open 12 to 31 minutes. A caller says how it wants a checkout's `status` (`checkoutStatuses`, `StatusAsk`): one that decides on it (a review, a merge, what a removal would meet, an agent's `worktree_status`, opening a pull request) asks for `fresh` and gets a read made after it asked, shared with others asking the same then; one that only shows it takes the status held since the checkout's last signal, and where a tab has the checkout open, the one its watcher keeps (`Repository.status`) when that lists the same files. A removal reads its own. Settings › Worktrees is drawn from what's held and asks Git nothing: a worktree with no count that still stands is listed with its last one and `refreshing`, read behind the answer as sizes are measured behind it (kept until the checkout's HEAD or index moves), and `worktree-sizes` says when either is in. What the list shows never decides a removal. `test-worktree-summary-passes.ts` counts the processes of each of these.
 
 Debug Git through host.log: with `MAKO_GIT_TRACE=1` (`HostConfig.gitTrace`) every Git process is logged under `git` with its arguments, folder, queued and running time, exit code and bytes. Without it, only processes slower than two seconds or stopped for time are logged. A failed probe alone isn't logged, since probes such as `rev-parse --verify` fail by design.
 
@@ -3177,7 +3587,7 @@ deliberate action and never rides along with a commit.
   on screen, and `watchApexView` ends the desk's view once anything else shows. `npm run test:side-rail-ui` holds the
   rail, and `test:fin-transitions-ui` each way in through closing, another Thread, a reload and the rail on every form.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
-  composer's chip, the crew card, the rail's pips, the Agents panel, the stop
+  composer's chip, the crew card, the rail's pips, the Overview, the stop
   card, the phone's row) counts from the Thread's one roster
   (`threadChildren` / `threadRollup` in `src/state/apex-fins.ts`) through
   `rollup`, and words it with `rollupLine`, `rollupChip` or `rollupLabel`
@@ -3204,8 +3614,9 @@ deliberate action and never rides along with a commit.
 - **Every message wears who wrote it, as a square** (`message-avatar.tsx`):
   the person's own face beside their prompt, at its last line; an agent's
   fin, still, with its harness as the badge, on its reply's byline; and a
-  Fin's own fin beside each report it sent its Apex (`FinReports`), where the
-  person's face stands. Every avatar is square, the rail footer's too. Real shadows exist only on
+  Fin's own fin beside each report it sent its Apex (`FinReport`), where the
+  person's face stands, or at the block's start for one that needs someone
+  (`ReportBlock`). Every avatar is square, the rail footer's too. Real shadows exist only on
   floating surfaces (`.overlay-panel`: menus, palette, dialogs).
 - **The ramp is warm neutrals — red-shifted near-blacks, warm off-white
   text — and stays that quiet.** The one accent is the brand's sea
@@ -3374,6 +3785,38 @@ turns it back into a draft. Adding a kind is a detail schema, a writer and
 reader in `kinds.ts`, a chip in `reference-chip.tsx` and a glyph; nothing
 else branches on it. `scripts/test-context-wire.ts` and
 `test-context-kinds.ts` hold every kind's round trip and the old formats.
+
+A file in a draft is a reference from the composer to the harness, never
+its bytes. `stageAttachment` (`src/lib/attachment-staging.ts`) stages one
+with a path on this Mac by that path (a clone, `workspaces/staging.ts`) and
+one without (a paste, a capture) 510 KiB at a time (`stageFilePart`), so
+the window never reads or encodes a whole file and no call carries more
+than a piece; the draft holds the staged path and an object URL for its
+chip. The message carries the path (`promptAttachment`). The host keeps the
+file before it admits the message: `LiveAssets.hold` hashes it as a stream
+and clones it under `<sha256>-<name>`, or only restarts its times when the
+store holds that hash already, and `retainPrompt` under the same request ID
+then swaps the path in with no file touched, since admission runs in one
+turn (`holdAttachments` in the `mako:live-prompt`, `live-continue`,
+`live-start` and steer handlers; a caller that doesn't hold still works,
+and pays the copy as it's admitted). A message that carries `data` (the web
+app's, which has no path to stage from and stays under its 700 KiB budget;
+a cloud move's; an older window's) is kept the same way, decoded a piece at
+a time, and keeps its bytes for the harnesses that take them inline (ACP
+image blocks, Cursor, OpenCode); Claude's SDK needs base64 and encodes it
+from the kept file as it's read, a step at a time; Codex takes the path.
+What a message is known by (`promptFingerprint`) is still what it came as,
+so a retry is the same message to a host from before this. In the
+transcript a read is kept by its conversation, path and purpose
+(`src/state/transcript-media.ts`: a row scrolled back or a Thread reopened
+draws at once; a file the agent may rewrite is asked again once the
+conversation has moved, and soon while it works), and a large picture alone
+draws the host's `inline` rendition rather than the original
+(`lonePictureUrl`; `MediaRenditions` keeps a picture's renditions by its
+content's hash, so the staged file and the kept one share one, and
+attaching a picture asks for it ahead). The original loads in the lightbox.
+`tsx --tsconfig tsconfig.app.json scripts/test-attachment-pipeline.ts`
+holds all of it and prints what sending a 10 MB picture costs.
 
 The textarea holds each chip's label (`@`, which its mark covers, then its
 words: `draftView` in `src/lib/draft-view.ts`), never its token or anchor,
@@ -3740,6 +4183,24 @@ startup, so a default Mako read from the first can be a model it no longer
 routes: the driver treats `models-dev.refreshed` and `integration.updated` as
 catalog changes, and a session still on the default it was given moves to the
 refreshed default before its next prompt.
+
+A new OpenCode conversation asks its model about 380 ms later through Mako than
+`opencode run` does by itself (`npm run bench:vs-bare -- --harness opencode`,
+N=5 on 2026-11-18: 917 ms against 533), most of it OpenCode's own: Mako runs one
+`opencode serve` per conversation (`opencode/servers.ts`), so each new one pays
+the server's handshake (159 ms) and its plugin activation (310 ms). Starting
+that server ahead while the person types was looked at and left: the server is
+the conversation's own, spawned with its grant (the write-hold plugin's URL and
+token, minted per binding), its permission tier, routing denies, primer and
+Thread values in its environment, so the one a launch would start exists only
+once the conversation does, and a conversation started ahead and never sent
+leaves a journal, a Thread in the person's list and a native session, at some
+400 MB of server for every draft. One server shared by every conversation isn't
+safe as Mako uses OpenCode for the same reason: those settings are the
+process's, so every session's calls would post under one binding's grant and
+one tier. `mako:launch-prewarm` still lists the folder's MCP servers and loads
+what a first launch loads (`host-warmup.ts`); it carries the folder alone, and
+the warm-up already keeps to the harnesses used on this device.
 No test, probe or proof runs a real harness in the person's own home. A
 session it starts there is a real entry in their Codex, Cursor, Claude or
 Grok history, and their own Mako lists it and keeps a copy: deleting the
@@ -4195,6 +4656,15 @@ the list shows of its conversation (`conversationShown`, the rule its row is
 made with), and one that moved it (working, waiting, idle, failed, what it
 waits on, its title) is reported on the next turn of the event loop, at most
 every 100 ms, without waiting for the second's pacing or a held foreground.
+A report is also paced by what it costs: after one that took 5 ms or more,
+none starts until five times that from its start (`REPORT_COST_TIMES`), a
+change a list shows included, so reports take a fifth of the host's thread at
+most however slow one gets, and the waiting report goes on the rest's own
+deadline. A loaded conversation's listing line is kept until what it is read
+from changes (`LiveRecords.summaryOf`), and a few rows' report looks its
+conversations up by ID (`listingOf`).
+`scripts/test-session-report-deadlines.ts` and
+`scripts/test-live-conversations.ts` (`listingIsKept`) hold these.
 A Thread renamed or a Session archived here goes the same way: no batch says
 either, and a rename once waited for whatever next marked the list changed. So
 does a new conversation, once its journal is placed (`opened`), before its
@@ -4378,14 +4848,77 @@ archived before the list is read again. `scripts/test-thread-store.ts`
 `test-thread-lifecycle.ts` cover these.
 
 A ready provider process is a warm cache, not active work. `LiveConversations`
-keeps at most two warm bindings per host and hibernates either the oldest excess
-or any one idle for ten minutes. Hibernation closes the provider and its MCP
-children, revokes its control grants, releases its session hold, and keeps the
-journal and binding. The next prompt takes the hold, checks the resume verdict
-and starts that same native session once; concurrent prompts share the wake.
+keeps as many warm bindings per host as its memory allows and hibernates either
+the oldest excess or any one idle for ten minutes. The number is `warmLimit`
+(`warm-limit.ts`): an eighth of the memory left after the person's reserve and
+the Fins at work, and never more than 3 GB, divided by what a provider holds
+there (a Fin's light memory from `FinCostModel`, 0.8 GB before it has measured
+any), never fewer than two nor more than eight. That is 2 on an 8 or 16 GB
+machine and 3 on a 36 GB Mac or anything larger. A reading that finds memory
+short (the system's pressure level, or swap nearly gone) makes it two for five
+minutes and hibernates the excess at that reading, not at the next turn's end
+(`memoryPressed`); while more than two are warm a job reads memory every 10 s
+(`watchWarmProviders`), since no Fin may be at work to have the engine look.
+Hibernation closes the provider and its MCP children, revokes its control
+grants, releases its session hold, and keeps the journal and binding. The next
+prompt takes the hold, checks the resume verdict and starts that same native
+session once; concurrent prompts share the wake. A wake also starts before
+its prompt: while the person types (`prewarm`), as `agents_send` gathers a
+message for a Fin at rest, and when a digest is queued for an idle Apex, so
+the restart overlaps the wait (`LiveConversations.expect`, which sends nothing
+and wakes nothing for a message that would be refused or held, nor a
+conversation whose folder is gone). One Mako starts for its own message,
+never the person's typing, that fails before the message is queued leaves the
+conversation asleep, unfailed: the message's own wake meets the failure and
+holds it to retry. A wake inside the idle window its provider was hibernated
+in starts with the Thread's values its launch read (`Resident.startedWith`);
+past the window, in another folder or title, or after its worktree was made
+again, it reads them again. The resume verdict and the tools' grant are asked
+at every wake.
+While a provider rests warm, a job has its harness's held credential reads
+checked every 2.5 s (`keepAccountsFresh`, `CredentialRevisions.refresh`): on
+Claude, the Keychain item's last-written stamp, read from its attributes by
+`security` without its secret, so nothing is asked of the person. A read its
+store vouches for stands from that check, and a message's admission finds it
+instead of waiting on a read of its own. A store that changed, or a check that
+failed or couldn't say, ends the checking until the next message reads for
+itself. An admission still takes only a read that stood inside the 3 s hold,
+nothing is checked two minutes after the last ask, and with no provider warm
+the job holds no timer.
 Running or queued work, permissions, child delivery, transfers, checkpoints,
 rewinds and automatic continuation prevent hibernation. A retired driver's late
 events are fenced by the resident generation and cannot close its replacement.
+Running or queued work, permissions, child delivery, transfers, checkpoints,
+rewinds and automatic continuation prevent hibernation. A retired driver's late
+events are fenced by the resident generation and cannot close its replacement.
+Writing in the composer wakes a session whose process has gone (`noteComposing`
+in `src/state/prewarm.ts`, `mako:live-prewarm`), so the start overlaps the
+typing: once a half minute for one that's awake, and again at the next key for
+one that's hibernated or disconnected, since the signal before it woke nothing.
+
+What a person does to a conversation is timed by `npm run bench:actions`
+(`scripts/bench-actions.ts`): a message, a steer, a Stop, a message after a
+Stop or to a hibernated session, an access change, a model, reasoning or fast
+change and an approval's answer, on a real host with each real harness against
+the scripted model, with Claude Code also driven bare over its stream-json
+input. It reads the host through the probe `bench:vs-bare` uses
+(`scripts/lib/bench-host.ts`, `bench-vs-bare-probe.mjs`), and what has no
+request to be a stage of (`conversations/live-stages.ts`) is a step
+(`liveSteps`, `mako:live-step`, in `base/live-steps.ts`, where a harness's
+driver may say its own round trips too): name a new wait there (`stagedWait`,
+`stagedCall`) rather than timing it where it happens.
+Three rules came of it. A selection reaches the running process when it changes,
+never with each message: the window sends its model, reasoning and fast lane
+with every message, and Claude's `tune` sets only what differs from what the
+process has (`Live.tuned`; `test-claude-tune.ts` counts the round trips). A
+running session's access shows from the person's pick (`src/state/live-mode.ts`,
+on the desk and the phone alike) and is believed only from its host's answer:
+refused, the picker goes back and says why. And nothing starts a turn under a
+level wider than the person chose while a change is on its way: the window's
+sends, steers, goals and reviews wait for the answer (`modeSettled`), a message
+that waited on a refused narrowing isn't sent, and the host dispatches nothing
+while a `setMode` is unanswered (`Resident.modeChanging`), whichever client
+asked. `test-live-mode.ts` and `test-live-mode-gate.ts` hold both sides.
 
 A saved binding's fate is a `ResumeVerdict`
 (`packages/host/src/contracts/conversation-control.ts`), not a boolean: `resumable`
@@ -4646,7 +5179,17 @@ each real harness against the scripted model (Cursor on its own): a 15 s
 command steered 4 s in. Claude, OpenCode and Grok hear it once the command
 returns; Codex's command yields to the model at once and carries on; Devin
 hears it when its command hands back, which it does by itself after about 10 s;
-Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Enter steers a steerable running turn and
+Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Claude
+Code's Stop keeps its process (`keepStopped`): an `interrupt` that also drops
+what the CLI had queued (`cancel_queued`, where its `init` says
+`interrupt_cancel_queued_v1`) and a `stop_task` for each background task, so
+the next message, and the person's steer, which lands by stopping the turn,
+cost a message and not a relaunch (`bench:actions`: 16 ms where it was 300 or
+more). It closes the process, as it always did, where the CLI can't, doesn't
+answer within two seconds, or had a message queued behind the running command,
+which the CLI would otherwise let finish; `test-claude-stop.ts` holds each
+with fakes, `test-claude-stop-live.ts` on the real CLI against the scripted
+model, and `scripts/probe-claude-stop.ts` reads it on the real model. Enter steers a steerable running turn and
 Cmd/Ctrl+Enter queues; the `steerOnEnter` preference swaps them. Re-verify a
 provider's kind with a real multi-step tool task before changing it: a single
 long generation cannot distinguish step delivery from turn-end delivery.
@@ -4998,7 +5541,11 @@ and a new message supersedes the continuation. The held-wakes job sends each
 again when its time comes (`wakeDue`), across restarts, as it does a usage
 limit's timed resume; a Resume sends it now. A session Mako's exit closed
 reopens for it, while the person's own close stops it waiting. The waits grow
-from ten seconds to ten minutes and repeat (`RETRY_STEPS_MS`), and every
+from ten seconds to ten minutes and repeat (`RETRY_STEPS_MS`); a wake whose
+ownership check only ran out of time found nothing against the session, so
+it is asked again after a second and a half, three times, before those steps
+(`QUICK_RETRY_MS`, `ResumeVerdict.soon`), while a session open elsewhere or
+an inventory that can't be completed waits the steps from the first. Every
 cause ends (`GIVE_UP_MS`): a rate limit after six hours, so a usage limit's
 window is waited out, the service, the network or a stalled start after an
 hour, a session open elsewhere after half an hour, each then failing with its
@@ -5031,7 +5578,10 @@ fails the turn and disconnects in one patch. Claude's hooks report a fresh
 session's transcript only when its first turn ends, so a death before that
 finds the file by session id under the account's `CLAUDE_CONFIG_DIR`
 (`ClaudeTranscript.locate`); without it the reconnect refused with "native
-session source has not been located". A resumable ACP source declares
+session source has not been located". A resume looks first where the file
+is already known to be, one stat each: the path its binding saved, then the
+folder Claude names after the working folder, and only then every project
+folder at once. A resumable ACP source declares
 `locateSession` (`acpLiveDriver` refuses one without it), and the transport
 reports the located source on the ready update and again on the exit update,
 since a new session is not on disk when it opens: Grok searches
@@ -5106,6 +5656,15 @@ imports the selected pack before publishing the saved index, so later checkpoint
 expiration cannot strand staged blobs. Legacy repository-backed checkpoints remain
 readable; their refs are removed only after ownership checks and a Git compare-and-swap.
 Never run Git GC against a user's repository to enforce Mako's storage policy.
+
+A turn's capture reserves the checkout's real index (`index.lock`) only while it
+copies the index file (`WorkspaceSnapshots.take`); every Git command of the capture
+reads that copy, so the agent's own `git add` or `git commit` never meets Mako's
+lock. Only a rewind holds it throughout. What a capture needs of the checkout it
+reads once: HEAD from Git's files (`headFromFiles`), one listing of the copied
+index, and the answers that only configuration changes (`CheckoutFacts`), kept
+per checkout until a config file's stamp differs. `test-checkpoint-reuse.ts`
+holds the process counts and `test-checkpoint-order.ts` the lock's span.
 
 Retained checkpoint payloads are limited to 1 GiB per profile/workspace, with a
 512 MiB per-capture limit, a 30-day/1,000-record retention target, and at most 64
@@ -5194,22 +5753,65 @@ version itself. The host reads every runtime five seconds after it starts,
 when a window asks and the reading is over ten minutes old, hourly for the
 public version, and after an update; each reading is pushed to every window
 as `runtime-updates` and kept in `~/.mako/runtime-updates.json` so the next
-host paints the last reading before its own lands. A window that asks for a
+host paints the last reading before its own lands. The same file keeps what
+a harness remembers of its installations (`ProviderUpdateSource.remembered`):
+Codex's answer to which installation reads the person's configuration, by
+each binary's and the configuration's size and change time
+(`CodexExecutables`), so a start runs `codex features list` once per binary
+and not on every start. A window that asks for a
 refresh (`mako:harness-updates` with `true`) gets the reading taken after
 its ask, so a refresh right after an update or a terminal's install never
 answers the old version. Settings > Agents
 therefore shows versions the moment it opens, and opening the model picker
-runs nothing. Before this the card was one IPC that spawned five CLIs and
+reads no version. Before this the card was one IPC that spawned five CLIs and
 ran `npm view` for each on every open of Settings, read "No runtimes found"
 for the second that took, and stalled ten seconds offline.
 
 The installed reading is keyed by the binary's mtime and size (Omnigent's
 rule for its Codex catalog): a re-read spawns nothing until the file moves,
 and when it moves — Mako's update or the user's `npm i -g` in a terminal —
-`onRuntimeChanged` fires and `refreshHarnessProfiles` drops that provider's
-model catalog in every workspace and discovers again, so an updated Codex
-lists its new models without a restart (it once served the old CLI's list
-for the rest of the host's life). The public version is
+`onRuntimeChanged` fires and `HarnessProfiles.refresh` reads that provider's
+model list again, once, in the folder it was last read in, and every folder
+of the account hears the new list, so an updated Codex lists its new models
+without a restart (it once served the old CLI's list for the rest of the
+host's life).
+
+A harness's model list is the account's and is read rarely
+(`HarnessProfiles`, `harness-profiles.ts`). Every read answers from what is
+held: memory, then `provider-profiles.json`, then the account's list in a
+folder it was never discovered in (with Mako's defaults; a folder's own
+`settings` and `configuredModel` are never another folder's), then a pending
+placeholder. A discovery runs only when nothing is held for the account,
+when the list is older than six hours (`DISPLAY_TTL_MS`, behind the answer),
+when the person opens the model picker (`mako:harness-tuning` with `force`,
+at most once a minute per folder), when a send's options were refused by the
+held catalogue (behind the refusal), and when the runtime, the account or a
+connection changed. A window's start (`mako:harness-profiles`) and the
+telemetry heartbeat read `snapshots()`, which never discovers, and a send or
+a Fin's start never waits while what it launches on is held. A harness
+whose profile says what the folder itself configures (`folder` on its
+loader: Codex's `configuredModel`, OpenCode's default, Claude Code's
+settings where Mako's default isn't listed) is the exception in a folder
+never discovered: a send there takes the folder's fields from the loader's
+own parse where it has one (none of the six does), else from a folder of
+the same repository and account whose project configuration files are the
+same bytes (`sameProjectConfiguration`, reading its own behind the send),
+else it waits for that folder's discovery, so a project never launches on
+a model it didn't choose. All six CLIs once ran at
+every window's start, every five minutes and on every focus, and a Claude
+Code process ran for each Fin. A discovery nobody waits for starts once the
+foreground is free, one per account at a time, and a failed one is held 5 s,
+doubling to ten minutes; the window's own retry reads without forcing.
+Claude Code's answers about each model (`set_model`, `get_settings`) are
+kept per binary and account (`runtimeStamp`, `ProfileLoadContext.kept`), so
+a discovery is `list_models` and the default model's settings. The file
+keeps one entry per account and a line per folder, is written only when
+something changed (or to confirm a list once an hour), and is read again and
+merged before each write, since every host of the user shares it. The picker
+draws "Checking…" only for a harness with no models to show
+(`profileUnread`). `scripts/test-send-discovery.ts`,
+`test-provider-reads.ts`, `test-providers.ts` and
+`test-claude-discovery.ts` hold this. The public version is
 `registry.npmjs.org/<pkg>/latest` with a four-second deadline and a bounded
 body, held an hour, a failure ten minutes; it never blocks the installed
 reading and leaves it standing with `latestError` beside it. Versions are

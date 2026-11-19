@@ -4,6 +4,7 @@ import { fromHostOperation, hostFailure, hostOperations, hostSuccess } from "../
 import { runtimeEventRouting, runtimeFailure, type RuntimeFailure } from "../contracts/runtime.js"
 import { encodeRuntimeEvent, payloadFor, runtimeEventLine, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { olderReadable } from "../contracts/provider-failure-evidence.js"
 import type { HostInvoke } from "./server.js"
 import { HostStoppedCallError } from "./call-lifetime.js"
 
@@ -62,7 +63,8 @@ export function serveHostThroughGateway(link: RuntimeLink, options: GatewayHostO
     let reply: Reply
     let failure: RuntimeFailure | undefined
     try {
-      reply = hostSuccess(operation.id, await options.invoke(request.channel, request.args, client, request.history, operation.correlationId))
+      // Answered as another device's build reads it (`olderReadable`): a phone, a browser or another Mac may predate a kind.
+      reply = hostSuccess(operation.id, olderReadable(await options.invoke(request.channel, request.args, client, request.history, operation.correlationId)))
     } catch (error) {
       // A host that is stopping answers the gateway nothing for a call its stop ended: the gateway keeps a runtime's
       // answer as the operation's, so the client's repeats would all get it (about 29 s of `sendWithRepeats`) before a
@@ -119,8 +121,9 @@ export function historyChangedNotice(event: RuntimeEvent): RuntimeEvent | null {
  * answers by reading it again; anything else that doesn't fit doesn't go (`too-large`). A cloud Thread's events and a
  * watched conversation's live updates both go out through this, so neither closes the link with one too large.
  */
-export function gatewayEventLine(channel: RuntimeEventChannel, event: RuntimeEvent, maxBytes = MAX_EVENT_BYTES):
+export function gatewayEventLine(channel: RuntimeEventChannel, sent: RuntimeEvent, maxBytes = MAX_EVENT_BYTES):
   { fit: "whole" | "reread"; text: string } | { fit: "too-large"; type: string | undefined; bytes: number } {
+  const event = forOtherDevices(sent)
   // A batch heard in the compact form only has no whole line: a reader of the whole form reads its conversation again.
   const whole = payloadFor(event, WHOLE_LIVE_FORM) !== undefined
   const text = runtimeEventLine(channel, event).slice(0, -1)
@@ -134,9 +137,17 @@ export function gatewayEventLine(channel: RuntimeEventChannel, event: RuntimeEve
  * An event's line in the compact live form as it goes out through the gateway: its compact payload alone, read by its
  * first characters (`readEventLine`). Undefined when it has none, or none under `MAX_EVENT_BYTES`: its whole line goes.
  */
-export function gatewayCompactLine(event: RuntimeEvent, maxBytes = MAX_EVENT_BYTES): string | undefined {
+export function gatewayCompactLine(sent: RuntimeEvent, maxBytes = MAX_EVENT_BYTES): string | undefined {
+  const event = forOtherDevices(sent)
   const text = event.compact ?? (event.form === COMPACT_LIVE_FORM ? event.payload : undefined)
   return text !== undefined && fits(text, maxBytes) ? text : undefined
+}
+
+/** An event as another device's build reads it, whatever it predates (`olderReadable`). */
+function forOtherDevices(event: RuntimeEvent): RuntimeEvent {
+  const payload = olderReadable(event.payload)
+  const compact = olderReadable(event.compact)
+  return payload === event.payload && compact === event.compact ? event : { ...event, payload, ...(compact !== undefined && { compact }) }
 }
 
 /** Whether `text` is within `maxBytes` in UTF-8. A character is at most three bytes: most lines are measured without encoding them. */

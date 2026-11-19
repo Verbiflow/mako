@@ -54,3 +54,27 @@ export function keptEmbed(attachment: AttachmentContent, answer: MediaConfirmati
   const { path } = attachment.source
   return { ...attachment, source: { kind: "file", path: answer.media.file, ...(answer.media.file !== path && { originalPath: path }) } }
 }
+
+/** The longer side of the host's `inline` and `thumbnail` renditions (`SIDE` in its `media-renditions.ts`). */
+export const INLINE_RENDITION_SIDE = 1440
+const THUMBNAIL_SIDE = 640
+/** A picture is drawn from the `inline` rendition only when it has at least this many pixels on its longer side: under it the rendition saves too little to be worth making. */
+const INLINE_RENDITION_ABOVE = 2160
+/** The longest a picture alone draws, in CSS pixels: `mediaBox`'s 30rem at the usual 16 px. */
+const LONE_BOX_PX = 480
+
+/**
+ * What a picture alone in the column draws from: the smallest of the host's renditions that fills its box at this
+ * display's `ratio`, else the original. The host signs a thumbnail's URL only for a picture large enough to have
+ * one, and makes the `inline` rendition from the same signed URL, so the URL here is that one asking for another
+ * size; a host from before `inline` answers it with the original. The lightbox always loads `previewUrl`.
+ */
+export function lonePictureUrl(file: { previewUrl?: string; thumbnailUrl?: string; width?: number; height?: number }, ratio: number): string | undefined {
+  const { previewUrl, thumbnailUrl } = file
+  const longer = Math.max(file.width ?? 0, file.height ?? 0)
+  if (!previewUrl || !thumbnailUrl || !longer || !/[?&]rendition=thumbnail(?:&|$)/.test(thumbnailUrl)) return previewUrl
+  const needed = LONE_BOX_PX * ratio
+  if (needed <= THUMBNAIL_SIDE) return thumbnailUrl
+  if (needed <= INLINE_RENDITION_SIDE && longer >= INLINE_RENDITION_ABOVE) return thumbnailUrl.replace("rendition=thumbnail", "rendition=inline")
+  return previewUrl
+}

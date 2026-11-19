@@ -61,6 +61,7 @@ import type {
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { onProviderChildChange } from "../base/provider-children.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { threadFileWorkspace } from "../contracts/thread-file-workspace.js"
 import type { WorktreeOrigins } from "./worktree-origins.js"
@@ -107,6 +108,8 @@ const TEMPORARY_ROOTS = [
 const WORKSPACE_PRESENCE_TTL_MS = 60_000
 /** How soon catalog events' activity is reconciled, all of them at once (`reconcileSoon`). */
 const RECONCILE_MS = 250
+/** How long after the sync daemon's last event its memory is still watched. */
+const DAEMON_QUIET_MS = 60_000
 const CATALOG_ACTOR: Actor = { kind: "service", name: "catalog" }
 
 /** Refs other host callers look through; the rail's own list is `threadList`. */
@@ -478,12 +481,12 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   function placeCatalog(refs: readonly ThreadRef[]): void {
     if (!threadStore) return
     const started = performance.now()
-    try {
-      threadStore.placeMany(refs, CATALOG_ACTOR)
-      hostLog("threads", "catalog placed in Threads", { rows: refs.length, ms: Math.round(performance.now() - started) })
-    } catch (error) {
-      hostWarn("threads", "catalog placement failed", { error: error instanceof Error ? error.message : String(error) })
-    }
+    // A batch at a time with the loop turning between: nothing waits on these, and a row served meanwhile is placed
+    // as it's served (`withThreadPlacements`).
+    void threadStore.placeAll(refs, CATALOG_ACTOR).then(
+      () => hostLog("threads", "catalog placed in Threads", { rows: refs.length, ms: Math.round(performance.now() - started) }),
+      (error: Error) => hostWarn("threads", "catalog placement failed", { error: error.message }),
+    )
   }
 
   function annotated(ref: ThreadRef): ThreadRef {
@@ -550,7 +553,11 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   const closingFor = new WeakMap<DaemonClient, string>()
   let catalogWorker: Worker | null = null
   let stopMonitoring: (() => void) | null = null
+  /** On within `DAEMON_QUIET_MS` of the sync daemon's last event: its memory is watched only then. */
+  const daemonBusy = jobs.demand("the sync daemon works")
+  let daemonWorkedAt = 0
   let activityEngine: ProviderActivityEngine | null = null
+  let stopNudges: (() => void) | undefined
   const providerActivity = new Map<string, ProviderActivitySession[]>()
   let emittedActivity = new Map<string, ExternalThreadActivity>()
   /** Daemon mode's synchronous view: filled once, patched by events. */
@@ -741,9 +748,13 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       reconcileSoon()
     })
     activityEngine.start()
+    // A harness Mako starts or sees end: looked at now, not at its idle half minute.
+    stopNudges = onProviderChildChange(() => activityEngine?.nudge())
   }
 
   function stopProcessMonitor(): void {
+    stopNudges?.()
+    stopNudges = undefined
     activityEngine?.stop()
     activityEngine = null
     providerActivity.clear()
@@ -797,6 +808,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   }
 
   function applyDaemonEvent(event: DaemonEvent, announce: boolean): void {
+    daemonWorked()
     if (event.event === "added" || event.event === "updated") {
       invalidateActivityRef(event.ref)
       if (nativeFolders) noteNativeFolder(nativeFolders, event.ref)
@@ -824,10 +836,21 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     }
   }
 
+  /**
+   * The sync daemon's memory grows only while it works, which it says in events: its memory is watched for a minute
+   * after its last one, so a daemon with nothing to do isn't asked every five seconds.
+   */
+  function daemonWorked(): void {
+    daemonWorkedAt = Date.now()
+    daemonBusy.set(true)
+  }
+
   function monitorDaemon(client: DaemonClient): void {
     stopDaemonMonitor()
     let highMemorySamples = 0
+    daemonWorked()
     stopMonitoring = jobs.every("watch the sync daemon's memory", 5_000, async () => {
+      if (Date.now() - daemonWorkedAt > DAEMON_QUIET_MS && highMemorySamples === 0) return daemonBusy.set(false)
       if (daemon !== client || stopping) return
       const stats = await client.refresh().catch(() => undefined)
       if (!stats || daemon !== client) return
@@ -839,7 +862,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       closingFor.set(client, `memory over ${MAX_DAEMON_RSS / 1024 / 1024} MB (${Math.round((stats.rss ?? 0) / 1024 / 1024)} MB)`)
       void client.retire().catch(() => {})
       client.close()
-    })
+    }, { needs: [daemonBusy] })
   }
 
   async function connectViaDaemon(signal: AbortSignal): Promise<boolean> {
@@ -951,6 +974,18 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       applyDaemonEvent(event, true)
     })
     client.onClose(stopEvents)
+    // The rail as the last run left it, while this reader's discovery reads every store again (29 s for 5,336 sessions,
+    // and the rail stood empty for it): drawn, and no more. `list` below replaces it whole and is what's adopted, so
+    // nothing takes a saved row for discovered. A mirror that already holds a list (another reader's) keeps it.
+    void client.saved().then((refs) => {
+      if (signal.aborted || daemon !== client || hydrated || mirror.size) return
+      activityIndex = null
+      nativeFolders = null
+      for (const ref of refs) mirror.set(ref.path, ref)
+      placeCatalog(refs)
+      push()
+      hostLog("threads", "catalog drawn from the last run's list", { sessions: mirror.size, ms: Math.round(performance.now() - started), kind })
+    }, () => undefined)
     void catalogTask(signal, async () => {
       await client.list({}, (refs) => {
         signal.throwIfAborted()
@@ -1018,7 +1053,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     const worker = new Worker(compiled, {
       workerData: data,
       transferList: [channel.port2],
-      resourceLimits: { maxOldGenerationSizeMb: 768 },
+      // Its young generation held to 32 MB: grown to 76 MB reading the catalog in, it stayed that size at rest with 6 MB in use.
+      resourceLimits: { maxOldGenerationSizeMb: 768, maxYoungGenerationSizeMb: 32 },
     })
     catalogWorker = worker
     // The worker's own log lines (the record store's backfill), kept with the host's.

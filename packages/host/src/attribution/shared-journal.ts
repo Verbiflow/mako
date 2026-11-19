@@ -1,10 +1,10 @@
 import { ThreadIdSchema } from "@mako/protocol/ids"
 import { createHash, randomUUID } from "node:crypto"
-import { chmodSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs"
 import { readFile, rm, writeFile } from "node:fs/promises"
 import { connect, createServer, type Server, type Socket } from "node:net"
-import { tmpdir } from "node:os"
-import { dirname, join, resolve } from "node:path"
+import { tmpdir, userInfo } from "node:os"
+import { dirname, join, resolve, sep } from "node:path"
 import { z } from "zod"
 import {
   AbsolutePathSchema,
@@ -57,14 +57,43 @@ export function sharedJournalFolder(userRoot: string): string {
   return join(userRoot, "attribution", SHARED_FORMAT)
 }
 
-/** Where the owner listens: a socket beside the lock, or one the kernel names where a path would be too long. */
-export function ownerAddress(folder: string, platform: NodeJS.Platform = nodePlatform()): string {
+/** How long `SharedJournal.applied` waits on a connected owner that acknowledges nothing; each acknowledgement starts it over. */
+const APPLIED_QUIET_MS = 15_000
+
+/** A socket's path on macOS is at most 104 bytes with the byte that ends it: one longer can't be listened on (`EINVAL`). */
+const SOCKET_PATH_MOST = 103
+
+/** The folder for sockets whose path fits nowhere else: this user's own, in the system's shared temporary folder, the shortest path every Mac has. */
+const shortSocketFolder = () => join(sep, "tmp", `mako-${userInfo().uid}`)
+
+/**
+ * Where the owner listens: a socket beside the lock; where that path is too long, one in the temporary folder; and
+ * where that is too long as well (a host started with a temporary folder of its own, under a long one), one in this
+ * user's short folder. The second was returned whatever its length, and an owner that couldn't listen there went on
+ * without saying more than "followers can't reach this owner", while its own host, which reaches it only by that
+ * socket, waited on it for good.
+ */
+export function ownerAddress(folder: string, platform: NodeJS.Platform = nodePlatform(), temporary = tmpdir()): string {
   const id = createHash("sha256").update(resolve(folder)).digest("hex").slice(0, 24)
   if (platform === "win32") return `\\\\.\\pipe\\mako-attribution-${id}`
   if (platform !== "darwin") return `\0mako-attribution-${id}`
   const path = join(folder, "owner.sock")
-  // A socket's path is at most 104 bytes on macOS.
-  return Buffer.byteLength(path) <= 100 ? path : join(tmpdir(), `mako-attribution-${id}.sock`)
+  if (Buffer.byteLength(path) <= 100) return path
+  const inTemporary = join(temporary, `mako-attribution-${id}.sock`)
+  return Buffer.byteLength(inTemporary) <= SOCKET_PATH_MOST ? inTemporary : join(shortSocketFolder(), `${id}.sock`)
+}
+
+/**
+ * Whether a socket's address may be used: any outside the shared temporary folder's short one, and one inside it
+ * only when that folder is this user's alone. Anyone can make a folder there first, and a socket in another's folder
+ * would be theirs to answer on. `make` creates it for the owner.
+ */
+function trustedAddress(address: string, make: boolean): boolean {
+  const folder = shortSocketFolder()
+  if (dirname(address) !== folder) return true
+  if (make) mkdirSync(folder, { recursive: true, mode: 0o700 })
+  const found = lstatSync(folder, { throwIfNoEntry: false })
+  return found !== undefined && found.isDirectory() && found.uid === userInfo().uid && (found.mode & 0o077) === 0
 }
 
 /** Where a follower Thread's session runs, so the owner reads it as that Thread's. */
@@ -265,13 +294,15 @@ export interface SharedJournalOptions {
   alone(why: string): Promise<OwnedJournal>
   log(message: string, facts?: Readonly<Record<string, string | number | boolean>>): void
   /** Waits between attempts, and how long a held lock may go unanswered before this host keeps its own. */
-  timing?: { retryMs?: number; maxRetryMs?: number; unansweredMs?: number }
+  timing?: { retryMs?: number; maxRetryMs?: number; unansweredMs?: number; appliedQuietMs?: number }
   /** For tests: the format this host speaks. */
   format?: string
   /** Start or find a writing owner elsewhere. This client never takes the lock or opens a writer itself. */
   startOwner?(privateReason?: string): Promise<string>
   /** A private writing owner may still serve its own host, on an address other hosts never discover. */
   privateAddress?: string
+  /** This journal's host reaches it only through its socket (the writer's worker): an owner that can't listen there fails to open. */
+  socketOnly?: boolean
   /** An isolated owner for this host, after its sharing attempt was refused. */
   privateReason?: string
 }
@@ -323,6 +354,7 @@ const send = (socket: Socket, message: ToOwner | ToFollower) => {
 const openKey = (mark: ActivityMark) => `${mark.session}\u0000${mark.kind}\u0000${mark.id}`
 
 function tryConnect(address: string): Promise<Socket | null> {
+  if (!trustedAddress(address, false)) return Promise.resolve(null)
   return new Promise((settle) => {
     const socket = connect(address)
     const failed = () => {
@@ -499,23 +531,41 @@ export class SharedJournal {
     }
   }
 
-  /** The messages already sent have been applied. This does not wait for a root's watch or rescan. */
+  /**
+   * The messages already sent have been applied. This does not wait for a root's watch or rescan. It waits on the
+   * owner itself: resolved as its acknowledgement reaches what was sent, rejected at once when no owner is connected
+   * or the one that was goes, and rejected when a connected owner acknowledges nothing for `APPLIED_QUIET_MS`, each
+   * acknowledgement starting that wait over. A host stopping without an owner used to wait a fixed 15 s here for an
+   * acknowledgement nobody could send.
+   */
   applied(): Promise<void> {
     if (!this.unsent.length) return Promise.resolve()
+    if (!this.link) return Promise.reject(new Error("The record of changes has no owner connected to acknowledge this Mako's writes."))
     const through = this.sent
     return new Promise((resolve, reject) => {
+      let waiting = this.unsent.length
+      let timer: ReturnType<typeof setTimeout> | undefined
       const finish = (error?: Error) => {
         clearTimeout(timer)
         this.acknowledgements.delete(check)
         if (error) reject(error)
         else resolve()
       }
+      const quiet = () => {
+        clearTimeout(timer)
+        timer = setTimeout(() => finish(new Error("The journal owner did not acknowledge its writes before closing.")), this.options.timing?.appliedQuietMs ?? APPLIED_QUIET_MS)
+        timer.unref()
+      }
       const check = () => {
         if (this.closed) finish(new Error("The journal closed before acknowledging its writes."))
         else if (!this.unsent.some(message => message.n <= through)) finish()
+        else if (!this.link) finish(new Error("The record of changes' owner left before acknowledging this Mako's writes."))
+        else if (this.unsent.length < waiting) {
+          waiting = this.unsent.length
+          quiet()
+        }
       }
-      const timer = setTimeout(() => finish(new Error("The journal owner did not acknowledge its writes before closing.")), 15_000)
-      timer.unref()
+      quiet()
       this.acknowledgements.add(check)
       check()
     })
@@ -576,7 +626,11 @@ export class SharedJournal {
       }
       const lock = await acquireHostLock(this.options.folder, { purpose: "owner" }).catch((error: Error) => error)
       if (lock instanceof Error) return this.keepOwn(`the lock couldn't be taken: ${lock.message}`)
-      if (lock.kind === "held") return this.own(lock)
+      if (lock.kind === "held") {
+        // Closed while the lock was being taken: nothing is opened under it.
+        if (this.closed) return lock.release()
+        return this.own(lock)
+      }
       if (Date.now() - began > unanswered) return this.keepOwn(`another Mako (pid ${lock.holder ?? "unknown"}) holds it but doesn't answer`)
       await new Promise((done) => setTimeout(done, Math.min(maxRetry, retry * 2 ** Math.min(attempt, 6))))
     }
@@ -625,10 +679,27 @@ export class SharedJournal {
     this.lock = lock
     this.link = undefined
     // Listening first: followers wait for the welcome while the journal opens, rather than race for the lock.
-    await this.listen().catch((error: Error) => this.options.log("followers can't reach this owner", { error: error.message }))
+    const deaf = await Promise.resolve().then(() => this.listen()).then(() => undefined, (error: Error) => error)
+    if (deaf && this.options.socketOnly) {
+      // Nothing could reach this owner, its own host included: it gives the journal up and says why, so the host that
+      // started it hears the cause instead of finding nobody at the address.
+      this.server = undefined
+      this.lock = undefined
+      await lock.release()
+      throw new Error(`The record of changes' owner can't listen at ${this.address}: ${deaf.message}`)
+    }
+    if (deaf) this.options.log("followers can't reach this owner", { error: deaf.message })
     const owned = await this.options.own()
     if (this.closed) {
+      // `close` ran while the journal opened and found neither it nor, perhaps, this socket and lock: they end here,
+      // or the socket keeps the process alive and the lock keeps the journal from the next owner.
       await owned.close()
+      const server = this.server
+      this.server = undefined
+      if (server?.listening) await new Promise<void>((done) => server.close(() => done()))
+      if (server && onFileSystem(this.address)) rmSync(this.address, { force: true })
+      if (this.lock === lock) this.lock = undefined
+      await lock.release()
       return
     }
     this.owned = owned
@@ -641,6 +712,7 @@ export class SharedJournal {
   }
 
   private listen(): Promise<void> {
+    if (!trustedAddress(this.address, true)) return Promise.reject(new Error(`${dirname(this.address)} isn't this user's own folder, so no socket is made in it.`))
     if (onFileSystem(this.address)) rmSync(this.address, { force: true })
     const server = createServer((socket) => this.accept(socket))
     this.server = server
@@ -764,6 +836,11 @@ export class SharedJournal {
   // The follower's side.
 
   private follow(socket: Socket): Promise<"following" | "lost" | { why: string }> {
+    // A connection made while this journal closed is nobody's to close later: it ends here, or it keeps the process alive.
+    if (this.closed) {
+      socket.destroy()
+      return Promise.resolve("lost")
+    }
     this.following = socket
     return new Promise((settle) => {
       const finish = (outcome: "following" | "lost" | { why: string }) => {
@@ -866,7 +943,10 @@ export class SharedJournal {
       const timer = setTimeout(() => {
         this.calls.delete(id)
         if (request.kind === "settled") {
-          this.options.log("the record of changes didn't answer in time; going on with what it holds", { waitedMs: patience.ms })
+          // The owner says what it waited on itself ("settled slowly"); this side says what it asked, and of whom.
+          this.options.log("the record of changes didn't answer in time; going on with what it holds", {
+            waitedMs: patience.ms, checkouts: request.checkouts?.length ?? "all", rescans: request.rescans !== false, owner: this.current.kind === "follower" ? this.current.owner.pid : this.current.kind,
+          })
           resolveCall({ kind: "settled", complete: false })
         } else rejectCall(new Error("Mako's record of changes didn't answer in time. Try again in a moment."))
       }, patience.ms)

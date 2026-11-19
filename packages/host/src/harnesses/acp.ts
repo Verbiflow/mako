@@ -1,4 +1,6 @@
 import { providerCall, failureEvidenceOf, ProviderFailureError, providerTextEvidence, HostFailureError, providerExitEvidence } from "../contracts/provider-failure.js"
+import type { WriteHolds } from "./write-holds.js"
+import { CALL_GATE_HOLD_MS } from "./call-gate.js"
 import { applyControlEnvironment } from "../control/index.js"
 import { applyThreadEnvironment } from "../workspaces/index.js"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "../contracts/approval-response.js"
@@ -82,7 +84,7 @@ import type { DiscoveryProcesses } from "./discovery-process.js"
 import { SessionUsage, type UsageObservation } from "./session-usage.js"
 import { AcpModelWindow, acpNotificationUsage, acpUsageReading } from "./acp-usage.js"
 import type { JsonObject } from "../contracts/json.js"
-import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
+import { environmentForExecutable } from "../base/executable.js"
 import { acpMcpServers } from "../tools/index.js"
 import type { McpTransport } from "../contracts/mcp-skills-integrations.js"
 import type { LiveInputQuestion, LivePermissionRequest, LivePermissionResponse, PromptAttachment, LiveSessionState } from "../contracts/providers-acp.js"
@@ -263,6 +265,8 @@ export interface AcpEngineDependencies {
   approvalRoot: string
   /** Where streams go (`HarnessContext.streams`); without it none are written. */
   streams?: string
+  /** Where calls that may write wait for their turn's checkpoint (`HarnessContext.writeHolds`). */
+  writeHolds?: WriteHolds
 }
 
 export type AcpEngine = ReturnType<typeof createAcpEngine>
@@ -273,6 +277,8 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const closingSessions = new Map<string, Promise<void>>()
+  // What the harness last said loads in a folder, for this engine's life (`AcpCallHooks.writes.personCodeRuns`).
+  const personCodeAnswers = new Map<string, boolean>()
 
   async function requestElicitation(
     live: Live,
@@ -376,7 +382,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     spec.configureEnvironment(env)
     applyControlEnvironment(env, options.conversationTools?.control)
     applyThreadEnvironment(env, options.threadEnvironment)
-    const executable = resolveExecutable(spec.command, env)
+    const executable = await dependencies.processes.executables.find(spec.command, env)
     if (!executable) throw new Error(`${harness} is not installed`)
     // Before MCP preparation: a native fork only copies the session, so it starts none of the conversation's servers.
     const forkEnvironment = options.fork ? environmentForExecutable(executable, env) : undefined
@@ -386,12 +392,21 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     const preparedServers = acpMcpServers(mcpSnapshot, harness, ["stdio", "http", "sse"])
     const makoMcp = adapter.apply(layerOf({ conversationTools: options.conversationTools }), options.conversationId).servers
     preparedServers.push(...makoMcp)
-    const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env))
+    const makoServers = new Set(makoMcp.map((server) => server.name))
+    const launchServers = preparedServers.map((server) => ({ name: server.name, process: "command" in server && !makoServers.has(server.name) }))
+    // A source whose own config carries Mako's hook says whether this launch holds writes before that config is written.
+    const hookHolds = dependencies.writeHolds && options.nativeCalls && spec.holdsWrites
+      ? await trace.step("settings", () => spec.holdsWrites!({ env, cwd: workingDir, servers: launchServers }))
+      : false
+    const disposeMcp = await trace.step("mcp-preparation", () => spec.prepareMcp?.(preparedServers, env, hookHolds))
     const approvals = await trace.step("observation", () => spec.prepareApprovals?.({
       root: dependencies.approvalRoot, env,
       previous: options.observedApprovals ?? [],
       publish: decision => send({ type: "live-approval-decision", id, decision }),
     }))
+    // This launch's writes are held only where Mako's hooks gate them and nothing the person set up runs beside them.
+    const writes = dependencies.writeHolds && options.nativeCalls ? source.callHooks?.writes : undefined
+    const holdsWrites = hookHolds || (writes ? !await writes.personCodeRuns({ executable, env, cwd: workingDir, servers: launchServers }, personCodeAnswers) : false)
     const child = trace.sync("spawn", () => spawnProviderProcess(executable, spec.args, {
       cwd: workingDir,
       env: environmentForExecutable(executable, env),
@@ -440,6 +455,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       emit: send,
     }
     sessions.set(id, live)
+    dependencies.writeHolds?.attend(id, holdsWrites)
     let open: (sessionId: string | null) => void = () => undefined
     const opened = new Promise<string | null>((resolve) => { open = resolve })
     live.startup.signal.addEventListener("abort", () => open(null), { once: true })
@@ -520,8 +536,13 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         return { outcome: { outcome: "selected" as const, optionId: chosen } }
       },
       async extMethod(method: string, params: JsonObject) {
-        // A call hook answers at once and records nothing: it's Mako's, not the transcript's.
-        if (source.callHooks?.method === method && options.nativeCalls) return source.callHooks.answer(params, options.nativeCalls())
+        // A call hook records nothing: it's Mako's, not the transcript's. It answers at once, but for a call that may
+        // write, which waits for its turn's checkpoint where the turn holds writes.
+        if (source.callHooks?.method === method && options.nativeCalls) {
+          const answer = source.callHooks.answer(params, options.nativeCalls())
+          if (source.callHooks.writes?.holds(params, answer)) await dependencies.writeHolds?.beforeWrite(id, undefined, CALL_GATE_HOLD_MS)
+          return answer
+        }
         const frame = record({ request: method, params })
         const vendor = decoder.request(method, params)
         // Grok asks about folder trust from a task it starts with the session, so the request can land before session/new's reply.
@@ -1189,6 +1210,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
   }
 
   async function liveClose(id: string): Promise<void> {
+    dependencies.writeHolds?.forget(id)
     const closing = closingSessions.get(id)
     if (closing) return closing
     const live = sessions.get(id)

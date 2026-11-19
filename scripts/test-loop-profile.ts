@@ -3,7 +3,8 @@ import { loopSlices, type CpuProfile } from "@mako/host/base/loop-profile"
 
 /**
  * What the held-loop profile names (`npm run test:loop-profile`): the host's own functions, in a checkout and in the
- * installed app, where they're under `node_modules/@mako` and it once named none, and never a dependency's.
+ * installed app, where they're bundled into `dist-electron/host` or under `node_modules/@mako` and it once named
+ * none, and never a dependency's.
  */
 const frame = (id: number, functionName: string, url: string, children?: number[]): CpuProfile["nodes"][number] => ({ id, callFrame: { functionName, url, lineNumber: 9 }, ...(children && { children }) })
 const framesAt = (url: string) => {
@@ -19,6 +20,9 @@ const framesAt = (url: string) => {
 assert.deepEqual(framesAt("file:///work/mako/packages/host/dist/conversations/agents.js"), ["hold host/conversations/agents.js:10"], "a checkout's build")
 assert.deepEqual(framesAt("file:///work/mako/packages/host/src/conversations/agents.ts"), ["hold host/conversations/agents.ts:10"], "a checkout's source")
 assert.deepEqual(framesAt("file:///Applications/Mako.app/Contents/Resources/app.asar/node_modules/@mako/host/dist/conversations/agents.js"), ["hold host/conversations/agents.js:10"], "the installed app's")
+assert.deepEqual(framesAt("file:///Applications/Mako.app/Contents/Resources/app.asar/dist-electron/host/chunk-63VOYIZZ.js"), ["hold host/chunk-63VOYIZZ.js:10"], "the installed app's bundled host, which named nothing")
+assert.deepEqual(framesAt("file:///work/mako/dist-electron/main/entry.js"), ["hold main/entry.js:10"], "a checkout's bundled main process")
+assert.deepEqual(framesAt("file:///Applications/Mako.app/Contents/Resources/app.asar/dist-electron/host/vendor/x.js"), [], "nothing below a bundle's own chunks")
 assert.deepEqual(framesAt("file:///Applications/Mako.app/Contents/Resources/app.asar/node_modules/zod/index.js"), [], "a dependency's isn't ours")
 assert.deepEqual(framesAt("file:///work/mako/packages/host/node_modules/zod/index.js"), [], "nor one inside a package")
 assert.deepEqual(framesAt("file:///Applications/Mako.app/Contents/Resources/app.asar/node_modules/@mako/host/node_modules/zod/index.js"), [], "nor one inside an installed package")

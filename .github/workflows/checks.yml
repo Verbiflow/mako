@@ -82,6 +82,7 @@ jobs:
       syncBench: ${{ steps.detect.outputs.syncBench }}
       steer: ${{ steps.detect.outputs.steer }}
       codexSandbox: ${{ steps.detect.outputs.codexSandbox }}
+      grokLive: ${{ steps.detect.outputs.grokLive }}
       fileSearch: ${{ steps.detect.outputs.fileSearch }}
       macHost: ${{ steps.detect.outputs.macHost }}
     steps:
@@ -497,6 +498,38 @@ jobs:
         run: |
           PATH="$RUNNER_TEMP/codex/node_modules/.bin:$PATH" scripts/check-codex-sandbox.sh
 
+  # Grok's live tests, against the real grok at the tested build and a stand-in model in a sealed home: plan feedback,
+  # side questions, goals, reviews, forks, folder trust, approvals and a session moved into another folder. Each skips
+  # itself where grok isn't installed, which every other runner is, so until this job none of them ran in CI
+  # (2026-11-17: plan feedback's and side questions' cleanup failed on main three times in three, unseen).
+  grok-live:
+    needs: changes
+    if: github.event_name != 'pull_request' || needs.changes.outputs.grokLive == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
+      - uses: ./.github/actions/tested-grok
+        with:
+          prefix: ${{ runner.temp }}/grok
+      # The tests import @mako/sessions and the other packages through their builds.
+      - run: npm run -s build --workspace @mako/sessions && npm run -s build:control-runtime
+      - name: Grok's live tests at the tested build
+        run: |
+          export PATH="$RUNNER_TEMP/grok/node_modules/.bin:$PATH"
+          for test in folder-trust plan-feedback goal side review fork approvals relocate; do
+            npx tsx "scripts/test-grok-$test-live.ts"
+          done
+
   # The Mac app as a person builds it, from this commit: packaged unsigned under the runner's own TMPDIR, a Mac's long
   # per-user temporary folder, then package-mac.mjs's own checks of the app (its control CLI, its startup directly and
   # through Launch Services). #786: a control root under that TMPDIR ran out of a socket's 103 bytes and packaging failed on
@@ -571,7 +604,7 @@ jobs:
   # Every job's verdict: on main, the whole of CI after a merge.
   ci:
     if: always()
-    needs: [changes, checks, install-cold, gate, mac-host, mac-package, file-search, performance, update-checks, transcript-ui, suites, sync-bench, steer-latency, host-load, codex-sandbox]
+    needs: [changes, checks, install-cold, gate, mac-host, mac-package, file-search, performance, update-checks, transcript-ui, suites, sync-bench, steer-latency, host-load, codex-sandbox, grok-live]
     runs-on: ubuntu-24.04
     timeout-minutes: 2
     steps:

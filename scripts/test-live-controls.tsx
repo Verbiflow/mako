@@ -953,6 +953,24 @@ publish()
   threadsStore.set({ composerHarness: "claude" })
   noteComposing("Carry on with the migration", 10_000_000)
   assert.deepEqual(prewarms, [id], "writing for its own harness wakes it, as before")
+  noteComposing("Carry on with the migration, then", 10_002_000)
+  assert.deepEqual(prewarms, [id], "a session still awake isn't signalled again within the half minute")
+  // A Stop ended its process two seconds after that signal (Claude Code's does), or the warm limit hibernated it: the
+  // next key wakes it, so the start overlaps the typing instead of following Send.
+  for (const connection of ["disconnected", "hibernated"] as const) {
+    prewarms.length = 0
+    conversation.session = { ...savedSession, status: "ready", connection }
+    publish()
+    const at = connection === "disconnected" ? 10_004_000 : 10_010_000
+    noteComposing("Now do the other half", at)
+    assert.deepEqual(prewarms, [id], `a ${connection} session is woken at the next key, inside the half minute`)
+    noteComposing("Now do the other half, and", at + 200)
+    assert.deepEqual(prewarms, [id], "once, not at every key")
+    noteComposing("Now do the other half, and then", at + 1_200)
+    assert.deepEqual(prewarms, [id, id], "and again a second on, while its host hasn't said it's starting")
+    conversation.session = savedSession
+    publish()
+  }
   threadsStore.set({ composerHarness: savedHarness })
   if (before) Object.defineProperty(globalThis, "window", before)
   else Reflect.deleteProperty(globalThis, "window")

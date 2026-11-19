@@ -25,7 +25,7 @@ import { END_CONFIRM_MS, lastStep, PROCESS_READS, type ProcessReads } from "@mak
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { namedUuid } from "@mako/host/conversations/cloud-moves"
 import type { LiveRequest } from "@mako/host/contracts/live-conversations"
-import { Agents, settingsIn } from "@mako/host/conversations/agents"
+import { Agents, ROOM_WATCH_JOB, settingsIn } from "@mako/host/conversations/agents"
 import { macLoad } from "@mako/host/conversations/mac-capacity"
 import { uploadScope } from "@mako/host/conversations/session-uploads"
 import { CLAUDE_MODES } from "@mako/host/harnesses/claude/sdk-driver"
@@ -203,10 +203,12 @@ async function startsAndWakes(): Promise<void> {
     await w.settle()
     assert.equal(childTurns, 3)
     const wakes = w.prompts.filter((prompt) => prompt.conversation === apex.conversation)
-    assert.equal(wakes.length, 1, "three reports in one burst wake an idle apex once")
-    assert.ok(wakes[0]!.text.startsWith(FROM_AGENTS))
-    assert.match(wakes[0]!.text, /3 finished:/)
-    assert.match(wakes[0]!.text, /0 working, 3 ended\./)
+    // An idle Apex hears the first report at once, and the rest of the burst as one digest after it.
+    assert.ok(wakes.length >= 1 && wakes.length <= 2, `three reports in one burst wake an idle apex at most twice, not ${wakes.length}`)
+    assert.ok(wakes.every((wake) => wake.text.startsWith(FROM_AGENTS)))
+    for (const harness of ["claude", "cursor", "grok"]) assert.equal(wakes.filter((wake) => wake.text.includes(`"review-${harness}"`)).length, 1, `review-${harness} is in exactly one wake`)
+    assert.equal(wakes.reduce((sum, wake) => sum + Number(/(\d+) finished:/.exec(wake.text)?.[1] ?? 0), 0), 3, "three finished, across them")
+    assert.match(wakes.at(-1)!.text, /0 working, 3 ended\./)
     const wake = w.live.snapshot(apex.conversation)!.requests.at(-1)!
     assert.equal(wake.actor?.kind, "agent", "a wake is an agent's request")
     const listed = await w.agents.list(apex.caller, {})
@@ -1275,6 +1277,74 @@ async function finsAtWorkByBinding(): Promise<void> {
   }
 }
 
+/**
+ * The room watch reads nothing on an idle host: its job is paused while no Fin here is at work and no start waits, on
+ * once a Fin takes a place, and paused again by the first look that finds none, which still tells the capacity none.
+ */
+async function roomWatchFollowsWork(): Promise<void> {
+  const looks: number[] = []
+  const every = HostJobs.prototype.every
+  let look: (() => void | Promise<void>) | undefined
+  HostJobs.prototype.every = function (this: HostJobs, name, everyMs, run, options) {
+    if (name === ROOM_WATCH_JOB) look = run
+    return every.call(this, name, everyMs, run, options)
+  }
+  const w = new AgentsWorld({
+    root: join(root, "room-watch-follows"),
+    script: (turn) => (turn.text.includes("You're fin:") ? turn.world.hold(turn.conversation).then(() => "stopped") : "ok"),
+    observeCapacity: async (working) => void looks.push(working),
+  })
+  HostJobs.prototype.every = every
+  const paused = () => w.jobs.list().find((job) => job.name === ROOM_WATCH_JOB)?.paused
+  try {
+    const apex = await w.apex("claude")
+    assert.equal(paused(), true, "no Fin and no start: the room watch holds no timer")
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Hold" }, harness: "codex", name: "room", clientKey: "room", cwd: w.root })
+    assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+    await waitFor(() => w.live.session(started.conversation!)?.status === "running", "the Fin at work")
+    await waitFor(() => paused() === false, "a Fin taking a place turns the room watch on")
+    await look!()
+    assert.equal(looks.at(-1), 1)
+    await w.agents.stop(apex.caller, { child: "all" })
+    await waitFor(() => w.live.session(started.conversation!)?.status !== "running", "the Fin stopped")
+    // The stop settles the Fin's place a moment after its status reads stopped: look until a look finds it gone.
+    for (const end = Date.now() + 8_000; paused() !== true && Date.now() < end; ) {
+      await look!()
+      if (paused() !== true) await new Promise((resolve) => setTimeout(resolve, 50))
+    }
+    assert.equal(paused(), true, "the first look that finds nothing at work pauses it")
+    assert.equal(looks.at(-1), 0, "and that look still tells the capacity nothing is at work")
+  } finally {
+    HostJobs.prototype.every = every
+    await w.close()
+  }
+}
+
+/**
+ * A host that comes back to a start queued for a full place reads the room again at once: the demand starts off with
+ * every host, and a queue the last host left would otherwise wait on a watch that never turns on.
+ */
+async function roomWatchAfterRestart(): Promise<void> {
+  // No room at all: the start waits however the restart goes.
+  const w = new AgentsWorld({
+    root: join(root, "room-watch-restart"),
+    script: () => "ok",
+    observeCapacity: async () => {},
+    finLimit: () => 0,
+  })
+  const paused = () => w.jobs.list().find((job) => job.name === ROOM_WATCH_JOB)?.paused
+  try {
+    const apex = await w.apex("claude")
+    const queued = await w.agents.start(apex.caller, { brief: { objective: "Hold" }, harness: "codex", name: "waits", queue: true, clientKey: "waits", cwd: w.root })
+    assert.ok(!("refused" in queued) && queued.state === "queued", JSON.stringify(queued))
+    await w.restart()
+    assert.ok(w.store.queuedSpawns().length > 0, "the start still waits after the restart")
+    assert.equal(paused(), false, "a host that comes back to a queued start reads the room again")
+  } finally {
+    await w.close()
+  }
+}
+
 /** A stopped Fin's own queued Fins wait for it, whatever room there is, and start once it resumes. */
 /** A Fin's activity time moves with every token: alone it tells no one, or one Fin resends its Apex's whole roster to each conversation of its Thread. */
 async function activityTellsNoOne(): Promise<void> {
@@ -1449,9 +1519,15 @@ async function finsMoveInTheNewestSession(): Promise<void> {
  */
 async function anySessionAsks(): Promise<void> {
   for (const asker of ["newer", "older"] as const) {
-    const w = world(`asks-${asker}`, (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : "Started it."))
+    // The Apex stays at work, so the Fin's result waits for its turn's end: heard, an idle Apex's result lets the Fin's
+    // provider go (it hibernates), and a scripted ask can't come from a provider that has gone.
+    const w = world(`asks-${asker}`, async (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : turn.text.endsWith("Keep at it.") ? turn.world.hold(turn.conversation).then(() => "Kept at it.") : "Started it."))
+    let apexConversation: string | undefined
     try {
       const apex = await w.apex("codex")
+      apexConversation = apex.conversation
+      w.say(apex.conversation, "Keep at it.")
+      await waitFor(() => w.live.atWork(apex.conversation), "the Apex at work")
       const started = await w.agents.start(apex.caller, { brief: { objective: "Finish." }, harness: "claude", name: "asker", clientKey: "k-asker", cwd: w.root })
       assert.ok(!("refused" in started) && started.conversation && started.child, JSON.stringify(started))
       await waitFor(() => w.live.held(started.conversation!)?.requests[0]?.status === "completed", "the Fin's first turn ends")
@@ -1476,6 +1552,7 @@ async function anySessionAsks(): Promise<void> {
       await answered
       assert.equal(w.live.waitingOn(asking), undefined, `${asker}: the answer reached the Session that asked`)
     } finally {
+      if (apexConversation) w.release(apexConversation)
       await w.close()
     }
   }
@@ -1488,9 +1565,14 @@ async function anySessionAsks(): Promise<void> {
  * needs the person still reaches its Apex, and its answer the Session that asked.
  */
 async function aSessionNeedsYou(): Promise<void> {
-  const w = world("needs-you", (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : "Started it."))
+  // The Apex stays at work, as in `anySessionAsks`: heard by an idle Apex, the Fin's result lets its provider go.
+  const w = world("needs-you", async (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : turn.text.endsWith("Keep at it.") ? turn.world.hold(turn.conversation).then(() => "Kept at it.") : "Started it."))
+  let apexConversation: string | undefined
   try {
     const apex = await w.apex("codex")
+    apexConversation = apex.conversation
+    w.say(apex.conversation, "Keep at it.")
+    await waitFor(() => w.live.atWork(apex.conversation), "the Apex at work")
     const started = await w.agents.start(apex.caller, { brief: { objective: "Finish." }, harness: "claude", name: "needing", clientKey: "k-needing", cwd: w.root })
     assert.ok(!("refused" in started) && started.conversation && started.child, JSON.stringify(started))
     const older = started.conversation
@@ -1523,6 +1605,7 @@ async function aSessionNeedsYou(): Promise<void> {
     await answered
     assert.equal(w.live.waitingOn(older), undefined, "the answer reached the Session that asked")
   } finally {
+    if (apexConversation) w.release(apexConversation)
     await w.close()
   }
 }
@@ -2268,6 +2351,8 @@ try {
     settingsFollowTheBinding,
     startedFinsOldQueueRow,
     finsAtWorkByBinding,
+    roomWatchFollowsWork,
+    roomWatchAfterRestart,
     stoppedApexHolds,
     listsReadNoJournal,
     activityTellsNoOne,

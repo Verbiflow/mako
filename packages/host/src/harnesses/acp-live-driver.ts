@@ -1,6 +1,5 @@
 import { acpDefaultMode, acpSessionModes } from "./acp-access.js"
 import { acpClientCapabilities, type ProviderAcpSource } from "./acp-source.js"
-import { resolveExecutable } from "../base/executable.js"
 import { heavy } from "../base/heavy-packages.js"
 import { realpath } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -23,7 +22,7 @@ export const ACP_NATIVE_IDENTITY = {
 export function createAcpLiveDriver(
   source: ProviderAcpSource,
   host: Pick<ProviderHost, "discovery" | "mcpSources">,
-  context: Pick<HarnessContext, "dataRoot" | "appRoot" | "streams">
+  context: Pick<HarnessContext, "dataRoot" | "appRoot" | "streams" | "writeHolds">
 ): ProviderLiveDriver {
   let loading: Promise<AcpEngine> | undefined
   const engine = () => (loading ??= import("./acp.js").then(({ createAcpEngine }) => createAcpEngine(source, {
@@ -32,6 +31,7 @@ export function createAcpLiveDriver(
     appRoot: context.appRoot,
     approvalRoot: approvalRoot(context),
     streams: context.streams,
+    ...context.writeHolds && { writeHolds: context.writeHolds },
   })))
   // Observers are pure until a session feeds them, so one made here only reads what it can do.
   const stopsOneBackground = source.observeBackground?.().stopOne !== undefined
@@ -50,7 +50,7 @@ export function createAcpLiveDriver(
     delete env.CLAUDECODE
     delete env.CLAUDE_CODE_ENTRYPOINT
     spec.configureEnvironment(env)
-    const command = resolveExecutable(spec.command, env)
+    const command = await host.discovery.executables.find(spec.command, env)
     if (!command) return undefined
     const { PROTOCOL_VERSION } = await heavy.acpSdk.load("read a start ahead")
     const params = { protocolVersion: PROTOCOL_VERSION, clientCapabilities: acpClientCapabilities(source) }
@@ -58,6 +58,8 @@ export function createAcpLiveDriver(
   }
   return {
     provider: source.provider,
+    ...context.writeHolds && source.callHooks?.writes && { firstWrite: { via: source.callHooks.writes.via } },
+    ...context.writeHolds && !source.callHooks?.writes && source.hookWrites && { firstWrite: source.hookWrites },
     launchEnvironment: { kind: "prepared", via: "Shared ACP launch applies the admitted account environment before native process creation." },
     nativeIdentity: ACP_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
@@ -77,6 +79,10 @@ export function createAcpLiveDriver(
     resume: resume.kind === "native"
       ? { ...resume, locate: async (binding, cwd, env) => binding.nativeId ? resume.locate({ nativeId: binding.nativeId, cwd, env }) : undefined }
       : resume,
+    hostWarmup: {
+      via: "The ACP client package, which a host's first ACP launch loads before it spawns (`sdk-load`): about 20 ms of a first Grok or Devin launch (2026-11-18).",
+      pieces: [{ name: "the ACP client package", load: async () => void await heavy.acpSdk.load("a first launch, ahead") }],
+    },
     startPrefetch: {
       via: "The ACP agent, launched as a start launches it, through `initialize`, with its binary read alongside.",
       files: async (env) => {

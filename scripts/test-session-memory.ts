@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { mock } from "node:test"
 import type { ThreadRef } from "@mako/sessions"
+import { HostJobs } from "@mako/host/base/host-jobs"
 import { planContinuation } from "@mako/host/contracts/thread-continuation"
 import { heldReason } from "@mako/host/contracts/session-hold"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
@@ -32,6 +33,28 @@ import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts
 const root = mkdtempSync(join(tmpdir(), "mako-session-memory-"))
 const ledger = join(root, "session-memory.sqlite")
 const tick = () => new Promise<void>((resolve) => setImmediate(resolve))
+
+/** The heartbeat keeps this host's holds fresh only while it holds a session: an idle host beats nothing. */
+function heartbeatWhileHolding(): void {
+  const jobs = new HostJobs()
+  const memory = new SessionMemory(join(root, "heartbeat.sqlite"), { pid: 500, startedAt: 5, label: "a host" }, { now: () => 100, alive: () => true })
+  const paused = () => jobs.list().find((job) => job.name === "keep this host's session holds fresh")?.paused
+  try {
+    memory.startHeartbeat(jobs)
+    assert.equal(paused(), true, "holding nothing: no beat")
+    memory.hold("claude", "native-a", "conversation-a")
+    assert.equal(paused(), false, "a hold taken: the beat runs")
+    memory.hold("codex", "native-b", "conversation-b")
+    memory.release("claude", "native-a", "conversation-a")
+    assert.equal(paused(), false, "one still held: it goes on")
+    memory.release("codex", "native-b")
+    assert.equal(paused(), true, "the last let go: no beat")
+  } finally {
+    memory.close()
+    jobs.stop()
+  }
+  console.log("Session memory: the heartbeat runs only while this host holds a session")
+}
 
 function upgradeLegacyRoutes(): void {
   const path = join(root, "legacy.sqlite")
@@ -521,6 +544,7 @@ const dev = new SessionMemory(ledger, { pid: 200, startedAt: 2, label: "Mako's d
 
 try {
   holdReadsPrepareOnce()
+  heartbeatWhileHolding()
   upgradeLegacyRoutes()
 hostDataRoots()
   retireLegacyRoutes()

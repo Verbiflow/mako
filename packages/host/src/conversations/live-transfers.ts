@@ -23,7 +23,7 @@ import { SessionHeldError } from "../threads/index.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { prepareLiveContext } from "./live-context.js"
-import { bindingPath, launchAccount, launchCalls, launchRouting, neverRan, noteCarriedFolders } from "./live-runtime.js"
+import { bindingPath, launchAccount, launchCalls, launchRouting, neverRan, noteCarriedFolders, noteStartedWith } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import type {
   LiveAccess,
@@ -44,7 +44,7 @@ function arrival(requests: readonly LiveRequest[], arrived: LiveRequest, ahead: 
 /** The refusal a resume that can't go raises: `SessionBusyError` while a process has the session open. */
 export function reconnectError(verdict: ResumeVerdict | undefined): Error {
   return verdict?.kind === "held" ? new SessionBusyError(verdict.by)
-    : verdict?.kind === "unavailable" && verdict.retry ? new NativeVerificationPendingError(verdict.reason)
+    : verdict?.kind === "unavailable" && verdict.retry ? new NativeVerificationPendingError(verdict.reason, verdict.soon === true)
       : new HostFailureError("resume-failed", reconnectRefusal(verdict))
 }
 
@@ -154,7 +154,7 @@ export class LiveTransfers {
       throw new Error(
         `${command.provider} has no available interactive transport`
       )
-    command.attachments = this.host.retainAttachments(command.attachments)
+    command.attachments = this.host.retainAttachments(command.attachments, command.id)
     const previous = resident.snapshot
     resident.snapshot = {
       ...previous,
@@ -336,6 +336,11 @@ export class LiveTransfers {
         return
       }
       if (!owned()) return
+      const restoring = this.host.restoreRetiredWorktree(resident)
+      if (restoring) {
+        await restoring
+        if (!owned()) return
+      }
       this.host.returnFromRemovedWorktree(resident)
       const source = resident.snapshot
       const control = this.host.control(resident)
@@ -507,11 +512,12 @@ export class LiveTransfers {
           source.session.title,
           source.session.cwd
         )
+        noteStartedWith(resident, bindingId, source.session.cwd, source.session.title, threadEnvironment)
         const open = (resume?: { nativeId?: string; path?: string }) => this.host.nativeStart(resident, driver, bindingId, () => driver.start(source.session.cwd, {
           unattended: this.host.dependencies.unattended,
           emit: this.host.driverEvents(resident, bindingId),
           mcpSnapshot: this.host.dependencies.mcpSnapshot
-            ? () => this.host.dependencies.mcpSnapshot!(source.session.cwd)
+            ? () => this.host.dependencies.mcpSnapshot!(source.session.cwd, driver.provider)
             : undefined,
           conversationId: bindingId,
           resume: resume?.nativeId,
@@ -852,7 +858,7 @@ export class LiveTransfers {
         const failure = classifyStartFailure(words, reconnect, evidence)
         // A cause that clears by itself: the transfer stays queued and goes again at its time (`wakeDue`), once.
         const cause = transientCause(words, failure, error instanceof SessionBusyError || error instanceof SessionHeldError, evidence)
-        const retry = cause && nextRetry(transfer.retry, cause, words, Date.now())
+        const retry = cause && nextRetry(transfer.retry, cause, words, Date.now(), undefined, error instanceof NativeVerificationPendingError && error.soon)
         try {
           if (retry) {
             this.save(resident, { ...transfer, behind: undefined, state: { kind: "queued" }, retry })

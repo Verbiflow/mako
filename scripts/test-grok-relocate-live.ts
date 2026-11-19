@@ -5,7 +5,7 @@ import "./lib/scratch-git.mjs"
 // with its turns, and its next turn carries them.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { createServer, type IncomingMessage } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -19,6 +19,7 @@ import { emitGrokSession } from "../packages/sessions/src/emit.ts"
 import { GrokProvider } from "../packages/sessions/src/providers/grok.ts"
 import { assertSeedHolds, seeded, seedThread } from "./lib/seed-readback.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { removeScratch } from "./lib/scratch-processes.mjs"
 
 const nativeStores = new NativeStores(false)
 
@@ -144,6 +145,8 @@ else {
     assert.equal(turn.stopReason, "end_turn")
     assert.ok(contexts.slice(before).some((context) => /first/.test(context.join("\n")) && /third/.test(context.join("\n"))), "its next turn carries the turns from the first folder")
     assert.ok(!systems.at(-1)!.includes(main), "nothing the model gets after the move names the first folder")
+    const movedSummary = JSON.parse(readFileSync(join(sessions, encodeURIComponent(worktree), sessionId, "summary.json"), "utf8"))
+    assert.equal(movedSummary.info.cwd, worktree, "its summary, which the catalog lists it by, names the new folder after Grok's own turn there")
 
     assert.deepEqual(readdirSync(sessions).filter((name) => existsSync(join(sessions, name, sessionId))), [encodeURIComponent(worktree)], "the session is saved under the new folder alone")
     assert.equal(grokSessionSource(sessionId, worktree, sessions), join(sessions, encodeURIComponent(worktree), sessionId, "updates.jsonl"))
@@ -168,6 +171,7 @@ else {
     console.log("Grok relocate: a session saved under one folder refuses to load from another; moved under the new folder's name, the same session loads there with its turns and goes on; a seeded session resumed still begins with its seed")
   } finally {
     for (const done of after.reverse()) done()
-    rmSync(root, { recursive: true, force: true })
+    // Grok writes its session as it exits: wait for nothing to hold the folder, then remove it.
+    await removeScratch(root)
   }
 }

@@ -97,8 +97,16 @@ async function movesSince(cwd: string, ref: string, since: number): Promise<{ fr
 
 async function repositorySince(checkout: string, repository: string, since: number, maxFiles: number): Promise<RepositoryChanges | undefined> {
   const name = relative(checkout, repository) || "."
-  const branch = (await git(repository, ["symbolic-ref", "-q", "--short", "HEAD"]))?.trim()
-  const head = await movesSince(repository, "HEAD", since)
+  // Four reads that depend on nothing of each other, asked of Git at once: one after another they were most of what
+  // a message sent after an interrupted turn waited on (about 80 ms in a checkout of 1,500 files, `bench:actions`).
+  // Each still reads the repository as it stands when the account is asked for.
+  const [named, head, listed, touched] = await Promise.all([
+    git(repository, ["symbolic-ref", "-q", "--short", "HEAD"]),
+    movesSince(repository, "HEAD", since),
+    git(repository, ["for-each-ref", "--format=%(refname)", "refs/remotes/"]),
+    filesTouchedSince(repository, since),
+  ])
+  const branch = named?.trim()
   const commits: RepositoryChanges["commits"] = []
   const files = new Set<string>()
   if (head) {
@@ -112,22 +120,21 @@ async function repositorySince(checkout: string, repository: string, since: numb
   }
   const remotes: RepositoryChanges["remotes"] = []
   if (branch) {
-    const refs = (await git(repository, ["for-each-ref", "--format=%(refname)", "refs/remotes/"]))?.split("\n") ?? []
-    for (const ref of refs.filter((each) => each.endsWith(`/${branch}`))) {
-      const moved = await movesSince(repository, ref, since)
-      if (moved) remotes.push({ ref: ref.replace(/^refs\/remotes\//, ""), from: moved.from, to: moved.to, how: moved.moves.map((move) => move.subject).join("; ") })
-    }
+    const refs = (listed?.split("\n") ?? []).filter((each) => each.endsWith(`/${branch}`))
+    const moves = await Promise.all(refs.map((ref) => movesSince(repository, ref, since)))
+    for (const [index, moved] of moves.entries())
+      if (moved) remotes.push({ ref: refs[index]!.replace(/^refs\/remotes\//, ""), from: moved.from, to: moved.to, how: moved.moves.map((move) => move.subject).join("; ") })
   }
-  for (const path of await filesTouchedSince(repository, since)) files.add(path)
-  const listed = [...files].sort()
-  if (!head && !remotes.length && !listed.length) return undefined
+  for (const path of touched) files.add(path)
+  const all = [...files].sort()
+  if (!head && !remotes.length && !all.length) return undefined
   return {
     name,
     ...(head && { head: { ...(head.from && { from: head.from }), to: head.to, moves: head.moves.map((move) => move.subject) } }),
     commits,
     remotes,
-    files: listed.slice(0, maxFiles).map((path) => (name === "." ? path : join(name, path))),
-    moreFiles: Math.max(0, listed.length - maxFiles),
+    files: all.slice(0, maxFiles).map((path) => (name === "." ? path : join(name, path))),
+    moreFiles: Math.max(0, all.length - maxFiles),
   }
 }
 

@@ -2,7 +2,7 @@ import { createReadStream } from "node:fs"
 import { lstat, readFile, readdir, rm } from "node:fs/promises"
 import { delimiter, join } from "node:path"
 import { z } from "zod"
-import type { Git } from "@mako/git"
+import { fileStamp, gitFileText, personalGitConfigFiles, storedRef, type Git } from "@mako/git"
 
 export interface SnapshotObjects {
   write?: string
@@ -82,6 +82,13 @@ function environment(
       : undefined,
   }
 }
+/**
+ * For a checkpoint's `git add`: every blob it writes streams into one pack (Git's bulk check-in, for any file past
+ * `core.bigFileThreshold`) instead of a loose file each. Loose writes were most of a capture: 1,300 changed files took
+ * 630 to 1,580 ms to add loose and 150 to 300 ms into a pack, on the same loaded Mac. A file Git converts on its way in
+ * (line endings, a clean filter) still goes the ordinary way; `sealSnapshotObjects` repacks either into one pack.
+ */
+export const STREAMED_BLOBS = ["-c", "core.bigFileThreshold=1"] as const
 /** What one Git command of a checkpoint may print: a listing of every file of a large repository fits. */
 export const SNAPSHOT_OUTPUT_BYTES = 64 * 1024 * 1024
 
@@ -105,31 +112,78 @@ export async function snapshotGit(
   if (result.truncated) throw new Error(`git ${args[0] ?? ""} wrote more than 64 MB for a checkpoint`)
   return result.stdout.toString("utf8")
 }
+/**
+ * What Git says of a checkout that only its configuration changes: asked once and kept (`WorkspaceSnapshots.facts`),
+ * since a capture asked each of them again, a process apiece, and got the same answers.
+ */
+export interface CheckoutFacts {
+  /** The repository's hash (`rev-parse --show-object-format`). */
+  format: string
+  /** Its object store (`--git-path objects`). */
+  objects: string
+  /** Its own ignore rules outside the working tree (`--git-path info/exclude`). */
+  exclude: string
+  /** `core.excludesFile`, empty when none is set. */
+  excludesFile: string
+  /** `core.sparseCheckout`. */
+  sparse: boolean
+}
+
+export async function readCheckoutFacts(git: Git, cwd: string): Promise<CheckoutFacts> {
+  const [located, excludesFile, sparse] = await Promise.all([
+    snapshotGit(git, cwd, ["rev-parse", "--show-object-format", "--path-format=absolute", "--git-path", "objects", "--git-path", "info/exclude"]),
+    snapshotGit(git, cwd, ["config", "--path", "--get", "core.excludesFile"]).then((path) => path.trim(), () => ""),
+    snapshotGit(git, cwd, ["config", "--bool", "core.sparseCheckout"]).then((value) => value.trim() === "true", () => false),
+  ])
+  const [format, objects, exclude] = located.split("\n")
+  if (!format || !objects || !exclude) throw new Error("Git didn't say where this checkout keeps its objects")
+  return { format, objects, exclude, excludesFile, sparse }
+}
+
+/**
+ * The configuration files `CheckoutFacts` are read from, each by its path, size and modification time: the
+ * repository's, the checkout's own (`extensions.worktreeConfig`) and the person's. A file one of them includes isn't
+ * followed.
+ */
+export async function checkoutFactsStamp(gitDir: string, commonDir: string): Promise<string> {
+  return (await Promise.all([join(commonDir, "config"), join(gitDir, "config.worktree"), ...personalGitConfigFiles()].map(fileStamp))).join("\0")
+}
+
+const OBJECT_ID = /^[a-f0-9]{40,64}$/
+/** Refs each checkout keeps for itself, in its own Git folder; every other ref is in the one they share. */
+const OWN_REFS = /^refs\/(bisect|worktree|rewritten)\//
+
+/**
+ * HEAD as `symbolic-ref -q HEAD` and `rev-parse --verify HEAD` say it together (`<branch's ref, or "detached">:<commit,
+ * or "unborn">`), read from the files Git keeps instead of by two processes: HEAD in the checkout's Git folder, then
+ * the branch's commit where the repository stores it (`storedRef`). Undefined when the files can't say, and Git is
+ * asked: a reftable repository, a branch that names another ref, a file that can't be read.
+ */
+export async function headFromFiles(gitDir: string, commonDir: string): Promise<string | undefined> {
+  const head = await gitFileText(join(gitDir, "HEAD"))
+  if (!head) return undefined
+  if (OBJECT_ID.test(head)) return `detached:${head}`
+  const ref = /^ref: (refs\/\S+)$/.exec(head)?.[1]
+  if (!ref || OWN_REFS.test(ref)) return undefined
+  const commit = await storedRef(commonDir, ref)
+  return commit === undefined ? undefined : `${ref}:${commit ?? "unborn"}`
+}
+
 export async function privateSnapshotObjects(
   git: Git,
   cwd: string,
-  directory: string
+  directory: string,
+  facts: Pick<CheckoutFacts, "format" | "objects">
 ): Promise<SnapshotObjects> {
-  const format = (
-    await snapshotGit(git,cwd, ["rev-parse", "--show-object-format"])
-  ).trim()
-  const source = (
-    await snapshotGit(git,cwd, [
-      "rev-parse",
-      "--path-format=absolute",
-      "--git-path",
-      "objects",
-    ])
-  ).trim()
   await snapshotGit(git,cwd, [
     "init",
     "--bare",
     "--quiet",
     "--template=",
-    `--object-format=${format}`,
+    `--object-format=${facts.format}`,
     join(directory, "git"),
   ])
-  return { write: join(directory, "git", "objects"), read: [source] }
+  return { write: join(directory, "git", "objects"), read: [facts.objects] }
 }
 /**
  * Pack what a checkpoint commit reaches into its private store, leaving out
@@ -171,7 +225,7 @@ export async function sealSnapshotObjects(
         "The checkpoint exceeds its object storage limit. No workspace files were changed."
       )
   }
-  await snapshotGit(git,
+  const sealed = (await snapshotGit(git,
     cwd,
     [
       "pack-objects",
@@ -183,7 +237,14 @@ export async function sealSnapshotObjects(
     undefined,
     base ? `${commit}\n^${base}^{tree}\n` : `${commit}\n`,
     objects
-  )
+  )).trim()
+  // The checkpoint keeps one pack: the one just written. Any other here is what `STREAMED_BLOBS` streamed as it was
+  // taken, every object of which the sealed pack holds now if the commit reaches it.
+  if (!/^[a-f0-9]{40,64}$/.test(sealed)) throw new Error("A checkpoint's pack wasn't written")
+  for (const entry of await readdir(join(directory, "git/objects/pack"))) {
+    if (entry.startsWith(`pack-${sealed}.`)) continue
+    await rm(join(directory, "git/objects/pack", entry), { force: true })
+  }
   for (const entry of await readdir(join(directory, "git/objects"))) {
     if (/^[a-f0-9]{2}$/.test(entry))
       await rm(join(directory, "git/objects", entry), {

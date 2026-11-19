@@ -1,5 +1,5 @@
 import { hostCommand } from "../base/host-command.js"
-import type { HostJobs } from "../base/host-jobs.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import type { MachineCapability } from "../base/machine.js"
 
 const run = hostCommand
@@ -49,9 +49,32 @@ export class CloudAttention {
     this.#log = options.log
   }
 
-  /** Looks now, then once a minute on the host's jobs. */
-  start(jobs: Pick<HostJobs, "every">): void {
-    this.#cancel ??= jobs.every("tell the account whether the person is at this Mac", EVERY_MS, () => this.look(), { firstAfterMs: 0 })
+  /**
+   * Looks now, then once a minute on the host's jobs, while `watched` is on: only a window shows this Mac's banner, so
+   * with none the person isn't here for one, and the account hears so once and keeps sending their notices elsewhere.
+   */
+  start(jobs: Pick<HostJobs, "every">, watched?: JobDemand): void {
+    if (this.#cancel) return
+    const cancel = jobs.every("tell the account whether the person is at this Mac", EVERY_MS, () => this.look(), { firstAfterMs: 0, ...(watched && { needs: [watched] }) })
+    const stopWatching = watched?.onChange((on) => {
+      if (!on) void this.gone()
+    })
+    this.#cancel = () => {
+      cancel()
+      stopWatching?.()
+    }
+  }
+
+  /** No window shows a banner: the person is said away, once. */
+  async gone(): Promise<void> {
+    if (this.#said !== true || !this.#signedIn()) return
+    try {
+      await this.#say(false)
+      this.#said = false
+      this.#log("no window is open; the account sends what waited")
+    } catch (error) {
+      this.#log("couldn't tell the account whether the person is at this Mac", { error: error instanceof Error ? error.message : String(error) })
+    }
   }
 
   stop(): void {

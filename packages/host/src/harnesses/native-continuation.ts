@@ -124,13 +124,15 @@ export async function inspectNativeSession(
     return { kind: "unavailable", reason: "The native session source has not been located." }
   if (!probe)
     return { kind: "unavailable", reason: "Whether another process has this session open cannot be checked for this provider." }
+  const limit = AbortSignal.timeout(probe.timeoutMs ?? 6_000)
   const activity = await probe
-    .probe(AbortSignal.timeout(probe.timeoutMs ?? 6_000), { nativeId: binding.nativeId, path: binding.path, ...mako && { mako } })
-    .catch(() => ({ kind: "unavailable" as const }))
+    .probe(limit, { nativeId: binding.nativeId, path: binding.path, ...mako && { mako } })
+    .catch(() => ({ kind: "unavailable" as const, reason: limit.aborted ? "timeout" as const : "failed" as const }))
   if (activity.kind !== "available")
-    return { kind: "unavailable", retry: true, reason: "reason" in activity && activity.reason === "incomplete"
-      ? "Native activity inventory is incomplete; an external executor may still own this session."
-      : "Whether another process has this session open could not be checked." }
+    return activity.reason === "incomplete"
+      ? { kind: "unavailable", retry: true, reason: "Native activity inventory is incomplete; an external executor may still own this session." }
+      // A check that ran out of time found nothing against the session: it is asked again soon, not on the long backoff.
+      : { kind: "unavailable", retry: true, reason: "Whether another process has this session open could not be checked.", ...activity.reason === "timeout" && { soon: true as const } }
   const holder = activity.sessions.find(
       (session) =>
         session.nativeId === binding.nativeId || session.path === binding.path

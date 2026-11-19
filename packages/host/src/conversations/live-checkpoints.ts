@@ -14,6 +14,7 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { join } from "node:path"
 import type { LiveTurnChanges } from "./live-turn-changes.js"
+import { liveStages } from "./live-stages.js"
 
 /**
  * How long a turn waits for its checkpoint to hold the workspace before it goes without one. Behind a slow save of the
@@ -66,9 +67,14 @@ export class LiveCheckpoints {
     run: () => Promise<void>
   ): Promise<void> {
     const snapshots = this.host.dependencies.workspaceSnapshots
-    if (!snapshots) return run()
+    const conversation = resident.snapshot.session.id
+    if (!snapshots) {
+      if (liveStages.heard) liveStages.publish({ stage: "gate", conversation, request: request.id, kind: "none" })
+      return run()
+    }
     const generation = resident.generation
     return this.prepare(resident, request).then(async (prepared) => {
+      if (liveStages.heard) liveStages.publish({ stage: "gate", conversation, request: request.id, kind: prepared.kind })
       // Held for a binding no longer the one that runs (a switch between): its writes wouldn't wait, so the turn does.
       if (prepared.kind === "held" && activeBinding(resident)?.id !== prepared.binding) await prepared.gate
       if (
@@ -481,9 +487,11 @@ export class LiveCheckpoints {
     }
     resident.rewinding = true
     try {
-      await snapshots.restore(plan, () => {
+      const { keptAsIs } = await snapshots.restore(plan, () => {
         this.fork(id, plan.fork)
       })
+      // The window said which before the person chose (`RewindPreview.keptAsIs`); the log keeps it with the rewind.
+      if (keptAsIs.length) hostLog("rewind", "a rewind left files as they were", { files: keptAsIs.length })
       return this.host.require(command.id).snapshot
     } finally {
       resident.rewinding = false

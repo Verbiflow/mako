@@ -5,7 +5,7 @@ import "./lib/scratch-git.mjs"
 // in the history the next main turn sends the model.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { createServer, type IncomingMessage } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -14,6 +14,7 @@ import { z } from "zod"
 import { acpReadable, acpWritable } from "@mako/host/harnesses/acp-stream"
 import { acpClientCapabilities, type AcpSidePeer } from "@mako/host/harnesses/acp-source"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
+import { removeScratch } from "./lib/scratch-processes.mjs"
 
 const source = createGrokAcpSource()
 const side = source.sideQuestions
@@ -124,6 +125,7 @@ if (!installed) {
   } finally {
     child.kill("SIGTERM")
     models.close()
-    rmSync(root, { recursive: true, force: true })
+    // Grok writes its session as it exits: wait for nothing to hold the folder, then remove it.
+    await removeScratch(root)
   }
 }

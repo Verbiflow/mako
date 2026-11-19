@@ -1,7 +1,8 @@
 /**
  * A turn's writes, held until its checkpoint holds the workspace. A harness that runs Mako's code before each of its
  * agent's tools and waits for it (`ProviderLiveDriver.firstWrite`) says so per launch (`attend`), and only where
- * nothing else the person set up can write on the session's behalf. Its tools that may write then ask here first
+ * nothing else the person set up can write on the session's behalf ahead of that code (on Claude, an MCP server's
+ * tools are the agent's tools and wait like the rest). Its tools that may write then ask here first
  * (`beforeWrite`), and the conversation's checkpoints hold the answer while the turn's "before" capture still reads the
  * workspace. So the message goes to the agent at once, and the checkpoint is taken before anything the agent changes.
  *
@@ -18,6 +19,15 @@ export interface TurnHold {
   frozen(): boolean
   /** A write was let go before it did: the checkpoint can't be the turn's "before". */
   wrote(): void
+}
+
+/**
+ * Before a message whose submission itself runs the person's code (`ProviderLiveDriver.firstWrite.submitRuns`) goes
+ * to a binding whose writes are held: it waits as a write would, since no tool call stands between it and that
+ * code. Any other message has nothing to wait for, said as undefined so it goes in the step it was prepared in.
+ */
+export function heldSubmission(holds: WriteHolds | undefined, submitRuns: ((text: string) => boolean) | undefined, binding: string, text: string): Promise<void> | undefined {
+  return holds && submitRuns?.(text) ? holds.beforeWrite(binding) : undefined
 }
 
 export class WriteHolds {

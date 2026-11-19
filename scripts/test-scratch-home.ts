@@ -230,10 +230,13 @@ try {
     "test-background-work.ts": "recorded Agent SDK messages; no Claude runs",
     "test-claude-runtime.ts": "intercepts the SDK's spawn; no Claude runs",
     "test-claude-sdk.ts": "injected Agent SDK queries; no Claude runs",
+    "test-claude-stop.ts": "an injected Agent SDK query; no Claude runs",
+    "test-claude-tune.ts": "an injected Agent SDK query; no Claude runs",
     "test-claude-sdk-startup.ts": "a shim stands in for Claude's executable",
     "test-native-agents.ts": "a fixture driver; no harness runs",
     "test-native-failures.mjs": "stand-in native processes for every harness",
     "test-fixture-desk.mjs": "the fixture desk refuses every live start",
+    "test-first-write-hold.ts": "an injected fixture driver behind LiveConversations; no harness runs",
     "test-session-memory.ts": "injected fixture drivers",
   } satisfies Record<string, string>
   const unsealed: string[] = []

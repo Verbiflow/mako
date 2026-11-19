@@ -7,7 +7,7 @@ import "./lib/scratch-git.mjs"
 // matches.
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { createServer, type IncomingMessage } from "node:http"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -17,6 +17,7 @@ import { acpReadable, acpWritable } from "@mako/host/harnesses/acp-stream"
 import { acpClientCapabilities } from "@mako/host/harnesses/acp-source"
 import { createGrokAcpSource } from "@mako/host/harnesses/grok/acp"
 import { GrokTurnCounts, grokFork } from "@mako/host/harnesses/grok/fork"
+import { removeScratch } from "./lib/scratch-processes.mjs"
 
 const turnCounts = new GrokTurnCounts()
 const grokAcpSource = createGrokAcpSource()
@@ -152,6 +153,7 @@ else {
     console.log(`Grok fork: ${took} ms with the source held by its own process; checkpoints follow Grok's turn count, and a fork after turn two loads and continues without turn three`)
   } finally {
     for (const done of after.reverse()) done()
-    rmSync(root, { recursive: true, force: true })
+    // Grok writes its session as it exits: wait for nothing to hold the folder, then remove it.
+    await removeScratch(root)
   }
 }

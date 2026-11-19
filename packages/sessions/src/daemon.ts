@@ -39,7 +39,7 @@ import { closeSync, constants, openSync } from "node:fs"
 import { chmod, mkdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
 import { createHash } from "node:crypto"
-import { monitorEventLoopDelay } from "node:perf_hooks"
+import { PerformanceObserver, monitorEventLoopDelay, performance } from "node:perf_hooks"
 import { z } from "zod"
 import { dirname, join } from "node:path"
 import type { SessionCatalog } from "./catalog.js"
@@ -98,8 +98,12 @@ export const MAX_DAEMON_RSS = 1024 * 1024 * 1024
 export function daemonMemoryUnsafe(rss: number): boolean {
   return rss > MAX_DAEMON_RSS
 }
+/** The most often the daemon weighs its memory. */
+const MEMORY_SAMPLE_MS = 5_000
 const MAX_CLIENTS = 64
 const HOLD_TIMEOUT_MS = 15 * 60_000
+/** How long a list is waited for: the reader answers it once its first discovery is done, and a reader that died is known by its link closing. */
+const LIST_TIMEOUT_MS = 3 * 60_000
 const MAX_REQUEST_FRAME_BYTES = 1024 * 1024
 const MAX_RESPONSE_FRAME_BYTES = 256 * 1024 * 1024
 const MAX_PENDING_WRITE_BYTES = 256 * 1024 * 1024
@@ -334,11 +338,28 @@ function catalogService(
   }
   watchIdle()
   const guard = new MemoryGuard(catalog.uploadBudget, (level, message, fields) => options.log?.(level, message, fields))
-  const memoryTimer = setInterval(() => {
+  // Memory grows only with what's allocated, which collects: sampled after collections, every 5 s at most, so a
+  // catalog with nothing to do is never woken to weigh itself. While uploads wait on the limit a sample goes every 5 s
+  // whatever collects, so they go on as soon as memory falls.
+  let memoryTimer: ReturnType<typeof setInterval> | undefined
+  let sampledAt = Number.NEGATIVE_INFINITY
+  const sampleMemory = () => {
     if (options.memoryGuard === false || retiring) return
+    sampledAt = performance.now()
     const over = guard.sample()
-    if (over) retire("memory", over)
-  }, 5_000)
+    if (over) return retire("memory", over)
+    if (guard.shedding && !memoryTimer) {
+      memoryTimer = setInterval(sampleMemory, MEMORY_SAMPLE_MS)
+      memoryTimer.unref?.()
+    } else if (!guard.shedding && memoryTimer) {
+      clearInterval(memoryTimer)
+      memoryTimer = undefined
+    }
+  }
+  const collections = new PerformanceObserver(() => {
+    if (performance.now() - sampledAt >= MEMORY_SAMPLE_MS) sampleMemory()
+  })
+  collections.observe({ entryTypes: ["gc"] })
 
   const attach = (link: DaemonLink): boolean => {
     if (clients.size >= MAX_CLIENTS) {
@@ -385,7 +406,9 @@ function catalogService(
             return
           }
           case "list":
-            await options.discovery
+            // `saved` is the catalog as the last run left it, answered before the stores are read again: a rail to
+            // draw at once. Every other list waits for discovery, since what reads a list takes it for what's there.
+            if (!frame.saved) await options.discovery
             reply({
               id: frame.id,
               ok: true,
@@ -533,6 +556,7 @@ function catalogService(
     dispose() {
       if (idleTimer) clearTimeout(idleTimer)
       clearInterval(memoryTimer)
+      collections.disconnect()
       eventLoopDelay.disable()
       stopWatch()
       stopEvents()
@@ -632,6 +656,12 @@ export interface DaemonClient {
     filter?: { cwd?: string; harness?: string },
     onSnapshot?: (refs: ThreadRef[]) => void
   ): Promise<ThreadRef[]>
+  /**
+   * The catalog as its last run saved it, answered without waiting for this run's discovery: what a window can draw
+   * while `list` waits. It may name a session deleted since and miss one made since; `list` and its events say so.
+   * A reader from before this answers once its discovery is done, as `list` does.
+   */
+  saved(): Promise<ThreadRef[]>
   open(path: string): Promise<Thread | null>
   page(
     path: string,
@@ -857,8 +887,9 @@ async function connectDaemonLink(
   ): Promise<ThreadRef[]> =>
     new Promise((resolve, reject) => {
       const id = nextId++
-      // Initial discovery can outlast a ping. Use the existing data-read budget.
-      const timer = requestTimer(id, reject, Math.max(timeoutMs, 30_000))
+      // The answer waits for the reader's first discovery, which is as long as the stores are large: 29 s for 5,336
+      // sessions once, a second short of the 30 s this gave it, so the reader was closed and its discovery begun again.
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, LIST_TIMEOUT_MS))
       pending.set(id, {
         kind: "list",
         resolve: (refs) => {
@@ -873,6 +904,14 @@ async function connectDaemonLink(
         timer,
       })
       send({ id, op: "list", cwd: filter.cwd, harness: filter.harness })
+    })
+
+  const requestSaved = (): Promise<ThreadRef[]> =>
+    new Promise((resolve, reject) => {
+      const id = nextId++
+      const timer = requestTimer(id, reject, Math.max(timeoutMs, LIST_TIMEOUT_MS))
+      pending.set(id, { kind: "list", resolve, reject, timer })
+      send({ id, op: "list", saved: true })
     })
 
   const requestOpen = (path: string): Promise<Thread | null> =>
@@ -1006,6 +1045,7 @@ async function connectDaemonLink(
       stats,
       refresh: requestPing,
       list: requestList,
+      saved: requestSaved,
       open: requestOpen,
       page: requestPage,
       entry: requestEntry,

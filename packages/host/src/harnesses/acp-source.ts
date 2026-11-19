@@ -55,7 +55,15 @@ export interface AcpLaunch {
   configureEnvironment(env: NodeJS.ProcessEnv): void
   /** Shown in the conversation once the session is ready, such as the provider's own permission rules. */
   notices?: TranscriptEvent[]
-  prepareMcp?(servers: readonly McpServer[], env: NodeJS.ProcessEnv): Promise<() => Promise<void>>
+  /** `holdsWrites`: what this launch's `holdsWrites` answered, for a config that installs its hook to match. */
+  prepareMcp?(servers: readonly McpServer[], env: NodeJS.ProcessEnv, holdsWrites?: boolean): Promise<() => Promise<void>>
+  /**
+   * For a source that gates calls by a command hook in the launch's own config (`ProviderAcpSource.hookWrites`):
+   * whether this launch can hold its agent's writes, so nothing the person set up runs beside that hook. Asked before
+   * `prepareMcp`, with the person's own config still in `env`, and of the MCP servers Mako passes the launch
+   * (`process`: run as a process and not Mako's own). False when it can't say.
+   */
+  holdsWrites?(launch: { env: NodeJS.ProcessEnv; cwd: string; servers: readonly { name: string; process: boolean }[] }): Promise<boolean>
   /** Observe native decisions without taking over the provider's permission policy. */
   prepareApprovals?(input: {
     root: string
@@ -267,6 +275,13 @@ export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<A
   sessionMetadata?(tuning: SessionSettings): NewSessionRequest["_meta"]
   /** How the agent asks Mako before its tool calls, where it can: Mako answers each from the Thread's routing (`ProviderStartOptions.nativeCalls`). */
   callHooks?: AcpCallHooks
+  /**
+   * Where the agent instead runs a command hook from its launch's config before each of its tools, posting the call
+   * to Mako's conversation server and waiting for the answer (`heldAnswer`): a launch that says so
+   * (`AcpLaunch.holdsWrites`) sends a turn's message at once, and a call that may write waits for its checkpoint
+   * (`ProviderLiveDriver.firstWrite`, whose `submitRuns` this carries).
+   */
+  hookWrites?: { via: string; submitRuns?(text: string): boolean }
   available(appPath: string): boolean
   launch(options: AcpLaunchOptions): Promise<AcpLaunch | null>
 }
@@ -391,6 +406,21 @@ export interface AcpCallHooks {
   meta: JsonObject
   method: string
   answer(params: JsonObject, thread: CallThread): JsonObject
+  /**
+   * Where the hooks cover the agent's tools that may write and the agent waits for their answer: a turn's message
+   * goes at once and such a call waits for its checkpoint (`ProviderLiveDriver.firstWrite`, `WriteHolds`).
+   */
+  writes?: {
+    via: string
+    /** Whether a hook's call, answered so, is one that runs and may write. */
+    holds(params: JsonObject, answer: JsonObject): boolean
+    /**
+     * Whether the person's own setup runs code beside these hooks, so a launch can't hold writes: asked of the harness
+     * itself, as the launch runs it, with the MCP servers Mako passes it (`process`: run as a process and not Mako's
+     * own). True when it can't say.
+     */
+    personCodeRuns(launch: { executable: string; env: NodeJS.ProcessEnv; cwd: string; servers: readonly { name: string; process: boolean }[] }, answers: Map<string, boolean>): Promise<boolean>
+  }
 }
 
 export interface AcpVendorRequests {

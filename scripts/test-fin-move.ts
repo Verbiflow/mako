@@ -58,6 +58,8 @@ interface Fixture {
 }
 
 /** An Apex on `apex` with one Fin, "labels", on `harness`, whose first turn ends at once, or with `hold` holds until it's stopped. */
+const KEEP_AT_IT = "Keep at it."
+
 async function fixture(harness: string, options: Partial<WorldOptions> & { hold?: boolean; access?: "full" | "auto"; apex?: string } = {}): Promise<Fixture> {
   const wakes: string[] = []
   let turns = 0
@@ -70,6 +72,8 @@ async function fixture(harness: string, options: Partial<WorldOptions> & { hold?
       return "Labels finished."
     }
     if (turn.text.startsWith(FROM_AGENTS)) wakes.push(turn.text)
+    // An Apex kept at work, so what its Fins report waits for its turn's end.
+    if (turn.text.endsWith(KEEP_AT_IT)) return turn.world.hold(turn.conversation).then(() => "ok")
     return "ok"
   }
   const world = new AgentsWorld({ root: join(root, `w${(fixtures += 1)}`), script, ...options })
@@ -1005,6 +1009,10 @@ async function grantsAndQuestions(): Promise<void> {
     const f = await fixture("claude", { hold: true, apex: "codex" })
     await until("its turn", () => f.world.live.session(f.fin().conversation)?.status === "running")
     const { conversation } = f.fin()
+    // The Apex at work in a turn that takes nothing at a step: the question waits for that turn's end. An idle one
+    // would hear it at once.
+    f.world.say(f.apex.conversation, KEEP_AT_IT)
+    await until("the Apex at work", () => f.world.prompts.some((prompt) => prompt.conversation === f.apex.conversation && prompt.text.includes(KEEP_AT_IT)))
     await f.world.agents.report(f.world.caller(conversation), { status: "needs-input", summary: "Choose", question: "Which one?", options: [{ label: "still-unheard" }], clientKey: "ask" })
     assert.ok(!("refused" in await f.world.agents.send(f.apex.caller, { to: "labels", text: "crossing-words", deliver: "steer", clientKey: "steer" })))
     await until("the steer", () => f.world.steers.some((steer) => steer.text.includes("crossing-words")))
@@ -1012,6 +1020,7 @@ async function grantsAndQuestions(): Promise<void> {
     const answer = await f.world.agents.answer(f.apex.caller, { to: "labels", answer: "still-unheard", clientKey: "open" })
     assert.ok(!("refused" in answer), JSON.stringify(answer))
     f.world.release(conversation)
+    f.world.release(f.apex.conversation)
     await f.world.settle(40, 20_000, "ignore")
     await f.world.close()
   }

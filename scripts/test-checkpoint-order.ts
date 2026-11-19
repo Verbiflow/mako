@@ -78,6 +78,31 @@ class ReadGit extends CaptureGit {
   }
 }
 
+/** Before each Git command of a capture, the agent's own `git add` in the checkout, as a turn's tools run it. */
+class SpanGit extends Git {
+  started = 0
+  staged = 0
+  reserved = 0
+  private readonly cwd: string
+
+  constructor(cwd: string) {
+    super()
+    this.cwd = cwd
+  }
+
+  override async run(options: RunOptions) {
+    // Opening the repository asks Git where it is before any capture; only a capture's commands have their own index or store.
+    if (!options.env) return super.run(options)
+    this.started++
+    if (existsSync(join(this.cwd, ".git/index.lock")) || existsSync(join(this.cwd, ".git/mako-index-write.lock"))) this.reserved++
+    writeFileSync(join(this.cwd, "agent-" + this.started), "the agent's file\n")
+    const added = spawnSync("git", ["add", "agent-" + this.started], { cwd: this.cwd, encoding: "utf8" })
+    assert.equal(added.status, 0, "git add failed beside git " + options.args.join(" ") + ": " + added.stderr)
+    this.staged++
+    return super.run(options)
+  }
+}
+
 if (process.argv[2] === "--crash") {
   const git = new CaptureGit()
   const command = process.argv[5]
@@ -408,6 +433,79 @@ try {
     } finally { store.abandonRun(id); store.close(); await git.close() }
   }
 
+  {
+    // The real index is reserved for one file copy. Held through the capture's Git commands, each waiting for a read
+    // slot, it failed an agent's own `git add` or `git commit` in the checkout at once ("index.lock: File exists").
+    const f = fixture("lock-span"), git = new SpanGit(f.cwd), store = new WorkspaceSnapshots(git, f.storage)
+    const repository = await git.openRepository(f.cwd)
+    assert(repository)
+    const reserve = repository.withLockedIndex.bind(repository)
+    let reservations = 0
+    repository.withLockedIndex = (action) => reserve(async () => {
+      reservations++
+      assert(existsSync(join(f.cwd, ".git/index.lock")), "the copy is made with the real index reserved")
+      const before = git.started
+      const copies = () => readdirSync(f.storage).filter((id) => existsSync(join(f.storage, id, "index"))).length
+      const copied = copies()
+      const result = await action()
+      assert.equal(git.started, before, "no Git process runs while the real index is reserved")
+      assert.equal(copies(), copied + 1, "what the reservation covers is the copy of the index")
+      return result
+    })
+    const turn = randomUUID()
+    try {
+      const before = await store.beginRun(turn, f.cwd)
+      assert.equal(reservations, 1, "a capture reserves the real index once")
+      assert(git.started >= 10 && git.staged === git.started, "the agent's own git add succeeded beside every Git command of the capture")
+      assert.equal(git.reserved, 0, "no Git command of the capture started with the real index reserved")
+      assert.equal(f.git("--git-dir=" + join(f.storage, before.id, "git"), "show", checkpoint(f.storage, before.id) + "^:file"), "staged", "the checkpoint holds the index as it was copied, not what was staged after")
+      writeFileSync(join(f.cwd, "file"), "the turn's edit\n")
+      const after = await store.endRun(turn)
+      assert.equal(reservations, 2)
+      assert.equal(git.reserved, 0)
+      assert.equal(git.staged, git.started)
+      assert.equal(f.git("--git-dir=" + join(f.storage, after.id, "git"), "show", checkpoint(f.storage, after.id) + ":file"), "the turn's edit")
+      console.log("PASS: a capture reserves the real index for its copy alone, and the agent's git add succeeds beside each of its " + git.started + " Git commands")
+    } finally { store.abandonRun(turn); store.close(); await git.close() }
+  }
+
+  {
+    // A split index's copy reads a shared index Git may replace once the real one is free, so that copy alone is
+    // written whole while the real index is still reserved; the person's index stays split, byte for byte.
+    const f = fixture("split-index"), git = new Git(), store = new WorkspaceSnapshots(git, f.storage)
+    f.git("update-index", "--split-index")
+    const shared = () => readdirSync(join(f.cwd, ".git")).filter((name) => name.startsWith("sharedindex."))
+    assert.equal(shared().length, 1)
+    const index = readFileSync(join(f.cwd, ".git/index"))
+    const repository = await git.openRepository(f.cwd)
+    assert(repository)
+    const reserve = repository.withLockedIndex.bind(repository)
+    const under: string[] = []
+    let reserved = false
+    const run = git.run.bind(git)
+    git.run = (options: RunOptions) => {
+      if (reserved) under.push(options.args.find((arg) => !arg.startsWith("-") && !arg.includes("=")) ?? "")
+      return run(options)
+    }
+    repository.withLockedIndex = (action) => reserve(async () => {
+      reserved = true
+      try { return await action() } finally { reserved = false }
+    })
+    try {
+      const captured = await store.capture(f.cwd)
+      assert.deepEqual(under, ["update-index"], "only the copy's rewrite ran under the reservation")
+      assert.deepEqual(readFileSync(join(f.cwd, ".git/index")), index, "the person's split index is untouched")
+      assert.equal(shared().length, 1)
+      // The copy stands alone: it lists what the checkout stages with the shared index gone from beside it.
+      const alone = join(root, "split-alone")
+      execFileSync("git", ["clone", "-q", "--no-checkout", f.cwd, alone])
+      const staged = execFileSync("git", ["ls-files", "--stage"], { cwd: alone, encoding: "utf8", env: { ...process.env, GIT_INDEX_FILE: join(f.storage, captured.id, "index") } })
+      assert.equal(staged, f.git("ls-files", "--stage") + "\n")
+      assert.equal(f.git("--git-dir=" + join(f.storage, captured.id, "git"), "show", checkpoint(f.storage, captured.id) + "^:file"), "staged")
+      console.log("PASS: a split index is copied whole under the reservation and left as it was")
+    } finally { store.close(); await git.close() }
+  }
+
   for (const phase of ["update-index", "add", "pack-objects"] as const) {
     const f = fixture("crash-" + phase), git = new Git()
     let store = new WorkspaceSnapshots(git, f.storage)
@@ -418,7 +516,7 @@ try {
     assert.equal(child.status, 74, child.stderr)
     const orphan = readdirSync(f.storage).filter((id) => /^[a-f0-9-]{36}$/.test(id) && !before.has(id))
     assert.equal(orphan.length, 1, "a crash leaves exactly its unpublished payload")
-    assert.equal(existsSync(join(f.cwd, ".git/index.lock")), phase === "update-index", "only a crash during the protected index copy leaves a reservation")
+    assert(!existsSync(join(f.cwd, ".git/index.lock")), "the index is reserved for its copy alone, so a crash in any Git command leaves no reservation")
     store = new WorkspaceSnapshots(git, f.storage)
     try {
       const recovered = await store.capture(f.cwd)
