@@ -1535,9 +1535,14 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * The person archived a conversation's Thread: a Fin's work ends there, once.
-   * One at work is stopped as a stop would, in those words; one stopped
-   * already keeps its stop. A message to it is refused until it's restored.
+   * A conversation was archived. Once that leaves its Thread with no Session
+   * the person hasn't archived, the person archived the Thread: a Fin's work
+   * ends there, once. One at work is stopped as a stop would, in those words;
+   * one stopped already keeps its stop. A message to it is refused until it's
+   * restored. A Session archived while another of the Thread goes on (the one
+   * a move into its worktree forked from, or one the person archived alone)
+   * ends nothing: on 2026-11-18 four Fins' own `worktree_move` forks ended
+   * them "the person archived it".
    */
   async archived(conversation: string): Promise<boolean> {
     // Its own wait ends with it, a Fin's or not.
@@ -1545,6 +1550,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
     if (!edge) return false
+    const goesOn = this.conversationsOfThread(edge.child).find((other) => other !== conversation && !this.deps.archived?.(other))
+    if (goesOn) {
+      hostLog("agents", "a Session of a Fin's Thread was archived; another goes on", { op: edge.op, child: edge.child, archived: conversation, goesOn })
+      return false
+    }
     return this.end(edge, "the person archived it")
   }
 
