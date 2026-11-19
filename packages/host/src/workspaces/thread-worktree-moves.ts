@@ -144,8 +144,8 @@ export class ThreadWorktreeMoves {
   }
 
   /** Move one conversation into its Thread's worktree (`conversation-move.ts`); `bring` takes the changes that stay otherwise too. */
-  move(id: string, input: ForkInput | undefined, project?: string, bring = false, haste?: MoveHaste, waitTurn = false): Promise<MovedConversation> {
-    return moveIntoWorktree(this.deps, id, input, project, bring, haste, waitTurn)
+  move(id: string, input: ForkInput | undefined, project?: string, bring = false, haste?: MoveHaste): Promise<MovedConversation> {
+    return moveIntoWorktree(this.deps, id, input, project, bring, haste)
   }
 
   /**
@@ -158,10 +158,9 @@ export class ThreadWorktreeMoves {
    * person's own move (`input`) is announced by the window that made it,
    * which also archives what it leaves. `bring`: the person chose to bring
    * what might be the Thread's and what nobody can be named for too. `asItself`: it goes as the same session or not
-   * at all, never as a fork, as a handoff's paused turn needs to go on in that session. `waitTurn`: the agent asked to
-   * move and this is Mako moving it, so a turn it begins while the worktree is made is waited out (`moveIntoWorktree`).
+   * at all, never as a fork, as a handoff's paused turn needs to go on in that session.
    */
-  async carry(id: string, how: { lead: boolean; tell: boolean; after?: string; input?: ForkInput; bring?: boolean; asItself?: boolean; haste?: MoveHaste; waitTurn?: boolean }): Promise<LiveSnapshot> {
+  async carry(id: string, how: { lead: boolean; tell: boolean; after?: string; input?: ForkInput; bring?: boolean; asItself?: boolean; haste?: MoveHaste }): Promise<LiveSnapshot> {
     const source = this.deps.conversations.snapshot(id)
     if (!source) throw new Error("The conversation closed before it could move onto its own branch.")
     const title = source.session.title || "Untitled conversation"
@@ -175,7 +174,7 @@ export class ThreadWorktreeMoves {
       move: true,
     } satisfies ForkInput)
     // With no answer to fork from, it can still go as itself.
-    const { conversation, moved, outcome, relocated } = await this.move(id, input, how.lead ? this.project(id) : undefined, how.bring, how.haste, how.waitTurn).catch((error: Error) => {
+    const { conversation, moved, outcome, relocated } = await this.move(id, input, how.lead ? this.project(id) : undefined, how.bring, how.haste).catch((error: Error) => {
       if (input) throw error
       if (how.asItself) throw new Error(`It couldn't go onto its own branch as the same session. ${error.message}`)
       throw new Error(how.lead

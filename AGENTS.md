@@ -498,16 +498,8 @@ its branch against the one it goes into, with commits landed there touching
 its files (`branchSince`). Its turns report and wake the Apex again, and a
 repeat of the message resumes it once. Archiving its Thread is the one
 end: one at work stops in those words, once (`Agents.archived`), and
-nothing resumes it until the person restores it (`test:fin-resume`). That
-is the archive of its Thread's last Session the person hadn't archived: one
-archived while another goes on, as the Session a move into the worktree
-forked from, ends nothing. When Mako moves an agent that asked to move
-and its Session began a turn while its worktree was made, the move waits
-that turn out and keeps the worktree and the branch its agent asked for
-(`relocateOnceIdle`), never giving them back to fork (`test:fin-own-move`);
-a move made in haste waits no later than its deadline, and the person's
-own move from the composer forks at once, as it always did.
-A finished Fin's edge closes by itself (`Agents.closeFinished`, `closedFinished`):
+nothing resumes it until the person restores it (`test:fin-resume`). A
+finished Fin's edge closes by itself (`Agents.closeFinished`, `closedFinished`):
 six hours after its last report (`FINISHED_CLOSE_MS`), when that report is
 `done`, or `failed` asking nothing, and nothing is pending. Until 2026-11-17
 only a stop or an archive closed an edge, and the person's store held 113

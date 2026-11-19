@@ -455,8 +455,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     source: (id) => moveSource(live, id),
     companions: (id) => worktreeMoves?.companions(id) ?? [],
     place: (id, cwd) => moveablePlace(git, worktrees, id, worktreeMoves?.project(id) ?? cwd),
-    // The agent asked to move and it moves now it's idle: a turn it begins while its worktree is made is waited out.
-    move: async (id, bring) => (await worktreeMove().carry(id, { lead: true, tell: true, bring, waitTurn: true })).session.id,
+    move: async (id, bring) => (await worktreeMove().carry(id, { lead: true, tell: true, bring })).session.id,
     follow: async (id, told, lead, haste) => { await worktreeMove().carry(id, { lead: false, tell: told, after: lead, ...haste && { haste } }) },
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
     failed: (id, message) => {
