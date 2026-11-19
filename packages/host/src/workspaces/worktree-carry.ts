@@ -126,10 +126,11 @@ async function gitFor(git: Git, root: string, pattern: string): Promise<{ cwd: s
  * entry as Git lists it; a plain path inside an ignored folder, such as
  * `config/local/settings.json`, is taken as it is.
  */
-export async function matchedEntries(git: Git, repoRoot: string, patterns: readonly string[]): Promise<string[]> {
+export async function matchedEntries(git: Git, repoRoot: string, patterns: readonly string[], listed?: Promise<string[]>): Promise<string[]> {
   if (!patterns.length) return []
-  // Outside Git there are no worktrees to carry into.
-  const ignored = await ignoredEntries(git, repoRoot).catch((): string[] => [])
+  // Outside Git there are no worktrees to carry into. `listed`: the listing a caller already has under way, so the
+  // entries of one carry are matched against one walk of the main checkout rather than one each.
+  const ignored = await (listed ?? ignoredEntries(git, repoRoot).catch((): string[] => []))
   const found = new Set(ignored.filter((entry) => patterns.some((pattern) => matchesGlob(entry, pattern))))
   for (const pattern of patterns) {
     if (/[*?[\]{}]/.test(pattern)) {
@@ -494,11 +495,13 @@ async function copyInto(from: string, info: Awaited<ReturnType<typeof lstat>>, t
 }
 
 /** Entries `entries` match in the main checkout, each copied or linked; one a linking entry matches links. */
-async function carriedEntries(git: Git, repoRoot: string, entries: readonly CarryEntry[]): Promise<Map<string, boolean>> {
+async function carriedEntries(git: Git, repoRoot: string, entries: readonly CarryEntry[], listed?: Promise<string[]>): Promise<Map<string, boolean>> {
   const wanted = entries
+  // One listing of what the main checkout ignores for both kinds.
+  const ignored = entries.length ? listed ?? ignoredEntries(git, repoRoot).catch((): string[] => []) : undefined
   const [linked, copied] = await Promise.all([
-    matchedEntries(git, repoRoot, wanted.filter((entry) => entry.link).map((entry) => entry.path)),
-    matchedEntries(git, repoRoot, wanted.filter((entry) => !entry.link).map((entry) => entry.path)),
+    matchedEntries(git, repoRoot, wanted.filter((entry) => entry.link).map((entry) => entry.path), ignored),
+    matchedEntries(git, repoRoot, wanted.filter((entry) => !entry.link).map((entry) => entry.path), ignored),
   ])
   return new Map([...copied.map((entry) => [entry, false] as const), ...linked.map((entry) => [entry, true] as const)])
 }
@@ -509,9 +512,9 @@ async function carriedEntries(git: Git, repoRoot: string, entries: readonly Carr
  * checkout already has are left alone, so a retry never overwrites what the
  * Thread's agent wrote. Returns the entries it placed, each one it made itself.
  */
-export async function carryFiles(git: Git, repoRoot: string, checkout: string, entries: readonly CarryEntry[], staged?: Staged): Promise<string[]> {
+export async function carryFiles(git: Git, repoRoot: string, checkout: string, entries: readonly CarryEntry[], staged?: Staged, listed?: Promise<string[]>): Promise<string[]> {
   const placed: string[] = []
-  for (const [entry, link] of await carriedEntries(git, repoRoot, entries)) {
+  for (const [entry, link] of await carriedEntries(git, repoRoot, entries, listed)) {
     const from = join(repoRoot, entry)
     const to = join(checkout, entry)
     if (await lstat(to).catch(() => undefined)) continue

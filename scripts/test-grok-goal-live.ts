@@ -60,10 +60,10 @@ const read = async (request: IncomingMessage) => {
   return body
 }
 
-const waitFor = async (predicate: () => boolean, message: string) => {
+const waitFor = async (predicate: () => boolean, message: string | (() => string)) => {
   const timeout = Date.now() + 30_000
   while (!predicate()) {
-    if (Date.now() >= timeout) throw new Error(message)
+    if (Date.now() >= timeout) throw new Error(message instanceof Function ? message() : message)
     await new Promise<void>((resolve) => setTimeout(resolve, 20))
   }
 }
@@ -89,10 +89,17 @@ interface ToolCall {
 type Cleanup = () => void | Promise<void>
 /** The stand-in's worker for a round: the tool it calls, given the tools offered and who spoke last. */
 type RoundWorker = (tools: ReadonlySet<string>, lastRole: string | undefined) => ToolCall | undefined
-/** How many rounds the stand-in has played, and the worker playing the next. */
+/** How many rounds the stand-in has played, the worker playing the next, and the answers it is keeping back. */
 interface Rounds {
   rounds: number
   worker?: RoundWorker
+  /**
+   * The round from which the worker's answer waits for `release`. Grok pauses a goal by itself after four rounds its
+   * evaluator calls no progress (`no_progress_paused`), which the stand-in plays in tens of milliseconds: a goal
+   * meant to be at work when Stop lands is kept inside a round instead.
+   */
+  holdFrom?: number
+  held: (() => void)[]
 }
 
 /** Grok in a sealed HOME against the stand-in, as Mako launches it for an ordinary Thread or an Apex. */
@@ -105,7 +112,7 @@ async function grokSession(root: string, after: Cleanup[], apex: boolean) {
 
   const evaluator: Evaluator = { queue: [], afterwards: "complete" }
   const offered = new Set<string>()
-  const state: Rounds = { rounds: 0 }
+  const state: Rounds = { rounds: 0, held: [] }
   const models = createServer(async (request, res) => {
     if (request.method !== "POST") {
       res.writeHead(200, { "content-type": "application/json" })
@@ -124,10 +131,16 @@ async function grokSession(root: string, after: Cleanup[], apex: boolean) {
         ? { decision: "continue", evidence: "The file is missing", next_step: "Create the file", blocker_key: "" }
         : { decision: "candidate_complete", evidence: "The file has the content", next_step: "Verify the file", blocker_key: "" })
     } else if (last.includes("adversarial verifier")) content = "Not Refuted"
-    else if (system.startsWith("You are Grok released by xAI")) {
+    // Grok asks for a session title under the worker's own system prompt: that is no round of the goal.
+    else if (system.startsWith("You are Grok released by xAI") && !last.includes("Generate a session title")) {
       state.rounds += 1
       for (const name of tools) offered.add(name)
       call = state.worker?.(tools, body.messages.at(-1)?.role)
+      if (state.holdFrom !== undefined && state.rounds >= state.holdFrom) {
+        await new Promise<void>((released) => state.held.push(released))
+        // Stop made Grok hang up on the round it was kept in.
+        if (res.destroyed) return
+      }
     }
     const usage = { prompt_tokens: 10, completion_tokens: 2, total_tokens: 12 }
     const delta = call
@@ -193,13 +206,26 @@ async function grokSession(root: string, after: Cleanup[], apex: boolean) {
       (previous, text) => previous.then(() => connection.prompt({ sessionId, prompt: [{ type: "text", text }] })),
       Promise.resolve())
   }
-  return { evaluator, state, offered, reported, latest: () => reported.at(-1), send, cancel: () => connection.cancel({ sessionId }) }
+  /** Keeps the goal inside its round `from` until `release`: the worker is asked and not answered. */
+  const hold = (from: number) => {
+    state.holdFrom = from
+  }
+  const release = () => {
+    state.holdFrom = undefined
+    for (const answer of state.held.splice(0)) answer()
+  }
+  const latest = () => reported.at(-1)
+  /** A wait's failure with what Grok last said of the goal, which is what tells a goal it paused from one it never set. */
+  const saying = (message: string) => () => `${message}; Grok last reported ${JSON.stringify(latest() ?? null)}`
+  /** Grok answers the clear's prompt and says `cleared` in either order, so the notice is waited for. */
+  const cleared = () => waitFor(() => latest() === null, saying("a cleared goal reads as none"))
+  return { evaluator, state, offered, reported, latest, saying, cleared, send, cancel: () => connection.cancel({ sessionId }), hold, release }
 }
 
 type Session = Awaited<ReturnType<typeof grokSession>>
 
 /** An ordinary Thread: the workflow driver runs the goal's rounds, evaluator and panel. */
-async function ordinary({ evaluator, state, reported, latest, send, cancel }: Session) {
+async function ordinary({ evaluator, state, reported, latest, saying, cleared, send, cancel, hold, release }: Session) {
   evaluator.queue = ["continue"]
   evaluator.afterwards = "complete"
   await send({ kind: "set", objective: FIRST, replacing: false })
@@ -212,12 +238,14 @@ async function ordinary({ evaluator, state, reported, latest, send, cancel }: Se
 
   state.rounds = 0
   evaluator.afterwards = "continue"
+  hold(2)
   const working = send({ kind: "set", objective: SECOND, replacing: false })
-  await waitFor(() => latest()?.objective === SECOND, "Grok didn't take a new goal after a finished one")
-  await waitFor(() => state.rounds >= 2, "Grok didn't keep working on the goal")
+  await waitFor(() => latest()?.objective === SECOND, saying("Grok didn't take a new goal after a finished one"))
+  await waitFor(() => state.rounds >= 2, saying("Grok didn't keep working on the goal"))
   await cancel()
   await working
-  await waitFor(() => latest()?.status === "paused", "Stop didn't pause the goal")
+  release()
+  await waitFor(() => latest()?.status === "paused", saying("Stop didn't pause the goal"))
   assert.equal(latest()?.objective, SECOND)
   await send({ kind: "pause" })
   assert.equal(latest()?.status, "paused", "pausing after Stop leaves it paused")
@@ -230,11 +258,13 @@ async function ordinary({ evaluator, state, reported, latest, send, cancel }: Se
   assert.equal(latest()?.status, "complete")
 
   evaluator.afterwards = "continue"
+  hold(1)
   const unfinished = send({ kind: "set", objective: FIRST, replacing: false })
-  await waitFor(() => latest()?.objective === FIRST && latest()?.status === "active", "the next goal didn't start")
+  await waitFor(() => latest()?.objective === FIRST && latest()?.status === "active", saying("the next goal didn't start"))
   await cancel()
   await unfinished
-  await waitFor(() => latest()?.status === "paused", "Stop didn't pause the goal")
+  release()
+  await waitFor(() => latest()?.status === "paused", saying("Stop didn't pause the goal"))
   const before = reported.length
   evaluator.afterwards = "complete"
   await send({ kind: "set", objective: THIRD, replacing: true })
@@ -243,19 +273,21 @@ async function ordinary({ evaluator, state, reported, latest, send, cancel }: Se
   assert.equal(latest()?.status, "complete")
 
   await send({ kind: "clear" })
-  assert.equal(latest(), null, "a cleared goal reads as none")
+  await cleared()
 
   evaluator.afterwards = "continue"
+  hold(1)
   const budgeted = send({ kind: "set", objective: FIRST, tokenBudget: 50, replacing: false })
-  await waitFor(() => latest()?.objective === FIRST && latest()?.tokenBudget === 50, "Grok didn't take the goal's budget")
+  await waitFor(() => latest()?.objective === FIRST && latest()?.tokenBudget === 50, saying("Grok didn't take the goal's budget"))
   await cancel()
   await budgeted
+  release()
   await send({ kind: "clear" })
   return "set, continued within the turn, verified complete, paused on Stop, resumed, replaced, cleared, and set with a token budget"
 }
 
 /** An Apex: no spawn tools, and the goal on `update_goal`, which the worker calls to mark it complete. */
-async function asApex({ evaluator, state, offered, reported, latest, send }: Session) {
+async function asApex({ evaluator, state, offered, reported, latest, saying, cleared, send }: Session) {
   let marked = false
   state.worker = (tools, lastRole) => {
     if (marked || !tools.has("update_goal") || lastRole === "tool") return undefined
@@ -267,10 +299,10 @@ async function asApex({ evaluator, state, offered, reported, latest, send }: Ses
   assert.ok(marked, "the worker was offered update_goal")
   assert.ok(!offered.has("spawn_subagent") && !offered.has("workflow"), `an Apex offers no native spawn: ${[...offered].filter((name) => name === "spawn_subagent" || name === "workflow").join(", ")}`)
   assert.equal(reported[0]?.status, "active")
-  await waitFor(() => latest()?.status === "complete", "the panel didn't pass the goal update_goal marked complete")
+  await waitFor(() => latest()?.status === "complete", saying("the panel didn't pass the goal update_goal marked complete"))
   assert.equal(latest()?.objective, FIRST)
   await send({ kind: "clear" })
-  assert.equal(latest(), null, "a cleared goal reads as none")
+  await cleared()
   return "no spawn_subagent or workflow, set, marked complete with update_goal and passed, and cleared"
 }
 

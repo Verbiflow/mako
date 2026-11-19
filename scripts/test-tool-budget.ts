@@ -49,8 +49,11 @@ for (const role of AGENT_TOOL_ROLES) {
   const hidden = new Set(ROLE_HIDES[role].map((verb) => `agents_${verb}`))
   assert.deepEqual(Object.keys(measured[role].tools).sort(), [...others, ...everyAgentTool.filter((name) => !hidden.has(name))].sort(), `${role}'s tools`)
 }
-assert.deepEqual(ROLE_HIDES.thread, ["report", "settle"], "a plain Thread has no Apex to report to and no Fins' follow-ups to settle")
-assert.deepEqual(ROLE_HIDES.fin, ["settle", "answer", "link", "move"], "a Fin with no Fins of its own settles, answers, links and moves none")
+assert.deepEqual(ROLE_HIDES.thread, ["report"], "a top-level Thread never has an Apex to report to")
+assert.deepEqual(ROLE_HIDES.apex, ["report"], "nor does one with Fins")
+// A harness lists a launch's tools once: a Thread that starts its first Fin mid-launch settles with what it was listed,
+// and a Fin that does answers, links, moves and settles with it, so neither loses those verbs before it has Fins.
+assert.deepEqual(ROLE_HIDES.fin, [], "a Fin keeps every verb: it may start or link Fins of its own mid-launch")
 assert.deepEqual(ROLE_HIDES["fin-apex"], [], "a Fin that is an Apex of its own reports and keeps every Apex tool")
 
 if (process.argv.includes("--table")) {

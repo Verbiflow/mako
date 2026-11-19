@@ -27,6 +27,7 @@ import {
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import type { TurnWaitInput, TurnWaitResult } from "../contracts/thread-tools.js"
 import { AgentListResults } from "./agent-list-results.js"
+import { compactAnswer } from "./agent-tool-compact.js"
 
 const UNAVAILABLE: AgentRefused = { refused: "unavailable", why: "Children need the Thread store, which didn't open on this host." }
 
@@ -100,11 +101,12 @@ export const AgentAnswerSchema = z.looseObject({ refused: z.string().optional() 
 export type AgentAnswer = z.infer<typeof AgentAnswerSchema>
 
 /**
- * What a door says back: the operation's answer as JSON on one line, every field kept (indentation was a third of a
- * list's tokens); a refusal's first line names it, so an agent reads why before the fields.
+ * What a door says back: the operation's answer as JSON on one line (indentation was a third of a list's tokens), with
+ * what repeats cut for the model where `tool` names one (`compactAnswer`: `agents_list` rows, `agents_move { all }`);
+ * a refusal's first line names it, so an agent reads why before the fields.
  */
-export function agentToolText(answer: AgentAnswer): string {
-  const json = JSON.stringify(answer)
+export function agentToolText(answer: AgentAnswer, tool?: string): string {
+  const json = JSON.stringify(compactAnswer(tool, answer))
   return answer.refused === undefined ? json : `refused: ${answer.refused}\n${json}`
 }
 
@@ -137,7 +139,7 @@ export function registerAgentTools(server: McpServer, door: AgentToolDoor, role?
           const known = door.filled()
           const filled = Object.fromEntries(tool.filled.map((field) => [field, known[field]]))
           const answer = await door.invoke(tool.channel, [door.caller(), { ...filled, ...ToolArgumentsSchema.parse(input) }])
-          return { ...(answer.refused !== undefined && { isError: true }), content: [{ type: "text" as const, text: agentToolText(answer) }] }
+          return { ...(answer.refused !== undefined && { isError: true }), content: [{ type: "text" as const, text: agentToolText(answer, tool.mcp.name) }] }
         } catch (error) {
           return { isError: true, content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }] }
         }

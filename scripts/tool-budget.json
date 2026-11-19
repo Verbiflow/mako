@@ -3,17 +3,17 @@
   "roles": {
     "thread": {
       "total": {
-        "tokens": 13970,
-        "bytes": 61372
+        "tokens": 14714,
+        "bytes": 64469
       },
       "instructions": {
-        "tokens": 941,
-        "bytes": 4079
+        "tokens": 727,
+        "bytes": 3096
       },
       "tools": {
         "worktree_status": {
-          "tokens": 326,
-          "bytes": 1567
+          "tokens": 327,
+          "bytes": 1585
         },
         "worktree_bring": {
           "tokens": 293,
@@ -36,8 +36,8 @@
           "bytes": 655
         },
         "app_status": {
-          "tokens": 141,
-          "bytes": 659
+          "tokens": 146,
+          "bytes": 686
         },
         "app_start": {
           "tokens": 354,
@@ -68,12 +68,12 @@
           "bytes": 1583
         },
         "recipe_guide": {
-          "tokens": 150,
-          "bytes": 696
+          "tokens": 181,
+          "bytes": 823
         },
         "recipe_save": {
-          "tokens": 418,
-          "bytes": 1874
+          "tokens": 417,
+          "bytes": 1872
         },
         "recipe_publish": {
           "tokens": 385,
@@ -84,8 +84,8 @@
           "bytes": 502
         },
         "pull_request_status": {
-          "tokens": 413,
-          "bytes": 1914
+          "tokens": 659,
+          "bytes": 2884
         },
         "pull_request_open": {
           "tokens": 698,
@@ -116,8 +116,8 @@
           "bytes": 1027
         },
         "agents_list": {
-          "tokens": 568,
-          "bytes": 2560
+          "tokens": 608,
+          "bytes": 2737
         },
         "agents_move": {
           "tokens": 356,
@@ -127,9 +127,13 @@
           "tokens": 593,
           "bytes": 2737
         },
+        "agents_settle": {
+          "tokens": 618,
+          "bytes": 2688
+        },
         "agents_answer": {
-          "tokens": 317,
-          "bytes": 1430
+          "tokens": 335,
+          "bytes": 1505
         },
         "agents_send": {
           "tokens": 615,
@@ -171,17 +175,17 @@
     },
     "apex": {
       "total": {
-        "tokens": 14588,
-        "bytes": 64060
+        "tokens": 14714,
+        "bytes": 64469
       },
       "instructions": {
-        "tokens": 941,
-        "bytes": 4079
+        "tokens": 727,
+        "bytes": 3096
       },
       "tools": {
         "worktree_status": {
-          "tokens": 326,
-          "bytes": 1567
+          "tokens": 327,
+          "bytes": 1585
         },
         "worktree_bring": {
           "tokens": 293,
@@ -204,8 +208,8 @@
           "bytes": 655
         },
         "app_status": {
-          "tokens": 141,
-          "bytes": 659
+          "tokens": 146,
+          "bytes": 686
         },
         "app_start": {
           "tokens": 354,
@@ -236,12 +240,12 @@
           "bytes": 1583
         },
         "recipe_guide": {
-          "tokens": 150,
-          "bytes": 696
+          "tokens": 181,
+          "bytes": 823
         },
         "recipe_save": {
-          "tokens": 418,
-          "bytes": 1874
+          "tokens": 417,
+          "bytes": 1872
         },
         "recipe_publish": {
           "tokens": 385,
@@ -252,8 +256,8 @@
           "bytes": 502
         },
         "pull_request_status": {
-          "tokens": 413,
-          "bytes": 1914
+          "tokens": 659,
+          "bytes": 2884
         },
         "pull_request_open": {
           "tokens": 698,
@@ -284,8 +288,8 @@
           "bytes": 1027
         },
         "agents_list": {
-          "tokens": 568,
-          "bytes": 2560
+          "tokens": 608,
+          "bytes": 2737
         },
         "agents_move": {
           "tokens": 356,
@@ -300,8 +304,8 @@
           "bytes": 2688
         },
         "agents_answer": {
-          "tokens": 317,
-          "bytes": 1430
+          "tokens": 335,
+          "bytes": 1505
         },
         "agents_send": {
           "tokens": 615,
@@ -343,17 +347,17 @@
     },
     "fin": {
       "total": {
-        "tokens": 14054,
-        "bytes": 61731
+        "tokens": 15710,
+        "bytes": 68829
       },
       "instructions": {
-        "tokens": 941,
-        "bytes": 4079
+        "tokens": 727,
+        "bytes": 3096
       },
       "tools": {
         "worktree_status": {
-          "tokens": 326,
-          "bytes": 1567
+          "tokens": 327,
+          "bytes": 1585
         },
         "worktree_bring": {
           "tokens": 293,
@@ -376,8 +380,8 @@
           "bytes": 655
         },
         "app_status": {
-          "tokens": 141,
-          "bytes": 659
+          "tokens": 146,
+          "bytes": 686
         },
         "app_start": {
           "tokens": 354,
@@ -408,12 +412,12 @@
           "bytes": 1583
         },
         "recipe_guide": {
-          "tokens": 150,
-          "bytes": 696
+          "tokens": 181,
+          "bytes": 823
         },
         "recipe_save": {
-          "tokens": 418,
-          "bytes": 1874
+          "tokens": 417,
+          "bytes": 1872
         },
         "recipe_publish": {
           "tokens": 385,
@@ -424,8 +428,8 @@
           "bytes": 502
         },
         "pull_request_status": {
-          "tokens": 413,
-          "bytes": 1914
+          "tokens": 659,
+          "bytes": 2884
         },
         "pull_request_open": {
           "tokens": 698,
@@ -451,9 +455,17 @@
           "tokens": 1264,
           "bytes": 5342
         },
+        "agents_link": {
+          "tokens": 239,
+          "bytes": 1027
+        },
         "agents_list": {
-          "tokens": 568,
-          "bytes": 2560
+          "tokens": 608,
+          "bytes": 2737
+        },
+        "agents_move": {
+          "tokens": 356,
+          "bytes": 1544
         },
         "agents_read": {
           "tokens": 593,
@@ -462,6 +474,14 @@
         "agents_report": {
           "tokens": 996,
           "bytes": 4360
+        },
+        "agents_settle": {
+          "tokens": 618,
+          "bytes": 2688
+        },
+        "agents_answer": {
+          "tokens": 335,
+          "bytes": 1505
         },
         "agents_send": {
           "tokens": 615,
@@ -503,17 +523,17 @@
     },
     "fin-apex": {
       "total": {
-        "tokens": 15584,
-        "bytes": 68420
+        "tokens": 15710,
+        "bytes": 68829
       },
       "instructions": {
-        "tokens": 941,
-        "bytes": 4079
+        "tokens": 727,
+        "bytes": 3096
       },
       "tools": {
         "worktree_status": {
-          "tokens": 326,
-          "bytes": 1567
+          "tokens": 327,
+          "bytes": 1585
         },
         "worktree_bring": {
           "tokens": 293,
@@ -536,8 +556,8 @@
           "bytes": 655
         },
         "app_status": {
-          "tokens": 141,
-          "bytes": 659
+          "tokens": 146,
+          "bytes": 686
         },
         "app_start": {
           "tokens": 354,
@@ -568,12 +588,12 @@
           "bytes": 1583
         },
         "recipe_guide": {
-          "tokens": 150,
-          "bytes": 696
+          "tokens": 181,
+          "bytes": 823
         },
         "recipe_save": {
-          "tokens": 418,
-          "bytes": 1874
+          "tokens": 417,
+          "bytes": 1872
         },
         "recipe_publish": {
           "tokens": 385,
@@ -584,8 +604,8 @@
           "bytes": 502
         },
         "pull_request_status": {
-          "tokens": 413,
-          "bytes": 1914
+          "tokens": 659,
+          "bytes": 2884
         },
         "pull_request_open": {
           "tokens": 698,
@@ -616,8 +636,8 @@
           "bytes": 1027
         },
         "agents_list": {
-          "tokens": 568,
-          "bytes": 2560
+          "tokens": 608,
+          "bytes": 2737
         },
         "agents_move": {
           "tokens": 356,
@@ -636,8 +656,8 @@
           "bytes": 2688
         },
         "agents_answer": {
-          "tokens": 317,
-          "bytes": 1430
+          "tokens": 335,
+          "bytes": 1505
         },
         "agents_send": {
           "tokens": 615,

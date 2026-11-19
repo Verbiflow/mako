@@ -16,7 +16,7 @@ import { lostVersions, restoreVersion } from "./recovery.js"
 import type { JournalView } from "./queries.js"
 import { within } from "./paths.js"
 import { rootId, sessionFolders, sessionIds, outsideFolders, harnessScratch, type CataloguedSession } from "./writer-paths.js"
-import type { WriterSettings, WriterPorts, WriterSnapshot, WriterCommand, WriterCommandResult } from "./writer-protocol.js"
+import type { WriterSettings, WriterPorts, WriterSnapshot, WriterCommand, WriterCommandResult, WriterMemory } from "./writer-protocol.js"
 
 const DAY_MS = 86_400_000
 const RETENTION_DAYS = 14
@@ -162,7 +162,6 @@ export async function openWriter(settings: WriterSettings, ports: WriterPorts) {
         footprint: {
           home,
           roots: [home, ...temporary],
-          live: temporary,
           stores: async () => [...(await ports.context()).stores, ...harnessScratch(home), ...own, ...(sharing.journal?.followers() ?? []).map((follower) => follower.host.dataRoot)],
           others: async (thread, since) => { const context = await ports.context(); return sessionFolders(placed(context.sessions), context.running, thread, since) },
           sessions: async (thread) => sessionIds(await catalogued(), thread),
@@ -171,12 +170,13 @@ export async function openWriter(settings: WriterSettings, ports: WriterPorts) {
         outsider: settings.running ? outsider : undefined,
         log: (message, facts) => hostLog("attribution", message, facts),
         deliveryLagMs: ports.deliveryLagMs,
+        settledThrough: ports.settledThrough,
       },
     )
     const backfill = ports.children && settings.catalogued ? new Backfill({
       sessions: catalogued,
       records: ports.children,
-      unsure: () => tracker.unsureFiles(),
+      unsure: (where) => tracker.unsureFiles(where),
       reconcile: (calls) => tracker.reconcile(calls),
       now: () => Date.now(),
       log: (message, facts) => hostLog("attribution", message, facts),
@@ -246,6 +246,7 @@ export async function openWriter(settings: WriterSettings, ports: WriterPorts) {
   const journal = await SharedJournal.open({
     folder, host: { pid: settings.hostPid, dataRoot: settings.dataRoot, label: settings.label },
     privateAddress: ownerAddress(privateFolder),
+    socketOnly: true,
     privateReason: settings.privateReason,
     own: async () => {
       adoptJournal(folder, [...otherFormats(settings.userRoot, folder).map(other => other.journal), join(settings.dataRoot, "attribution", "journal.sqlite"),
@@ -266,7 +267,15 @@ export async function openWriter(settings: WriterSettings, ports: WriterPorts) {
     address: journal.role().kind === "private" ? ownerAddress(privateFolder) : ownerAddress(folder),
     role: journal.role(), sharing: { ...journal.status(), followers: followers().map(follower => follower.host) }, followers: followers(),
     recent: (local?.tracker.recent() ?? []).map(({ lagMs, hashMs, diffMs, writeMs }) => ({ lagMs, hashMs, diffMs, writeMs })), rescans: local?.tracker.rescanReading() ?? null,
+    memory: memory(),
   })
+  /** The worker's own figures, two reads of counters: no heap walk. */
+  const memory = (): WriterMemory => {
+    const usage = process.memoryUsage()
+    const states = [...(local?.tracker.rootStates().values() ?? [])]
+    const asleep = states.filter(({ root }) => local?.tracker.asleep(root.path)).length
+    return { heapBytes: usage.heapUsed, arrayBytes: usage.arrayBuffers, awake: states.length - asleep, asleep }
+  }
   const command = async (request: WriterCommand): Promise<WriterCommandResult> => {
     const tracker = local?.tracker
     switch (request.kind) {
@@ -276,7 +285,12 @@ export async function openWriter(settings: WriterSettings, ports: WriterPorts) {
       case "wake":
         if (tracker) await Promise.all([...tracker.rootStates().values()].filter(({ root }) => (within(request.checkout, root.path) || within(root.path, request.checkout)) && tracker.asleep(root.path)).map(({ root }) => journal.writes.track(root.path)))
         return
-      case "read-back": return local?.readBack()
+      case "read-back": {
+        // Under way from here, and said when it ends: the host's ask is answered now.
+        const reading = local?.readBack() ?? Promise.resolve(undefined)
+        void reading.then((result) => ports.readBack?.(result), () => ports.readBack?.(undefined))
+        return
+      }
       case "collect": return tracker?.collectOffThread()
       case "sleep": return tracker?.sleepIdle() ?? []
       case "let-go": return tracker?.letGoIdle() ?? []

@@ -12,7 +12,8 @@ import { z } from "zod"
 import { gitActionPrompt, gitCommands, gitRepositoryName, PULL_REQUEST_WRITING, pullBaseFor, type GitCommandFacts } from "@mako/host/contracts/git-actions"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { pullRequestTools, registerPullRequestTools, type ReachableRepository, type RepositoryPlace } from "@mako/host/git/pull-request-tools"
-import { mergePullRequest, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "@mako/host/git/pull-requests"
+import { mergePullRequest, openedSentence, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "@mako/host/git/pull-requests"
+import checksFixture from "./fixtures/pull-request-checks.json" with { type: "json" }
 
 const gitRunner = new Git()
 
@@ -53,7 +54,10 @@ if (a === "--version") out("gh version 2.0.0")
 else if (a === "api" && b === "user") out({ login: "you" })
 else if (a === "api" && b === "graphql") out({ data: { repository: { pullRequest: { reviewThreads: { nodes: db.threads } } } } })
 else if (a === "api" && b === "repos/{owner}/{repo}") out({ full_name: "o/r", html_url: "https://github.com/o/r", default_branch: "main", allow_squash_merge: db.methods.squashMergeAllowed, allow_merge_commit: db.methods.mergeCommitAllowed, allow_rebase_merge: db.methods.rebaseMergeAllowed })
-else if (a === "pr" && b === "view") {
+else if (a === "pr" && b === "view" && /^\\d+$/.test(args[2])) {
+  const pull = db.pulls.find((entry) => entry.number === Number(args[2]) && entry.repo === repo())
+  pull ? out(pull) : fail("GraphQL: Could not resolve to a PullRequest with the number of " + args[2] + ".")
+} else if (a === "pr" && b === "view") {
   const pull = db.pulls.filter((entry) => entry.headRefName === branch() && entry.repo === repo()).at(-1)
   pull ? out(pull) : fail("no pull requests found for branch " + branch())
 } else if (a === "pr" && b === "create") {
@@ -66,10 +70,17 @@ else if (a === "pr" && b === "view") {
   save()
   out("https://github.com/o/r/pull/" + number + "\\n")
 } else if (a === "pr" && b === "edit") {
-  const pull = db.pulls.find((entry) => entry.number === Number(args[2]))
-  if (flag("--title") !== undefined) pull.title = flag("--title")
-  if (flag("--body") !== undefined) pull.body = flag("--body")
+  // gh pr edit reads the pull request's classic Projects through GraphQL, which a token without read:project can't.
+  fail("error: your authentication token is missing required scopes [read:project]")
+} else if (a === "api" && b === "-X" && args[2] === "PATCH" && args[3].startsWith("repos/{owner}/{repo}/pulls/")) {
+  if (db.editRefusal) fail(db.editRefusal)
+  const fields = JSON.parse(readFileSync(flag("--input"), "utf8"))
+  const pull = db.pulls.find((entry) => entry.number === Number(args[3].split("/").at(-1)) && entry.repo === repo())
+  if (!pull) fail("gh: Not Found (HTTP 404)")
+  db.edits.push(fields)
+  Object.assign(pull, fields)
   save()
+  out(pull)
 } else if (a === "pr" && b === "merge") {
   const pull = db.pulls.find((entry) => entry.number === Number(args[2]))
   pull.state = "MERGED"
@@ -77,6 +88,7 @@ else if (a === "pr" && b === "view") {
   save()
 } else if (a === "run" && b === "list") out(db.runs.filter((run) => run.branch === flag("--branch")))
 else if (a === "run" && b === "rerun") { db.reruns.push(args[2] + " " + args[3]); save() }
+else if (a === "run" && b === "view" && args[2] === "--job") out(args[4] === "--log-failed" ? db.jobLogs[args[3]]?.failed ?? "" : db.jobLogs[args[3]]?.all ?? "")
 else if (a === "run" && b === "view") out(db.logs[args[2]] ?? "")
 else fail("unknown command: " + args.join(" "))
 `)
@@ -89,16 +101,21 @@ interface FakePull {
   state: "OPEN" | "MERGED" | "CLOSED"
   reviewDecision: string
   latestReviews: { state: string; author: { login: string } }[]
-  statusCheckRollup: { name: string; conclusion: string; detailsUrl?: string; workflowName?: string; startedAt?: string }[]
+  statusCheckRollup: { name: string; conclusion: string; status?: string; detailsUrl?: string; workflowName?: string; startedAt?: string; completedAt?: string }[]
 }
 interface GitHubState {
   calls: string[]
   pulls: FakePull[]
+  /** What each REST edit sent, as its JSON input. */
+  edits: { title?: string; body?: string }[]
+  /** Set: GitHub refuses edits with these words. */
+  editRefusal?: string
   methods: Record<string, boolean>
   merged: string[]
   runs: { databaseId: number; headSha: string; conclusion: string; workflowName: string; url: string; branch: string }[]
   reruns: string[]
   logs: Record<string, string>
+  jobLogs: Record<string, { failed?: string; all?: string }>
   threads: unknown[]
 }
 const github = (): GitHubState => JSON.parse(readFileSync(state, "utf8"))
@@ -107,7 +124,7 @@ const setGithub = (change: (db: GitHubState) => void) => {
   change(db)
   writeFileSync(state, JSON.stringify(db))
 }
-writeFileSync(state, JSON.stringify({ calls: [], pulls: [], methods: { squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true }, merged: [], runs: [], reruns: [], logs: {}, threads: [] }))
+writeFileSync(state, JSON.stringify({ calls: [], pulls: [], edits: [], methods: { squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true }, merged: [], runs: [], reruns: [], logs: {}, jobLogs: {}, threads: [] }))
 process.env.GH_PATH = ghPath
 
 let grants: Awaited<ReturnType<typeof startConversationMcp>> | undefined
@@ -199,8 +216,32 @@ try {
   assert.deepEqual([again.opened, again.pushed, again.edited], [false, 1, false])
   assert.equal(git(origin, "rev-parse", "mako/feature"), git(project, "rev-parse", "HEAD"))
   const edited = await openPullRequest(gitRunner, project, { body: "## Why\nBecause, and c." })
-  assert.deepEqual([edited.pushed, edited.edited, edited.pull.body], [0, true, "## Why\nBecause, and c."])
-  assert.ok(!github().calls.some((call) => call.startsWith("pr edit 100 --title")), "a title not passed isn't changed")
+  assert.deepEqual([edited.pushed, edited.edited, edited.pull.body], [0, true, "## Why\nBecause, and c."], "with nothing to push, the edit still applies")
+  assert.deepEqual(github().edits.at(-1), { body: "## Why\nBecause, and c." }, "a title not passed isn't changed")
+  // Edits go over REST, the fields in a file: gh pr edit needs read:project, which the person's token may lack.
+  assert.ok(github().calls.some((call) => /^api -X PATCH repos\/\{owner\}\/\{repo\}\/pulls\/100 --input \S+$/.test(call)), "the edit is a REST PATCH")
+  assert.ok(!github().calls.some((call) => call.startsWith("pr edit")), "never gh pr edit")
+  const retitled = await openPullRequest(gitRunner, project, { title: "Add b and c", body: "## Why\nBoth." })
+  assert.deepEqual([retitled.pushed, retitled.edited, retitled.pull.title, retitled.pull.body], [0, true, "Add b and c", "## Why\nBoth."], "title and body together, nothing to push")
+
+  // A push and an edit in one call: both happen.
+  commit(project, "c2.txt", "c2", "Add c2")
+  const pushedAndEdited = await openPullRequest(gitRunner, project, { title: "Add b, c and c2", body: "## Why\nAll three." })
+  assert.deepEqual([pushedAndEdited.pushed, pushedAndEdited.edited, pushedAndEdited.pull.title, pushedAndEdited.pull.body], [1, true, "Add b, c and c2", "## Why\nAll three."])
+  assert.equal(git(origin, "rev-parse", "mako/feature"), git(project, "rev-parse", "HEAD"), "the commit was pushed")
+  assert.equal(openedSentence(pushedAndEdited), "#100 was already open; pushed 1 commit and updated its title and body: https://github.com/o/r/pull/100")
+
+  // The edit refused after the push went: the error says the push happened, so nobody takes it for nothing done.
+  setGithub((db) => { db.editRefusal = "gh: Validation Failed (HTTP 422)" })
+  commit(project, "c3.txt", "c3", "Add c3")
+  await assert.rejects(openPullRequest(gitRunner, project, { title: "Refused" }), (error: Error) => {
+    assert.equal(error.message, "Pushed 1 commit to #100, but GitHub didn't change its title or body: gh: Validation Failed (HTTP 422)")
+    return true
+  })
+  assert.equal(git(origin, "rev-parse", "mako/feature"), git(project, "rev-parse", "HEAD"), "the push stands")
+  assert.equal(github().pulls[0]!.title, "Add b, c and c2", "the refused edit changed nothing")
+  await assert.rejects(openPullRequest(gitRunner, project, { body: "Again" }), /^Error: #100 had nothing new to push, but GitHub didn't change its title or body: /)
+  setGithub((db) => { delete db.editRefusal })
 
   // Someone else pushed: refused, and nothing forced.
   const other = join(root, "other")
@@ -234,7 +275,7 @@ try {
       { isResolved: false, isOutdated: true, path: "c.txt", line: 1, comments: { nodes: [{ author: { login: "ann" }, body: "Old." }] } },
     ]
   })
-  const status = await pullRequestReport(gitRunner, project, { logs: true })
+  const status = await pullRequestReport(gitRunner, project, { logs: true, checks: "all" })
   assert.deepEqual(status.pullRequest?.checks, [{ name: "test", state: "failed", url: "https://ci/test" }, { name: "lint", state: "passed" }])
   assert.equal(status.pullRequest?.merge, "Fix failing checks first")
   assert.deepEqual(status.pullRequest?.reviews, ["ann: changes"])
@@ -267,7 +308,7 @@ try {
     ]
     db.logs = { "10": "build\tBuild\t2026-11-13T10:00:01.000Z The operation was canceled.\n", "11": "test\tRun\t2026-11-13T10:00:01.000Z The operation was canceled.\n" }
   })
-  const pushedTwice = await pullRequestReport(gitRunner, project, { logs: true })
+  const pushedTwice = await pullRequestReport(gitRunner, project, { logs: true, checks: "all" })
   assert.deepEqual(pushedTwice.pullRequest?.checks, [{ name: "test", state: "passed" }, { name: "build", state: "cancelled" }], "the run a newer run replaced isn't read; the lone cancelled one says cancelled")
   assert.equal(pushedTwice.pullRequest?.merge, "Run the cancelled checks again first")
   assert.deepEqual(pushedTwice.pullRequest?.failedLogs, [{ workflow: "Docs", url: "https://ci/10", log: "build\tBuild\tThe operation was canceled." }], "no log of the replaced run")
@@ -307,7 +348,7 @@ try {
   assert.match(describe("pull_request_open").description!, /instead of `gh pr create`/)
   assert.equal(describe("pull_request_status").annotations?.readOnlyHint, true)
   assert.equal(describe("pull_request_merge").annotations?.destructiveHint, true)
-  assert.match(agent.getInstructions() ?? "", /^pull_request_\*: /m, "the server says what the family is for")
+  assert.match(agent.getInstructions() ?? "", /^- pull request: .*pull_request_\*/m, "the server says what the family is for")
   const text = (result: Awaited<ReturnType<typeof agent.callTool>>) => z.array(z.object({ text: z.string() })).parse(result.content)[0]!.text
   const read = parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: {} })))
   assert.equal(read.opening.base, "release", "the tool targets where this Thread's worktree started")
@@ -320,6 +361,86 @@ try {
   assert.equal(changed, 1, "windows read GitHub again after opening")
   rmSync(join(project, "draft.txt"))
   assert.equal(text(await agent.callTool({ name: "pull_request_open", arguments: {} })), "#101 was already open; nothing new to push: https://github.com/o/r/pull/101.")
+
+  // Another pull request of the same repository by its number, and one job's or run's log by its id: what an Apex
+  // reads of its Fins' pull requests, read only.
+  setGithub((db) => {
+    Object.assign(db.pulls[0]!, { headRefOid: pushed })
+    db.jobLogs = {
+      "5512": { failed: "e2e\tRun\t2026-11-17T01:02:03.456Z expected 1 row, got 0\n", all: "e2e\tSetup\t2026-11-17T01:00:00.000Z ok\ne2e\tRun\t2026-11-17T01:02:03.456Z expected 1 row, got 0\n" },
+      "77": { all: "lint\tRun\t2026-11-17T01:00:00.000Z 0 warnings\n" },
+    }
+  })
+  const writesBefore = github().calls.length
+  const byNumber = parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: { number: 100, logs: true } })))
+  assert.deepEqual([byNumber.pullRequest.number, byNumber.pullRequest.state, byNumber.pullRequest.head, byNumber.pullRequest.merge], [100, "merged", "mako/feature", "It is merged."], "another pull request reads by its number, whatever this branch is")
+  assert.deepEqual(byNumber.pullRequest.failedLogs, [{ workflow: "Docs", url: "https://ci/10", log: "build\tBuild\tThe operation was canceled." }], "its failed logs are its own head's, not this branch's")
+  assert.equal(byNumber.pullRequest.headCommit, pushed, "with its head commit, which an Apex checks before a merge")
+  assert.equal(byNumber.branch, undefined, "a pull request by number says nothing of this branch")
+  const job = parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: { job: 5512 } })))
+  assert.deepEqual(job, { job: 5512, log: "e2e\tRun\texpected 1 row, got 0" }, "a named job's failed steps, without timestamps")
+  assert.deepEqual(parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: { job: 77 } }))), { job: 77, log: "lint\tRun\t0 warnings" }, "a job with no failed step gives its whole log")
+  assert.deepEqual(parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: { run: 11 } }))), { run: 11, log: "test\tRun\tThe operation was canceled." }, "a named run's failed log")
+  const withJob = parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: { number: 100, job: 5512 } })))
+  assert.deepEqual([withJob.pullRequest.number, withJob.log.job], [100, 5512], "a number and a job read both")
+  const missing = await agent.callTool({ name: "pull_request_status", arguments: { number: 999 } })
+  assert.equal(missing.isError, true)
+  assert.match(text(missing), /has no pull request #999/)
+  const reads = github().calls.slice(writesBefore)
+  assert.ok(reads.every((call) => /^(--version|api |pr view |run view |run list |repo view )/.test(call)), `reading another pull request writes nothing: ${reads.filter((call) => !/^(--version|api |pr view |run view |run list |repo view )/.test(call)).join("; ")}`)
+  assert.ok(reads.includes("run view --job 5512 --log-failed"))
+
+  // Checks as an agent waiting on CI reads them: counts, then only what didn't pass. The fixture is Verbiflow/mako#974's
+  // 71 checks as gh listed them, 59 passed and 12 skipped, `gate (1)` to `gate (45)` among them.
+  type Rollup = FakePull["statusCheckRollup"]
+  const fixtureRows = z.array(z.object({ name: z.string(), conclusion: z.string(), status: z.string().optional(), detailsUrl: z.string().optional(), workflowName: z.string().optional(), startedAt: z.string().optional(), completedAt: z.string().optional() }))
+  const rollup = (change: (checks: Rollup) => void = () => {}) => {
+    const checks: Rollup = fixtureRows.parse(structuredClone(checksFixture))
+    change(checks)
+    setGithub((db) => { db.pulls.find((pull) => pull.number === 101)!.statusCheckRollup = checks })
+  }
+  const statusOf = async (args: { checks?: "all" } = {}) => parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: args }))).pullRequest
+  const urlOf = (name: string) => checksFixture.find((check) => check.name === name)!.detailsUrl
+  rollup()
+  const allPassed = await statusOf()
+  assert.deepEqual(allPassed.checks, { totals: "59 passed, 12 skipped" }, "all passed: one line of counts, no check listed")
+  assert.equal(allPassed.number, 101, "the rest of the report stays")
+  assert.ok(allPassed.merge && allPassed.mergeable, "the merge line and mergeable stay")
+  const failing = ["checks (types)", "gate (7)"]
+  const running = ["gate (10)", "gate (11)", "gate (12)", "gate (13)", "gate (14)"]
+  rollup((checks) => {
+    for (const check of checks) {
+      if (failing.includes(check.name)) check.conclusion = "FAILURE"
+      if (running.includes(check.name)) Object.assign(check, { status: "IN_PROGRESS", conclusion: "" })
+    }
+  })
+  const someFailed = await statusOf()
+  assert.deepEqual(someFailed.checks, {
+    totals: "52 passed, 12 skipped, 2 failed, 5 running",
+    notPassed: [
+      `checks (types): failed ${urlOf("checks (types)")}`,
+      `gate (7): failed ${urlOf("gate (7)")}`,
+      `gate (10, 11, 12, 13, 14): running ${urlOf("gate (10)")}`,
+    ],
+  }, "failed and running checks each with a link; one matrix family sharing a state is one line")
+  assert.match(someFailed.merge, /Fix failing checks first/)
+  rollup((checks) => { for (const check of checks) if (running.includes(check.name)) Object.assign(check, { status: check.name === "gate (10)" ? "QUEUED" : "IN_PROGRESS", conclusion: "" }) })
+  assert.deepEqual((await statusOf()).checks, {
+    totals: "54 passed, 12 skipped, 5 running",
+    notPassed: [`gate (10, 11, 12, 13, 14): running ${urlOf("gate (10)")}`],
+  }, "running only, queued ones with them: the family once")
+  rollup((checks) => { checks.find((check) => check.name === "mac-host")!.conclusion = "CANCELLED" })
+  assert.deepEqual((await statusOf()).checks, {
+    totals: "59 passed, 11 skipped, 1 cancelled",
+    notPassed: [`mac-host: cancelled ${urlOf("mac-host")}`],
+  }, "a cancelled check is listed")
+  rollup()
+  const every = z.array(z.object({ name: z.string(), state: z.string(), url: z.string().optional() }).strict()).parse((await statusOf({ checks: "all" })).checks)
+  assert.equal(every.length, 71, "checks: all lists every check")
+  assert.deepEqual(every[0], { name: "Analyze (actions)", state: "passed", url: urlOf("Analyze (actions)") })
+  assert.equal(every.filter((check) => check.state === "skipped").length, 12, "and says which were skipped")
+  const schema = z.object({ properties: z.object({ checks: z.object({ const: z.literal("all") }) }) }).safeParse(describe("pull_request_status").inputSchema)
+  assert.ok(schema.success, "pull_request_status takes checks: all")
   // Re-run, as the sidebar's: the failed jobs of each failed run on the pushed commit.
   const rerunsBefore = github().reruns.length
   const rerun = text(await agent.callTool({ name: "pull_request_rerun", arguments: {} }))
@@ -375,6 +496,10 @@ try {
   assert.equal(both.repositories[1].opening.blocked, "mako/multi has no commits that main doesn't. Commit the work first.")
   assert.equal(await project2.open("c", { title: "Add the endpoint", body: "## Why\nweb needs it." }), "api: Opened #102 into main: https://github.com/o/r/pull/102.", "the only repository with work is the one opened, and the reply names it")
   assert.deepEqual([pullOf("api").length, pullOf("web").length], [1, 0])
+  // From the project folder, a title or body for the one open pull request applies with nothing to push.
+  assert.equal(await project2.open("c", { title: "Add the endpoint, validated", body: "## Why\nweb needs it, checked." }), "api: #102 was already open; nothing new to push and updated its title and body: https://github.com/o/r/pull/102.")
+  assert.deepEqual([pullOf("api")[0]!.title, pullOf("api")[0]!.body], ["Add the endpoint, validated", "## Why\nweb needs it, checked."])
+  await assert.rejects(project2.open("c", {}), /^Error: None of this project's repositories has work to open a pull request for:\n- api: #102 is open; /, "with nothing to push and nothing to change, there's still nothing to do")
 
   commit(web.root, "web.txt", "web", "Call the endpoint")
   await assert.rejects(project2.open("c", {}), /^Error: A new pull request needs a title\.$/, "web is now the only one with work: api's pull request has nothing new to push")

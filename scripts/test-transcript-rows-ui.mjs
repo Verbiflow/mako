@@ -248,13 +248,15 @@ const CROSSING = (up) => `(() => {
   const node = document.querySelector('[data-transcript-viewport]')
   const view = node.getBoundingClientRect()
   const first = [...node.querySelectorAll('[data-exchange]')].find((turn) => turn.getBoundingClientRect().bottom > view.top + 40)
+  // At the end of a narrow pane the waiting line and the crew card can fill the view, with every turn above it: only a reader up has a turn to hold.
   const anchor = ${up} ? first.dataset.exchange : null
-  const start = first.getBoundingClientRect().top
+  const start = first ? first.getBoundingClientRect().top : 0
   const seen = window.__crossing = { frames: 0, after: 0, crossed: false, empty: [], moved: [] }
   const read = () => {
     seen.frames += 1
     if (node.hasAttribute('data-virtualized')) { seen.crossed = true; seen.after += 1 }
-    const turns = [...node.querySelectorAll('[data-exchange]')].map((turn) => turn.getBoundingClientRect())
+    // A wake's report folds into its turn's one line, so at the end the crew card under the turns fills most of a narrow pane: it is painted content too.
+    const turns = [...node.querySelectorAll('[data-exchange], [data-crew]')].map((turn) => turn.getBoundingClientRect())
     const shown = turns.reduce((all, box) => all + Math.max(0, Math.min(box.bottom, view.bottom) - Math.max(box.top, view.top)), 0)
     if (shown < view.height * (anchor ? 0.5 : 0.05)) seen.empty.push({ frame: seen.frames, turns: turns.length, shown: Math.round(shown), scrollTop: Math.round(node.scrollTop) })
     if (anchor) {

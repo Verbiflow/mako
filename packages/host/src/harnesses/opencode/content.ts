@@ -35,12 +35,14 @@ export function openCodeEventUpdates(content: OpenCodeContent, event: OpenCodeEv
     case "session.reasoning.started":
       content.carry(event.data.sessionID, event.data.assistantMessageID)
       return []
-    // Their content arrives as the deltas and tool results above; a call's progress has nothing to draw.
+    // Their content arrives as the deltas and tool results above; a call's progress, and when a step's model sent its
+    // first token (`session.step.first-token`), have nothing to draw.
     case "session.tool.progress":
     case "session.reasoning.ended":
     case "session.tool.input.delta":
     case "session.tool.input.ended":
     case "session.step.streamed":
+    case "session.step.first-token":
     case "session.step.failed":
     case "session.status":
     case "session.idle":

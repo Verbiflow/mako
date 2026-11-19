@@ -247,6 +247,8 @@ export type CodexFrame =
   | { records: { rollout: string; from: number; to: number } }
 
 export interface ProtocolContext {
+  /** When Mako's instructions go with a turn (`CodexPrimer`): a compaction may drop them from the transcript. */
+  primer?: { forgot(): void }
   /** Side conversations' threads, whose messages never reach the decoder. */
   sides?: import("./codex/side-questions.js").CodexSideQuestions
   /** Stopped native turns retained until transport disposal: late commands still belong to Stop. */
@@ -265,6 +267,10 @@ export interface ProtocolContext {
   decoder: CodexDecoder
   /** The thread's rollout, read as Codex appends to it (`drawRollout`). */
   rollout?: CodexRolloutTail
+  /** Whether the rollout was read for the stdout chunk being handled (`drawRolloutOnce`). */
+  rolloutRead?: boolean
+  /** When the rollout was last read (`performance.now()`), for a streamed delta's reads (`drawRolloutPaced`). */
+  rolloutReadAt?: number
   /** Records each message as it arrived, when the host keeps streams. */
   stream?: NativeStream<CodexFrame> | null
   /**

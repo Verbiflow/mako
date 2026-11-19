@@ -16,6 +16,7 @@ import type { SetupProgress } from "@mako/host/contracts/thread-app"
 import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { environmentTools, registerEnvironmentTools } from "@mako/host/workspaces/environment-tools"
+import { ENVIRONMENT_GUIDE, GUIDE_SECTIONS } from "@mako/host/workspaces/environment-guide"
 import { applyThreadEnvironment, folderApp, portListening, ThreadEnvironments, threadEnvironmentInstructions } from "@mako/host/workspaces/thread-environment"
 import { freeThreadBlock } from "./lib/thread-ports.ts"
 import { ThreadProcesses } from "@mako/host/workspaces/thread-processes"
@@ -333,9 +334,10 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   assert.equal(launched?.values?.PORT, String(launched?.port), "the recipe's PORT is the Thread's first port in the agent's shell")
   assert.equal(launched?.values?.APP_URL, `http://${launched?.host}:${launched?.port}`)
   assert.deepEqual(launched?.recipe, { kind: "ready", processes: [{ name: "web", port: launched!.port }, { name: "api", port: launched!.port + 1 }], checks: ["quick", "full"] })
-  assert.match(threadEnvironmentInstructions(launched!), /The project's recipe also sets PORT=\d+, APP_URL=http:\/\/\S+, API_URL=\S+ in your shell\. Its processes \(web on \d+, api on \d+\) run through the mako server's app_start/)
-  assert.match(threadEnvironmentInstructions(launched!), /If your change alters how the project installs, starts or is checked, update the recipe in the same turn: recipe_save, then recipe_publish once it works\.$/, "every Session is told to keep the recipe current")
-  assert.match(threadEnvironmentInstructions(launched!), /call worktree_move .*[Nn]ever make a worktree with `git worktree add` or copy the checkout/, "every Session is told how to get a branch of its own")
+  assert.match(threadEnvironmentInstructions(launched!), /The project's recipe also sets PORT=\d+, APP_URL=http:\/\/\S+, API_URL=\S+ in your shell\. Its processes, for app_start: web on \d+, api on \d+\./)
+  // Values only: keeping the recipe current and getting a branch of one's own are the primer's (test-primer.ts), said once.
+  assert.match(threadEnvironmentInstructions(launched!), /Its checks, for app_check: quick, full\.$/)
+  assert.doesNotMatch(threadEnvironmentInstructions(launched!), /worktree_move|recipe_save|by hand/)
   const shopApp = folderApp(realpathSync(project))
   cleanups.push(() => processes.discard(shopApp), () => processes.discard(AppKeySchema.parse(placed.thread)))
   const projectRecipes = join(root, "project-recipes")
@@ -403,8 +405,21 @@ process.exit(body.port === Number(process.env.PORT) ? 0 : 1)
   const probe = z.object({ running: z.boolean(), listening: z.record(z.string(), z.string()) }).parse(parseYaml(probeText))
   assert.equal(probe.running, true)
   assert.match(probe.listening[String(toolBase)] ?? "", /^pid \d+$/, "the probe sees the app's own port, inside this Thread's block")
-  const guide = JSON.stringify(await agent.callTool({ name: "recipe_guide", arguments: {} }))
-  assert.match(guide, /Setting up this project's recipe/)
+  // recipe_guide gives an overview with a section index; each section, and the whole guide, comes when asked.
+  const overview = JSON.stringify(await agent.callTool({ name: "recipe_guide", arguments: {} }))
+  assert.match(overview, /Setting up this project's recipe/)
+  assert.match(overview, /- save: 4\. Save the recipe \(an example recipe/, "the index names each section")
+  assert.match(overview, /- try: 5\. Try it with the tools \(app_start, app_check/, "a tool's name in the index stays as the tool is named")
+  assert.doesNotMatch(overview, /verify\.run\): only a command/, "a section's text waits until it's asked for")
+  assert.ok(overview.length < ENVIRONMENT_GUIDE.length / 4, "the overview is a fraction of the guide")
+  const sections = await Promise.all(GUIDE_SECTIONS.map(async ({ name }) => String(JSON.parse(JSON.stringify(await agent.callTool({ name: "recipe_guide", arguments: { section: name } }))).content[0].text)))
+  const opening = ENVIRONMENT_GUIDE.indexOf("\n## What each Thread") + 1
+  assert.ok(JSON.parse(overview).content[0].text.startsWith(ENVIRONMENT_GUIDE.slice(0, opening).trimEnd()), "the overview opens with the guide's opening")
+  assert.equal(sections.join("\n\n"), ENVIRONMENT_GUIDE.slice(opening).trimEnd(), "the sections hold everything after it, nothing lost")
+  assert.match(sections[GUIDE_SECTIONS.findIndex(({ name }) => name === "save")]!, /^## 4\. Save the recipe/)
+  const guide = JSON.stringify(await agent.callTool({ name: "recipe_guide", arguments: { section: "all" } }))
+  assert.equal(JSON.parse(guide).content[0].text, ENVIRONMENT_GUIDE, "all is the whole guide")
+  assert.equal((await agent.callTool({ name: "recipe_guide", arguments: { section: "nope" } })).isError, true, "a section the guide lacks is refused")
   assert.match(guide, /verify\.run\): only a command the project already has/, "an agent writes what to see as a check rather than a script of its own for verify")
   assert.match(guide, /A desktop or mobile app beside a web app or a server it loads is such a project/, "a desktop app beside its web app gets targets")
   assert.match(guide, /a recipe that names one needs a cleanup; recipe_save says when it's missing/, "what's kept under a Thread's name gets a cleanup")

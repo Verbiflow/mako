@@ -47,6 +47,8 @@ export const INSTRUCTION_BLOCKS = {
   orchestration: { cadence: "session" },
   routes: { cadence: "session" },
   policy: { cadence: "session" },
+  /** The `mako` server's instructions, for a harness that doesn't read them from the server (`serverBlock`). */
+  server: { cadence: "session" },
   "front-door": { cadence: "per-message" },
   rules: { cadence: "per-message" },
   /** The person's standing rules for every Fin and every Apex (`roleRuleLines`): standing lines of Mako's note, read once and again when they change. */
@@ -136,6 +138,12 @@ export interface LayerCapabilities {
   hooks: LayerSupport<"sdk-hooks" | "config-hooks" | "plugin" | "client-hooks">
   /** Must stay `kept`: Mako's layer never drops the person's own harness setup. */
   personSetup: "kept"
+  /**
+   * `unread`: the harness never shows the model the `mako` server's
+   * instructions, so Mako's note carries them as the `server` block
+   * (`serverBlock`). Absent: the model reads them from the server.
+   */
+  serverInstructions?: { kind: "unread"; reason: string }
 }
 
 /** One harness's mapping of the layer: its declared capabilities, and the launch fragment its driver passes on. */

@@ -1,4 +1,4 @@
-import type { Block, ChatMessage, MessageOrigin } from "@/lib/types"
+import type { Block, ChatMessage, MessageOrigin, OriginEntry } from "@/lib/types"
 
 /**
  * Keep message identity stable across host re-serializations.
@@ -13,6 +13,15 @@ import type { Block, ChatMessage, MessageOrigin } from "@/lib/types"
  * deliberately structural rather than a general deep equality or hash. Text
  * is compared directly so in-place provider rewrites cannot preserve stale
  * output merely because the replacement has the same length.
+ *
+ * What a block carries from its entry (a call's arguments, a result's
+ * attachments and details, where a message's entries are recorded) is the same
+ * object while the entry is: only an entry read again, a new object saying
+ * perhaps the same, is serialized to compare. Projected whole, a long
+ * conversation once serialized every call's arguments twice over.
+ *
+ * A message that changed keeps the blocks that didn't, so a reply that gained
+ * a paragraph hands back the same calls above it.
  */
 export function reconcileMessages(
   previous: ChatMessage[],
@@ -28,7 +37,7 @@ export function reconcileMessages(
       reused += 1
       return old
     }
-    return message
+    return old ? keepingBlocks(old, message) : message
   })
 
   // Nothing was reusable (a compaction, a branch switch): take the new array
@@ -39,6 +48,35 @@ export function reconcileMessages(
   )
     return previous
   return reused === 0 ? next : out
+}
+
+/** `next` with each block `old` held at the same place saying the same, as `old`'s. */
+function keepingBlocks(old: ChatMessage, next: ChatMessage): ChatMessage {
+  let kept = 0
+  const blocks = next.blocks.map((block, index) => {
+    const held = old.blocks[index]
+    if (!held || held === block || !sameBlock(held, block) || !sameRest(held, block)) return block
+    kept += 1
+    return held
+  })
+  return kept ? { ...next, blocks } : next
+}
+
+/**
+ * What `sameBlock` leaves to the rest of its message to say changed: how a call is identified, and where a result's
+ * whole content, its media and its command's end are. A block kept on its own answers for these too.
+ */
+function sameRest(a: Block, b: Block): boolean {
+  if (a.type === "toolCall") return b.type === "toolCall" && a.tool === b.tool && a.kind === b.kind
+  if (a.type === "toolResult")
+    return b.type === "toolResult" && a.exitCode === b.exitCode && a.cwd === b.cwd &&
+      sameValue(a.rest, b.rest) && sameValue(a.media, b.media)
+  return true
+}
+
+/** The same value: the same object, or one that serializes the same. */
+function sameValue<Value>(a: Value, b: Value): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b)
 }
 
 function sameMessage(a: ChatMessage, b: ChatMessage): boolean {
@@ -73,8 +111,15 @@ function sameOrigin(a: MessageOrigin | undefined, b: MessageOrigin | undefined):
   return a.entries.every((entry, index) => {
     const other = b.entries[index]!
     return entry.id === other.id && entry.type === other.type && entry.label === other.label &&
-      JSON.stringify([entry.record, entry.stream, entry.at]) === JSON.stringify([other.record, other.stream, other.at])
+      sameValue(entry.record, other.record) && sameValue(entry.stream, other.stream) && sameAddress(entry.at, other.at)
   })
+}
+
+/** An address is drawn anew with its message: its two fields say whether it's the same. */
+function sameAddress(a: OriginEntry["at"], b: OriginEntry["at"]): boolean {
+  if (a === b) return true
+  if (!a || !b || a.kind !== b.kind) return false
+  return a.kind === "live" ? b.kind === "live" && a.index === b.index : b.kind === "base" && a.id === b.id
 }
 
 function sameBlock(a: Block, b: Block): boolean {
@@ -93,15 +138,14 @@ function sameBlock(a: Block, b: Block): boolean {
     case "thinking":
       return b.type === "thinking" && a.thinking === b.thinking
     case "attachment":
-      return b.type === "attachment" && JSON.stringify(a) === JSON.stringify(b)
+      return b.type === "attachment" && sameValue(a, b)
     case "toolCall":
       return (
         b.type === "toolCall" &&
         a.id === b.id &&
         a.name === b.name &&
         a.at === b.at &&
-        (a.arguments === b.arguments ||
-          JSON.stringify(a.arguments) === JSON.stringify(b.arguments))
+        sameValue(a.arguments, b.arguments)
       )
     case "toolResult":
       return (
@@ -114,8 +158,8 @@ function sameBlock(a: Block, b: Block): boolean {
         a.isCutOff === b.isCutOff &&
         a.streaming === b.streaming &&
         a.endedAt === b.endedAt &&
-        JSON.stringify(a.attachments) === JSON.stringify(b.attachments) &&
-        JSON.stringify(a.details) === JSON.stringify(b.details)
+        sameValue(a.attachments, b.attachments) &&
+        sameValue(a.details, b.details)
       )
   }
 }

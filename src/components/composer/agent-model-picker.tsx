@@ -50,7 +50,7 @@ import { activeLiveAcp, useAcp } from "@/state/acp"
 import { accountIdentity } from "@/lib/account-identity"
 import type { AccountConfirmation } from "@mako/host/contracts/execution-context"
 import { usePrefs } from "@/state/prefs"
-import { providerProfileKey, providers, useProviders, watchProviderProfile } from "@/state/providers"
+import { profileUnread, providerProfileKey, providers, useProviders } from "@/state/providers"
 import { shallowEqual } from "@/state/store"
 import { setComposerHarness } from "@/state/threads"
 import { formatTokens } from "@/lib/format"
@@ -87,7 +87,8 @@ export function AgentModelPicker({ view }: { view: ComposerSettingsView }) {
       onOpenChange={(next) => {
         setOpen(next)
         if (next) {
-          void providers.loadAll()
+          // Opening the picker is the person asking what each harness lists now.
+          void providers.askShown(view.target.cwd)
           void view.refresh().catch(() => {})
         }
       }}
@@ -267,7 +268,6 @@ function LoadoutRow({
   const profile = useProviders((state) => state.contexts[providerProfileKey(entry.harness, cwd)] ?? state.profiles[entry.harness])
   const availability = loadoutAvailability(entry, profile)
   const label = availability.label
-  useEffect(() => watchProviderProfile(entry.harness, cwd), [entry.harness, cwd])
   return (
     <MenuItem onSelect={onChoose} title={availability.kind === "ready" ? undefined : availability.reason} className="group/loadout">
       <HarnessIcon harness={entry.harness} className="size-3.5" />
@@ -335,7 +335,7 @@ function HarnessRow({ harness, composer }: { harness: string; composer: Composer
           {harnessLabel(harness)}
         </span>
         <span className="min-w-0 flex-1 truncate text-right text-label text-faint">
-          {profile?.pending || !profile
+          {profileUnread(profile)
             ? "Checking…"
             : [view.modelLabel, currentEffort(view)].filter(Boolean).join(" · ")}
         </span>
@@ -433,12 +433,12 @@ export function ModelList({
             />
           )
         })}
-        {profile && !profile.pending && models.length === 0 ? (
+        {!profileUnread(profile) && models.length === 0 ? (
           <p className="px-2 py-4 text-center text-ui text-faint">
             {query ? "No models match." : "This harness reported no models."}
           </p>
         ) : null}
-        {!profile || profile.pending ? (
+        {profileUnread(profile) ? (
           <div role="status" className="px-2 py-1.5">
             <p className="flex h-7 items-center gap-2 text-ui">
               <ActivityMark state="connecting" size={20} />

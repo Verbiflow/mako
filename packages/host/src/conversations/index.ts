@@ -2,7 +2,8 @@ import { cloudFinLimits } from "./fin-capacity.js"
 import { SnapshotBudgetSettingsSchema } from "../contracts/snapshot-budget.js"
 import type { SnapshotBudget } from "../workspaces/index.js"
 import { readSnapshotSettlement } from "./live-journal.js"
-import type { LimitNoticeChoice } from "../contracts/agents.js"
+import { edgeStopped, FIN_WORD, type LimitNoticeChoice } from "../contracts/agents.js"
+import type { WorktreeRestored } from "../contracts/thread-worktrees.js"
 import { noteCarried } from "@mako/sessions/record-carried"
 import { GATEWAY_CLIENT, hostClient } from "../base/host-client.js"
 import type { Foreground } from "../base/foreground.js"
@@ -12,6 +13,7 @@ import type { HostWork } from "../base/event-loop.js"
 import { makoRecords } from "@mako/sessions/record-streams"
 import type { Git } from "@mako/git"
 import { randomUUID } from "node:crypto"
+import { existsSync } from "node:fs"
 import { join } from "node:path"
 import type { Admission } from "../base/admission.js"
 import { readPull, RequiredChecks } from "../git/index.js"
@@ -22,6 +24,7 @@ import type { MethodTable } from "../base/methods.js"
 import { hostWarn } from "../base/host-log.js"
 import { WorktreeThreadState } from "./worktree-thread-state.js"
 import { LiveConversations } from "./live-conversations.js"
+import { listJournals } from "./live-records.js"
 import type { Dependencies as LiveDependencies } from "./live-runtime.js"
 import { NativeRequests } from "./native-requests.js"
 import { SharedConversations, type ConversationRoutingResult } from "./shared-conversations.js"
@@ -37,9 +40,9 @@ import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
 import { placeLink } from "./place-link.js"
 import { PlacedCheckouts } from "./placed-checkouts.js"
-import { verifyFinSource } from "./fin-source.js"
+import { captureFinSource, verifyFinSource } from "./fin-source.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
-import { Agents } from "./agents.js"
+import { Agents, type CloudFins } from "./agents.js"
 import { continueOn as continuing, type ContinueOn } from "./continue-on.js"
 import { MacCapacity } from "./mac-capacity.js"
 import type { HostJobs } from "../base/host-jobs.js"
@@ -48,6 +51,7 @@ import { restorePlan, restoringResume } from "./kept-resume.js"
 import type { RestorePlan } from "../contracts/restore-plan.js"
 import { FIN_CEILING } from "../contracts/fin-tuning.js"
 import type { FinCapacity } from "./fin-capacity-host.js"
+import { keepAccountsFresh, watchWarmProviders } from "./warm-watch.js"
 import { TransferInputSchema } from "../contracts/conversation-control.js"
 import type { TurnUndoScope } from "../contracts/turn-review.js"
 import type { CloudAccount, HostTelemetry } from "../usage/index.js"
@@ -85,10 +89,10 @@ export { MacCapacity, finSlots } from "./mac-capacity.js"
 export { callThreadOf } from "./live-runtime.js"
 export { makoNote } from "./mako-note.js"
 export { OwnerFiles } from "./owner-files.js"
-export { ListedRepositories } from "./listed-repositories.js"
+export { CheckoutRepositories, ListedRepositories } from "./listed-repositories.js"
 export { CloudMoves, namedUuid } from "./cloud-moves.js"
 export { CloudContinues } from "./cloud-continues.js"
-export { CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, workingThreads } from "./cloud-handoffs.js"
+export { CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, workingThreads, WorkingSet } from "./cloud-handoffs.js"
 export { conversationShown, finAsking, ownedSessions, sessionOrderIn, REPORT_WORK, SessionPublisher, SessionReporter, type FinAsking, type ReportSources, type SessionLink } from "./session-report.js"
 export { MovesUnderWay } from "./moves-under-way.js"
 export { CloudTurnOnFollower, declareTurnOnMethods, TURN_ON_POLL_MS, turnOnOf, type TurnOnReading, type TurnOnSources } from "./cloud-turn-on.js"
@@ -110,6 +114,7 @@ export type { MoveArrivalDeps } from "./move-arrival.js"
 export { declareCloudControlPreviewMethods } from "./cloud-control-previews.js"
 export { threadHistoryTools, registerThreadHistoryTools, type ThreadHistoryTools } from "./thread-history.js"
 import type { ThreadHistoryTools } from "./thread-history.js"
+import { stagedWait } from "../base/live-steps.js"
 export { Agents } from "./agents.js"
 export { AgentAnswerSchema, declareAgentMethods, registerAgentTools } from "./agent-tools.js"
 export { AgentAskGate, declareAgentAskMethods } from "./agent-ask-gate.js"
@@ -218,7 +223,7 @@ export interface ConversationsDeps {
   /** This machine's build slots now, for a heavy suite's note (`build-slots-full`). */
   builds?(): { slots: number; holders: string[] }
   /** This device's Fins at once (`FinCapacity`); without it, `FIN_LIMIT`. */
-  finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe">
+  finCapacity?: Pick<FinCapacity, "atOnce" | "observe" | "subscribe"> & Partial<Pick<FinCapacity, "warm" | "look" | "subscribeMemoryPressure">>
   /** Operations this device runs for another place's Threads (`LentHere`): each takes a Fin's place here. */
   lent?: () => number
   /**
@@ -226,6 +231,30 @@ export interface ConversationsDeps {
    * be placed on one, and one placed here reports to its Apex's device. Without it Fins start here only.
    */
   account?(): Pick<CloudAccount, "deviceId" | "devices" | "session" | "heldCloudFinLimits"> | undefined
+  /**
+   * The account's cloud Fin calls, given only to a proof's isolated host (`HostConfig.cloudFinProof`): with them cloud
+   * Fins open here (`AgentsDeps.cloudFins`); absent, `place: cloud` is refused as it ships.
+   */
+  cloudFinProof?(): CloudFinAccount | undefined
+}
+
+/** What a proof host's cloud Fins ask of its account. */
+type CloudFinAccount = Pick<CloudAccount, "cloudHarnesses" | "reserveCloudFin" | "startCloudFin" | "cancelCloudFin">
+
+/** A proof host's cloud Fins, through its account: each call says why when the host isn't signed in. */
+function proofCloudFins(git: Git, account: () => CloudFinAccount | undefined): CloudFins {
+  const call = <Name extends keyof CloudFinAccount>(name: Name): NonNullable<CloudFinAccount[Name]> => {
+    const method = account()?.[name]
+    if (!method) throw new Error("this host isn't signed in to an account that starts cloud Fins")
+    return method
+  }
+  return {
+    harnesses: async () => Object.keys((await call("cloudHarnesses")())?.harnesses ?? {}),
+    capture: (folder) => captureFinSource(git, folder),
+    reserve: (start) => call("reserveCloudFin")(start),
+    start: (place) => call("startCloudFin")(place),
+    cancel: (start) => call("cancelCloudFin")(start),
+  }
 }
 
 export async function openConversations(deps: ConversationsDeps): Promise<Conversations> {
@@ -248,13 +277,39 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   })
   const assessResume = resumingUnder(memory ?? undefined, restoring)
   let agents: Agents | undefined
+  /**
+   * Makes again the worktree Mako retired from under a finished Fin, for conversation `id` about to run in `cwd`, and
+   * says in its transcript how that went, once: the person reading the Fin's Thread sees where it works now, or why it
+   * isn't in a worktree of its own. Undefined, nothing asked of Git, for a folder no retired worktree held.
+   */
+  const remakeWorktree = (id: string, cwd: string): Promise<WorktreeRestored | undefined> | undefined => {
+    const worktrees = workspaces.worktrees
+    if (!worktrees || !threads.store?.retiredWorktrees().some((retired) => cwd === retired.path || cwd.startsWith(`${retired.path}/`))) return undefined
+    return worktrees.restoreRetired(cwd).then((restored) => {
+      if (restored?.kind === "restored") live.recordNote(id, "Worktree made again", `Mako removed this worktree after its ${FIN_WORD} finished, and made it again at ${restored.path} ${restored.note}`)
+      else if (restored) live.recordNote(id, "Worktree couldn't be made again", `Mako removed this worktree after its ${FIN_WORD} finished: ${restored.why} It goes on in its project's folder where its harness resumes there.`)
+      return restored
+    }, (error) => {
+      hostWarn("worktrees", "a finished Fin's worktree couldn't be made again", { conversation: id, error: error instanceof Error ? error.message : String(error) })
+      return undefined
+    })
+  }
   const workspaceSnapshots = new WorkspaceSnapshots(deps.git, join(dataRoot, "workspace-snapshots"))
   workspaceSnapshots.followHistory(workspaces.fileHistory)
   workspaceSnapshots.followSettlement(() => readSnapshotSettlement(join(dataRoot, "conversations"), id => deps.elsewhere?.(id) ?? false))
   deps.jobs.every("settled rewind snapshot budget", 60 * 60_000, async () => {
     if ((await workspaceSnapshots.budget.settings()).mode === "evict") await workspaceSnapshots.budget.run()
   })
-  const live = new LiveConversations({
+  const listed = await listJournals(join(dataRoot, "conversations"))
+  // Idle providers stay warm by this machine's memory, where the host reads it; two of them where it doesn't.
+  const capacity = deps.finCapacity
+  const warmProviders = capacity?.warm && capacity.look && capacity.subscribeMemoryPressure
+    ? watchWarmProviders({ jobs: deps.jobs, capacity: { warm: capacity.warm.bind(capacity), look: capacity.look.bind(capacity), subscribeMemoryPressure: capacity.subscribeMemoryPressure.bind(capacity) }, live: () => live })
+    : undefined
+  const live: LiveConversations = new LiveConversations({
+    listed,
+    ...warmProviders,
+    ...keepAccountsFresh({ jobs: deps.jobs, accounts: host.accounts, live: () => live }),
     agents: () => agents,
     heldModels: (harness) => harnesses.profiles.held(harness)?.models,
     ...(deps.stopping && { stopping: deps.stopping }),
@@ -288,12 +343,13 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       const summary = live.listed().find(summary => summary.session.id === id)
       const placed = threads.store?.journalPlacement(id)
       const edge = placed && threads.store?.edges().of(placed.thread)
-      return edge?.closedAt === undefined && summary !== undefined && !archivedByKeys(liveArchiveKeys(summary), threads.archives.hidden(), catalog.ref(summary.session.nativePath ?? ""))
+      return !edgeStopped(edge) && summary !== undefined && !archivedByKeys(liveArchiveKeys(summary), threads.archives.hidden(), catalog.ref(summary.session.nativePath ?? ""))
     },
     children: catalog.childSource,
     harnessLabel: (harness) => harnessLabel(host, harness),
     resumeVerdict: assessResume,
     projectFolderOfRemoved: (folder) => threads.origins.projectFolderOfRemoved(folder),
+    restoreWorktree: (id, cwd) => (existsSync(cwd) ? undefined : remakeWorktree(id, cwd)?.then(() => undefined)),
     settled: (id) => {
       workspaceSnapshots.budget.changed()
       deps.settled(id)
@@ -443,12 +499,17 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       finCeiling: () => deps.finDefaults?.reading().ceiling ?? FIN_CEILING,
       capacity: new MacCapacity(),
       heldPulls: (repoRoot, branch) => workspaces.worktrees?.heldPulls(repoRoot, branch) ?? [],
+      restoreWorktree: (conversation) => {
+        const cwd = live.session(conversation)?.cwd
+        return cwd === undefined || existsSync(cwd) ? undefined : remakeWorktree(conversation, cwd)
+      },
       readPull: (target) => readPull(target, undefined, requiredChecks),
       watchCheck: (conversation, tier, onEnd) => deps.watchCheck?.(conversation, tier, onEnd) ?? Promise.resolve(false),
       ...(away && { away }),
       remoteOf: (cwd) => deps.git.output(cwd, ["remote", "get-url", "origin"]).then((text) => text.trim() || undefined, () => undefined),
       checkoutOf: (remote) => checkouts.find(remote),
       verifySource: (folder, source) => verifyFinSource(deps.git, folder, source),
+      ...(deps.cloudFinProof && { cloudFins: proofCloudFins(deps.git, () => deps.cloudFinProof?.()) }),
     })
     deps.finCapacity?.subscribe(() => agents?.capacityChanged())
     await agents.resumeInSlices()
@@ -715,7 +776,16 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
   methods.handle("mako:live-rewind-recover", () => live.recoverRewinds())
   methods.handle("mako:live-prompt-versions", (id: string) => live.promptVersions(id))
   methods.handle("mako:unopened-conversations", () => live.unopened())
-  methods.handle("mako:live-action", (id: string, input: LiveActionInput) => live.act(id, input))
+  methods.handle("mako:live-action", async (id: string, input: LiveActionInput) => {
+    // A steer's files are kept before it goes into the turn, as a message's are (`holdAttachments`).
+    if (input.kind !== "steer" || !input.attachments?.length) return live.act(id, input)
+    await live.holdAttachments(input.id, input.attachments)
+    try {
+      return await live.act(id, input)
+    } finally {
+      live.releaseAttachments(input.id)
+    }
+  })
   // A separate method advertises atomic queued steering to clients whose UI
   // can update while the shared host remains alive. Keep live-action for
   // existing clients and receipts written before this capability was named.
@@ -769,9 +839,15 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const binding = snapshot?.control?.bindings.find((item) => item.id === bindingId)
     if (!snapshot || !binding) throw new Error("The selected native session is unavailable")
     // Which binding is active is read as it's admitted: a move may land while the selection resolves.
-    const continued = await conversations.continueOn(id, { kind: "reply", reply: { bindingId, provider: binding.provider, requestId, text, ...(attachments && { attachments }), tuning: tuning ?? binding.tuning } })
-    if (!continued) throw new Error("The selected native session is unavailable")
-    return continued
+    // A reply with no files reaches `continueOn` in this same turn, as it always did; one with files keeps them first.
+    if (attachments?.length) await live.holdAttachments(requestId, attachments)
+    try {
+      const continued = await conversations.continueOn(id, { kind: "reply", reply: { bindingId, provider: binding.provider, requestId, text, ...(attachments && { attachments }), tuning: tuning ?? binding.tuning } })
+      if (!continued) throw new Error("The selected native session is unavailable")
+      return continued
+    } finally {
+      live.releaseAttachments(requestId)
+    }
   })
   // `options.actor`: Mako's own words a move carries (a wait the move ended), drawn and read as Mako's, never the
   // person's. A host that answers `mako:move-ready` with `promptActor` takes it; the device sends none to one that doesn't.
@@ -779,8 +855,12 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     const session = live.session(id)
     if (!session) throw new Error("This conversation is no longer available")
     deps.used?.(session.harness, tuning)
-    return live.admitInOrder(id, profiles.resolveLaunch(session.harness, session.cwd, tuning),
+    // The settings and the attachments' files are readied together; the message is admitted in one turn after both.
+    const held = live.holdAttachments(requestId, attachments)
+    const ready = Promise.all([stagedWait(id, "launch settings", () => profiles.resolveLaunch(session.harness, session.cwd, tuning)), held]).then(([selected]) => selected)
+    return live.admitInOrder(id, ready,
       (selected) => live.submit(id, requestId, text, attachments, selected, undefined, undefined, options?.actor))
+      .finally(() => live.releaseAttachments(requestId))
   })
   // A failed message sent again at a time: a usage limit's reset.
   methods.handle("mako:live-hold-until", (id: string, requestId: string, input: { after: string; at: number }) =>

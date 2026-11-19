@@ -205,7 +205,7 @@ export async function agentsMain(argv: string[]): Promise<void> {
     if (!verb) throw new Error("agents needs a command: start, move, list, read, report, settle, wait, send, stop or link")
     const call = await input(verb, { ...parsed, positionals: rest }, cwd)
     const result = await door(transport, cwd).invoke(call.tool.channel, [caller(), call.input])
-    process.stdout.write(`${parsed.values.json ? JSON.stringify(result) : agentToolText(result)}\n`)
+    process.stdout.write(`${parsed.values.json ? JSON.stringify(result) : agentToolText(result, call.tool.mcp.name)}\n`)
     if (result.refused !== undefined) process.exitCode = 1
   } finally {
     transport.close()

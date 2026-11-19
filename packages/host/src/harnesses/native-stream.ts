@@ -9,6 +9,7 @@ import type { PromptAttachment } from "../contracts/providers-acp.js"
 import { hostLog } from "../base/host-log.js"
 import { SyncScope } from "../base/sync-scope.js"
 import { nativeStreamJson } from "../base/native-diagnostic-json.js"
+import { topic } from "../base/topic.js"
 
 /**
  * Every frame a driver receives from its harness, whole and before any
@@ -133,6 +134,9 @@ export interface RecordedLine {
   frame?: StreamFrame
   at?: number
 }
+
+/** Each frame a driver records, as it arrives and before it is encoded: when its harness was heard from, and by which conversation. */
+export const nativeFrames = topic<{ harness: string; conversation: string }>("mako:native-frame")
 
 /** The line being decoded, while its decode runs: work the decode starts that runs later wasn't decoded from it. */
 const decoding = new SyncScope<RecordedLine>()
@@ -335,6 +339,7 @@ export function nativeStream<Frame>(
       return path
     },
     record: (message) => {
+      if (nativeFrames.heard) nativeFrames.publish({ harness, conversation })
       let json: string | undefined
       try {
         json = nativeStreamJson(message)

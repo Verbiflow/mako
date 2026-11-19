@@ -101,7 +101,7 @@ export interface JsonRecord {
 
 export type DaemonRequestFrame =
   | { id: number; op: "ping" }
-  | { id: number; op: "list"; cwd?: string; harness?: string }
+  | { id: number; op: "list"; cwd?: string; harness?: string; saved?: boolean }
   | { id: number; op: "open"; path: string }
   | {
       id: number
@@ -378,6 +378,7 @@ export function parseDaemonRequest(raw: string): DaemonRequestFrame | null {
         op,
         cwd: readString(record, "cwd"),
         harness: readString(record, "harness"),
+        ...(readBoolean(record, "saved") === true && { saved: true }),
       }
     case "open": {
       const path = readString(record, "path")

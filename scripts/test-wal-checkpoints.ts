@@ -32,6 +32,10 @@ function opened(primer: WalPrimer) {
   const db = journal["db"]
   const policy = () => Number(db.prepare("PRAGMA wal_autocheckpoint").get()?.wal_autocheckpoint)
   journal.checkpointWith(primer)
+  // A journal takes its place on the worker as a turn of it runs (`checkpointWhile`): this one's is running.
+  const running = { ...snapshot, revision: snapshot.revision + 1, session: { ...snapshot.session, status: "running" as const } }
+  journal.commit(running, snapshot)
+  snapshot = running
   const commit = (bytes = 4096) => {
     const previous = snapshot
     const next = { ...snapshot, revision: snapshot.revision + 1, blocks: [...snapshot.blocks, { type: "tool" as const, id: `call-${snapshot.revision}`, title: "Edit", toolKind: "edit" as const, status: "completed" as const, output: "x".repeat(bytes) }] }
@@ -87,6 +91,8 @@ test("unload and immediate reopen cancel old tidy while a zero-paged checkpoint 
   const primer = records["primer"]
   let release: ReturnType<typeof heldRelease> | undefined
   try {
+    // The worker's place comes with a running turn's commit: this journal is unloaded holding one.
+    old.journal.commit({ ...old.snapshot, revision: old.snapshot.revision + 1, session: { ...old.snapshot.session, status: "running" } }, old.snapshot)
     await until(() => old.journal["checkpoints"]?.active() === true)
     assert.equal(old.journal.pagedCount(), 0)
     freePages(old.journal)
@@ -511,6 +517,45 @@ test("a failed policy restoration blocks a write until foreground policy can be 
   }
 })
 
+test("a journal holds its place on the worker while it commits, and lets go once quiet", async () => {
+  const primer = new WalPrimer(), item = opened(primer)
+  // What its quiet timer does once no commit has come for a while, without the wait.
+  const quiet = () => { item.journal["committedAt"] = performance.now() - 60_000; item.journal["leaveWorker"]() }
+  try {
+    await until(() => item.policy() === 0)
+    assert.equal(primer["leases"].size, 1)
+    // Its turn ends: it keeps its place for the commits that follow a turn, then lets go, and what the turn left is
+    // checkpointed on the worker as it does.
+    const ended = { ...item.snapshot(), revision: item.snapshot().revision + 1, session: { ...item.snapshot().session, status: "ready" as const } }
+    item.journal.commit(ended, item.snapshot())
+    assert.equal(item.policy(), 0, "the commits just after a turn still checkpoint on the worker")
+    quiet()
+    assert.equal(item.policy(), 1000, "a quiet journal checkpoints in its own commits")
+    await until(() => primer["leases"].size === 0)
+    const log = item.db.prepare("PRAGMA wal_checkpoint(NOOP)").get()
+    assert.equal(log?.checkpointed, log?.log, "the worker checkpointed what the turn left as it let go")
+    // One commit at rest takes no place, however many journals are read in; a second soon after does (an Apex's, as
+    // its Fins work), and so does its next turn.
+    quiet()
+    item.journal.commit({ ...ended, revision: ended.revision + 1 }, ended)
+    assert.equal(primer["leases"].size, 0)
+    item.journal.commit({ ...ended, revision: ended.revision + 2 }, { ...ended, revision: ended.revision + 1 })
+    assert.equal(primer["leases"].size, 1, "a second commit at rest within two seconds takes a place")
+    await until(() => item.policy() === 0)
+    quiet()
+    await until(() => primer["leases"].size === 0)
+    const again = { ...ended, revision: ended.revision + 3, session: { ...ended.session, status: "running" as const } }
+    item.journal.commit(again, { ...ended, revision: ended.revision + 2 })
+    await until(() => item.policy() === 0)
+    assert.deepEqual(item.journal.read()?.blocks, again.blocks)
+  } finally {
+    item.journal.close()
+    await item.journal.released()
+    await primer.stop()
+    rmSync(item.root, { recursive: true, force: true })
+  }
+})
+
 test("unacknowledged and malformed ownership leave foreground checkpoints enabled", async () => {
   for (const source of [
     `const{parentPort}=require('node:worker_threads');parentPort.on('message',m=>parentPort.postMessage({id:m.id,kind:m.kind,ok:false}))`,
@@ -542,7 +587,7 @@ test("checkpoint connections are bounded and every accepted handle closes on sto
   const databases: DatabaseSync[] = []
   const leases: WalCheckpoint[] = []
   try {
-    for (let i = 0; i < 32; i++) {
+    for (let i = 0; i < 64; i++) {
       const path = join(root, `${i}.sqlite`)
       const db = new DatabaseSync(path)
       databases.push(db)
