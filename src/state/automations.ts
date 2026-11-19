@@ -11,7 +11,7 @@ import type {
   AutomationTemplate,
   AutomationView,
 } from "@mako/host/contracts/automations"
-import { automationFingerprint } from "@mako/host/contracts/automations"
+import { automationFingerprint, isApproved } from "@mako/host/contracts/automations"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
@@ -189,7 +189,7 @@ function definitionJson(definition: AutomationDefinition): JsonValue {
 
 /** Whether `view`'s definition, as the file says it now, is one the person approved. */
 export function approvedNow(view: Pick<AutomationView, "local" | "fingerprint">): boolean {
-  return view.local.approved === view.fingerprint
+  return isApproved(view.local, view.fingerprint)
 }
 
 /** Shows what approving would approve and waits for the person's answer; a second review answers the first with no. */
@@ -288,14 +288,14 @@ export const automations = {
   },
 
   /**
-   * On or off. On again after its file changed since the person approved it shows them that change first, unless they
-   * just read it on its page (`reviewed`); declined, it stays as it is.
+   * On or off. Turning on one whose file isn't what the person approved (never approved, or changed since) shows them
+   * what they'd approve first, unless they just read it on its page (`reviewed`); declined, it stays as it is.
    */
   async setEnabled(project: string, id: string, enabled: boolean, reviewed = false): Promise<void> {
     const view = automationView(automationsStore.get(), project, id)
     let approve: string | undefined
-    if (enabled && view && view.local.approvedDefinition !== undefined && !approvedNow(view)) {
-      if (!reviewed && !(await reviewChange({ project, id, name: view.definition.name, action: "on", before: view.local.approvedDefinition, after: definitionJson(view.definition) }))) return
+    if (enabled && view && !approvedNow(view)) {
+      if (!reviewed && !(await reviewChange({ project, id, name: view.definition.name, action: "on", ...(view.local.approvedDefinition !== undefined && { before: view.local.approvedDefinition }), after: definitionJson(view.definition) }))) return
       approve = view.fingerprint
     }
     try {

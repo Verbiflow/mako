@@ -42,8 +42,9 @@ export const ProposalBlock = memo(function ProposalBlock({
   className?: string
 }) {
   const [sending, setSending] = useState<"approve" | "decline" | null>(null)
-  // A whole new definition is long: its prompt and triggers first, the rest a press away.
-  const [whole, setWhole] = useState(proposal.change !== "create" && proposal.change !== "delete")
+  // A whole new definition is long: once decided, its prompt and triggers first, the rest a press away. While it waits,
+  // all of it: approving approves exactly what was shown, its start, gate and limits too.
+  const [whole, setWhole] = useState(proposal.status === "pending" || (proposal.change !== "create" && proposal.change !== "delete"))
   const pending = proposal.status === "pending"
   const decide = async (approve: boolean) => {
     setSending(approve ? "approve" : "decline")

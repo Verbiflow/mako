@@ -6,6 +6,7 @@ import type { JsonValue } from "@mako/host/contracts/json"
 import {
   AutomationDefinitionSchema,
   automationFingerprint,
+  isApproved,
   automationClientKey,
   cloudTriggerWaiting,
   triggerFiresHere,
@@ -351,13 +352,17 @@ export function mockAutomations(emit: (event: HostEvent) => void) {
   const apply = (proposal: AutomationProposal) => {
     const list = definitions[proposal.project] ?? (definitions[proposal.project] = [])
     if (proposal.change === "delete") definitions[proposal.project] = list.filter((each) => each.id !== proposal.automation)
-    else if (proposal.change === "enable") locals.set(proposal.automation, { failures: 0, ...locals.get(proposal.automation), enabled: true })
+    else if (proposal.change === "enable" && proposal.after) {
+      const shown = AutomationDefinitionSchema.parse(proposal.after)
+      locals.set(proposal.automation, { failures: 0, ...locals.get(proposal.automation), enabled: true, approved: automationFingerprint(shown), approvedDefinition: json(shown) })
+    }
     else if (proposal.after) {
       const next = AutomationDefinitionSchema.parse(proposal.after)
       const at = list.findIndex((each) => each.id === proposal.automation)
       if (at === -1) list.push(next)
       else list[at] = next
-      if (!locals.has(next.id)) locals.set(next.id, { enabled: false, failures: 0 })
+      // What the person approved is the definition the card showed, on or off.
+      locals.set(next.id, { enabled: false, failures: 0, ...locals.get(next.id), approved: automationFingerprint(next), approvedDefinition: json(next) })
     }
   }
   const decide = (id: string, approve: boolean): AutomationProposal => {
@@ -395,7 +400,7 @@ export function mockAutomations(emit: (event: HostEvent) => void) {
         const before = locals.get(replaces ?? next.id)
         const prior = (definitions[project] ?? []).find((each) => each.id === (replaces ?? next.id))
         // As the host does: an edit to one the person approved as it stood approves the edit; any other only with `approve`.
-        if (before?.enabled && (approve === automationFingerprint(next) || (prior && before.approved === automationFingerprint(prior))))
+        if (before?.enabled && (approve === automationFingerprint(next) || (prior && isApproved(before, automationFingerprint(prior)))))
           locals.set(replaces ?? next.id, { ...before, approved: automationFingerprint(next), approvedDefinition: json(next), ...(before.paused?.kind === "changed" && { paused: undefined }) })
         const list = definitions[project] ?? (definitions[project] = [])
         const at = list.findIndex((each) => each.id === (replaces ?? next.id))
@@ -415,7 +420,8 @@ export function mockAutomations(emit: (event: HostEvent) => void) {
       setAutomationEnabled: async (project: string, id: string, enabled: boolean, approve?: string): Promise<AutomationProjectReading> => {
         const rest: AutomationLocal = { ...(locals.get(id) ?? { enabled: false, failures: 0 }) }
         const current = (definitions[project] ?? []).find((each) => each.id === id)
-        if (enabled && current && rest.approvedDefinition !== undefined && rest.approved !== automationFingerprint(current) && approve !== automationFingerprint(current)) throw new Error(`${current.name} changed since you approved it. Review what changed, then turn it on.`)
+        // As the host does: every approval, the first too, is of the definition the person was shown.
+        if (enabled && current && !isApproved(rest, automationFingerprint(current)) && approve !== automationFingerprint(current)) throw new Error(`${current.name} isn't approved as it reads now. Review it, then turn it on.`)
         delete rest.paused
         locals.set(id, { ...rest, enabled, failures: enabled ? 0 : rest.failures, ...(enabled && { enabledAt: Date.now() }), ...(enabled && current && { approved: automationFingerprint(current), approvedDefinition: json(current) }) })
         return changed(project)
@@ -423,7 +429,7 @@ export function mockAutomations(emit: (event: HostEvent) => void) {
       runAutomation: async (project: string, id: string, clientKey: string, approve?: string): Promise<AutomationRunNowResult> => {
         const current = (definitions[project] ?? []).find((each) => each.id === id)
         const kept = locals.get(id) ?? { enabled: false, failures: 0 }
-        if (current && kept.approved !== automationFingerprint(current)) {
+        if (current && !isApproved(kept, automationFingerprint(current))) {
           if (approve !== automationFingerprint(current)) return { refused: `${current.name} changed since you approved it: review it, then run it.` }
           locals.set(id, { ...kept, approved: approve, approvedDefinition: json(current) })
         }

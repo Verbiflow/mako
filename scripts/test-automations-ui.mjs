@@ -188,7 +188,14 @@ async function checkWindow() {
   assert.match(await evaluate(`document.activeElement.dataset.automationRow`), /check-failed-fix$/, "ArrowDown moves to the next row")
   await press("ArrowUp")
   await press("t")
-  await until(`import('/src/state/automations.ts').then(({ automationsStore, automationView }) => automationView(automationsStore.get(), '/Users/you/mako', 'flaky-tests')?.local.enabled === true)`, "T turns it on")
+  // Never approved: T shows all it says first, and turns it on only once that's approved.
+  await until(`document.querySelector('[data-automation-review="on"]') !== null`, "T on one never approved shows what it would approve")
+  assert.ok(await evaluate(`document.querySelectorAll('[data-automation-review] [data-diff-field]').length > 2`), "all of it, not a summary")
+  await capture("review-turn-on-never-approved.png")
+  await click('[data-review-approve]')
+  await until(`import('/src/state/automations.ts').then(({ automationsStore, automationView }) => automationView(automationsStore.get(), '/Users/you/mako', 'flaky-tests')?.local.enabled === true)`, "approved, T turns it on")
+  await until(`document.querySelector('[data-automation-review]') === null`, "the review closes")
+  await evaluate(`document.querySelector('${ROW("flaky-tests")}').focus()`)
   await press("r")
   await until(`document.querySelector('[data-automation-key$="#flaky-tests"]')?.dataset.automationStanding === 'running'`, "R runs it now")
   await until(`[...document.querySelectorAll('[data-sonner-toast]')].some((toast) => toast.innerText.includes('Hunt flaky tests started'))`, "Run now's toast")
@@ -303,6 +310,13 @@ async function checkWindow() {
     assert.equal(model, answer === "approve" ? "claude-sonnet-5" : "claude-opus-5-5")
   }
   console.log("PASS: the Inbox's card shows the diff and decides through its ask, both ways")
+
+  // A proposal's ask card, in its Thread or before the Inbox read its proposal, never approves unseen: it leads to the
+  // change, or only declines.
+  const ask = `{ id: 'ask-1', want: { kind: 'automation-proposal', proposal: 'p-x', change: 'enable', id: 'x', cwd: '/Users/you/mako' }, at: 0 }`
+  const choices = await evaluate(`import('/src/state/agent-asks.ts').then(({ agentAskCard }) => [agentAskCard('c', ${ask}, 'Claude').choices.map((each) => each.label), agentAskCard('c', ${ask}, 'Claude', undefined, () => {}).choices.map((each) => each.label)])`)
+  assert.deepEqual(choices, [["Decline"], ["Review the change", "Decline"]], "no Allow without the change shown")
+  console.log("PASS: a proposal's ask card leads to its change, never approves unseen")
 
   // 9. The editor: new from blank, validation, schedule picker, save, and the row it adds.
   await click('[data-rail-top-row="automations"]')

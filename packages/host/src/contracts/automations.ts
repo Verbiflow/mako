@@ -644,20 +644,24 @@ export function automationFingerprint(definition: AutomationDefinition): string 
 }
 
 /**
- * The fingerprint before SHA-256 (two 32-bit FNV-1a hashes, 16 hex characters), read only to take an older approval
- * forward: one that still matches the file is that definition, approved; any other stays unapproved.
+ * The definition the person approved, as they approved it: the kept definition, while its fingerprint is the approved
+ * one. Undefined when none is kept: such an automation was never approved, whatever else is stored.
  */
-export function legacyAutomationFingerprint(definition: AutomationDefinition): string {
-  const text = stableJson(JsonSchema.parse(JSON.parse(JSON.stringify(definition))))
-  let a = 0x811c9dc5
-  let b = 0x01000193
-  for (let index = 0; index < text.length; index++) {
-    const code = text.charCodeAt(index)
-    a = Math.imul(a ^ code, 0x01000193) >>> 0
-    b = Math.imul(b ^ code, 0x5bd1e995) >>> 0
-  }
-  return `${a.toString(16).padStart(8, "0")}${b.toString(16).padStart(8, "0")}`
+export function approvedDefinitionOf(local: Pick<AutomationLocal, "approved" | "approvedDefinition">): AutomationDefinition | undefined {
+  const definition = AutomationDefinitionSchema.safeParse(local.approvedDefinition).data
+  return definition && local.approved === automationFingerprint(definition) ? definition : undefined
 }
+
+/**
+ * The one rule of approval, the same for the host and every window: the person approved the definition whose
+ * fingerprint is `fingerprint` (the file's now) when the definition they approved is kept and is that one. Nothing
+ * else counts: a fingerprint kept without its definition, or an older one, is never approved.
+ */
+export function isApproved(local: Pick<AutomationLocal, "approved" | "approvedDefinition">, fingerprint: string): boolean {
+  const approved = approvedDefinitionOf(local)
+  return approved !== undefined && automationFingerprint(approved) === fingerprint
+}
+
 
 const JsonSchema = z.json()
 

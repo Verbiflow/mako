@@ -16,7 +16,12 @@ export const AutomationDiff = memo(function AutomationDiff({ proposal, only, cla
   if (proposal.change === "enable" && !parts.length)
     return <p className={cn("text-label text-muted-foreground", className)}>Nothing changed since you approved it; it starts running on its own, as its triggers say.</p>
   if (!parts.length) return <p className={cn("text-label text-muted-foreground", className)}>Nothing changes.</p>
-  const lead = proposal.change === "enable" ? (proposal.before === undefined ? "Turning it on approves all it says:" : "Turning it on approves what changed since you approved it:") : undefined
+  // Never approved: no `before`, so all it says is shown, and labelled so; approving approves all of it.
+  const lead = proposal.change === "enable"
+    ? (proposal.before === undefined ? "Never approved: turning it on approves all it says." : "Turning it on approves what changed since you approved it:")
+    : proposal.change === "update" && proposal.before === undefined
+      ? "Never approved: approving approves all it says."
+      : undefined
   return (
     <div className={cn("flex flex-col gap-2.5", className)}>
       {lead ? <p data-diff-lead className="text-label text-muted-foreground">{lead}</p> : null}
