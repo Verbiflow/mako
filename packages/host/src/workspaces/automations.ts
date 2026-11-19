@@ -1,504 +1,956 @@
-import type { Git } from "@mako/git"
-import { randomUUID } from "node:crypto"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
+import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
-import type { JsonObject, JsonValue } from "../contracts/json.js"
-import { automationTriggerAvailable, type Automation, type AutomationFired, type AutomationRun } from "../contracts/automations-usage-updates.js"
+import { hostLog, hostWarn } from "../base/host-log.js"
+import type { MethodTable } from "../base/methods.js"
+import type { AgentAskWant } from "../contracts/agent-asks.js"
+import type { ReportStatus } from "../contracts/agents.js"
+import { lastCronAtOrBefore, nextCron, parseCron } from "../contracts/automation-cron.js"
+import {
+  AUTOMATION_CATCH_UP_GRACE_MS,
+  AUTOMATION_PAUSE_AFTER_FAILURES,
+  AUTOMATION_PROPOSAL_TTL_MS,
+  AUTOMATION_QUEUE_LIMIT,
+  AutomationDefinitionSchema,
+  automationBriefText,
+  automationClientKey,
+  automationDiff,
+  automationFingerprint,
+  branchFor,
+  cloudTriggerWaiting,
+  scheduleOccurrence,
+  triggerFiresInCloud,
+  triggerLive,
+  type AutomationCause,
+  type AutomationChange,
+  type AutomationDefinition,
+  type AutomationDiffEntry,
+  type AutomationDraft,
+  type AutomationLocal,
+  type AutomationProjectReading,
+  type AutomationProposal,
+  type AutomationRun,
+  type AutomationRunNowResult,
+  type AutomationsReading,
+  type AutomationTemplate,
+  type AutomationTrigger,
+  type AutomationView,
+  type ScheduleTrigger,
+} from "../contracts/automations.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
-import { watchTree, type TreeWatch } from "./tree-watcher.js"
-import type { WatchBackend } from "./watch-backend.js"
-import { AutomationNotStartedError, type AutomationLaunches } from "./automation-launches.js"
+import type { JsonObject, JsonValue } from "../contracts/json.js"
+import { readAutomationFile, writeAutomationFile, type AutomationFileReading } from "./automation-file.js"
+import type { AutomationStore } from "./automation-store.js"
+import { AUTOMATION_TEMPLATES } from "./automation-templates.js"
 
 /**
- * Saved prompts that can fire on their own.
+ * Automations: stored `agents_start`s and what starts them (`contracts/automations.ts`).
  *
- * The triggers are chosen, not exhaustive, and the choices are worth stating:
+ * The definitions are the project's file; on/off, next runs, run records and proposals are this Mac's
+ * (`AutomationStore`). It serves every project a window has open and every one with an automation on, not only the
+ * one in front: the scheduler ticks over all of them (`AutomationScheduler`, `HostJobs` here; the cloud account's
+ * Durable Object in a later slice).
  *
- *   * **Manual.** Always available. At minimum an automation is a prompt you
- *     do not have to retype, which is most of the value on its own.
- *   * **On file change**, matched by glob. This is the one people actually
- *     want — "when a migration lands, check the schema doc" — and it is the
- *     one that composes with an agent that edits files.
- *   * **On commit.** HEAD moving is the clearest "a unit of work finished"
- *     signal a repository has.
- *   * **External events.** Slack, Gmail, Calendar, and webhook definitions are
- *     preserved but cannot be enabled before their provider receiver exists.
- *
- * Deliberately **not** on a schedule. A desktop app that is closed cannot fire
- * one, so a scheduled automation is a promise the app cannot keep; and an app
- * that is open quietly running cron jobs against your repository is a surprise
- * nobody asked for. If it ever needs a schedule it needs a daemon, and that is
- * a different product decision.
- *
- * Everything here is off until switched on, one at a time. A file that arrives
- * with a repository must not start running an agent because you opened the
- * folder.
+ * A run goes: daily cap, overlap (one at a time; extras skipped, or queued with `overlap: queue`), the gate (exit 1
+ * skips; its `key` dedupes), `runWhen` (a fast model's yes or no), then its record, kept before its Thread starts under
+ * `automation:<id>:<occurrence>`, so a repeat reaches the same Thread. It's complete when that Thread's turn ends,
+ * with what it said; three failures in a row pause it, saying why.
  */
 
-/** Where they live: in the project, so they can be committed and shared. */
-const FILE = join(".mako", "automations.json")
+/** What drives `tick`: here `HostJobs`; the cloud account's Durable Object once schedules move there. */
+export interface AutomationScheduler {
+  /** Calls `due` as time passes, about every half minute; the returned function stops it. */
+  start(due: (now: number) => Promise<void>): () => void
+}
 
-/**
- * The floor between two runs of the same automation.
- *
- * A file-change trigger watching a directory an agent is actively editing can
- * fire dozens of times a minute. This is not a nicety — without it, one
- * automation can spend real money in a loop.
- */
-const MIN_INTERVAL_MS = 60_000
+/** A fast, cheap model's yes or no on whether an event meets a trigger's `runWhen`. */
+export interface RunWhenJudge {
+  judge(input: { condition: string; event: string }): Promise<{ run: boolean; why: string; model?: string } | { unavailable: string }>
+}
 
-/** Editors write a file several times per save; wait for it to settle. */
-const DEBOUNCE_MS = 1200
-const OptionalTextSchema = z.string().max(500).optional()
+/** What starts a run's Thread: `agents_start`'s fields, settled. */
+export interface AutomationLaunch {
+  project: string
+  definition: AutomationDefinition
+  run: AutomationRun
+  /** The conversation this run's Thread is: fixed by its client key, so a repeat finds it. */
+  conversationId: string
+  /** The message it sends: the brief, with its gate's context. */
+  requestId: string
+  text: string
+  /** Filled in from the template. */
+  branch?: string
+  /** A standing Thread that already exists takes the run as its next message. */
+  standing: boolean
+}
 
-interface Runtime {
+/** How a run's Thread stands, as the host holds it. */
+export type AutomationThreadReading =
+  | { state: "working" }
+  | { state: "ended"; status: Exclude<ReportStatus, "progress">; summary: string }
+  /** Not on this host now (not loaded, or another place's): the timeout still applies. */
+  | { state: "unknown" }
+
+export type GateOutcome = { exit: number; stdout: string; stderr: string } | { error: string }
+
+/** Nothing started: no Thread exists for the run. Anything else thrown leaves that uncertain, so the run stays fired. */
+export class AutomationNotStartedError extends Error {}
+
+/** Who an agent's call is, as its proposal names it. */
+export interface AutomationProposer {
+  conversation: string
+  title?: string
+  harness?: string
+}
+
+/** What `mako:automations-draft` reads of a Thread. */
+export interface ThreadDraftSource {
   cwd: string
-  watcher: TreeWatch | null
-  timers: Map<string, NodeJS.Timeout>
-  lastRun: Map<string, number>
-  inFlight: Set<string>
-  head: string | null
-}
-
-interface AutomationDocument {
-  automations: Automation[]
-}
-
-export function parseAutomationDocument(text: string): AutomationDocument {
-  const value: JsonValue = JSON.parse(text)
-  if (!isJsonObject(value) || !Array.isArray(value.automations))
-    return { automations: [] }
-
-  const entries: Automation[] = []
-  for (const entry of value.automations) {
-    if (!isJsonObject(entry)) throw new Error("Invalid automation")
-    entries.push(normalizeAutomation(entry))
-  }
-  return { automations: entries }
-}
-
-/**
- * A file from a repository is input, not configuration we wrote.
- *
- * `enabled` is forced off on load: an automation arrives from a checkout with
- * whatever the author set, and honouring that would mean cloning a repo could
- * start running an agent. Enabling is a local decision, held locally.
- */
-export function normalizeAutomation(raw: JsonObject): Automation {
-  return {
-    id:
-      String(raw.id ?? "").slice(0, 80) ||
-      `a${Math.abs(hash(JSON.stringify(raw)))}`,
-    name: String(raw.name ?? "Untitled").slice(0, 120),
-    prompt: String(raw.prompt ?? "").slice(0, 8000),
-    trigger: normalizeTrigger(raw),
-    enabled: false,
-  }
-}
-
-function normalizeTrigger(raw: JsonObject): Automation["trigger"] {
-  const trigger = raw.trigger
-  if (trigger === "files") return { kind: "files", paths: strings(raw.paths) }
-  if (trigger === "commit") return { kind: "commit" }
-  if (trigger === "manual" || !isJsonObject(trigger)) return { kind: "manual" }
-  const kind = trigger.kind
-  if (kind === "files") return { kind, paths: strings(trigger.paths) }
-  if (kind === "commit" || kind === "manual") return { kind }
-  if (kind === "slack") {
-    const event = [
-      "message_in_channel",
-      "reaction_added",
-      "channel_created",
-    ].includes(String(trigger.event))
-      ? trigger.event
-      : "message_in_channel"
-    return {
-      kind,
-      event:
-        event === "reaction_added" || event === "channel_created"
-          ? event
-          : "message_in_channel",
-      channels: strings(trigger.channels),
-      messageFilter: optionalString(trigger.messageFilter),
-    }
-  }
-  if (kind === "gmail") {
-    return {
-      kind,
-      event: "message_received",
-      from: strings(trigger.from),
-      to: strings(trigger.to),
-      subjectFilter: optionalString(trigger.subjectFilter),
-      labels: strings(trigger.labels),
-      hasAttachment: trigger.hasAttachment === true,
-    }
-  }
-  if (kind === "google_calendar") {
-    const event = String(trigger.event)
-    return {
-      kind,
-      event:
-        event === "event_updated" ||
-        event === "event_cancelled" ||
-        event === "event_starting_soon" ||
-        event === "event_ended"
-          ? event
-          : "event_created",
-      calendars: strings(trigger.calendars),
-      titleFilter: optionalString(trigger.titleFilter),
-    }
-  }
-  if (kind === "webhook") {
-    return {
-      kind,
-      path: String(trigger.path ?? "").slice(0, 160),
-    }
-  }
-  return { kind: "manual" }
-}
-
-function strings(value: JsonValue | undefined): string[] {
-  return Array.isArray(value)
-    ? value.slice(0, 40).map((entry) => String(entry).slice(0, 200))
-    : []
-}
-
-function optionalString(value: JsonValue | undefined): string | undefined {
-  return OptionalTextSchema.catch(undefined).parse(value) || undefined
-}
-
-function isJsonObject(value: JsonValue | undefined): value is JsonObject {
-  return (
-    value !== undefined &&
-    value !== null &&
-    !Array.isArray(value) &&
-    Object.prototype.toString.call(value) === "[object Object]"
-  )
-}
-
-function hash(text: string): number {
-  let value = 0
-  for (let index = 0; index < text.length; index += 1) {
-    value = (value * 31 + text.charCodeAt(index)) | 0
-  }
-  return value
-}
-
-/* ------------------------------------------------------------------ */
-/* matching                                                            */
-/* ------------------------------------------------------------------ */
-
-/**
- * Glob matching, small on purpose.
- *
- * `**` crosses directories, `*` does not, `?` is one character. That is the
- * whole vocabulary — enough for `src/**\/*.ts` and `migrations/*.sql`, which is
- * what these patterns are for, and small enough to read in one sitting rather
- * than pulling in a matcher.
- */
-export function matchesGlob(pattern: string, path: string): boolean {
-  let source = ""
-  let index = 0
-  while (index < pattern.length) {
-    const char = pattern[index] ?? ""
-    if (char === "*" && pattern[index + 1] === "*") {
-      // `**/` has to be able to match *no* directories, or `src/**/*.ts`
-      // misses `src/session.ts` — which is the first thing anyone writes and
-      // the first thing they would notice not working.
-      if (pattern[index + 2] === "/") {
-        source += "(?:.*/)?"
-        index += 3
-        continue
-      }
-      source += ".*"
-      index += 2
-      continue
-    }
-    if (char === "*") {
-      source += "[^/]*"
-      index += 1
-      continue
-    }
-    if (char === "?") {
-      source += "[^/]"
-      index += 1
-      continue
-    }
-    source += /[.+^${}()|[\]\\]/.test(char) ? `\\${char}` : char
-    index += 1
-  }
-  try {
-    return new RegExp(`^${source}$`).test(path)
-  } catch {
-    return false
-  }
-}
-
-/* ------------------------------------------------------------------ */
-/* running                                                             */
-/* ------------------------------------------------------------------ */
-
-/** Git's own bookkeeping is never what a rule means; `watchTree` already drops dependency and build folders. */
-const IGNORED = /(^|\/)\.git(\/|$)/
-
-function isIgnored(path: string): boolean {
-  return IGNORED.test(path)
+  title?: string
+  prompt: string
+  harness?: string
+  model?: string
+  reasoning?: string
+  access?: AutomationDefinition["start"]["access"]
+  branch?: string
 }
 
 export interface AutomationsDeps {
-  git: Git
-  /** Watches a workspace for its file rules. */
-  watch: WatchBackend
+  store: AutomationStore
+  scheduler: AutomationScheduler
   emit(event: HostEvent): void
-  /** Starts the prompt in `cwd` as a new conversation, named `label`. */
-  launch(cwd: string, prompt: string, label: string): Promise<void>
-  /** Receipts for agent-approved launches; without one those launches are refused. */
-  launches?: AutomationLaunches
+  /** The project folders windows have open now. */
+  openProjects(): string[]
+  startThread(launch: AutomationLaunch): Promise<{ thread?: string; place?: string }>
+  threadOf(conversation: string, request: string): AutomationThreadReading
+  stopThread(conversation: string): Promise<void>
+  runGate(project: string, command: string, timeoutMs: number): Promise<GateOutcome>
+  /** The project's HEAD, its branch and the commit's subject; undefined outside a repository. */
+  head(project: string): Promise<{ head: string; branch?: string; subject?: string } | undefined>
+  runWhen?: RunWhenJudge
+  /** Mako's note to an agent's conversation, once, under `request`. */
+  tell(conversation: string, request: string, text: string): Promise<void>
+  /** The agent asks that carry proposals to the person (`AgentAskGate`). */
+  asks: { raise(conversation: string, want: AgentAskWant): string; settle(conversation: string, ask: string): void }
+  draftSource?(conversationId: string): ThreadDraftSource | undefined
+  /** `<dataRoot>/automation-launches`: an older build's receipts for approved runs, read for one release. */
+  legacyLaunches?: string
+  now?(): number
 }
 
-/** The automations of the workspace in front, and what fires them. */
+interface Cached {
+  mtimeMs: number | undefined
+  reading: AutomationFileReading
+}
+
+const LegacyReceiptSchema = z.object({
+  cwd: z.string(),
+  id: z.string(),
+  result: z.object({ status: z.enum(["started", "completed", "not-run", "unknown"]) }).loose(),
+})
+const GateContextSchema = z.record(z.string(), z.json())
+/** A gate's dedupe key: a word, not blank. */
+const GateKeySchema = z.string().trim().min(1)
+const IdTextSchema = z.string()
+const JsonSchema = z.json()
+
+/** A name's UUID, the same each time: conversation and request ids a repeat finds again. */
+export function automationUuid(name: string): string {
+  const hex = createHash("sha256").update(`mako automation\0${name}`).digest("hex")
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-8${hex.slice(13, 16)}-${((Number.parseInt(hex[16] ?? "0", 16) & 0x3) | 0x8).toString(16)}${hex.slice(17, 20)}-${hex.slice(20, 32)}`
+}
+
+/** A schedule occurrence's name: the contract's, shared with the cloud. */
+export const slotName = scheduleOccurrence
+
+const DAY_MS = 24 * 60 * 60_000
+/** A fired run younger than this whose Thread this host doesn't know starts again, under the same conversation. */
+const RECOVER_WITHIN_MS = 10 * 60_000
+/** Runs that count against `maxRunsPerDay`: every one that started, or waits to. */
+const COUNTED = new Set<AutomationRun["status"]>(["queued", "fired", "completed", "failed"])
+/** Runs a gate key already covers: one under way, waiting, or done. A failed one may run again. */
+const COVERED = new Set<AutomationRun["status"]>(["queued", "fired", "completed"])
+
 export class Automations {
-  private readonly deps: AutomationsDeps
-  private runtime: Runtime | null = null
-  private automations: Automation[] = []
-  private loadedFor: string | undefined
+  readonly #deps: AutomationsDeps
+  readonly #files = new Map<string, Cached>()
+  /** One change at a time per automation, so two triggers never both pass the overlap check. */
+  readonly #turns = new Map<string, Promise<unknown>>()
+  #stopScheduler: (() => void) | undefined
+  #started: Promise<void> | undefined
 
   constructor(deps: AutomationsDeps) {
-    this.deps = deps
+    this.#deps = deps
   }
 
-  list(): Automation[] {
-    return this.automations
+  #now(): number {
+    return this.#deps.now?.() ?? Date.now()
   }
 
-  /** The list and its owner are one reading, before a tool asks permission for any of it. */
-  context() {
-    return { cwd: this.runtime?.cwd === this.loadedFor ? this.loadedFor : undefined, automations: this.automations }
+  /** Reads what this Mac kept, takes up what an older build or a stopped host left, and starts the schedule. */
+  start(): Promise<void> {
+    this.#started ??= (async () => {
+      await this.#deps.store.load()
+      await this.#recover()
+      this.#stopScheduler = this.#deps.scheduler.start((now) => this.tick(now))
+    })()
+    return this.#started
   }
 
-  async load(cwd: string): Promise<Automation[]> {
-    const runtime = this.runtime
-    let loaded: Automation[]
-    try {
-      const document = parseAutomationDocument(
-        await readFile(join(cwd, FILE), "utf8")
-      )
-      loaded = document.automations
-    } catch {
-      loaded = []
-    }
-    if (this.runtime !== runtime) return this.automations
-    this.automations = loaded
-    this.loadedFor = cwd
-    if (this.runtime?.cwd === cwd) this.syncFileWatcher(this.runtime)
-    this.publish()
-    return this.automations
-  }
-
-  async save(cwd: string, next: Automation[]): Promise<Automation[]> {
-    this.automations = next
-    this.loadedFor = cwd
-    if (this.runtime?.cwd === cwd) this.syncFileWatcher(this.runtime)
-    this.publish()
-    try {
-      await mkdir(join(cwd, ".mako"), { recursive: true })
-      // `enabled` is not written: it is a local decision about a shared file, and
-      // committing it would switch the automation on for everyone who clones.
-      const shared = next.map((entry) => ({ ...entry, enabled: undefined }))
-      await writeFile(
-        join(cwd, FILE),
-        `${JSON.stringify({ automations: shared }, null, 2)}\n`,
-        "utf8"
-      )
-    } catch {
-      // A project we cannot write to still gets working automations in memory.
-    }
-    return this.automations
-  }
-
-  /** Enabling is per-machine and is not written to the shared file. */
-  setEnabled(id: string, enabled: boolean, cwd?: string): Automation[] {
-    if (cwd !== undefined && (this.runtime?.cwd !== cwd || this.loadedFor !== cwd)) throw new Error("The workspace changed. Open the automation's original workspace to answer its ask.")
-    this.automations = this.automations.map((entry) =>
-      entry.id === id && (!enabled || automationTriggerAvailable(entry.trigger))
-        ? { ...entry, enabled }
-        : entry
-    )
-    if (this.runtime) this.syncFileWatcher(this.runtime)
-    this.publish()
-    return this.automations
-  }
-
-  /**
-   * Fire one automation.
-   *
-   * Two guards, both about money rather than tidiness: an automation already
-   * running does not start again, and one that ran a moment ago waits. A file
-   * watcher pointed at a directory an agent is editing will otherwise re-trigger
-   * on the agent's own output, which is a loop that bills.
-   */
-  async fire(id: string, reason: AutomationRun["reason"], operation?: string, cwd?: string): Promise<AutomationFired> {
-    if (cwd !== undefined && (this.runtime?.cwd !== cwd || this.loadedFor !== cwd)) return { status: "not-run", why: "The workspace changed. Open the automation's original workspace to answer its ask." }
-    if (operation !== undefined) {
-      const state = this.runtime
-      if (reason !== "manual" || !this.deps.launches || !state || !cwd) return { status: "not-run", why: "This host can't safely record that automation's approved run." }
-      return this.deps.launches.run(operation, { cwd, id }, () => this.runtime === state ? this.fire(id, reason, undefined, cwd) : Promise.resolve({ status: "not-run", why: "The workspace changed before this automation could start." }))
-    }
-    const automation = this.automations.find((entry) => entry.id === id)
-    const state = this.runtime
-    if (!automation || !state || this.loadedFor !== state.cwd) return { status: "not-run", why: "Mako can't find that automation here." }
-    if (reason !== "manual" && (!automation.enabled || automation.trigger.kind !== reason)) return { status: "not-run", why: "It isn't on for this." }
-    if (state.inFlight.has(id)) return { status: "not-run", why: "It's running already." }
-
-    const last = state.lastRun.get(id) ?? 0
-    if (reason !== "manual" && Date.now() - last < MIN_INTERVAL_MS) return { status: "not-run", why: "It ran a moment ago." }
-
-    state.inFlight.add(id)
-    const runId = randomUUID()
-    const startedAt = Date.now()
-    state.lastRun.set(id, startedAt)
-    const { emit } = this.deps
-    emit({
-      type: "automation-run",
-      run: {
-        runId,
-        id,
-        name: automation.name,
-        reason,
-        at: startedAt,
-        status: "started",
-      },
-    })
-    try {
-      await this.deps.launch(state.cwd, automation.prompt, automation.name)
-      emit({
-        type: "automation-run",
-        run: {
-          runId,
-          id,
-          name: automation.name,
-          reason,
-          at: Date.now(),
-          status: "completed",
-        },
-      })
-      return { status: "completed" }
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error)
-      emit({
-        type: "automation-run",
-        run: {
-          runId,
-          id,
-          name: automation.name,
-          reason,
-          at: Date.now(),
-          status: "failed",
-          error: message,
-        },
-      })
-      return error instanceof AutomationNotStartedError ? { status: "not-run", why: message } : { status: "failed", error: message }
-    } finally {
-      state.inFlight.delete(id)
-    }
-  }
-
-  /**
-   * Watch the workspace.
-   *
-   * One recursive watcher for the whole tree rather than one per pattern: the
-   * patterns are matched here, and a watcher per rule would multiply the same
-   * events by the number of rules. No subscription is needed until a file rule
-   * is enabled; native watcher registration and close can block on the OS.
-   */
-  async watch(cwd: string): Promise<void> {
-    this.stop()
-    this.runtime = {
-      cwd,
-      watcher: null,
-      timers: new Map(),
-      lastRun: new Map(),
-      inFlight: new Set(),
-      head: null,
-    }
-    await this.load(cwd)
-  }
-
-  /**
-   * Notice a commit.
-   *
-   * Driven by the git status the app already computes rather than a watcher of
-   * its own — the app re-reads git after every turn and on focus, which is
-   * exactly when HEAD could have moved.
-   */
-  noticeHead(head: string | undefined): void {
-    if (!this.runtime || !head) return
-    const previous = this.runtime.head
-    this.runtime.head = head
-    if (previous === null || previous === head) return
-    for (const automation of this.automations) {
-      if (automation.enabled && automation.trigger.kind === "commit") {
-        void this.fire(automation.id, "commit")
-      }
-    }
+  /** A window opened `project`: it's served from now, and its reading goes to every window. */
+  async opened(project: string): Promise<void> {
+    await this.start()
+    this.#deps.store.seen(project, this.#now())
+    await this.#changed(project)
   }
 
   stop(): void {
-    if (!this.runtime) return
-    const previous = this.runtime
-    this.runtime = null
-    for (const timer of previous.timers.values()) clearTimeout(timer)
-    previous.watcher?.close()
+    this.#stopScheduler?.()
+    this.#stopScheduler = undefined
   }
 
-  private publish(): void {
-    this.deps.emit({ type: "automations", automations: this.automations })
+  /* ---------------------------------------------------------------- reading */
+
+  /** The projects served: those open in a window, and those with an automation on or a proposal waiting. */
+  projects(): string[] {
+    const open = this.#deps.openProjects()
+    const store = this.#deps.store
+    const kept = store.projects().filter((project) => store.ids(project).some((id) => store.local(project, id).enabled) || store.proposals(project).some((proposal) => proposal.status === "pending"))
+    return [...new Set([...open, ...kept])]
   }
 
-  private syncFileWatcher(current: Runtime): void {
-    const enabled = new Set(this.automations.filter(entry => entry.enabled && entry.trigger.kind === "files").map(entry => entry.id))
-    for (const [id, timer] of current.timers) {
-      if (enabled.has(id)) continue
-      clearTimeout(timer)
-      current.timers.delete(id)
+  async #file(project: string): Promise<AutomationFileReading> {
+    const cached = this.#files.get(project)
+    const reading = await readAutomationFile(project)
+    if (cached && reading.mtimeMs !== undefined && cached.mtimeMs === reading.mtimeMs) return cached.reading
+    this.#files.set(project, { mtimeMs: reading.mtimeMs, reading })
+    return reading
+  }
+
+  async read(project?: string): Promise<AutomationsReading> {
+    await this.start()
+    const projects = project === undefined ? this.projects() : [project]
+    return { projects: await Promise.all(projects.map((each) => this.reading(each))) }
+  }
+
+  async reading(project: string): Promise<AutomationProjectReading> {
+    await this.start()
+    const file = await this.#file(project)
+    const store = this.#deps.store
+    const automations = file.definitions.map((definition) => this.#view(project, definition))
+    const proposals = [...store.proposals(project)].sort((a, b) => (a.status === "pending" ? 0 : 1) - (b.status === "pending" ? 0 : 1) || b.at - a.at).slice(0, 50)
+    return {
+      project,
+      automations,
+      proposals,
+      file: { exists: file.exists, ...(file.legacy && { legacy: true }), ...(file.error && { error: file.error }), ...(file.skipped.length && { skipped: file.skipped }) },
     }
-    if (!enabled.size) {
-      const watcher = current.watcher
-      current.watcher = null
-      watcher?.close()
+  }
+
+  #view(project: string, definition: AutomationDefinition): AutomationView {
+    const local = this.#deps.store.local(project, definition.id)
+    const runs = this.#deps.store.runs(project, definition.id)
+    const activeRun = runs.find((run) => run.status === "fired")
+    const fingerprint = automationFingerprint(definition)
+    const live = definition.triggers.filter((trigger) => triggerLive(trigger, local.cloudRegistered))
+    const issues = [
+      ...definition.triggers.flatMap((trigger) => trigger.kind === "unsupported" ? [`A trigger can't be read here: ${trigger.why}.`] : triggerFiresInCloud(trigger) ? [cloudTriggerWaiting(trigger, local.cloudRegistered)].filter((why) => why !== undefined) : []),
+      ...(definition.start.place.startsWith("device:") ? ["A run on another device starts with the cloud slice; until then it can't start."] : []),
+    ]
+    const standing = !local.enabled ? "off" : activeRun ? "running" : local.paused || (local.approved !== undefined && local.approved !== fingerprint) ? "paused" : live.some((trigger) => trigger.kind !== "manual") ? "on" : "unsupported"
+    const changed = local.enabled && !local.paused && local.approved !== undefined && local.approved !== fingerprint
+    return {
+      project,
+      definition,
+      local: changed ? { ...local, paused: { kind: "changed", reason: CHANGED_REASON, at: this.#now() } } : local,
+      standing,
+      ...(runs[0] && { lastRun: runs[0] }),
+      ...(activeRun && { activeRun }),
+      fingerprint,
+      issues,
+    }
+  }
+
+  async #definition(project: string, id: string): Promise<AutomationDefinition | undefined> {
+    return (await this.#file(project)).definitions.find((definition) => definition.id === id)
+  }
+
+  runs(project: string, id?: string, limit = 50): AutomationRun[] {
+    const store = this.#deps.store
+    const ids = id === undefined ? store.ids(project) : [id]
+    return ids.flatMap((each) => store.runs(project, each)).sort((a, b) => b.at - a.at).slice(0, Math.max(1, Math.min(limit, 500)))
+  }
+
+  templates(): AutomationTemplate[] {
+    return AUTOMATION_TEMPLATES
+  }
+
+  /** "Make this an automation": the Thread's first prompt and how it started, for the editor to open. */
+  draft(conversationId: string): AutomationDraft {
+    const source = this.#deps.draftSource?.(conversationId)
+    if (!source) throw new Error("Mako can't find that Thread's first prompt here.")
+    const title = source.title?.trim() || source.prompt.split("\n")[0]!.slice(0, 80)
+    const id = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 60) || "automation"
+    return {
+      project: source.cwd,
+      definition: {
+        id,
+        name: title.slice(0, 120),
+        prompt: { objective: source.prompt.slice(0, 200_000) },
+        start: {
+          ...(source.harness && { harness: source.harness }),
+          ...(source.model && { model: source.model }),
+          ...(source.reasoning && { reasoning: source.reasoning }),
+          access: source.access ?? "edits",
+          place: "here",
+          ...(source.branch && { workspace: { branch: `${id}/{date}` } }),
+        },
+        triggers: [{ kind: "manual" }],
+      },
+    }
+  }
+
+  /* ---------------------------------------------------------------- the person's edits */
+
+  /** The person's own edit: written at once. One that's on stays on, its new definition the one they approved. */
+  async save(project: string, raw: JsonValue, replaces?: string): Promise<AutomationProjectReading> {
+    const definition = AutomationDefinitionSchema.parse(raw)
+    await this.#write(project, (definitions) => {
+      const without = definitions.filter((each) => each.id !== definition.id && each.id !== replaces)
+      const at = definitions.findIndex((each) => each.id === (replaces ?? definition.id))
+      return at < 0 ? [...without, definition] : [...without.slice(0, at), definition, ...without.slice(at)]
+    })
+    const store = this.#deps.store
+    if (replaces && replaces !== definition.id) {
+      store.setLocal(project, definition.id, store.local(project, replaces))
+      store.forget(project, replaces)
+    }
+    const local = store.local(project, definition.id)
+    if (local.enabled) store.setLocal(project, definition.id, { ...local, approved: automationFingerprint(definition), paused: local.paused?.kind === "changed" ? undefined : local.paused, nextRunAt: this.#nextRun(definition, this.#now()) })
+    return this.#changed(project)
+  }
+
+  async remove(project: string, id: string): Promise<AutomationProjectReading> {
+    await this.#write(project, (definitions) => definitions.filter((each) => each.id !== id))
+    this.#deps.store.setLocal(project, id, { ...this.#deps.store.local(project, id), enabled: false })
+    return this.#changed(project)
+  }
+
+  /** On or off. On approves the definition as it stands now, and clears a pause. */
+  async setEnabled(project: string, id: string, enabled: boolean): Promise<AutomationProjectReading> {
+    const definition = await this.#definition(project, id)
+    if (!definition) throw new Error(`No automation here has the id ${id}.`)
+    const store = this.#deps.store
+    const local = store.local(project, id)
+    const now = this.#now()
+    store.setLocal(project, id, enabled
+      ? { ...local, enabled: true, approved: automationFingerprint(definition), paused: undefined, failures: 0, enabledAt: now, scheduledThrough: now, nextRunAt: this.#nextRun(definition, now) }
+      : { ...local, enabled: false, nextRunAt: undefined })
+    hostLog("automations", enabled ? "turned on" : "turned off", { automation: id })
+    return this.#changed(project)
+  }
+
+  /** Run now: the person's press, or an agent's `run_now`, under its caller's key. */
+  async runNow(project: string, id: string, clientKey: string, cause: AutomationCause = { kind: "person" }): Promise<AutomationRunNowResult> {
+    await this.start()
+    const definition = await this.#definition(project, id)
+    if (!definition) return { refused: `No automation in ${project} has the id ${id}.` }
+    const occurrence = `now-${createHash("sha256").update(clientKey).digest("hex").slice(0, 16)}`
+    return { run: await this.fire(project, definition, cause, occurrence) }
+  }
+
+  async #write(project: string, change: (definitions: AutomationDefinition[]) => AutomationDefinition[]): Promise<void> {
+    const file = await this.#file(project)
+    if (file.error && file.exists) throw new Error(`${file.error} Fix it before changing its automations here.`)
+    await writeAutomationFile(project, change(file.definitions), file.kept)
+    this.#files.delete(project)
+  }
+
+  async #changed(project: string): Promise<AutomationProjectReading> {
+    await this.#deps.store.save()
+    const reading = await this.reading(project)
+    this.#deps.emit({ type: "automations-changed", reading })
+    return reading
+  }
+
+  /* ---------------------------------------------------------------- firing */
+
+  /** One change at a time per automation. */
+  #inTurn<T>(project: string, id: string, work: () => Promise<T>): Promise<T> {
+    const key = `${project}\0${id}`
+    const run = (this.#turns.get(key) ?? Promise.resolve()).catch(() => undefined).then(work)
+    this.#turns.set(key, run)
+    void run.finally(() => {
+      if (this.#turns.get(key) === run) this.#turns.delete(key)
+    }).catch(() => undefined)
+    return run
+  }
+
+  /**
+   * One occurrence of an automation: its record, or the record a repeat of it already has. Whether it's on is the
+   * caller's to check: Run now runs one that's off.
+   */
+  fire(project: string, definition: AutomationDefinition, cause: AutomationCause, occurrence: string): Promise<AutomationRun> {
+    return this.#inTurn(project, definition.id, () => this.#fire(project, definition, cause, occurrence))
+  }
+
+  async #fire(project: string, definition: AutomationDefinition, cause: AutomationCause, occurrence: string): Promise<AutomationRun> {
+    const store = this.#deps.store
+    const id = definition.id
+    const kept = store.run(project, id, occurrence)
+    // A repeat is the same run; only one that certainly started nothing is tried again when asked again by hand.
+    if (kept && !(kept.status === "failed-to-start" && (cause.kind === "person" || cause.kind === "agent"))) return kept
+    const now = this.#now()
+    const base: AutomationRun = { occurrence, automation: id, project, clientKey: automationClientKey(id, occurrence), cause, status: "fired", at: now }
+    const runs = store.runs(project, id)
+    const limit = definition.limits.maxRunsPerDay
+    if (limit !== undefined && runs.filter((run) => COUNTED.has(run.status) && run.at > now - DAY_MS).length >= limit)
+      return this.#record({ ...base, status: "skipped", why: `It started ${limit} run${limit === 1 ? "" : "s"} in the last 24 hours, its limit.` })
+    const active = runs.find((run) => run.status === "fired")
+    if (active) {
+      const queued = runs.filter((run) => run.status === "queued").length
+      if (definition.limits.overlap === "queue" && queued < AUTOMATION_QUEUE_LIMIT) return this.#record({ ...base, status: "queued", why: `It starts once run ${active.occurrence} ends.` })
+      return this.#record({ ...base, status: "skipped", mergedInto: active.occurrence, why: `Run ${active.occurrence} was still going.` })
+    }
+    return this.#admit(project, definition, base)
+  }
+
+  /** The gate, the condition, the record, then the Thread. */
+  async #admit(project: string, definition: AutomationDefinition, base: AutomationRun): Promise<AutomationRun> {
+    const store = this.#deps.store
+    const id = definition.id
+    let gate: AutomationRun["gate"]
+    if (definition.gate) {
+      const outcome = await this.#deps.runGate(project, definition.gate.command, definition.gate.timeoutS * 1000)
+      if ("error" in outcome) return this.#failedToStart({ ...base }, `Its gate couldn't run: ${outcome.error}`)
+      if (outcome.exit === 1) return this.#record({ ...base, status: "gate-skipped", why: "Its gate found nothing to do (exit 1)." })
+      if (outcome.exit !== 0) return this.#failedToStart({ ...base }, `Its gate failed with exit ${outcome.exit}${outcome.stderr.trim() ? `: ${outcome.stderr.trim().split("\n").slice(-3).join(" ").slice(0, 600)}` : ""}.`)
+      gate = gateContext(outcome.stdout)
+      const key = gate?.key
+      const covered = key === undefined ? undefined : store.runs(project, id).find((run) => run.gate?.key === key && COVERED.has(run.status))
+      if (covered) return this.#record({ ...base, status: "gate-skipped", gate, why: `It already ran for ${key} (run ${covered.occurrence}).` })
+    }
+    const trigger = triggerOf(definition, base.cause)
+    const condition = trigger && "runWhen" in trigger ? trigger.runWhen : undefined
+    if (condition && (base.cause.kind === "schedule" || base.cause.kind === "commit")) {
+      const judged = this.#deps.runWhen
+        ? await this.#deps.runWhen.judge({ condition, event: eventWords(definition, base.cause, gate) }).catch((error: Error) => ({ unavailable: error.message }))
+        : { unavailable: "This Mac has no model to check it with." }
+      if ("unavailable" in judged) return this.#record({ ...base, status: "skipped", ...(gate && { gate }), why: `Its condition couldn't be checked, so it didn't run: ${judged.unavailable} Connect an API key in Settings › Git for a model to check it.` })
+      const runWhen = { verdict: judged.run ? "run" as const : "skip" as const, reason: judged.why.slice(0, 400), ...(judged.model && { model: judged.model.slice(0, 80) }) }
+      if (!judged.run) return this.#record({ ...base, status: "skipped", ...(gate && { gate }), runWhen, why: runWhen.reason })
+      return this.#launch(project, definition, { ...base, ...(gate && { gate }), runWhen })
+    }
+    return this.#launch(project, definition, { ...base, ...(gate && { gate }) })
+  }
+
+  async #launch(project: string, definition: AutomationDefinition, base: AutomationRun): Promise<AutomationRun> {
+    const now = this.#now()
+    const standing = definition.thread === "standing"
+    const conversationId = automationUuid(standing ? `${project}\0${definition.id}\0standing` : `${project}\0${base.clientKey}`)
+    const requestId = automationUuid(`${project}\0${base.clientKey}\0prompt`)
+    const template = definition.start.workspace?.branch
+    const timezone = definition.triggers.find((trigger): trigger is ScheduleTrigger => trigger.kind === "schedule")?.timezone
+    const branch = template ? branchFor(template, { id: definition.id, occurrence: base.occurrence, at: base.cause.kind === "schedule" ? base.cause.at : now, ...(timezone && { timezone }) }) : undefined
+    if (definition.start.place.startsWith("device:")) return this.#failedToStart(base, "A run on another device starts with the cloud slice. Set its place to here or cloud.")
+    // Kept before its Thread starts: a host that stops between the two starts the same Thread again (`#recover`).
+    const run: AutomationRun = { ...base, status: "fired", startedAt: now, thread: { conversation: conversationId, request: requestId, ...(branch && { branch }), ...(definition.start.place !== "here" && { place: definition.start.place }) } }
+    await this.#record(run)
+    return this.#startThread(project, definition, run)
+  }
+
+  async #startThread(project: string, definition: AutomationDefinition, run: AutomationRun): Promise<AutomationRun> {
+    const thread = run.thread!
+    try {
+      const started = await this.#deps.startThread({
+        project,
+        definition,
+        run,
+        conversationId: thread.conversation,
+        requestId: thread.request,
+        text: runText(definition, run),
+        ...(thread.branch && { branch: thread.branch }),
+        standing: definition.thread === "standing",
+      })
+      hostLog("automations", "run started", { automation: definition.id, occurrence: run.occurrence, conversation: thread.conversation })
+      const now = this.#deps.store.run(project, definition.id, run.occurrence) ?? run
+      if (now.status !== "fired" || (!started.thread && !started.place)) return now
+      return this.#record({ ...now, thread: { ...thread, ...(started.thread && { thread: started.thread }), ...(started.place && { place: started.place }) } })
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error)
+      if (error instanceof AutomationNotStartedError) return this.#failedToStart(run, `Its Thread didn't start: ${why}`)
+      // Something may have started: the run stays fired, and its timeout or its Thread's end settles it.
+      hostWarn("automations", "a run's start failed after it may have begun", { automation: definition.id, occurrence: run.occurrence, error: why })
+      return run
+    }
+  }
+
+  async #record(run: AutomationRun): Promise<AutomationRun> {
+    this.#deps.store.putRun(run)
+    await this.#deps.store.save()
+    this.#deps.emit({ type: "automation-run", run })
+    if (run.status !== "fired") hostLog("automations", "run recorded", { automation: run.automation, occurrence: run.occurrence, status: run.status, ...(run.why && { why: run.why.slice(0, 200) }) })
+    return run
+  }
+
+  async #failedToStart(run: AutomationRun, why: string): Promise<AutomationRun> {
+    const kept = await this.#record({ ...run, status: "failed-to-start", why, endedAt: this.#now() })
+    await this.#failed(run.project, run.automation, why)
+    return kept
+  }
+
+  /** One more failure in a row; the third pauses it. */
+  async #failed(project: string, id: string, why: string): Promise<void> {
+    const store = this.#deps.store
+    const local = store.local(project, id)
+    const failures = local.failures + 1
+    const paused = local.enabled && failures >= AUTOMATION_PAUSE_AFTER_FAILURES
+      ? { kind: "failures" as const, reason: `Paused after ${failures} failed runs in a row. The last: ${why}`.slice(0, 1000), at: this.#now() }
+      : local.paused
+    store.setLocal(project, id, { ...local, failures, ...(paused && { paused }) })
+    if (paused && !local.paused) hostWarn("automations", "paused after failures", { automation: id, failures })
+    await this.#changed(project)
+  }
+
+  /* ---------------------------------------------------------------- runs ending */
+
+  /** A conversation's turn ended: the run it is settles with what it said. */
+  async turnEnded(conversation: string): Promise<void> {
+    const run = this.#deps.store.runOf(conversation)
+    if (!run) return
+    await this.#settle(run)
+  }
+
+  async #settle(run: AutomationRun): Promise<void> {
+    const reading = this.#deps.threadOf(run.thread!.conversation, run.thread!.request)
+    if (reading.state !== "ended") return
+    await this.#inTurn(run.project, run.automation, async () => {
+      const now = this.#deps.store.run(run.project, run.automation, run.occurrence)
+      if (now?.status !== "fired") return
+      const failed = reading.status === "failed"
+      await this.#record({ ...now, status: failed ? "failed" : "completed", endedAt: this.#now(), result: { status: reading.status, summary: reading.summary.slice(0, 4000), ...pullRequestOf(reading.summary) }, ...(failed && { why: reading.summary.split("\n")[0]?.slice(0, 400) }) })
+      if (failed) await this.#failed(run.project, run.automation, reading.summary.split("\n")[0]?.slice(0, 400) ?? "its Thread failed")
+      else {
+        const store = this.#deps.store
+        const local = store.local(run.project, run.automation)
+        if (local.failures) store.setLocal(run.project, run.automation, { ...local, failures: 0 })
+        await this.#changed(run.project)
+      }
+    })
+    await this.#dequeue(run.project, run.automation)
+  }
+
+  /** The oldest queued run starts once nothing else of its automation runs. */
+  async #dequeue(project: string, id: string): Promise<void> {
+    const definition = await this.#definition(project, id)
+    await this.#inTurn(project, id, async () => {
+      const runs = this.#deps.store.runs(project, id)
+      if (runs.some((run) => run.status === "fired")) return
+      const next = runs.filter((run) => run.status === "queued").at(-1)
+      if (!next) return
+      if (!definition) {
+        await this.#record({ ...next, status: "skipped", why: "It left the project's file before its turn." })
+        return
+      }
+      await this.#admit(project, definition, { ...next, status: "fired", at: this.#now() })
+    })
+  }
+
+  /* ---------------------------------------------------------------- the tick */
+
+  /** What's due, across every project: schedules, commits, runs past their time, proposals past theirs. */
+  async tick(now = this.#now()): Promise<void> {
+    await this.start()
+    for (const project of this.projects()) {
+      try {
+        await this.#tickProject(project, now)
+      } catch (error) {
+        hostWarn("automations", "a project's automations couldn't be checked", { project, error: error instanceof Error ? error.message : String(error) })
+      }
+    }
+    await this.#watchRuns(now)
+    await this.#expireProposals(now)
+  }
+
+  async #tickProject(project: string, now: number): Promise<void> {
+    const file = await this.#file(project)
+    const store = this.#deps.store
+    for (const definition of file.definitions) {
+      const local = store.local(project, definition.id)
+      if (!local.enabled || local.paused) continue
+      if (local.approved !== undefined && local.approved !== automationFingerprint(definition)) {
+        store.setLocal(project, definition.id, { ...local, paused: { kind: "changed", reason: CHANGED_REASON, at: now } })
+        hostWarn("automations", "paused: its definition changed since it was turned on", { automation: definition.id })
+        await this.#changed(project)
+        continue
+      }
+      await this.#schedule(project, definition, local, now)
+      if (definition.triggers.some((trigger) => trigger.kind === "commit")) await this.noticeHead(project, undefined, definition)
+    }
+  }
+
+  /** Fires the latest slot due since the last tick: late (asleep, closed) within the grace window, once. */
+  async #schedule(project: string, definition: AutomationDefinition, local: AutomationLocal, now: number): Promise<void> {
+    const schedules = definition.triggers.filter((trigger): trigger is ScheduleTrigger => trigger.kind === "schedule")
+    if (!schedules.length) return
+    const store = this.#deps.store
+    const through = Math.max(local.scheduledThrough ?? local.enabledAt ?? now, local.enabledAt ?? 0)
+    const graceStart = Math.max(through, now - AUTOMATION_CATCH_UP_GRACE_MS)
+    let latest: number | undefined
+    for (const trigger of schedules) {
+      const parsed = parseCron(trigger.cron)
+      if (!parsed.ok) continue
+      const slot = lastCronAtOrBefore(parsed.spec, trigger.timezone, graceStart, now)
+      if (slot !== undefined && (latest === undefined || slot > latest)) latest = slot
+    }
+    // A slot missed past the grace window is said once, never run.
+    const missedOld = through < graceStart && schedules.some((trigger) => {
+      const parsed = parseCron(trigger.cron)
+      const slot = parsed.ok ? nextCron(parsed.spec, trigger.timezone, through) : undefined
+      return slot !== undefined && slot <= graceStart
+    })
+    const nextRunAt = this.#nextRun(definition, now)
+    store.setLocal(project, definition.id, { ...local, scheduledThrough: now, ...(nextRunAt !== undefined ? { nextRunAt } : { nextRunAt: undefined }) })
+    await store.save()
+    if (latest === undefined) {
+      if (missedOld) hostLog("automations", "schedule missed past its grace window; not run", { automation: definition.id })
       return
     }
-    if (current.watcher) return
-
-    const watcher: TreeWatch | undefined = watchTree(this.deps.git, this.deps.watch, current.cwd, (paths) => {
-      if (this.runtime !== current || current.watcher !== watcher) return
-      for (const path of paths) {
-        if (isIgnored(path)) continue
-        for (const automation of this.automations) {
-          if (!automation.enabled || automation.trigger.kind !== "files") continue
-          if (!automation.trigger.paths.some((pattern) => matchesGlob(pattern, path)))
-            continue
-          // Debounced per automation: a save that touches four matching files is
-          // one event, not four.
-          clearTimeout(current.timers.get(automation.id))
-          current.timers.set(
-            automation.id,
-            setTimeout(() => {
-              current.timers.delete(automation.id)
-              if (this.runtime === current && current.watcher === watcher)
-                void this.fire(automation.id, "files")
-            }, DEBOUNCE_MS)
-          )
-        }
-      }
-    }, () => {
-      if (current.watcher !== watcher) return
-      current.watcher = null
-      watcher?.close()
-    })
-    // The filesystem root and the home folder aren't watched, and some volumes
-    // can't be; file triggers don't fire there, manual ones still work.
-    current.watcher = watcher ?? null
+    const late = now - latest > 2 * 60_000
+    await this.fire(project, definition, { kind: "schedule", at: latest, ...(late && { catchUp: true }) }, slotName(latest))
   }
+
+  #nextRun(definition: AutomationDefinition, after: number): number | undefined {
+    let next: number | undefined
+    for (const trigger of definition.triggers) {
+      if (trigger.kind !== "schedule") continue
+      const parsed = parseCron(trigger.cron)
+      const at = parsed.ok ? nextCron(parsed.spec, trigger.timezone, after) : undefined
+      if (at !== undefined && (next === undefined || at < next)) next = at
+    }
+    return next
+  }
+
+  /**
+   * HEAD moved in `project`: each automation on with a commit trigger runs for the new commit. The first HEAD seen is
+   * only remembered. `head` comes from the git status a window already reads; undefined reads it here.
+   */
+  async noticeHead(project: string, head?: string, only?: AutomationDefinition): Promise<void> {
+    const store = this.#deps.store
+    const definitions = only ? [only] : (await this.#file(project)).definitions.filter((definition) => definition.triggers.some((trigger) => trigger.kind === "commit"))
+    const enabled = definitions.filter((definition) => {
+      const local = store.local(project, definition.id)
+      return local.enabled && !local.paused && (local.approved === undefined || local.approved === automationFingerprint(definition))
+    })
+    if (!enabled.length) return
+    const read = await this.#deps.head(project).catch(() => undefined)
+    const current = head ?? read?.head
+    if (!current) return
+    for (const definition of enabled) {
+      const local = store.local(project, definition.id)
+      if (local.head === current) continue
+      store.setLocal(project, definition.id, { ...local, head: current })
+      await store.save()
+      if (local.head === undefined) continue
+      const trigger = definition.triggers.find((each): each is Extract<AutomationTrigger, { kind: "commit" }> => each.kind === "commit")
+      if (trigger?.branch && read?.branch !== trigger.branch) continue
+      await this.fire(project, definition, { kind: "commit", head: current, ...(read?.subject && { subject: read.subject.slice(0, 400) }) }, `commit-${current.slice(0, 40)}`)
+    }
+  }
+
+  /** Runs whose Thread ended unheard, or ran past their time. */
+  async #watchRuns(now: number): Promise<void> {
+    for (const run of this.#deps.store.active()) {
+      if (run.status !== "fired" || !run.thread) continue
+      const reading = this.#deps.threadOf(run.thread.conversation, run.thread.request)
+      if (reading.state === "ended") {
+        await this.#settle(run)
+        continue
+      }
+      const definition = await this.#definition(run.project, run.automation)
+      const timeoutMs = (definition?.limits.timeoutMin ?? 60) * 60_000
+      if (now - (run.startedAt ?? run.at) < timeoutMs) continue
+      await this.#deps.stopThread(run.thread.conversation).catch((error: Error) => hostWarn("automations", "a run past its time couldn't be stopped", { conversation: run.thread?.conversation, error: error.message }))
+      const why = `Stopped after ${Math.round(timeoutMs / 60_000)} minutes, its limit.`
+      await this.#inTurn(run.project, run.automation, async () => {
+        const current = this.#deps.store.run(run.project, run.automation, run.occurrence)
+        if (current?.status !== "fired") return
+        await this.#record({ ...current, status: "failed", endedAt: now, why, result: { status: "failed", summary: why } })
+        await this.#failed(run.project, run.automation, why)
+      })
+      await this.#dequeue(run.project, run.automation)
+    }
+  }
+
+  /**
+   * What a stopped host or an older build left: a fired run whose Thread may not have started starts it again under
+   * the same conversation (a repeat finds it), and an older build's approved launches are recorded as runs.
+   */
+  async #recover(): Promise<void> {
+    await this.#readLegacyLaunches()
+    for (const run of this.#deps.store.active()) {
+      if (run.status !== "fired" || !run.thread || this.#deps.threadOf(run.thread.conversation, run.thread.request).state !== "unknown") continue
+      if (run.thread.place && run.thread.place !== "here") continue
+      // Only a start a stopped host may have cut: an older one settles by its Thread's end or its timeout.
+      if (this.#now() - (run.startedAt ?? run.at) > RECOVER_WITHIN_MS) continue
+      const definition = (await readAutomationFile(run.project)).definitions.find((each) => each.id === run.automation)
+      if (!definition) continue
+      void this.#startThread(run.project, definition, run).catch(() => undefined)
+    }
+  }
+
+  /** `<dataRoot>/automation-launches/*.json`: each receipt an older build kept, as a run, so its approval never runs twice. */
+  async #readLegacyLaunches(): Promise<void> {
+    const folder = this.#deps.legacyLaunches
+    if (!folder) return
+    const names = await readdir(folder).catch((): string[] => [])
+    let read = 0
+    for (const name of names.filter((each) => each.endsWith(".json"))) {
+      const receipt = LegacyReceiptSchema.safeParse(await readFile(join(folder, name), "utf8").then((text) => JSON.parse(text), () => undefined)).data
+      if (!receipt || receipt.result.status === "not-run") continue
+      const occurrence = `legacy-${name.slice(0, 16)}`
+      if (this.#deps.store.run(receipt.cwd, receipt.id, occurrence)) continue
+      this.#deps.store.putRun({
+        occurrence, automation: legacyIdOf(receipt.id), project: receipt.cwd, clientKey: automationClientKey(legacyIdOf(receipt.id), occurrence), cause: { kind: "person" },
+        status: receipt.result.status === "completed" ? "completed" : "failed", at: this.#now(),
+        why: receipt.result.status === "completed" ? "Started by an older Mako." : "An older Mako couldn't confirm whether this run started. Check its Threads.",
+      })
+      read += 1
+    }
+    if (read) {
+      await this.#deps.store.save()
+      hostLog("automations", "older approved launches recorded as runs", { read })
+    }
+  }
+
+  /** Whether an older build already launched the approved run `operation` names: its receipt, by the hash it was kept under. */
+  async legacyLaunched(operation: string): Promise<boolean> {
+    const folder = this.#deps.legacyLaunches
+    if (!folder) return false
+    const text = await readFile(join(folder, `${createHash("sha256").update(operation).digest("hex")}.json`), "utf8").catch(() => undefined)
+    const receipt = text === undefined ? undefined : LegacyReceiptSchema.safeParse(JSON.parse(text)).data
+    return receipt !== undefined && receipt.result.status !== "not-run"
+  }
+
+  /* ---------------------------------------------------------------- proposals */
+
+  /**
+   * An agent's create, update, delete or enable: saved pending, carried to the person by an ask in the agent's Thread,
+   * and answered at once. A repeat of the same call (`clientKey`) is the same proposal.
+   */
+  async propose(by: AutomationProposer, input: { project: string; change: AutomationChange; id?: string; definition?: JsonValue; why?: string; clientKey: string }): Promise<AutomationProposal | { refused: "no-automation" | "invalid"; why: string }> {
+    await this.start()
+    const proposalId = automationUuid(`proposal\0${by.conversation}\0${input.clientKey}`)
+    const kept = this.#deps.store.proposal(proposalId)
+    if (kept) return kept
+    const { project, change } = input
+    const given = input.definition === undefined ? undefined : JsonObjectSchema.safeParse(input.definition).data
+    if (input.definition !== undefined && !given) return { refused: "invalid", why: "definition is an object: {id, name, prompt, start, triggers, gate, limits, result}." }
+    const id = input.id ?? IdTextSchema.safeParse(given?.id).data
+    if (!id) return { refused: "invalid", why: "Name the automation: id, or definition.id for create." }
+    const current = await this.#definition(project, id)
+    let after: AutomationDefinition | undefined
+    if (change === "create" || change === "update") {
+      if (change === "create" && current) return { refused: "invalid", why: `${id} exists already: propose an update to it.` }
+      if (change === "update" && !current) return { refused: "no-automation", why: `No automation in ${project} has the id ${id}: list gives each one's id.` }
+      const merged = { ...(current && JsonObjectSchema.parse(JsonSchema.parse(JSON.parse(JSON.stringify(current))))), ...given, id }
+      const parsed = AutomationDefinitionSchema.safeParse(merged)
+      if (!parsed.success) return { refused: "invalid", why: parsed.error.issues.slice(0, 4).map((issue) => `${issue.path.join(".") || "definition"}: ${issue.message}`).join("; ") }
+      after = parsed.data
+      if (current && automationFingerprint(current) === automationFingerprint(after)) return { refused: "invalid", why: "That changes nothing." }
+    } else {
+      if (!current) return { refused: "no-automation", why: `No automation in ${project} has the id ${id}: list gives each one's id.` }
+      if (change === "enable" && this.#deps.store.local(project, id).enabled && !this.#deps.store.local(project, id).paused) return { refused: "invalid", why: `${id} is on already.` }
+    }
+    const now = this.#now()
+    const name = after?.name ?? current?.name
+    const proposal: AutomationProposal = {
+      id: proposalId,
+      project,
+      automation: id,
+      change,
+      ...(current && { before: JsonSchema.parse(JSON.parse(JSON.stringify(current))) }),
+      ...(after && { after: JsonSchema.parse(JSON.parse(JSON.stringify(after))) }),
+      ...(input.why?.trim() && { why: input.why.trim().slice(0, 2000) }),
+      by,
+      at: now,
+      expiresAt: now + AUTOMATION_PROPOSAL_TTL_MS,
+      status: "pending",
+    }
+    proposal.ask = this.#deps.asks.raise(by.conversation, { kind: "automation-proposal", proposal: proposalId, change, id, ...(name && { name: name.slice(0, 120) }), cwd: project })
+    this.#deps.store.putProposal(proposal)
+    hostLog("automations", "proposal made", { proposal: proposalId, change, automation: id })
+    await this.#changed(project)
+    return proposal
+  }
+
+  proposal(id: string): AutomationProposal | undefined {
+    return this.#deps.store.proposal(id)
+  }
+
+  /**
+   * The person's decision, from the ask's card (`via: "ask"`, which settles that ask itself) or the Automations view.
+   * Approving applies it, unless the automation changed since it was proposed (`stale`). Its agent hears either way.
+   */
+  async decide(id: string, approve: boolean, via: "ask" | "view" = "view"): Promise<AutomationProposal> {
+    await this.start()
+    const proposal = this.#deps.store.proposal(id)
+    if (!proposal) throw new Error("Mako has no such proposal.")
+    if (proposal.status !== "pending") return proposal
+    const now = this.#now()
+    let decided: AutomationProposal = { ...proposal, status: approve ? "approved" : "declined", decidedAt: now }
+    if (approve) {
+      const current = await this.#definition(proposal.project, proposal.automation)
+      const before = proposal.before === undefined ? undefined : AutomationDefinitionSchema.safeParse(proposal.before).data
+      const stale = proposal.change === "create" ? current !== undefined : !current || !before || automationFingerprint(current) !== automationFingerprint(before)
+      if (stale) decided = { ...decided, status: "stale", note: "The automation changed after this was proposed, so approving it would undo that change. Nothing was applied." }
+      else await this.#apply(proposal)
+    }
+    if (via === "view" && proposal.ask) this.#deps.asks.settle(proposal.by.conversation, proposal.ask)
+    this.#deps.store.putProposal(decided)
+    hostLog("automations", "proposal decided", { proposal: id, status: decided.status })
+    await this.#changed(proposal.project)
+    await this.#tell(decided)
+    return this.#deps.store.proposal(id) ?? decided
+  }
+
+  async #apply(proposal: AutomationProposal): Promise<void> {
+    const { project, automation } = proposal
+    if (proposal.change === "delete") {
+      await this.remove(project, automation)
+      return
+    }
+    if (proposal.change === "enable") {
+      await this.setEnabled(project, automation, true)
+      return
+    }
+    const after = AutomationDefinitionSchema.parse(proposal.after)
+    await this.#write(project, (definitions) => {
+      const at = definitions.findIndex((each) => each.id === automation)
+      return at < 0 ? [...definitions, after] : definitions.map((each) => (each.id === automation ? after : each))
+    })
+    // An update the person approved keeps an automation that's on, on: what they approved is the new definition.
+    const local = this.#deps.store.local(project, automation)
+    if (local.enabled) this.#deps.store.setLocal(project, automation, { ...local, approved: automationFingerprint(after), nextRunAt: this.#nextRun(after, this.#now()) })
+  }
+
+  async #expireProposals(now: number): Promise<void> {
+    for (const proposal of this.#deps.store.proposals()) {
+      if (proposal.status === "pending" && proposal.expiresAt <= now) {
+        const expired: AutomationProposal = { ...proposal, status: "expired", decidedAt: now }
+        if (proposal.ask) this.#deps.asks.settle(proposal.by.conversation, proposal.ask)
+        this.#deps.store.putProposal(expired)
+        await this.#changed(proposal.project)
+        await this.#tell(expired)
+      } else if (proposal.status !== "pending" && proposal.told === false) await this.#tell(proposal)
+    }
+  }
+
+  /** Its agent hears the decision as Mako's note, once: a note that couldn't go is tried again at the next tick. */
+  async #tell(proposal: AutomationProposal): Promise<void> {
+    const text = decisionNote(proposal)
+    try {
+      await this.#deps.tell(proposal.by.conversation, automationUuid(`proposal\0${proposal.id}\0decided`), text)
+      this.#deps.store.putProposal({ ...proposal, told: true })
+    } catch (error) {
+      hostWarn("automations", "a proposal's agent couldn't be told", { proposal: proposal.id, error: error instanceof Error ? error.message : String(error) })
+      this.#deps.store.putProposal({ ...proposal, told: false })
+    }
+    await this.#deps.store.save()
+  }
+
+  /** The diff a proposal's card shows. */
+  static diff(proposal: AutomationProposal): AutomationDiffEntry[] {
+    return automationDiff(proposal.before, proposal.after)
+  }
+}
+
+const CHANGED_REASON = "Its definition changed after you turned it on (a pull, or an edit outside Mako). Turn it on again to run what it says now."
+const JsonObjectSchema = z.record(z.string(), z.json())
+
+function legacyIdOf(id: string): string {
+  return id.toLowerCase().replace(/[^a-z0-9._-]+/g, "-").replace(/^[^a-z0-9]+/, "").slice(0, 80) || "automation"
+}
+
+/** A gate's stdout: a JSON object is its context, and its string `key` the dedupe key. */
+export function gateContext(stdout: string): AutomationRun["gate"] {
+  const text = stdout.trim()
+  if (!text) return undefined
+  let parsed: JsonObject | undefined
+  try {
+    parsed = GateContextSchema.safeParse(JSON.parse(text)).data
+  } catch {
+    parsed = undefined
+  }
+  if (!parsed) return undefined
+  const key = GateKeySchema.safeParse(parsed.key).data?.slice(0, 400)
+  // A context too large for a record is kept to its key.
+  const fits = JSON.stringify(parsed).length <= 16_000
+  return { ...(key && { key }), ...(fits && { context: parsed }) }
+}
+
+/** The trigger a cause came by. */
+function triggerOf(definition: AutomationDefinition, cause: AutomationCause): AutomationTrigger | undefined {
+  if (cause.kind === "schedule") return definition.triggers.find((trigger) => trigger.kind === "schedule")
+  if (cause.kind === "commit") return definition.triggers.find((trigger) => trigger.kind === "commit")
+  return undefined
+}
+
+/** The event as the `runWhen` model reads it. */
+function eventWords(definition: AutomationDefinition, cause: AutomationCause, gate: AutomationRun["gate"]): string {
+  const what = cause.kind === "schedule" ? `The schedule fired for ${new Date(cause.at).toISOString()}.` : cause.kind === "commit" ? `A commit landed: ${cause.head}${cause.subject ? ` "${cause.subject}"` : ""}.` : cause.kind === "event" ? `${cause.source} ${cause.event}: ${cause.summary}${cause.url ? ` (${cause.url})` : ""}.` : "Run now."
+  return [`Automation: ${definition.name}.`, what, ...(gate?.context ? [`What its gate found: ${JSON.stringify(gate.context).slice(0, 6000)}`] : [])].join("\n")
+}
+
+/** The message a run sends: its brief, then what triggered it and what its gate found. */
+function runText(definition: AutomationDefinition, run: AutomationRun): string {
+  const cause = run.cause
+  const why = cause.kind === "schedule" ? `its schedule (${slotName(cause.at)}${cause.catchUp ? ", caught up after this Mac was asleep or Mako was closed" : ""})` : cause.kind === "commit" ? `the commit ${cause.head}${cause.subject ? ` (${cause.subject})` : ""}` : cause.kind === "person" ? "the person's Run now" : cause.kind === "event" ? `${cause.source} ${cause.event}: ${cause.summary}${cause.url ? ` (${cause.url})` : ""}${cause.batch && cause.batch > 1 ? `, ${cause.batch} deliveries together` : ""}` : "an agent's run_now the person allowed"
+  return [
+    automationBriefText(definition.prompt),
+    "",
+    `Mako started this Thread for the automation "${definition.name}" (${definition.id}), run ${run.occurrence}, on ${why}.`,
+    ...(run.thread?.branch ? [`Work on the branch ${run.thread.branch}.`] : []),
+    `What it leaves: ${definition.result === "pull-request" ? "a pull request, with its link in your last reply" : definition.result === "report" ? "a report, as your last reply" : "the changes it makes, said in your last reply"}.`,
+    ...(run.gate?.context ? ["", "What its gate found:", "```json", JSON.stringify(run.gate.context, null, 2).slice(0, 12_000), "```"] : []),
+  ].join("\n")
+}
+
+function pullRequestOf(summary: string): { pullRequest?: string } {
+  const url = summary.match(/https:\/\/github\.com\/[\w.-]+\/[\w.-]+\/pull\/\d+/)?.[0]
+  return url ? { pullRequest: url } : {}
+}
+
+/** What its agent hears of a proposal's decision. */
+export function decisionNote(proposal: AutomationProposal): string {
+  const what = `your proposal to ${proposal.change} the automation ${proposal.automation} (${proposal.id})`
+  switch (proposal.status) {
+    case "approved":
+      return `Mako: the person approved ${what}. It's applied${proposal.change === "create" || proposal.change === "update" ? "; a new automation stays off until they turn it on" : ""}.`
+    case "declined":
+      return `Mako: the person declined ${what}. Nothing changed.`
+    case "expired":
+      return `Mako: ${what} expired without a decision. Nothing changed; propose it again if it's still wanted.`
+    case "stale":
+      return `Mako: ${what} wasn't applied: ${proposal.note ?? "the automation changed after it was proposed"}.`
+    case "pending":
+      return `Mako: ${what} still waits on the person.`
+  }
+}
+
+/** `mako:automations-*`: the person's calls (`contracts/automations.ts`). */
+export function declareAutomationMethods(methods: MethodTable, automations: Automations): void {
+  methods.handle("mako:automations-read", (project?: string) => automations.read(project))
+  methods.handle("mako:automations-runs", async (project: string, id?: string, limit?: number) => {
+    await automations.start()
+    return automations.runs(project, id, limit)
+  })
+  methods.handle("mako:automations-save", (project: string, definition: JsonValue, replaces?: string) => automations.save(project, definition, replaces))
+  methods.handle("mako:automations-delete", (project: string, id: string) => automations.remove(project, id))
+  methods.handle("mako:automations-enabled", (project: string, id: string, enabled: boolean) => automations.setEnabled(project, id, enabled))
+  methods.handle("mako:automations-run-now", (project: string, id: string, clientKey: string) => automations.runNow(project, id, clientKey))
+  methods.handle("mako:automations-decide", (proposal: string, approve: boolean) => automations.decide(proposal, approve, "view"))
+  methods.handle("mako:automations-draft", (conversationId: string) => automations.draft(conversationId))
+  methods.handle("mako:automations-templates", () => automations.templates())
 }

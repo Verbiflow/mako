@@ -115,7 +115,7 @@ function PullsRow() {
 }
 
 function AutomationsRow() {
-  const on = useAutomations((state) => state.list.filter((automation) => automation.enabled).length)
+  const on = useAutomations((state) => state.list.filter((automation) => automation.local.enabled).length)
   return (
     <RailRow
       data-rail-top-row="automations"

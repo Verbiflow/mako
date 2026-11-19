@@ -3892,6 +3892,27 @@ menu draft the recipe change in a new Thread for the person to send. No value
 is ever shown. `packages/protocol/test/setup.mjs` (in `test:protocol`) covers the
 rows and words; `npm run test:setup` the host's readings and brokers.
 
+## Automations
+
+An automation is a stored `agents_start` plus triggers (`contracts/automations.ts`): its brief, start (harness,
+model, access, place, worktree with a branch template), `thread: new|standing`, triggers (`schedule` with a
+timezone, `commit`, `manual` here; GitHub, Slack, Linear, Sentry and webhook ones the cloud fires once it registers
+them), an optional gate (a command whose exit 1 skips and whose JSON `key` dedupes), limits and a result kind.
+Definitions are the project's `.mako/automations.json` (the reader takes the first shape too and keeps what it can't
+read word for word); on/off, next runs, run records and agents' proposals are the host's, in
+`<dataRoot>/automations/state.json` (`AutomationStore`), keyed by project and id. `Automations`
+(`workspaces/automations.ts`) serves every project a window has open and every one with an automation on, ticked by
+`AutomationScheduler` (`HostJobs` here, the cloud account's Durable Object later). A run is recorded before its
+Thread starts, under `automation:<id>:<occurrence>` (a schedule's occurrence is `scheduleOccurrence(slot)`), whose
+conversation id is fixed by that key, so a repeat or a restart reaches the same Thread; it completes when that
+Thread's turn ends (`turnEnded`, read back on each tick). One run at a time, one catch-up within
+`AUTOMATION_CATCH_UP_GRACE_MS`, a pause after `AUTOMATION_PAUSE_AFTER_FAILURES` failures in a row, and a pause when
+the definition changes after the person turned it on (a pull can't change what runs). An agent's create, update,
+delete or enable through the `automation` tool is a proposal: saved pending, carried to the person by an
+`automation-proposal` ask (person-only: an Apex can't answer it), decided from the card or Automations, its agent
+told by Mako's note; stale and expired ones apply nothing. `runWhen` asks the person's utility model
+(`UtilityRunWhen`). `npm run test:automations` holds all of it.
+
 ## Notifications
 
 Five kinds, the same on every surface (desktop, web app, Web Push), declared

@@ -38,6 +38,8 @@ export interface PendingAsk {
   gone?: true
   /** Answered in its own words: its first option allows, its second keeps (`FinAsk.named`). */
   named?: true
+  /** The person's alone to answer, never an Apex's (an agent's automation proposal, `personOnlyAsk`). */
+  personOnly?: true
 }
 
 /** Only answered, visible predecessors participate in dependent questions. */

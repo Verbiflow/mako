@@ -100,20 +100,41 @@ export type HarnessActResult =
   | { outcome: "asked"; ask: string; next: string }
   | { refused: "unavailable" | "no-thread" | "no-harness" | "cloud-machine" | "failed"; why: string }
 
-/** Lists the person's automations, runs one now, or turns one on or off. */
+/**
+ * The person's automations (`contracts/automations.ts`), for an agent: read them and their runs, run one now, turn one
+ * off, and propose creating, changing, deleting or turning one on, which waits for the person's approval.
+ */
+export type AutomationAction = "list" | "get" | "runs" | "create" | "update" | "delete" | "enable" | "disable" | "run_now" | "proposal"
+
 export interface AutomationActInput {
-  action: "list" | "run" | "on" | "off"
-  /** run, on, off: the automation, as list gives it. */
+  action: AutomationAction
+  /** The project folder; absent: the caller's Thread's folder, else the folder in front. */
+  project?: string
+  /** Every action but list, create and proposal: the automation, as list gives it. create may name it here or in definition. */
   id?: string
-  /** The caller's own key for this. */
+  /** create: the whole definition. update: the parts that change, merged over the current one. */
+  definition?: JsonValue
+  /** create, update, delete, enable: why, in a sentence the person reads with the proposal. */
+  why?: string
+  /** proposal: the proposal's id, to read how it stands. */
+  proposal?: string
+  /** runs: at most this many, newest first (default 10). */
+  limit?: number
+  /** The caller's own key for this: a repeat with it is the same action. */
   clientKey: string
 }
 
 export type AutomationActResult =
   | { outcome: "listed"; automations: JsonValue }
-  | { outcome: "done"; action: string; id: string }
+  | { outcome: "got"; automation: JsonValue }
+  | { outcome: "runs"; runs: JsonValue }
+  /** A create, update, delete or enable waits for the person: the agent isn't held, and hears the decision as Mako's note. */
+  | { outcome: "proposed"; proposal: string; status: "pending"; expiresAt: string; diff: JsonValue; next: string }
+  | { outcome: "proposal"; proposal: JsonValue }
+  /** disable and run_now: done now. `run` names the run run_now recorded, and its Thread once it has one. */
+  | { outcome: "done"; action: string; id: string; run?: JsonValue }
   | { outcome: "asked"; ask: string; next: string }
-  | { refused: "unavailable" | "no-thread" | "no-automation" | "failed"; why: string }
+  | { refused: "unavailable" | "no-thread" | "no-automation" | "no-project" | "invalid" | "failed"; why: string }
 
 /** One thing a turn waits on, as the agent names it: a Fin of this Thread, a pull request until checks, review or merge, or this Thread's app check under way. */
 export type TurnWaitOn = { fin: string } | { pull: string; until?: "checks" | "review" | "merge" } | { check: "quick" | "full"; target?: string }
@@ -236,10 +257,15 @@ export const AUTOMATION_TOOL: ThreadToolDefinition = {
   filled: [],
   mcp: {
     name: "automation",
-    description: "List the person's automations, Run one now, or turn one on or off, as Settings › Automations does. Call it when the person asks. list answers at once; the rest happen now on full access, and on other access Mako asks the person first. To run work beside this Thread, use agents_start.",
+    description: "The person's automations: prompts Mako starts as Threads on a schedule, on a commit or on Run now. list, get and runs read; disable and run_now act now (on full access, else after the person allows). create, update, delete and enable are proposals the person approves: you get {proposal, status: pending} at once and hear the decision later, so go on. Call it when the person asks.",
     fields: {
-      action: "list, run, on or off.",
-      id: "run, on, off: the automation's id, from list.",
+      action: "list, get, runs, create, update, delete, enable, disable, run_now, or proposal (how one stands).",
+      project: "The project folder; absent: this Thread's.",
+      id: "The automation's id, from list.",
+      definition: "create: {id, name, prompt: {objective, doneWhen, boundaries, output}, start, triggers, gate, limits, result}. update: only what changes.",
+      why: "create, update, delete, enable: one sentence the person reads.",
+      proposal: "proposal: its id.",
+      limit: "runs: at most this many.",
       clientKey: "Your own key for this: a repeat with it is the same action.",
     },
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },

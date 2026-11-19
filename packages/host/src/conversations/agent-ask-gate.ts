@@ -19,6 +19,8 @@ export class AgentAskGate {
   readonly #allowing = new Map<string, Promise<AgentAskAnswer>>()
   /** Told once composition has every tool. */
   runs: Partial<AskRuns> = {}
+  /** What hears a refusal, for an ask whose tool keeps a record of its own (an automation proposal). */
+  declined: ((conversationId: string, want: AgentAskWant) => void | Promise<void>) | undefined
 
   constructor(asks: Pick<LiveAsks, "open" | "raise" | "settle">) {
     this.#asks = asks
@@ -51,6 +53,8 @@ export class AgentAskGate {
     hostLog("agent-asks", allow ? "the person allowed what an agent asked" : "the person refused what an agent asked", { conversation: conversationId, want: ask.want.kind })
     if (!allow) {
       const settled = this.#asks.settle(conversationId, id)
+      // Taken first, so a refusal is never raced by an allow; then the tool that keeps a record of its own hears it.
+      if (settled) await this.declined?.(conversationId, ask.want)
       return settled ? { outcome: "answered", ask: id, allow: false, want: ask.want } : { outcome: "missing", ask: id }
     }
     // Own this choice before its action starts; failure never removes and recreates a durable ask.

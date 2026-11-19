@@ -72,7 +72,6 @@ import { skillDeliveryFor } from "@mako/host/contracts/skill-reach"
 import type { AccountLogin, AccountLoginResult, AccountProviderInfo, AccountRemovalPlan, AccountRemovalSession, AccountUsage, HarnessAccount, ResetCreditOutcome } from "@mako/host/contracts/accounts"
 import type { ThreadFileContext } from "@mako/host/contracts/conversation-session"
 import type {
-  Automation,
   LiveSessionState,
   BootPayload,
   HostEvent,
@@ -3462,19 +3461,15 @@ export function installMockBridge() {
       },
     abortThreadRun: async () => {},
     usage: async () => fixtureUsageSummary(),
-    automations: async () => [
-      {
-        id: "a1",
-        name: "Check the schema doc",
-        prompt: "A migration changed. Check docs/schema.md still matches.",
-        trigger: { kind: "files" as const, paths: ["migrations/*.sql"] },
-        enabled: false,
-      },
-    ],
-    saveAutomations: async (next: Automation[]) => next,
-    setAutomationEnabled: async () => [],
-    runAutomation: async () => {},
-    reloadAutomations: async () => [],
+    automations: async () => ({ projects: [] }),
+    automationRuns: async () => [],
+    saveAutomation: async (project: string) => ({ project, automations: [], proposals: [], file: { exists: true } }),
+    deleteAutomation: async (project: string) => ({ project, automations: [], proposals: [], file: { exists: true } }),
+    setAutomationEnabled: async (project: string) => ({ project, automations: [], proposals: [], file: { exists: true } }),
+    runAutomation: async () => ({ refused: "The mock runs no automations." }),
+    decideAutomationProposal: async () => { throw new Error("The mock has no proposals.") },
+    draftAutomation: async () => { throw new Error("The mock has no Threads to draft from.") },
+    automationTemplates: async () => [],
     terminalList: async () => terminalSessions,
     terminalCreate: async (options) => {
       const now = Date.now()

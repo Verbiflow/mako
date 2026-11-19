@@ -1,4 +1,4 @@
-import { AGENT_ASK_ALLOW, AGENT_ASK_KEEP, agentAskWords, type AgentAsk } from "../contracts/agent-asks.js"
+import { AGENT_ASK_ALLOW, AGENT_ASK_KEEP, agentAskWords, personOnlyAsk, type AgentAsk } from "../contracts/agent-asks.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import type { LivePermissionResponse } from "../contracts/providers-acp.js"
 import type { LiveAccess } from "./live-runtime.js"
@@ -25,7 +25,7 @@ export class LiveAsks {
     const ask = this.open(id)[0]
     if (!ask) return undefined
     const words = agentAskWords(ask.want, "")
-    return { request: ask.id, kind: "approval", options: [{ optionId: AGENT_ASK_ALLOW, name: words.allow, kind: "allow_once" }, { optionId: AGENT_ASK_KEEP, name: words.keep, kind: "reject_once" }], questions: [], named: true }
+    return { request: ask.id, kind: "approval", options: [{ optionId: AGENT_ASK_ALLOW, name: words.allow, kind: "allow_once" }, { optionId: AGENT_ASK_KEEP, name: words.keep, kind: "reject_once" }], questions: [], named: true, ...(personOnlyAsk(ask.want) && { personOnly: true as const }) }
   }
 
   open(id: string): readonly AgentAsk[] {

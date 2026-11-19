@@ -229,8 +229,11 @@ const reads = [
   "mako:integrations",
   "mako:skills-discover",
   "mako:skills-resolve",
-  "mako:automations",
-  "mako:automation-context",
+  /** Automations (`contracts/automations.ts`): reads of the project's file and this Mac's records. */
+  "mako:automations-read",
+  "mako:automations-runs",
+  "mako:automations-draft",
+  "mako:automations-templates",
   "mako:external-editors",
   "mako:default-commit-prompt",
   "mako:native-requests",
@@ -283,6 +286,14 @@ const replays = [
   "mako:live-capture",
   /** `NativeRequests.submit`: the request id; content is fingerprinted. */
   "mako:native-submit",
+  /** Writes the same definition, the same switch, or the same deletion again: the end state a repeat reaches is the first's. */
+  "mako:automations-save",
+  "mako:automations-delete",
+  "mako:automations-enabled",
+  /** Run now is settled by the caller's key: a repeat is the same occurrence, so the same run and Thread. */
+  "mako:automations-run-now",
+  /** A decided proposal answers as it was decided. */
+  "mako:automations-decide",
   /** A spawn, a link, a report, a message and an answer are settled by the caller's key; stopping a stopped child stops nothing. */
   "mako:agents-start",
   "mako:agents-move",

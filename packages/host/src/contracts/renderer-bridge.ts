@@ -98,7 +98,8 @@ import type { CloudPrepareLaunch, CloudPrepareOutcome, CloudProjectsOffer, HandO
 import type { ContinueReading } from "./cloud-continues.js"
 import type { TelemetryChoice, TelemetryState } from "./telemetry.js"
 import type { HarnessUpdateInfo } from "./harness-updates.js"
-import type { Automation, UpdateState, UsageSummary } from "./automations-usage-updates.js"
+import type { UpdateState, UsageSummary } from "./automations-usage-updates.js"
+import type { AutomationDraft, AutomationProjectReading, AutomationProposal, AutomationRun, AutomationRunNowResult, AutomationsReading, AutomationTemplate } from "./automations.js"
 import type { Entry, ModelInfo, SessionState, SessionSummary, Thread, ThreadContextOptions, ThreadFileContext, ThreadPage, ThreadRef, ThreadRunState, ThinkingLevel } from "./conversation-session.js"
 import type { StorageReport } from "./storage.js"
 import type { BootPayload, ExternalThreadActivity, HostEvent, TabSnapshot } from "./host-events-boot.js"
@@ -1013,15 +1014,17 @@ export function createMakoBridge(transport: BridgeTransport) {
     userAvatar: () => invokeTrustedHost<string | undefined>("mako:user-avatar"),
 
     usage: () => invokeTrustedHost<UsageSummary>("mako:usage"),
-    automations: () => invokeTrustedHost<Automation[]>("mako:automations"),
-    saveAutomations: (next: Automation[]) =>
-      invokeTrustedHost<Automation[]>("mako:save-automations", next),
-    setAutomationEnabled: (id: string, enabled: boolean) =>
-      invokeTrustedHost<Automation[]>("mako:automation-enabled", id, enabled),
-    runAutomation: (id: string) =>
-      invokeTrustedHost<void>("mako:run-automation", id),
-    reloadAutomations: () =>
-      invokeTrustedHost<Automation[]>("mako:reload-automations"),
+    /** `contracts/automations.ts`: one project's automations, or every project's. */
+    automations: (project?: string) => invokeTrustedHost<AutomationsReading>("mako:automations-read", project),
+    automationRuns: (project: string, id?: string, limit?: number) => invokeTrustedHost<AutomationRun[]>("mako:automations-runs", project, id, limit),
+    /** The person's own edit, applied at once; `replaces` is the id it had, when renamed. */
+    saveAutomation: (project: string, definition: JsonValue, replaces?: string) => invokeTrustedHost<AutomationProjectReading>("mako:automations-save", project, definition, replaces),
+    deleteAutomation: (project: string, id: string) => invokeTrustedHost<AutomationProjectReading>("mako:automations-delete", project, id),
+    setAutomationEnabled: (project: string, id: string, enabled: boolean) => invokeTrustedHost<AutomationProjectReading>("mako:automations-enabled", project, id, enabled),
+    runAutomation: (project: string, id: string, clientKey: string) => invokeTrustedHost<AutomationRunNowResult>("mako:automations-run-now", project, id, clientKey),
+    decideAutomationProposal: (proposal: string, approve: boolean) => invokeTrustedHost<AutomationProposal>("mako:automations-decide", proposal, approve),
+    draftAutomation: (conversationId: string) => invokeTrustedHost<AutomationDraft>("mako:automations-draft", conversationId),
+    automationTemplates: () => invokeTrustedHost<AutomationTemplate[]>("mako:automations-templates"),
 
     terminalList: () =>
       invokeTrustedHost<TerminalSession[]>("mako:terminal-list"),

@@ -1,56 +1,52 @@
 import { createHook, createStore } from "@/state/store"
 import { getMako, hasBridge } from "@/lib/bridge"
-import type { Automation, AutomationRun } from "@/lib/types"
+import type { AutomationProjectReading, AutomationRun, AutomationView } from "@/lib/types"
 
 /**
- * Saved prompts and their triggers.
- *
- * The definitions live in the project so they can be committed; whether one is
- * switched on is a local decision, held here and in the host, and never
- * written back. Cloning a repository must not start running an agent.
+ * Every served project's automations (`contracts/automations.ts`), as the host reads them: definitions from each
+ * project's file, and what this Mac keeps of them. Whether one is on is a local decision, held in the host and never
+ * written to the shared file: cloning a repository must not start running an agent.
  */
-export const automationsStore = createStore<{ list: Automation[]; recent: AutomationRun[] }>({
+export const automationsStore = createStore<{ projects: AutomationProjectReading[]; list: AutomationView[]; recent: AutomationRun[] }>({
+  projects: [],
   list: [],
   recent: [],
 })
 
 export const useAutomations = createHook(automationsStore)
 
-export function applyAutomations(list: Automation[]) {
-  automationsStore.set({ list })
+function applyProjects(projects: AutomationProjectReading[]) {
+  automationsStore.set({ projects, list: projects.flatMap((project) => project.automations) })
+}
+
+/** One project's reading replaced: `automations-changed`. */
+export function applyAutomationsReading(reading: AutomationProjectReading) {
+  const others = automationsStore.get().projects.filter((project) => project.project !== reading.project)
+  applyProjects([...others, reading].sort((a, b) => a.project.localeCompare(b.project)))
 }
 
 export function noteAutomationRun(run: AutomationRun) {
-  const recent = automationsStore
-    .get()
-    .recent.filter((entry) => entry.runId !== run.runId)
-  automationsStore.set({ recent: [run, ...recent].slice(0, 8) })
+  const recent = automationsStore.get().recent.filter((entry) => !(entry.project === run.project && entry.automation === run.automation && entry.occurrence === run.occurrence))
+  automationsStore.set({ recent: [run, ...recent].slice(0, 20) })
 }
 
 export const automations = {
   async load() {
     if (!hasBridge()) return
-    const list = await getMako().automations().catch(() => [])
-    automationsStore.set({ list })
+    const reading = await getMako().automations().catch(() => null)
+    if (reading) applyProjects(reading.projects)
   },
 
-  async reload() {
-    if (!hasBridge()) return
-    const list = await getMako().reloadAutomations().catch(() => [])
-    automationsStore.set({ list })
+  async setEnabled(project: string, id: string, enabled: boolean) {
+    const reading = await getMako().setAutomationEnabled(project, id, enabled).catch(() => null)
+    if (reading) applyAutomationsReading(reading)
   },
 
-  async setEnabled(id: string, enabled: boolean) {
-    const list = await getMako().setAutomationEnabled(id, enabled).catch(() => null)
-    if (list) automationsStore.set({ list })
+  run(project: string, id: string) {
+    void getMako().runAutomation(project, id, crypto.randomUUID())
   },
 
-  run(id: string) {
-    void getMako().runAutomation(id)
-  },
-
-  async save(next: Automation[]) {
-    const list = await getMako().saveAutomations(next).catch(() => null)
-    if (list) automationsStore.set({ list })
+  async decide(proposal: string, approve: boolean) {
+    await getMako().decideAutomationProposal(proposal, approve).catch(() => null)
   },
 }

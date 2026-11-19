@@ -86,7 +86,7 @@ import { applyUpdate, updates } from "@/state/updates"
 import { application, applicationStore } from "@/state/application"
 import { runCommand } from "@/extend/commands"
 import {
-  applyAutomations,
+  applyAutomationsReading,
   automations,
   noteAutomationRun,
 } from "@/state/automations"
@@ -618,8 +618,8 @@ function applyToActive(event: HostEvent) {
     case "update":
       applyUpdate(event.update)
       break
-    case "automations":
-      applyAutomations(event.automations)
+    case "automations-changed":
+      applyAutomationsReading(event.reading)
       break
     case "threads":
       applyThreads(event.threads)
@@ -658,18 +658,12 @@ function applyToActive(event: HostEvent) {
       break
     case "automation-run":
       noteAutomationRun(event.run)
-      if (event.run.status === "started" && event.run.reason === "manual") {
-        toast(`${event.run.name} started`, {
-          description: "run by hand",
-        })
-      } else if (event.run.status === "failed") {
-        toast.error(`${event.run.name} failed`, {
+      if (event.run.status === "failed-to-start") {
+        const { project, automation } = event.run
+        toast.error(`${automation} didn't start`, {
           duration: ACTION_TOAST_MS,
-          description: event.run.error,
-          action: {
-            label: "Run again",
-            onClick: () => automations.run(event.run.id),
-          },
+          description: event.run.why,
+          action: { label: "Run again", onClick: () => automations.run(project, automation) },
         })
       }
       break

@@ -853,10 +853,6 @@ const inputs = {
       ]),
     ]),
   "mako:appshot-windows": () => z.tuple([]),
-  "mako:automation-context": () => z.tuple([]),
-  "mako:automation-enabled": () =>
-    z.tuple([z.string(), z.boolean(), z.string().optional()]),
-  "mako:automations": () => z.tuple([]),
   "mako:automations-act": () =>
     z.tuple([
       z.union([
@@ -883,15 +879,48 @@ const inputs = {
       ]),
       z.object({
         action: z.union([
-          z.literal("run"),
-          z.literal("off"),
-          z.literal("on"),
           z.literal("list"),
+          z.literal("update"),
+          z.literal("create"),
+          z.literal("enable"),
+          z.literal("delete"),
+          z.literal("proposal"),
+          z.literal("get"),
+          z.literal("runs"),
+          z.literal("disable"),
+          z.literal("run_now"),
         ]),
+        project: z.string().optional(),
         id: z.string().optional(),
+        definition: z
+          .union([
+            z.boolean(),
+            z.null(),
+            z.string(),
+            z.number(),
+            z.record(z.string(), z.json()),
+            z.array(z.json()),
+          ])
+          .optional(),
+        why: z.string().optional(),
+        proposal: z.string().optional(),
+        limit: z.number().optional(),
         clientKey: z.string(),
       }),
     ]),
+  "mako:automations-decide": () => z.tuple([z.string(), z.boolean()]),
+  "mako:automations-delete": () => z.tuple([z.string(), z.string()]),
+  "mako:automations-draft": () => z.tuple([z.string()]),
+  "mako:automations-enabled": () =>
+    z.tuple([z.string(), z.string(), z.boolean()]),
+  "mako:automations-read": () => z.tuple([z.string().optional()]),
+  "mako:automations-run-now": () =>
+    z.tuple([z.string(), z.string(), z.string()]),
+  "mako:automations-runs": () =>
+    z.tuple([z.string(), z.string().optional(), z.number().optional()]),
+  "mako:automations-save": () =>
+    z.tuple([z.string(), z.json(), z.string().optional()]),
+  "mako:automations-templates": () => z.tuple([]),
   "mako:boot": () => z.tuple([]),
   "mako:browser-control-connect": () => z.tuple([z.string()]),
   "mako:browser-control-disconnect": () => z.tuple([z.string()]),
@@ -1246,9 +1275,9 @@ const inputs = {
       ]),
       z.object({
         action: z.union([
+          z.literal("update"),
           z.literal("install"),
           z.literal("read"),
-          z.literal("update"),
         ]),
         harness: z.string().optional(),
         clientKey: z.string(),
@@ -2530,7 +2559,6 @@ const inputs = {
     z.tuple([z.string(), z.string(), z.literal("preview").optional()]),
   "mako:reconnect-host": () => z.tuple([]),
   "mako:relaunch": () => z.tuple([]),
-  "mako:reload-automations": () => z.tuple([]),
   "mako:repo-avatar": () => z.tuple([z.string()]),
   "mako:report-crash": () =>
     z.tuple([
@@ -2595,57 +2623,7 @@ const inputs = {
   "mako:restore-version": () => z.tuple([z.string(), z.number()]),
   "mako:reveal": () => z.tuple([z.string()]),
   "mako:reveal-plugins": () => z.tuple([]),
-  "mako:run-automation": () =>
-    z.tuple([z.string(), z.string().optional(), z.string().optional()]),
   "mako:run-command": () => z.tuple([z.string(), z.string().optional()]),
-  "mako:save-automations": () =>
-    z.tuple([
-      z.array(
-        z.object({
-          id: z.string(),
-          name: z.string(),
-          prompt: z.string(),
-          trigger: z.union([
-            z.object({ kind: z.literal("manual") }),
-            z.object({ kind: z.literal("files"), paths: z.array(z.string()) }),
-            z.object({ kind: z.literal("commit") }),
-            z.object({
-              kind: z.literal("slack"),
-              event: z.union([
-                z.literal("message_in_channel"),
-                z.literal("reaction_added"),
-                z.literal("channel_created"),
-              ]),
-              channels: z.array(z.string()),
-              messageFilter: z.string().optional(),
-            }),
-            z.object({
-              kind: z.literal("gmail"),
-              event: z.literal("message_received"),
-              from: z.array(z.string()),
-              to: z.array(z.string()),
-              subjectFilter: z.string().optional(),
-              labels: z.array(z.string()),
-              hasAttachment: z.boolean(),
-            }),
-            z.object({
-              kind: z.literal("google_calendar"),
-              event: z.union([
-                z.literal("event_created"),
-                z.literal("event_updated"),
-                z.literal("event_cancelled"),
-                z.literal("event_starting_soon"),
-                z.literal("event_ended"),
-              ]),
-              calendars: z.array(z.string()),
-              titleFilter: z.string().optional(),
-            }),
-            z.object({ kind: z.literal("webhook"), path: z.string() }),
-          ]),
-          enabled: z.boolean(),
-        })
-      ),
-    ]),
   "mako:search": () =>
     z.tuple([
       z.string(),
@@ -3633,10 +3611,16 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:appshot-capture", "control"],
   ["mako:appshot-front", "control"],
   ["mako:appshot-windows", "control"],
-  ["mako:automation-context", "workspaces"],
-  ["mako:automation-enabled", "workspaces"],
-  ["mako:automations", "workspaces"],
   ["mako:automations-act", "conversations"],
+  ["mako:automations-decide", "workspaces"],
+  ["mako:automations-delete", "workspaces"],
+  ["mako:automations-draft", "workspaces"],
+  ["mako:automations-enabled", "workspaces"],
+  ["mako:automations-read", "workspaces"],
+  ["mako:automations-run-now", "workspaces"],
+  ["mako:automations-runs", "workspaces"],
+  ["mako:automations-save", "workspaces"],
+  ["mako:automations-templates", "workspaces"],
   ["mako:boot", "workspaces"],
   ["mako:browser-control-connect", "control"],
   ["mako:browser-control-disconnect", "control"],
@@ -3883,7 +3867,6 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:read-file", "workspaces"],
   ["mako:read-live-file", "conversations"],
   ["mako:relaunch", "application"],
-  ["mako:reload-automations", "workspaces"],
   ["mako:repo-avatar", "git"],
   ["mako:report-crash", "application"],
   ["mako:rerun-checks", "git"],
@@ -3892,9 +3875,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:restore-version", "attribution"],
   ["mako:reveal", "workspaces"],
   ["mako:reveal-plugins", "tools"],
-  ["mako:run-automation", "workspaces"],
   ["mako:run-command", "workspaces"],
-  ["mako:save-automations", "workspaces"],
   ["mako:search", "workspaces"],
   ["mako:select-update-source", "application"],
   ["mako:session-reader-history", "threads"],
