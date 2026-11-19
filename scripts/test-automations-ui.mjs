@@ -145,6 +145,19 @@ async function checkWindow() {
   await capture("list-all.png")
   console.log("PASS: the rail opens the list: three projects, every standing, sentences, the pending proposal on its row")
 
+  // 1b. Cloud registration refused says why on its row; a Thread whose run this window never heard of asks the host.
+  assert.match(await text(`[data-automation-key$="#slack-questions"] [data-automation-note]`), /didn’t register it: Slack isn’t connected/)
+  assert.equal(await store(`'a7000000-0003-4000-8000-0000000000a3' in state.byConversation`), false, "the Tuesday run isn't one this window heard of")
+  await evaluate(`import('/src/state/acp.ts').then(({ acp }) => { acp.open('a7000000-0003-4000-8000-0000000000a3'); return true })`)
+  await until(`document.querySelector('[data-automation-run-line="nightly-ci-triage"]') !== null`, "the host's run-of answers for an older run")
+  assert.match(await text('[data-automation-run-line]'), /Run of Nightly CI triage/)
+  await capture("thread-badge-run-of.png")
+  await click('[data-automation-run-link]')
+  await until(`document.querySelector('[data-automation-page="nightly-ci-triage"]') !== null`, "it leads to the automation")
+  await press("Escape")
+  await until(`document.querySelector('[data-automations="list"]') !== null`, "back to the list")
+  console.log("PASS: a refused cloud registration on its row; run-of names an older run's automation")
+
   // 2. Filters and search, by mouse and by key.
   for (const [filter, key] of [["needs", "3"], ["paused", "4"], ["scheduled", "2"]]) {
     await click("[data-automation-row]")
@@ -353,8 +366,23 @@ async function checkWindow() {
   assert.ok(await evaluate(`Boolean(document.querySelector('[aria-label="If this Mac is off"]'))`), "what to do while this Mac is off")
   await evaluate(`document.querySelector('[data-trigger-index="0"]').scrollIntoView({ block: 'start' }); true`)
   await capture("editor-cloud-trigger.png")
+  await click("[data-webhook-address]")
+  await until(`document.querySelector('[data-webhook-secret]') !== null`, "its address and its secret, once")
+  assert.match(await text("[data-webhook-url]"), /^https:\/\/hooks\.mako\.dev\/.+stripe-forward$/)
+  const firstSecret = await text("[data-webhook-secret]")
+  assert.match(firstSecret, /^whsec_/)
+  await capture("editor-webhook-secret.png")
+  await click("[data-webhook-rotate]")
+  await until(`document.querySelector('[data-confirm-action]') !== null`, "rotating asks first")
+  await click("[data-confirm-action]")
+  await until(`document.querySelector('[data-webhook-secret]')?.innerText !== ${JSON.stringify(firstSecret)}`, "a new secret")
+  await until(`document.querySelector('[data-confirm-dialog]') === null`, "the confirmation gone")
+  await capture("editor-webhook-rotated.png")
+  console.log("PASS: a webhook's address, its secret shown once, and Rotate")
   await press("Escape")
+  await until(`document.querySelector('[data-automation-page="stripe-webhook"]') !== null`, "back to its page")
   await press("Escape")
+  await until(`document.querySelector('[data-automations="list"]') !== null`, "back to the list")
 
   // 12. Duplicate and delete with Undo, from the row's menu.
   await click(`[data-automation-key$="#openapi-sync"] [data-automation-menu]`)

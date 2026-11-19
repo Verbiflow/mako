@@ -1,7 +1,9 @@
 import { useMemo, useState, type ReactNode } from "react"
-import { CloudIcon, PlusIcon, XIcon } from "lucide-react"
+import { CheckIcon, CloudIcon, CopyIcon, LinkIcon, PlusIcon, RotateCwIcon, XIcon } from "lucide-react"
+import { automations } from "@/state/automations"
+import { confirmAction } from "@/state/confirm"
 import { TRIGGER_ICONS } from "@/components/automations/trigger-icons"
-import type { AutomationTrigger, AutomationTriggerKind } from "@mako/host/contracts/automations"
+import type { AutomationHook, AutomationTrigger, AutomationTriggerKind } from "@mako/host/contracts/automations"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import {
   cronOf,
@@ -172,6 +174,7 @@ function TriggerRow({ index, trigger, cloudRegistered, problem, onChange, onRemo
           <span>seconds into one run</span>
         </label>
       ) : null}
+      {trigger.kind === "webhook" ? <WebhookAddress name={trigger.secret} /> : null}
       {waits || triggerInCloud(trigger) ? (
         <p data-trigger-waits className="flex items-center gap-1.5 pl-[22px] text-label text-faint">
           <CloudIcon aria-hidden className="size-3" />
@@ -426,6 +429,65 @@ export function NextRuns({ cron, timezone }: { cron: string; timezone: string })
           )
         })}
       </ol>
+    </div>
+  )
+}
+
+/**
+ * Where the sender delivers a webhook: the account's address for this secret's name, and the secret itself, shown once
+ * when it's made or rotated (the account keeps it sealed after), with Copy beside each and Rotate for a new one.
+ */
+function WebhookAddress({ name }: { name: string }) {
+  const [hook, setHook] = useState<AutomationHook | undefined>()
+  const [busy, setBusy] = useState(false)
+  const [copied, setCopied] = useState<string | undefined>()
+  const ask = async (rotate: boolean) => {
+    if (rotate && !(await confirmAction({ title: "Rotate this webhook's secret?", body: "The old secret stops working at once; the sender needs the new one.", confirm: "Rotate secret", tone: "negative" }))) return
+    setBusy(true)
+    const answer = await automations.hook(name, "webhook", rotate)
+    setBusy(false)
+    if (answer) setHook(answer)
+  }
+  const copy = (what: string, text: string) => {
+    void navigator.clipboard.writeText(text).then(() => setCopied(what))
+  }
+  if (!name) return null
+  if (!hook || hook.name !== name)
+    return (
+      <div className="pl-[22px]">
+        <button type="button" data-webhook-address disabled={busy} onClick={() => void ask(false)} className="pressable flex h-7 items-center gap-1.5 bg-fill-hover px-2.5 text-label text-foreground hover:bg-fill-selected disabled:opacity-50">
+          <LinkIcon className="size-3" />
+          Get its address
+        </button>
+      </div>
+    )
+  return (
+    <div data-webhook-hook className="ml-[22px] flex flex-col gap-1.5 bg-raised px-2.5 py-2 text-label">
+      <div className="flex min-w-0 items-center gap-2">
+        <span className="w-14 shrink-0 text-faint">Address</span>
+        <code data-webhook-url className="min-w-0 flex-1 truncate font-mono text-foreground">{hook.url}</code>
+        <button type="button" data-webhook-copy="url" onClick={() => copy("url", hook.url)} className="pressable flex h-6 items-center gap-1 px-1.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground">
+          {copied === "url" ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+          {copied === "url" ? "Copied" : "Copy"}
+        </button>
+      </div>
+      {hook.secret ? (
+        <div className="flex min-w-0 items-center gap-2">
+          <span className="w-14 shrink-0 text-faint">Secret</span>
+          <code data-webhook-secret className="min-w-0 flex-1 truncate font-mono text-foreground">{hook.secret}</code>
+          <button type="button" data-webhook-copy="secret" onClick={() => copy("secret", hook.secret ?? "")} className="pressable flex h-6 items-center gap-1 px-1.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground">
+            {copied === "secret" ? <CheckIcon className="size-3" /> : <CopyIcon className="size-3" />}
+            {copied === "secret" ? "Copied" : "Copy"}
+          </button>
+        </div>
+      ) : null}
+      <div className="flex items-center gap-2">
+        <span className="min-w-0 flex-1 text-faint">{hook.secret ? "Shown this once: give it to the sender now. Your cloud account keeps it sealed." : "Its secret was shown when it was made. Rotate for a new one; the old one stops working."}</span>
+        <button type="button" data-webhook-rotate disabled={busy} onClick={() => void ask(true)} className="pressable flex h-6 shrink-0 items-center gap-1 px-1.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground disabled:opacity-50">
+          <RotateCwIcon className="size-3" />
+          Rotate secret
+        </button>
+      </div>
     </div>
   )
 }

@@ -12,6 +12,8 @@ import {
   type AutomationDefinition,
   type AutomationDefinitionInput,
   type AutomationDraft,
+  type AutomationHook,
+  type AutomationRunOf,
   type AutomationLocal,
   type AutomationProjectReading,
   type AutomationProposal,
@@ -254,7 +256,7 @@ const LOCALS = {
   "check-failed-fix": local({ enabled: true }),
   "broken-links": local({ enabled: true, paused: { kind: "changed", reason: "Paused because .mako/automations.json changed after you turned it on (a pull brought a new prompt). Read it, then turn it on again.", at: NOW - 6 * HOUR } }),
   "sentry-triage": local({ enabled: true, cloudRegistered: true }),
-  "slack-questions": local({ enabled: false }),
+  "slack-questions": local({ enabled: true, cloudRegistered: false, cloudIssue: "Slack isn’t connected to the account, so #support can’t be watched. Connect it in Settings › Integrations." }),
   "stripe-webhook": local({ enabled: true, cloudRegistered: true }),
   "openapi-sync": local({ enabled: false }),
   "token-rotation": local({ enabled: false }),
@@ -315,6 +317,7 @@ export function mockAutomations(emit: (event: HostEvent) => void) {
   const locals = new Map<string, AutomationLocal>(Object.entries(LOCALS))
   const runs = seedRuns()
   const proposals = proposalsSeed()
+  const hooks = new Map<string, { provider: AutomationHook["provider"]; url: string }>()
   const key = (project: string, id: string) => `${project}\u0000${id}`
 
   const view = (project: string, each: AutomationDefinition): AutomationView => {
@@ -428,6 +431,20 @@ export function mockAutomations(emit: (event: HostEvent) => void) {
         },
       }),
       automationTemplates: async (): Promise<AutomationTemplate[]> => AUTOMATION_TEMPLATES,
+      automationRunOf: async (conversation: string): Promise<AutomationRunOf | null> => {
+        const found = Object.values(runs).flat().find((each) => each.thread?.conversation === conversation)
+        if (!found) return null
+        const name = [...Object.values(definitions)].flat().find((each) => each.id === found.automation)?.name ?? found.automation
+        return { project: found.project, id: found.automation, occurrence: found.occurrence, name }
+      },
+      automationHook: async (name: string, provider: AutomationHook["provider"] = "webhook", rotate = false): Promise<AutomationHook> => {
+        const held = hooks.get(name)
+        const secret = () => `whsec_${crypto.randomUUID().replaceAll("-", "").slice(0, 32)}`
+        if (held && !rotate) return { name, provider: held.provider, url: held.url }
+        const url = held?.url ?? `https://hooks.mako.dev/a/7f3c2e/${provider}/${name.toLowerCase().replaceAll("_", "-")}`
+        hooks.set(name, { provider, url })
+        return { name, provider, url, secret: secret() }
+      },
     },
   }
 }

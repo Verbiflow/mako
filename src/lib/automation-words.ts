@@ -682,6 +682,7 @@ export function readTriggers(triggers: AutomationDefinitionInput["triggers"]): A
 export function standingNote(view: AutomationView): { text: string; tone: "caution" | "negative" | "faint" } | undefined {
   const waiting = view.definition.triggers.map((trigger) => cloudTriggerWaiting(trigger, view.local.cloudRegistered)).find(Boolean)
   if (view.standing === "paused" && view.local.paused) return { text: view.local.paused.reason, tone: "caution" }
+  if (view.local.cloudIssue) return { text: `Your cloud account didn’t register it: ${view.local.cloudIssue}`, tone: "negative" }
   if (view.standing === "unsupported") return { text: waiting ?? view.issues[0] ?? "None of its triggers fires on this Mac.", tone: "faint" }
   if (view.issues.length) return { text: view.issues.join(" "), tone: "caution" }
   if (view.local.enabled && waiting) return { text: waiting, tone: "faint" }

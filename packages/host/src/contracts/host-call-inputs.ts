@@ -913,9 +913,33 @@ const inputs = {
   "mako:automations-draft": () => z.tuple([z.string()]),
   "mako:automations-enabled": () =>
     z.tuple([z.string(), z.string(), z.boolean()]),
+  "mako:automations-forward-settle": () =>
+    z.tuple([
+      z.string(),
+      z.object({
+        status: z.union([
+          z.literal("approved"),
+          z.literal("declined"),
+          z.literal("expired"),
+          z.literal("stale"),
+        ]),
+        note: z.string().optional(),
+      }),
+    ]),
+  "mako:automations-forwarded": () => z.tuple([]),
+  "mako:automations-hook": () =>
+    z.tuple([
+      z.string(),
+      z
+        .union([z.literal("linear"), z.literal("sentry"), z.literal("webhook")])
+        .optional(),
+      z.boolean().optional(),
+      z.string().optional(),
+    ]),
   "mako:automations-read": () => z.tuple([z.string().optional()]),
   "mako:automations-run-now": () =>
     z.tuple([z.string(), z.string(), z.string()]),
+  "mako:automations-run-of": () => z.tuple([z.string()]),
   "mako:automations-runs": () =>
     z.tuple([z.string(), z.string().optional(), z.number().optional()]),
   "mako:automations-save": () =>
@@ -3616,8 +3640,12 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:automations-delete", "workspaces"],
   ["mako:automations-draft", "workspaces"],
   ["mako:automations-enabled", "workspaces"],
+  ["mako:automations-forward-settle", "workspaces"],
+  ["mako:automations-forwarded", "workspaces"],
+  ["mako:automations-hook", "workspaces"],
   ["mako:automations-read", "workspaces"],
   ["mako:automations-run-now", "workspaces"],
+  ["mako:automations-run-of", "workspaces"],
   ["mako:automations-runs", "workspaces"],
   ["mako:automations-save", "workspaces"],
   ["mako:automations-templates", "workspaces"],

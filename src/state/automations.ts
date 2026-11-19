@@ -5,7 +5,9 @@ import type {
   AutomationDraft,
   AutomationProjectReading,
   AutomationProposal,
+  AutomationHook,
   AutomationRun,
+  AutomationRunOf,
   AutomationTemplate,
   AutomationView,
 } from "@mako/host/contracts/automations"
@@ -32,6 +34,8 @@ export interface AutomationsState {
   templates: AutomationTemplate[] | null
   /** Each run this window heard of, by its Thread's conversation: a Thread started by an automation says so. */
   byConversation: Record<string, AutomationRun>
+  /** What the host said a Thread is (`mako:automations-run-of`), for a run this window never heard of; null for none. */
+  runOf: Record<string, AutomationRunOf | null>
 }
 
 export const automationsStore = createStore<AutomationsState>({
@@ -40,6 +44,7 @@ export const automationsStore = createStore<AutomationsState>({
   runs: {},
   templates: null,
   byConversation: {},
+  runOf: {},
 })
 
 export const useAutomations = createHook(automationsStore)
@@ -267,6 +272,24 @@ export const automations = {
       return decided
     } catch (error) {
       toast.error(approve ? "Couldn't approve it" : "Couldn't decline it", { description: failure(error instanceof Error ? error : String(error)) })
+      return undefined
+    }
+  },
+
+  /** Which automation ran a Thread, asked of the host once per conversation; the runs this window holds answer first. */
+  async runOf(conversation: string): Promise<void> {
+    if (!hasBridge() || conversation in automationsStore.get().runOf) return
+    automationsStore.set((state) => ({ runOf: { ...state.runOf, [conversation]: null } }))
+    const found = await getMako().automationRunOf(conversation).catch(() => null)
+    if (found) automationsStore.set((state) => ({ runOf: { ...state.runOf, [conversation]: found } }))
+  },
+
+  /** A webhook's address at the cloud account, made if new; `rotate` gives it a new secret. The secret shows only in this answer. */
+  async hook(name: string, provider: AutomationHook["provider"], rotate = false): Promise<AutomationHook | undefined> {
+    try {
+      return await getMako().automationHook(name, provider, rotate)
+    } catch (error) {
+      toast.error(rotate ? "Couldn't rotate its secret" : "Couldn't get its address", { description: failure(error instanceof Error ? error : String(error)) })
       return undefined
     }
   },

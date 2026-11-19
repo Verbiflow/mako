@@ -13,6 +13,7 @@ import {
   AUTOMATION_PROPOSAL_TTL_MS,
   AUTOMATION_QUEUE_LIMIT,
   AutomationDefinitionSchema,
+  ForwardedOutcomeSchema,
   automationBriefText,
   automationClientKey,
   automationDiff,
@@ -32,6 +33,9 @@ import {
   type AutomationProposal,
   type AutomationRun,
   type AutomationRunNowResult,
+  type AutomationRunOf,
+  type AutomationHook,
+  type ForwardedOutcome,
   type AutomationsReading,
   type AutomationTemplate,
   type AutomationTrigger,
@@ -39,6 +43,7 @@ import {
   type ScheduleTrigger,
 } from "../contracts/automations.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
+import { eventMarker, untrustedEventText, type CloudRun } from "@mako/protocol/automations-cloud"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { readAutomationFile, writeAutomationFile, type AutomationFileReading } from "./automation-file.js"
 import type { AutomationStore } from "./automation-store.js"
@@ -94,6 +99,24 @@ export type AutomationThreadReading =
 
 export type GateOutcome = { exit: number; stdout: string; stderr: string } | { error: string }
 
+/**
+ * The cloud account's word on an occurrence it also holds (`AutomationCloud`): asked before this Mac runs a schedule's
+ * slot or an event of an automation registered there, so of the Mac and the cloud only one ever runs it.
+ */
+export interface AutomationClaims {
+  /** `claimed`: this Mac's to run. `held`: the cloud's or another's, as its record stands. `unreachable`: not asked, so not run here. */
+  claim(project: string, run: AutomationRun): Promise<{ claimed: true } | { held: CloudRun } | { unreachable: string }>
+  /** An occurrence offered to this Mac that it won't run, and why; the account records it skipped. */
+  decline(project: string, run: AutomationRun, why: string): Promise<void>
+  /** The cloud's record of an occurrence, as this Mac keeps it. */
+  record(project: string, run: CloudRun): AutomationRun
+}
+
+/** An occurrence the cloud account offered this Mac: its event, which the run's agent reads only fenced as untrusted. */
+export interface AutomationOffer {
+  event?: unknown
+}
+
 /** Nothing started: no Thread exists for the run. Anything else thrown leaves that uncertain, so the run stays fired. */
 export class AutomationNotStartedError extends Error {}
 
@@ -136,6 +159,20 @@ export interface AutomationsDeps {
   draftSource?(conversationId: string): ThreadDraftSource | undefined
   /** `<dataRoot>/automation-launches`: an older build's receipts for approved runs, read for one release. */
   legacyLaunches?: string
+  /** The cloud account's claims, once this Mac is signed in to one (`AutomationCloud`). */
+  claims?(): AutomationClaims | undefined
+  /** A project's automations changed (an edit, on or off, a decision): what the cloud registers follows. */
+  changed?(project: string): void
+  /**
+   * A cloud machine's host: what its agents propose is the person's Mac's to apply, never this clone's. A decision here
+   * (the ask's card in its Thread) waits for the Mac (`relay: "awaiting"`), which reads them (`forwarded`) and says
+   * how each went (`settleForwarded`); only then is the agent told.
+   */
+  relaysProposals?: boolean
+  /** The person's Mac: tells a cloud Thread's host how a proposal forwarded from it went (`mako:automations-forward-settle`). */
+  forward?(): { settle(thread: string, proposal: string, outcome: ForwardedOutcome): Promise<void> } | undefined
+  /** The account's webhooks (`AutomationCloud.hook`), once this Mac is signed in to one with the cloud. */
+  hooks?(): { hook(name: string, provider?: AutomationHook["provider"], rotate?: boolean, secret?: string): Promise<AutomationHook> } | undefined
   now?(): number
 }
 
@@ -257,6 +294,7 @@ export class Automations {
     const issues = [
       ...definition.triggers.flatMap((trigger) => trigger.kind === "unsupported" ? [`A trigger can't be read here: ${trigger.why}.`] : triggerFiresInCloud(trigger) ? [cloudTriggerWaiting(trigger, local.cloudRegistered)].filter((why) => why !== undefined) : []),
       ...(definition.start.place.startsWith("device:") ? ["A run on another device starts with the cloud slice; until then it can't start."] : []),
+      ...(local.cloudIssue ? [`The cloud account didn't take it: ${local.cloudIssue}`] : []),
     ]
     const standing = !local.enabled ? "off" : activeRun ? "running" : local.paused || (local.approved !== undefined && local.approved !== fingerprint) ? "paused" : live.some((trigger) => trigger.kind !== "manual") ? "on" : "unsupported"
     const changed = local.enabled && !local.paused && local.approved !== undefined && local.approved !== fingerprint
@@ -284,6 +322,60 @@ export class Automations {
 
   templates(): AutomationTemplate[] {
     return AUTOMATION_TEMPLATES
+  }
+
+  /** The run a Thread is, by its conversation, however old: for its "Run of <name>" line. */
+  async runOf(conversation: string): Promise<AutomationRunOf | null> {
+    await this.start()
+    const run = this.#deps.store.runByConversation(conversation)
+    if (!run) return null
+    const definition = await this.#definition(run.project, run.automation).catch(() => undefined)
+    return { project: run.project, id: run.automation, occurrence: run.occurrence, name: definition?.name ?? run.automation }
+  }
+
+  /**
+   * The cloud's record of an occurrence, from its runs feed: kept as this Mac's record of it, unless this Mac runs it
+   * itself (claimed, its own record is the one), and counted as one of its runs for its pause after failures.
+   */
+  async recordCloud(run: AutomationRun): Promise<AutomationRun | undefined> {
+    await this.start()
+    return this.#inTurn(run.project, run.automation, async () => {
+      const store = this.#deps.store
+      const kept = store.run(run.project, run.automation, run.occurrence)
+      // This Mac's own record stands, unless it ran nothing and the cloud then did (its Mac away, or passed over).
+      if (kept && !kept.cloud && (kept.status === "fired" || kept.status === "queued" || kept.status === "completed" || kept.status === "failed" || !(run.status === "fired" || run.status === "completed" || run.status === "failed"))) return kept
+      if (kept?.cloud && kept.cloud.seq >= (run.cloud?.seq ?? 0)) return kept
+      const recorded = await this.#record(run)
+      const ended = run.status === "completed" || run.status === "failed"
+      if (ended && kept?.status !== run.status) {
+        if (run.status === "failed") await this.#failed(run.project, run.automation, run.why ?? "its cloud run failed")
+        else {
+          const local = store.local(run.project, run.automation)
+          if (local.failures) store.setLocal(run.project, run.automation, { ...local, failures: 0 })
+          await this.#changed(run.project)
+        }
+      }
+      return recorded
+    })
+  }
+
+  /** A webhook for a trigger, made or rotated in the account, its secret shown this once. */
+  async hook(name: string, provider?: AutomationHook["provider"], rotate?: boolean, secret?: string): Promise<AutomationHook> {
+    const hooks = this.#deps.hooks?.()
+    if (!hooks) throw new Error("Webhooks are the cloud account's: sign in to Mako with the cloud on to make one.")
+    return hooks.hook(name, provider, rotate, secret)
+  }
+
+  /** The cloud's registration of an automation: on, with what it's on with, or why not (`AutomationCloud`). */
+  async setCloudRegistered(project: string, id: string, registered: { ok: true } | { issue: string } | { off: true }): Promise<void> {
+    const store = this.#deps.store
+    const local = store.local(project, id)
+    const next: AutomationLocal = "ok" in registered ? { ...local, cloudRegistered: true, cloudIssue: undefined } : "issue" in registered ? { ...local, cloudRegistered: undefined, cloudIssue: registered.issue.slice(0, 1000) } : { ...local, cloudRegistered: undefined, cloudIssue: undefined }
+    if (next.cloudRegistered === local.cloudRegistered && next.cloudIssue === local.cloudIssue) return
+    store.setLocal(project, id, next)
+    await store.save()
+    const reading = await this.reading(project)
+    this.#deps.emit({ type: "automations-changed", reading })
   }
 
   /** "Make this an automation": the Thread's first prompt and how it started, for the editor to open. */
@@ -371,6 +463,7 @@ export class Automations {
     await this.#deps.store.save()
     const reading = await this.reading(project)
     this.#deps.emit({ type: "automations-changed", reading })
+    this.#deps.changed?.(project)
     return reading
   }
 
@@ -391,45 +484,119 @@ export class Automations {
    * One occurrence of an automation: its record, or the record a repeat of it already has. Whether it's on is the
    * caller's to check: Run now runs one that's off.
    */
-  fire(project: string, definition: AutomationDefinition, cause: AutomationCause, occurrence: string): Promise<AutomationRun> {
-    return this.#inTurn(project, definition.id, () => this.#fire(project, definition, cause, occurrence))
+  fire(project: string, definition: AutomationDefinition, cause: AutomationCause, occurrence: string, offer?: AutomationOffer): Promise<AutomationRun> {
+    return this.#inTurn(project, definition.id, () => this.#fire(project, definition, cause, occurrence, offer))
   }
 
-  async #fire(project: string, definition: AutomationDefinition, cause: AutomationCause, occurrence: string): Promise<AutomationRun> {
+  /**
+   * An occurrence the cloud account offered this Mac (its Mac is linked): held to the same daily cap, overlap and gate
+   * as one of its own, then claimed and run here; one it won't run is declined, saying why, and the account records it.
+   * One this Mac already decided (its own scheduler reached the slot first) is that decision.
+   */
+  async offered(project: string, cloudRun: CloudRun): Promise<AutomationRun | undefined> {
+    await this.start()
+    const claims = this.#deps.claims?.()
+    const definition = await this.#definition(project, cloudRun.automation)
+    const local = this.#deps.store.local(project, cloudRun.automation)
+    const cause: AutomationCause = cloudRun.cause
+    const asRun: AutomationRun = { occurrence: cloudRun.occurrence, automation: cloudRun.automation, project, clientKey: cloudRun.clientKey, cause, status: "skipped", at: this.#now() }
+    if (!definition || !local.enabled || local.paused || (local.approved !== undefined && local.approved !== automationFingerprint(definition))) {
+      await claims?.decline(project, asRun, !definition ? "It isn't in the project's file on its Mac now." : !local.enabled ? "It's off on its Mac now." : "It's paused on its Mac.").catch(() => undefined)
+      return undefined
+    }
+    return this.fire(project, definition, cause, cloudRun.occurrence, { event: cloudRun.event })
+  }
+
+  async #fire(project: string, definition: AutomationDefinition, cause: AutomationCause, occurrence: string, offer?: AutomationOffer): Promise<AutomationRun> {
     const store = this.#deps.store
     const id = definition.id
     const kept = store.run(project, id, occurrence)
     // A repeat is the same run; only one that certainly started nothing is tried again when asked again by hand.
-    if (kept && !(kept.status === "failed-to-start" && (cause.kind === "person" || cause.kind === "agent"))) return kept
+    // The cloud's record of one queued for this Mac while it was away isn't a decision here: offered, it runs.
+    const queuedForMac = kept?.cloud !== undefined && kept.status === "queued" && offer !== undefined
+    if (kept && !queuedForMac && !(kept.status === "failed-to-start" && (cause.kind === "person" || cause.kind === "agent"))) {
+      // The cloud offers what this Mac already passed over: it hears why, and records it so.
+      if (offer && !kept.cloud && !COVERED.has(kept.status) && kept.status !== "fired") await this.#decline(project, kept, kept.why ?? `It was ${kept.status} on its Mac.`)
+      return kept
+    }
     const now = this.#now()
     const base: AutomationRun = { occurrence, automation: id, project, clientKey: automationClientKey(id, occurrence), cause, status: "fired", at: now }
     const runs = store.runs(project, id)
     const limit = definition.limits.maxRunsPerDay
     if (limit !== undefined && runs.filter((run) => COUNTED.has(run.status) && run.at > now - DAY_MS).length >= limit)
-      return this.#record({ ...base, status: "skipped", why: `It started ${limit} run${limit === 1 ? "" : "s"} in the last 24 hours, its limit.` })
-    const active = runs.find((run) => run.status === "fired")
+      return this.#passOver(offer, { ...base, status: "skipped", why: `It started ${limit} run${limit === 1 ? "" : "s"} in the last 24 hours, its limit.` })
+    const active = runs.find((run) => run.status === "fired" && !run.cloud)
     if (active) {
-      const queued = runs.filter((run) => run.status === "queued").length
-      if (definition.limits.overlap === "queue" && queued < AUTOMATION_QUEUE_LIMIT) return this.#record({ ...base, status: "queued", why: `It starts once run ${active.occurrence} ends.` })
-      return this.#record({ ...base, status: "skipped", mergedInto: active.occurrence, why: `Run ${active.occurrence} was still going.` })
+      const queued = runs.filter((run) => run.status === "queued" && !run.cloud).length
+      if (definition.limits.overlap === "queue" && queued < AUTOMATION_QUEUE_LIMIT) {
+        // Offered, it's claimed now and waits here; its own, it's claimed when its turn comes (`#admit`).
+        if (offer) {
+          const held = await this.#claim(project, definition, base)
+          if (held) return held
+        }
+        return this.#record({ ...base, status: "queued", why: `It starts once run ${active.occurrence} ends.` })
+      }
+      return this.#passOver(offer, { ...base, status: "skipped", mergedInto: active.occurrence, why: `Run ${active.occurrence} was still going.` })
     }
-    return this.#admit(project, definition, base)
+    return this.#admit(project, definition, base, offer)
+  }
+
+  /** A run this Mac won't start: recorded, and if the cloud offered it, declined with the same words. */
+  async #passOver(offer: AutomationOffer | undefined, run: AutomationRun): Promise<AutomationRun> {
+    const recorded = await this.#record(run)
+    if (offer) await this.#decline(run.project, run, run.why ?? `It was ${run.status} on its Mac.`)
+    return recorded
+  }
+
+  async #decline(project: string, run: AutomationRun, why: string): Promise<void> {
+    await this.#deps.claims?.()?.decline(project, run, why).catch((error: Error) => hostWarn("automations", "an offered run couldn't be declined; the cloud's offer runs out instead", { automation: run.automation, occurrence: run.occurrence, error: error.message }))
+  }
+
+  /** Whether the cloud also holds this occurrence: a schedule's slot or an event, of an automation registered there. */
+  #claimable(project: string, definition: AutomationDefinition, cause: AutomationCause): boolean {
+    return this.#deps.store.local(project, definition.id).cloudRegistered === true && (cause.kind === "schedule" || cause.kind === "event")
+  }
+
+  /**
+   * Asks the cloud for an occurrence it also holds before this Mac runs it. Undefined: this Mac's to run. Otherwise
+   * what stands instead: the cloud's run (recorded as this Mac keeps it), or, not asked, an unrecorded skip, so the
+   * occurrence stays open for the cloud's own offer.
+   */
+  async #claim(project: string, definition: AutomationDefinition, run: AutomationRun): Promise<AutomationRun | undefined> {
+    if (!this.#claimable(project, definition, run.cause)) return undefined
+    const claims = this.#deps.claims?.()
+    if (!claims) return { ...run, status: "skipped", why: "This Mac isn't signed in to the cloud account it registered this automation with, so it can't claim this run." }
+    const answer = await claims.claim(project, run).catch((error: Error) => ({ unreachable: error.message }))
+    if ("claimed" in answer) return undefined
+    if ("unreachable" in answer) {
+      hostWarn("automations", "a run the cloud also holds wasn't claimed, so it doesn't start here", { automation: run.automation, occurrence: run.occurrence, why: answer.unreachable })
+      return { ...run, status: "skipped", why: `The cloud couldn't be asked whether it runs this, so this Mac didn't: ${answer.unreachable}` }
+    }
+    hostLog("automations", "a run the cloud holds", { automation: run.automation, occurrence: run.occurrence, status: answer.held.status, place: answer.held.place ?? "" })
+    return this.#record(claims.record(project, answer.held))
   }
 
   /** The gate, the condition, the record, then the Thread. */
-  async #admit(project: string, definition: AutomationDefinition, base: AutomationRun): Promise<AutomationRun> {
+  async #admit(project: string, definition: AutomationDefinition, base: AutomationRun, offer?: AutomationOffer): Promise<AutomationRun> {
     const store = this.#deps.store
     const id = definition.id
     let gate: AutomationRun["gate"]
     if (definition.gate) {
       const outcome = await this.#deps.runGate(project, definition.gate.command, definition.gate.timeoutS * 1000)
-      if ("error" in outcome) return this.#failedToStart({ ...base }, `Its gate couldn't run: ${outcome.error}`)
-      if (outcome.exit === 1) return this.#record({ ...base, status: "gate-skipped", why: "Its gate found nothing to do (exit 1)." })
-      if (outcome.exit !== 0) return this.#failedToStart({ ...base }, `Its gate failed with exit ${outcome.exit}${outcome.stderr.trim() ? `: ${outcome.stderr.trim().split("\n").slice(-3).join(" ").slice(0, 600)}` : ""}.`)
+      if ("error" in outcome) {
+        if (offer) await this.#decline(project, base, `Its gate couldn't run on its Mac: ${outcome.error}`)
+        return this.#failedToStart({ ...base }, `Its gate couldn't run: ${outcome.error}`)
+      }
+      if (outcome.exit === 1) return this.#passOver(offer, { ...base, status: "gate-skipped", why: "Its gate found nothing to do (exit 1)." })
+      if (outcome.exit !== 0) {
+        const why = `Its gate failed with exit ${outcome.exit}${outcome.stderr.trim() ? `: ${outcome.stderr.trim().split("\n").slice(-3).join(" ").slice(0, 600)}` : ""}.`
+        if (offer) await this.#decline(project, base, why)
+        return this.#failedToStart({ ...base }, why)
+      }
       gate = gateContext(outcome.stdout)
       const key = gate?.key
       const covered = key === undefined ? undefined : store.runs(project, id).find((run) => run.gate?.key === key && COVERED.has(run.status))
-      if (covered) return this.#record({ ...base, status: "gate-skipped", gate, why: `It already ran for ${key} (run ${covered.occurrence}).` })
+      if (covered) return this.#passOver(offer, { ...base, status: "gate-skipped", gate, why: `It already ran for ${key} (run ${covered.occurrence}).` })
     }
     const trigger = triggerOf(definition, base.cause)
     const condition = trigger && "runWhen" in trigger ? trigger.runWhen : undefined
@@ -440,12 +607,18 @@ export class Automations {
       if ("unavailable" in judged) return this.#record({ ...base, status: "skipped", ...(gate && { gate }), why: `Its condition couldn't be checked, so it didn't run: ${judged.unavailable} Connect an API key in Settings › Git for a model to check it.` })
       const runWhen = { verdict: judged.run ? "run" as const : "skip" as const, reason: judged.why.slice(0, 400), ...(judged.model && { model: judged.model.slice(0, 80) }) }
       if (!judged.run) return this.#record({ ...base, status: "skipped", ...(gate && { gate }), runWhen, why: runWhen.reason })
-      return this.#launch(project, definition, { ...base, ...(gate && { gate }), runWhen })
+      return this.#claimThenLaunch(project, definition, { ...base, ...(gate && { gate }), runWhen }, offer)
     }
-    return this.#launch(project, definition, { ...base, ...(gate && { gate }) })
+    return this.#claimThenLaunch(project, definition, { ...base, ...(gate && { gate }) }, offer)
   }
 
-  async #launch(project: string, definition: AutomationDefinition, base: AutomationRun): Promise<AutomationRun> {
+  async #claimThenLaunch(project: string, definition: AutomationDefinition, run: AutomationRun, offer?: AutomationOffer): Promise<AutomationRun> {
+    const held = await this.#claim(project, definition, run)
+    if (held) return held
+    return this.#launch(project, definition, run, offer)
+  }
+
+  async #launch(project: string, definition: AutomationDefinition, base: AutomationRun, offer?: AutomationOffer): Promise<AutomationRun> {
     const now = this.#now()
     const standing = definition.thread === "standing"
     const conversationId = automationUuid(standing ? `${project}\0${definition.id}\0standing` : `${project}\0${base.clientKey}`)
@@ -457,19 +630,20 @@ export class Automations {
     // Kept before its Thread starts: a host that stops between the two starts the same Thread again (`#recover`).
     const run: AutomationRun = { ...base, status: "fired", startedAt: now, thread: { conversation: conversationId, request: requestId, ...(branch && { branch }), ...(definition.start.place !== "here" && { place: definition.start.place }) } }
     await this.#record(run)
-    return this.#startThread(project, definition, run)
+    return this.#startThread(project, definition, run, offer)
   }
 
-  async #startThread(project: string, definition: AutomationDefinition, run: AutomationRun): Promise<AutomationRun> {
+  async #startThread(project: string, definition: AutomationDefinition, run: AutomationRun, offer?: AutomationOffer): Promise<AutomationRun> {
     const thread = run.thread!
     try {
+      const fenced = await eventText(run.cause, offer)
       const started = await this.#deps.startThread({
         project,
         definition,
         run,
         conversationId: thread.conversation,
         requestId: thread.request,
-        text: runText(definition, run),
+        text: fenced ? `${runText(definition, run)}\n\n---\n\n${fenced}` : runText(definition, run),
         ...(thread.branch && { branch: thread.branch }),
         standing: definition.thread === "standing",
       })
@@ -547,7 +721,8 @@ export class Automations {
     await this.#inTurn(project, id, async () => {
       const runs = this.#deps.store.runs(project, id)
       if (runs.some((run) => run.status === "fired")) return
-      const next = runs.filter((run) => run.status === "queued").at(-1)
+      // The cloud's queued records are its own to offer, never this Mac's queue.
+      const next = runs.filter((run) => run.status === "queued" && !run.cloud).at(-1)
       if (!next) return
       if (!definition) {
         await this.#record({ ...next, status: "skipped", why: "It left the project's file before its turn." })
@@ -662,7 +837,8 @@ export class Automations {
   /** Runs whose Thread ended unheard, or ran past their time. */
   async #watchRuns(now: number): Promise<void> {
     for (const run of this.#deps.store.active()) {
-      if (run.status !== "fired" || !run.thread) continue
+      // A run the cloud holds settles by the cloud's record of it (`recordCloud`), never by this Mac's clock.
+      if (run.status !== "fired" || !run.thread || run.cloud) continue
       const reading = this.#deps.threadOf(run.thread.conversation, run.thread.request)
       if (reading.state === "ended") {
         await this.#settle(run)
@@ -690,7 +866,7 @@ export class Automations {
   async #recover(): Promise<void> {
     await this.#readLegacyLaunches()
     for (const run of this.#deps.store.active()) {
-      if (run.status !== "fired" || !run.thread || this.#deps.threadOf(run.thread.conversation, run.thread.request).state !== "unknown") continue
+      if (run.status !== "fired" || !run.thread || run.cloud || this.#deps.threadOf(run.thread.conversation, run.thread.request).state !== "unknown") continue
       if (run.thread.place && run.thread.place !== "here") continue
       // Only a start a stopped host may have cut: an older one settles by its Thread's end or its timeout.
       if (this.#now() - (run.startedAt ?? run.at) > RECOVER_WITHIN_MS) continue
@@ -799,6 +975,15 @@ export class Automations {
     if (!proposal) throw new Error("Mako has no such proposal.")
     if (proposal.status !== "pending") return proposal
     const now = this.#now()
+    if (this.#deps.relaysProposals) {
+      // Decided in the cloud Thread: the person's Mac applies it, and its agent hears once the Mac says how it went.
+      const relayed: AutomationProposal = { ...proposal, status: approve ? "approved" : "declined", decidedAt: now, relay: "awaiting" }
+      if (via === "view" && proposal.ask) this.#deps.asks.settle(proposal.by.conversation, proposal.ask)
+      this.#deps.store.putProposal(relayed)
+      hostLog("automations", "proposal decided; its Mac applies it", { proposal: id, status: relayed.status })
+      await this.#changed(proposal.project)
+      return relayed
+    }
     let decided: AutomationProposal = { ...proposal, status: approve ? "approved" : "declined", decidedAt: now }
     if (approve) {
       const current = await this.#definition(proposal.project, proposal.automation)
@@ -851,13 +1036,69 @@ export class Automations {
   async #tell(proposal: AutomationProposal): Promise<void> {
     const text = decisionNote(proposal)
     try {
-      await this.#deps.tell(proposal.by.conversation, automationUuid(`proposal\0${proposal.id}\0decided`), text)
+      if (proposal.from) {
+        // Its agent is in a cloud Thread: that Thread's host hears how it went, and tells it.
+        const forward = this.#deps.forward?.()
+        if (!forward) throw new Error("this Mac can't reach the cloud Thread that proposed it now")
+        if (proposal.status === "pending") return
+        await forward.settle(proposal.from.thread, proposal.id, { status: proposal.status, ...(proposal.note && { note: proposal.note }) })
+      } else await this.#deps.tell(proposal.by.conversation, automationUuid(`proposal\0${proposal.id}\0decided`), text)
       this.#deps.store.putProposal({ ...proposal, told: true })
     } catch (error) {
       hostWarn("automations", "a proposal's agent couldn't be told", { proposal: proposal.id, error: error instanceof Error ? error.message : String(error) })
       this.#deps.store.putProposal({ ...proposal, told: false })
     }
     await this.#deps.store.save()
+  }
+
+  /** On a cloud machine's host: its agents' proposals the person's Mac hasn't settled, pending or decided here. */
+  forwarded(): AutomationProposal[] {
+    return this.#deps.store.proposals().filter((proposal) => proposal.status === "pending" || proposal.relay === "awaiting")
+  }
+
+  /**
+   * On a cloud machine's host: how a proposal went on the person's Mac, its agent told once. A repeat (an answer the Mac
+   * lost) finds it settled and answers the same.
+   */
+  async settleForwarded(id: string, outcome: ForwardedOutcome): Promise<AutomationProposal> {
+    await this.start()
+    const proposal = this.#deps.store.proposal(id)
+    if (!proposal) throw new Error("Mako has no such proposal.")
+    if (proposal.relay === "settled") return proposal
+    if (proposal.ask && proposal.status === "pending") this.#deps.asks.settle(proposal.by.conversation, proposal.ask)
+    const settled: AutomationProposal = { ...proposal, status: outcome.status, decidedAt: proposal.decidedAt ?? this.#now(), relay: "settled", ...(outcome.note && { note: outcome.note.slice(0, 1000) }) }
+    this.#deps.store.putProposal(settled)
+    hostLog("automations", "a proposal settled on its Mac", { proposal: id, status: settled.status })
+    await this.#changed(proposal.project)
+    await this.#tell(settled)
+    return this.#deps.store.proposal(id) ?? settled
+  }
+
+  /**
+   * On the person's Mac: proposals a cloud run's agent made, read from its cloud Thread's host (`thread`), taken under
+   * the run's project here. A pending one waits for the person in Automations, as one of this Mac's; one decided in the
+   * cloud Thread's card is applied now; one decided here whose Thread hasn't heard is told again.
+   */
+  async importForwarded(project: string, thread: string, proposals: readonly AutomationProposal[]): Promise<void> {
+    await this.start()
+    const store = this.#deps.store
+    for (const remote of proposals) {
+      const held = store.proposal(remote.id)
+      if (held && !held.from) continue
+      if (!held) {
+        // Its ask, decision and note are the cloud Thread's; here it starts pending, under this Mac's project.
+        store.putProposal({
+          id: remote.id, project, automation: remote.automation, change: remote.change,
+          ...(remote.before !== undefined && { before: remote.before }), ...(remote.after !== undefined && { after: remote.after }), ...(remote.why && { why: remote.why }),
+          by: remote.by, at: remote.at, expiresAt: remote.expiresAt, status: "pending", from: { thread },
+        })
+        hostLog("automations", "a cloud run's proposal came to this Mac", { proposal: remote.id, change: remote.change, automation: remote.automation })
+        await this.#changed(project)
+      }
+      const now = store.proposal(remote.id)!
+      if (now.status === "pending" && remote.relay === "awaiting" && (remote.status === "approved" || remote.status === "declined")) await this.decide(remote.id, remote.status === "approved", "ask")
+      else if (now.status !== "pending" && remote.status === "pending") await this.#tell(now)
+    }
   }
 
   /** The diff a proposal's card shows. */
@@ -901,6 +1142,13 @@ function triggerOf(definition: AutomationDefinition, cause: AutomationCause): Au
 function eventWords(definition: AutomationDefinition, cause: AutomationCause, gate: AutomationRun["gate"]): string {
   const what = cause.kind === "schedule" ? `The schedule fired for ${new Date(cause.at).toISOString()}.` : cause.kind === "commit" ? `A commit landed: ${cause.head}${cause.subject ? ` "${cause.subject}"` : ""}.` : cause.kind === "event" ? `${cause.source} ${cause.event}: ${cause.summary}${cause.url ? ` (${cause.url})` : ""}.` : "Run now."
   return [`Automation: ${definition.name}.`, what, ...(gate?.context ? [`What its gate found: ${JSON.stringify(gate.context).slice(0, 6000)}`] : [])].join("\n")
+}
+
+/** An offered event's content, fenced as untrusted for its agent, the fence fixed by the event so a repeat is the same text. */
+async function eventText(cause: AutomationCause, offer: AutomationOffer | undefined): Promise<string | undefined> {
+  if (cause.kind !== "event" || offer?.event === undefined) return undefined
+  const event = { source: cause.source, event: cause.event, summary: cause.summary, payload: offer.event }
+  return untrustedEventText(event, await eventMarker(event))
 }
 
 /** The message a run sends: its brief, then what triggered it and what its gate found. */
@@ -953,4 +1201,11 @@ export function declareAutomationMethods(methods: MethodTable, automations: Auto
   methods.handle("mako:automations-decide", (proposal: string, approve: boolean) => automations.decide(proposal, approve, "view"))
   methods.handle("mako:automations-draft", (conversationId: string) => automations.draft(conversationId))
   methods.handle("mako:automations-templates", () => automations.templates())
+  methods.handle("mako:automations-run-of", (conversation: string) => automations.runOf(conversation))
+  methods.handle("mako:automations-forwarded", async () => {
+    await automations.start()
+    return automations.forwarded()
+  })
+  methods.handle("mako:automations-forward-settle", (proposal: string, outcome: ForwardedOutcome) => automations.settleForwarded(proposal, ForwardedOutcomeSchema.parse(outcome)))
+  methods.handle("mako:automations-hook", (name: string, provider?: AutomationHook["provider"], rotate?: boolean, secret?: string) => automations.hook(name, provider, rotate, secret))
 }

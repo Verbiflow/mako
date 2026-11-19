@@ -39,7 +39,9 @@
     "./attribution": "./dist/attribution.js",
     "./ids": "./dist/ids.js",
     "./map-limit": "./dist/map-limit.js",
-    "./cloud-fins": "./dist/cloud-fins.js"
+    "./cloud-fins": "./dist/cloud-fins.js",
+    "./automations-cloud": "./dist/automations-cloud.js",
+    "./automations-cron": "./dist/automations-cron.js"
   },
   "files": [
     "dist"

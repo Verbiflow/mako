@@ -30,10 +30,15 @@ const ProjectEntrySchema = z.object({
   /** When a window last had it open: a project with nothing on is let go after a while. */
   seenAt: z.number().optional(),
 })
+/** One automation this Mac registered with the cloud account, under the project's stable key and its fingerprint then. */
+const CloudRegistrationSchema = z.object({ project: z.string(), id: z.string(), key: z.string(), fingerprint: z.string() })
+export type CloudRegistration = z.infer<typeof CloudRegistrationSchema>
 const StateSchema = z.object({
   version: z.literal(1),
   projects: z.record(z.string(), ProjectEntrySchema).default({}),
   proposals: z.array(AutomationProposalSchema).default([]),
+  /** What this Mac told the cloud account (`AutomationCloud`): its registrations, and how far it read the runs. */
+  cloud: z.object({ cursor: z.number().int().nonnegative().default(0), registrations: z.array(CloudRegistrationSchema).default([]) }).default({ cursor: 0, registrations: [] }),
 })
 type State = z.infer<typeof StateSchema>
 type Entry = z.infer<typeof AutomationEntrySchema>
@@ -44,7 +49,9 @@ const PROPOSALS_KEPT = 200
 
 export class AutomationStore {
   readonly #path: string
-  #state: State = { version: 1, projects: {}, proposals: [] }
+  #state: State = { version: 1, projects: {}, proposals: [], cloud: { cursor: 0, registrations: [] } }
+  /** Each run with a Thread, by that Thread's conversation: what `mako:automations-run-of` reads, however old. */
+  #byConversation: Map<string, AutomationRun> | undefined
   #writing: Promise<void> = Promise.resolve()
   #loaded: Promise<void> | undefined
 
@@ -61,6 +68,7 @@ export class AutomationStore {
     this.#loaded ??= readFile(this.#path, "utf8").then(
       (text) => {
         const parsed = StateSchema.safeParse(JSON.parse(text))
+        this.#byConversation = undefined
         if (parsed.success) this.#state = parsed.data
         else hostWarn("automations", "the automations state couldn't be read; starting empty", { error: parsed.error.message.slice(0, 400) })
       },
@@ -93,6 +101,7 @@ export class AutomationStore {
   forget(project: string, id: string): void {
     const entry = this.#state.projects[project]
     if (entry) delete entry.automations[id]
+    this.#byConversation = undefined
   }
 
   ids(project: string): string[] {
@@ -113,12 +122,55 @@ export class AutomationStore {
     const entry = this.#entry(run.project, run.automation)
     const others = entry.runs.filter((each) => each.occurrence !== run.occurrence)
     const was = entry.runs.findIndex((each) => each.occurrence === run.occurrence)
+    const dropped = was < 0 ? entry.runs.slice(AUTOMATION_RUNS_KEPT - 1) : []
     entry.runs = was < 0 ? [run, ...others].slice(0, AUTOMATION_RUNS_KEPT) : entry.runs.map((each) => (each.occurrence === run.occurrence ? run : each))
+    if (!this.#byConversation) return
+    for (const gone of dropped) if (gone.thread && this.#byConversation.get(gone.thread.conversation) === gone) this.#byConversation.delete(gone.thread.conversation)
+    if (run.thread) this.#byConversation.set(run.thread.conversation, run)
+  }
+
+  /**
+   * The newest run whose Thread is `conversation`, kept or settled, from an index built once and kept with each record. A
+   * standing Thread is every run's: its newest is the one named.
+   */
+  runByConversation(conversation: string): AutomationRun | undefined {
+    if (!this.#byConversation) {
+      const index = new Map<string, AutomationRun>()
+      const runs = Object.values(this.#state.projects).flatMap((project) => Object.values(project.automations).flatMap((entry) => entry.runs))
+      for (const run of runs.sort((a, b) => a.at - b.at)) if (run.thread) index.set(run.thread.conversation, run)
+      this.#byConversation = index
+    }
+    return this.#byConversation.get(conversation)
+  }
+
+  /** How far this Mac read the cloud account's runs. */
+  cloudCursor(): number {
+    return this.#state.cloud.cursor
+  }
+
+  setCloudCursor(cursor: number): void {
+    this.#state.cloud.cursor = Math.max(this.#state.cloud.cursor, cursor)
+  }
+
+  /** What this Mac registered with the cloud account. */
+  cloudRegistrations(): readonly CloudRegistration[] {
+    return this.#state.cloud.registrations
+  }
+
+  /** Records a registration (`fingerprint`), or with `undefined` that it was taken back. */
+  setCloudRegistration(project: string, id: string, registered: { key: string; fingerprint: string } | undefined): void {
+    const others = this.#state.cloud.registrations.filter((each) => !(each.project === project && each.id === id))
+    this.#state.cloud.registrations = registered ? [...others, { project, id, ...registered }] : others
   }
 
   /** Every run still under way, across every project. */
   active(): AutomationRun[] {
     return Object.values(this.#state.projects).flatMap((project) => Object.values(project.automations).flatMap((entry) => entry.runs.filter((run) => run.status === "fired" || run.status === "queued")))
+  }
+
+  /** Runs the cloud holds whose Thread works, or ended since `since`: the cloud Threads whose agents may have proposed something. */
+  cloudThreads(since: number): AutomationRun[] {
+    return Object.values(this.#state.projects).flatMap((project) => Object.values(project.automations).flatMap((entry) => entry.runs.filter((run) => run.cloud?.thread !== undefined && (run.status === "fired" || (run.endedAt ?? run.at) >= since))))
   }
 
   /** The run whose Thread is `conversation`. */
