@@ -1076,11 +1076,19 @@ deployed cloud.
 
 What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line
-(`agentToolText`), every field kept. `agents_list` lists what an Apex can act on (`foldList`): a Fin that ended over a day ago with
-nothing open, or was closed as finished, is counted in `folded`, not listed, its row never built (`Agents.unlisted`); past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
-their pull requests, then fold, oldest first. A Fin needing attention (a question, an action, a decision, at work,
-waiting or blocked) is never folded, past the budget if it must be; `scope: all` lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens, a
-call (`test-agents-list-fold.ts`). Neither a list nor a prompt reads a Fin's
+(`agentToolText`). What a model reads of `agents_list` and `agents_move` is cut where it repeats itself
+(`compactAnswer`, `agent-tool-compact.ts`; the engine, host callers and `--json` keep every field): a row's
+`idleFor` and `report.at` become ages in words (`idle: "3h"`, `report.ago`), `startedAt`, `changedAt`, `origin:
+started`, `model` beside `runsOn` and a title other rows share go, and a Shiver mate's topic is cut at 80 characters; every
+question, decision, wait and pull request stays. `agents_move { all }` says what its Fins share (harness, state, the
+sentence each hears) once under `each`. `agents_list` lists what an Apex can act on (`foldList`, and `foldShiver` for a
+Fin's `scope: shiver`): a Fin that ended or sat idle over a day ago with nothing open, or was closed as finished, is
+counted in `folded`, not listed, an ended or closed one's row never built (`Agents.unlisted`); past
+`LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose their pull requests, then fold, oldest first. A Fin needing
+attention (a question, an action, a decision, at work, waiting or blocked) is never folded, past the budget if it
+must be; `ended: true` (or `scope: all`) lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens,
+a call; 40 Fins of a week (5 at work, 2 waiting) read 1,802 tokens, a Shiver of them 1,524
+(`test-agents-list-fold.ts`). Neither a list nor a prompt reads a Fin's
 reports again while none is new: the engine keeps, by Fin, what a row takes
 from them (`Agents.reportsOf`: the pull requests they name and each one's
 mark for `owesApex`), added to as each report is kept (`reportKept`) and read
@@ -1091,7 +1099,7 @@ whose Fins held 6,520 (`test-fin-reports-held.ts`). Each Fin has a change mark t
 (`FinChanges`): when its state, report, open questions or pull requests last
 changed as the host read them, a working Fin's step and a queued one's place in
 line not counting, on the host's own clock (a tick never earlier than the
-last). Each row says it (`changedAt`) and each list answers a `mark` naming this
+last). Each row holds it (`changedAt`, left out of the model's text) and each list answers a `mark` naming this
 host life and a tick; with `since: <mark>` only the Fins that changed since are
 listed and the rest counted in `unchanged`, but a Fin waiting on its Apex (a
 question, an action, a decision, a block) is always listed, and a mark this

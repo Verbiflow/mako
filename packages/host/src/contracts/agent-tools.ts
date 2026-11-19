@@ -148,14 +148,19 @@ export interface AgentsListInput {
    * since are listed, and the rest are counted in `unchanged`.
    */
   since?: string
+  /**
+   * With `children`, `tree` or `shiver`: list the Fins the default folds too (`AgentsListFolded`), those that ended or
+   * sat idle over `LIST_ENDED_FOR_MS` ago with nothing open, and any past the budget.
+   */
+  ended?: boolean
 }
 
 /**
- * What a `children` or `tree` list leaves out (`foldList`): every Fin that ended more than `LIST_ENDED_FOR_MS` ago with
- * nothing open, and past `LIST_BUDGET_CHARS` of rows, idle and ended ones, after their bulk. A Fin needing attention (a
- * question, an action, a decision, at work, waiting or blocked) is always listed, past the budget if it must be.
- * `scope: all` lists every one. An Apex's list once held every Fin it ever started: 130 of them were 105 KB, about 26,000
- * tokens, a call.
+ * What a `children`, `tree` or `shiver` list leaves out (`foldList`, `foldShiver`): every Fin that ended or sat idle more than
+ * `LIST_ENDED_FOR_MS` ago with nothing open, and past `LIST_BUDGET_CHARS` of rows, idle and ended ones, after their bulk.
+ * A Fin needing attention (a question, an action, a decision, at work, waiting or blocked) is always listed, past the
+ * budget if it must be. `ended: true` (or `scope: all`) lists every one. An Apex's list once held every Fin it ever
+ * started: 130 of them were 105 KB, about 26,000 tokens, a call.
  */
 export interface AgentsListFolded {
   /** Fins left out, by where each stands. */
@@ -228,6 +233,7 @@ export interface AgentsShiver {
     asked?: string
   }
   shiver: ShiverMate[]
+  folded?: AgentsListFolded
 }
 export type ShiverMate = Omit<FrontDoorChild, "direct">
 
@@ -710,7 +716,7 @@ function routeOrder(state: ChildState): number {
   return state.kind === "blocked" || (state.kind === "ended" && state.decision) ? 0 : state.kind === "working" || state.kind === "starting" ? 1 : state.kind === "queued" || state.kind === "idle" ? 2 : 3
 }
 
-function ago(at: number, now: number): string {
+export function ago(at: number, now: number): string {
   const minutes = Math.max(0, Math.round((now - at) / 60_000))
   if (minutes < 1) return "just now"
   if (minutes < 60) return `${minutes}m ago`
@@ -786,7 +792,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     mcp: {
       name: "agents_list",
       description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Every PR fact stays inline by default. Explicit presentation summary replaces large PR arrays with counts: open and draft are known open; reported means its current state is unknown. Pass each read object to agents_read, then follow pulls.next as offset. These details expire at expiresAt, at most 30 minutes from capture, or on host restart; they require the same caller Session and current access. After that the original facts cannot be recovered; a new list gives current facts. Use full for lasting evidence. Reports wake you on their own, so read this when you need the whole picture, not to wait. Each answer carries a mark: pass it as since next time to list only the ${FIN_WORD}s that changed. A ${FIN_WORD} reads its ${SHIVER_WORD} (its ${APEX_WORD} and the other ${FIN_WORD}s it started) with scope shiver, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
-      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting, idle or need a decision, and those that ended in the last day; what needs you is always listed, and other idle or ended ones may be counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, shiver: your ${SHIVER_WORD} (your ${APEX_WORD} and the other ${FIN_WORD}s it started), what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, since: "The mark an earlier list answered: only the Fins that changed since (state, report, open questions or pull requests) are listed, the rest counted in unchanged. A Fin waiting on you is always listed. A mark from another host or an earlier host life lists every Fin.", presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
+      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting or need a decision, and those that ended or went idle in the last day; what needs you is always listed, and older idle or ended ones are counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, shiver: your ${SHIVER_WORD} (your ${APEX_WORD} and the other ${FIN_WORD}s it started), what each was asked and last reported, folded the same way; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, since: "The mark an earlier list answered: only the Fins that changed since (state, report, open questions or pull requests) are listed, the rest counted in unchanged. A Fin waiting on you is always listed. A mark from another host or an earlier host life lists every Fin.", ended: `With children, tree or shiver: also list the ${FIN_WORD}s that ended or went idle over a day ago, which folded counts.`, presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
