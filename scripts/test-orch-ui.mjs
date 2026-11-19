@@ -225,7 +225,8 @@ async function check() {
   await both("direct-sent", "orch-names-")
 
   // The composer's chip opens the Agents panel: the Apex's Fins by group, above what its harness runs in the turn.
-  await click("[data-agents-toggle]")
+  // An Apex's rail opens on its Overview, so the chip, which puts the panel away when it's showing, is pressed only when it isn't.
+  if (!(await evaluate("Boolean(document.querySelector('[data-apex-fins]'))"))) await click("[data-agents-toggle]")
   await until("Boolean(document.querySelector('[data-apex-fins]'))", "the panel's Fins section")
   const panel = await evaluate(`(() => {
     const section = document.querySelector('[data-apex-fins]')
@@ -234,9 +235,13 @@ async function check() {
   console.log("PANEL", JSON.stringify(panel))
   assert.match(panel.heading, /12 Fins · 2 need you · 5 working · 2 queued · 1 idle · 2 done/)
   assert.match(panel.heading, /Stop all/)
-  // Finished and idle Fins fold into one line, as the crew card folds them.
-  assert.deepEqual(panel.groups, ["Needs you 2", "Working 5", "Queued 2"])
-  assert.equal(await evaluate("document.querySelector('[data-apex-fins] [data-crew-settled]')?.innerText.trim()"), "2 done · 1 idle")
+  // The Overview's sections, each only while it holds something: the queued and the idle wait, and the finished are listed.
+  assert.deepEqual(panel.groups, ["Needs you 2", "Working 5", "Waiting 3", "Done 2"])
+  assert.deepEqual(
+    await evaluate("['waiting', 'done'].map((section) => document.querySelectorAll('[data-apex-fins] [data-overview-section=' + section + '] [data-child-row]').length)"),
+    [3, 2],
+    "2 queued and 1 idle wait, 2 are done"
+  )
   await both("panel")
 
   // Opening a Fin opens it in place: its breadcrumb, its brief from the Apex first, the approval it waits on, its

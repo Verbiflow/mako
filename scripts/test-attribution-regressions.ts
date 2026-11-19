@@ -752,6 +752,8 @@ test("a file a commit took before the journal read it is clean on the next start
   assert.ok(shares(storedView(stale), w.project, "T1").uncertain.files.includes(join(w.repo, "shots/a.png")), "as the person's journal stood")
   stale.close()
   const reopened = await LaptopTracker.open({ fs: nodeFileSystem(), events: new FakeEventSource(), clock: w.clock, storage: w.storage, device: "regression" }, { repository: async (path) => gitRepository(runner, path) })
+  // The status that reads the checkout asks for it, which reads its time away.
+  await reopened.track({ id: "repo", path: w.repo, kind: "workspace" })
   await reopened.settled()
   const view: JournalView = { store: reopened.store, roots: () => reopened.rootStates().values(), author: (entry) => reopened.authorOf(entry) }
   assert.equal(reopened.rootStates().get("repo")?.files.has("shots/a.png"), false, "HEAD has it as it is: it's clean")
@@ -880,6 +882,11 @@ test("a quiet root sleeps, and what changed while it slept is attributed when a 
   restarted.write("src/a.ts", "export const a = 2\n")
   restarted.write("src/b.ts", "export const b = 1\n")
   const reopened = await restarted.open()
+  await reopened.settled()
+  assert.equal(reopened.asleep(restarted.repo), true, "a start wakes no root: it reads none of their files")
+  assert.equal(reopened.rootStates().get("repo")?.stats.size, 0, "nor its stat cache")
+  assert.deepEqual(reopened.changes(0), [], "what changed while the host was away waits for the root to be asked for")
+  await reopened.track({ id: "repo", path: restarted.repo, kind: "workspace" })
   await reopened.settled()
   assert.deepEqual(new Map(reopened.changes(0).map((entry) => [entry.path, certainty(entry.author)])), woken)
   await reopened.close()

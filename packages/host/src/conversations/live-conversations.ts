@@ -3,7 +3,7 @@ import { z } from "zod"
 import type { PromptVersions, PromptVersionsByRequest } from "../contracts/live-conversations.js"
 import { randomBytes, randomUUID } from "node:crypto"
 import type { UnopenedConversation } from "../contracts/unopened-conversations.js"
-import { statSync } from "node:fs"
+import { existsSync, statSync } from "node:fs"
 import { join } from "node:path"
 import { Admission } from "../base/admission.js"
 import { NativeVerificationPendingError } from "../contracts/native-verification.js"
@@ -21,6 +21,7 @@ import { GoalCommandSchema, type GoalCommand } from "../contracts/live-goals.js"
 import type { SideQuestionCommand } from "../contracts/live-side-questions.js"
 import { makoReviewPrompt, reviewDisplayText, ReviewTargetSchema, type ReviewTarget } from "../contracts/live-reviews.js"
 import {
+  LIVE_AHEAD_MS,
   LIVE_FRAME_MS,
   requestsDelta,
   compactLiveBatch,
@@ -41,8 +42,8 @@ import {
   type TurnContinuation,
 } from "../contracts/live-conversations.js"
 import { QueuedPromptEditSchema, type QueuedPromptEdit } from "../contracts/live-queue.js"
-import { digestAsks } from "../contracts/agents.js"
-import { childGroup, childStateOf, DIGEST_WAITS, rollup, WAKE_COALESCE_MS } from "../contracts/children.js"
+import { digestAsks, edgeStopped } from "../contracts/agents.js"
+import { childGroup, childStateOf, DIGEST_WAITS, rollup, WAKE_COALESCE_MS, WAKES_PER_MINUTE } from "../contracts/children.js"
 import { latestPendingQuestion, retireQuestionsForInput, type PendingAsk } from "../contracts/live-questions.js"
 import { isActiveNativeAgent, isBusyProviderWork, withChildren } from "../contracts/native-agents.js"
 import type { ProviderResidencySnapshot } from "../contracts/provider-residency.js"
@@ -53,7 +54,7 @@ import { admittedInPlace, type ConversationSettings } from "../contracts/turn-co
 import type { StartPurpose } from "../contracts/thread-purposes.js"
 import type { RewindInput } from "../contracts/workspace-snapshots.js"
 import type { Relocation } from "../workspaces/index.js"
-import { changedEntryStart, deliverLiveUpdates, queueLiveUpdate, reduceLiveUpdates } from "@mako/sessions/live-content"
+import { changedEntryStart, compactLiveUpdates, deliverLiveUpdates, queueLiveUpdate, reduceLiveUpdates } from "@mako/sessions/live-content"
 import type { DirectRoute } from "@mako/sessions/events"
 import { bareCommand } from "@mako/sessions/tool-identity"
 import { needsYouWaiting, questionWaiting, requestWaiting, type Waiting } from "@mako/protocol/attention"
@@ -75,7 +76,7 @@ import type { TurnUndoScope } from "../contracts/turn-review.js"
 import { LiveClosing } from "./live-closing.js"
 import { LiveDispatch, nextQueued } from "./live-dispatch.js"
 import { latchedByStop } from "../contracts/delivery-retry.js"
-import { arriving, goesNext, goingFirst, holdDue, holdOf, released, sooner, transferDue } from "../contracts/request-hold.js"
+import { arriving, goesNext, goingFirst, holdDue, holdOf, keepsLine, released, sooner, transferDue } from "../contracts/request-hold.js"
 import { driverEvents, LiveEvents } from "./live-events.js"
 import { LiveForks } from "./live-forks.js"
 import { LiveGoals, turnReply, type TurnReply } from "./live-goals.js"
@@ -94,6 +95,8 @@ import { LiveRestarts } from "./live-restarts.js"
 import { ContextBundles, prepareLiveContext } from "./live-context.js"
 import { activeBinding, conversationControl, launched, type Dependencies, type LiveAccess, type ProviderStop, type Resident, STOPPED_FOR } from "./live-runtime.js"
 import { flushFrameMs } from "./answer-pace.js"
+import { emittedBatches, liveStages } from "./live-stages.js"
+import { stagedCall, stagedWait } from "../base/live-steps.js"
 import { LiveSources, settled, updateBinding, type SettledBases } from "./live-sources.js"
 import { LiveThreads } from "./live-threads.js"
 import { holdSwitches, LiveTransfers, withdrawGone } from "./live-transfers.js"
@@ -316,7 +319,8 @@ export class LiveConversations {
       takeUpdates: (resident, updates) => this.events.take(resident, updates),
       driverEvents: (resident, bindingId) => driverEvents(resident, bindingId, observe),
       nativeStart,
-      retainAttachments: (attachments) => this.assets.retainPrompt(attachments),
+      retainAttachments: (attachments, key) => this.assets.retainPrompt(attachments, key),
+      holdAttachments: (key, attachments) => this.assets.hold(key, attachments),
       reconcileQuestions: (resident) => this.questions.reconcile(resident),
       pending: (resident) => this.transfers.pending(resident),
       admit: (resident, request) => this.admit(resident, request),
@@ -344,6 +348,7 @@ export class LiveConversations {
       },
       homeFromRemovedWorktree: (resident) => this.relocations.homeFromRemovedWorktree(resident),
       returnFromRemovedWorktree: (resident) => this.relocations.returnFromRemovedWorktree(resident),
+      restoreRetiredWorktree: (resident) => this.relocations.restoreRetiredWorktree(resident),
       failedStart: (resident, boundary, resuming) => this.accounts.failedStart(resident, boundary, resuming),
       signInHold: (resident) => this.accounts.signInHold(resident),
       retireFromAccount: (resident) => this.accounts.retireFromAccount(resident),
@@ -500,10 +505,15 @@ export class LiveConversations {
     return this.records.listing()
   }
 
-  /** Every conversation's summary as a list shows it, or those of `only` alone. */
+  /** The listing's line for one conversation, loaded or not, without its Fins; none of the others' is made. */
+  listedOne(id: string): LiveSummary | undefined {
+    return this.records.summary(id)
+  }
+
+  /** Every conversation's summary as a list shows it, or those of `only` alone, each looked up by its ID (`listingOf`). */
   summaries(only?: ReadonlySet<string>): LiveSummary[] {
     const agents = this.dependencies.agents?.()
-    const listing = only ? this.records.listing().filter((summary) => only.has(summary.session.id)) : this.records.listing()
+    const listing = only ? this.records.listingOf(only) : this.records.listing()
     const away = this.threads.runningElsewhere(listing.map((summary) => summary.session.id))
     return listing.map((summary) => {
       const children = agents ? rollup(agents.roster(summary.session.id)) : undefined
@@ -701,6 +711,7 @@ export class LiveConversations {
    */
   waitingOn(id: string): Waiting | undefined {
     const resident = this.records.has(id) ? this.records.load(id) : undefined
+    // An open approval, question or agent's ask keeps a conversation in memory (`LiveRecords.pinned`).
     if (!resident) return undefined
     const permission = resident.snapshot.permissions[0]
     // A command as its person would type it: Codex asks about `/bin/zsh -lc '…'`, which says nothing more.
@@ -831,10 +842,67 @@ export class LiveConversations {
     return this.hibernation.prewarm(id)
   }
 
+  /**
+   * A message is on its way to this conversation: an agent's send still being prepared (no `request` yet), or the
+   * digest `request` waiting out its burst's window. A hibernated provider wakes now, as it does while the person
+   * types (`prewarm`), so its restart overlaps the wait instead of following it, and a warm one restarts its idle
+   * window. Nothing is sent by this. It leaves the conversation alone wherever the message wouldn't then go: what
+   * `prewarm` refuses (closing, archived, a sign-in pause), a host that takes no new work, a rewind, a switch or a move
+   * that refuses or holds a message, a message ahead that keeps the line, and a digest that's paused, held past its
+   * window, or over its minute's budget (`LiveDispatch.overBudget`). A conversation whose folder is gone is left too:
+   * its message's own path makes a retired worktree again and says how that went.
+   */
+  expect(id: string, request?: string): "waking" | "kept-warm" | "unchanged" {
+    if (this.records.stopping() || this.admission.closed) return "unchanged"
+    let resident: Resident | undefined
+    try {
+      resident = this.records.load(id)
+    } catch {
+      // A journal that can't be read refuses the message too, and says so there.
+      return "unchanged"
+    }
+    if (!resident || resident.rewinding || this.transfers.pending(resident) || this.moves.holdsQueued(resident)) return "unchanged"
+    try {
+      this.moves.assertAdmits(resident)
+    } catch {
+      return "unchanged"
+    }
+    if (!resident.driver && !existsSync(resident.snapshot.session.cwd)) return "unchanged"
+    const now = Date.now()
+    const { requests } = resident.snapshot
+    if (requests.some((asked) => {
+      const hold = holdOf(asked)
+      return hold !== undefined && keepsLine(hold)
+    })) return "unchanged"
+    if (request !== undefined) {
+      const digest = requests.find((asked) => asked.id === request)
+      const hold = digest && holdOf(digest)
+      const windowed = hold?.kind === "until" && hold.wake.after === DIGEST_WAITS && hold.wake.at - now <= WAKE_COALESCE_MS
+      if (!digest || !(digest.status === "queued" || windowed)) return "unchanged"
+      if (requests.filter((asked) => asked.digest?.sentAt !== undefined && asked.digest.sentAt > now - 60_000 && asked.nativeDelivery?.evidence.kind !== "not-accepted").length >= WAKES_PER_MINUTE) return "unchanged"
+    }
+    return this.hibernation.prewarm(id, true)
+  }
+
+  /** The harnesses with a provider idle and warm now (`LiveHibernation.warmHarnesses`). */
+  warmHarnesses(): Set<string> {
+    return this.hibernation.warmHarnesses()
+  }
+
+  /** How many providers are idle and warm now (`LiveHibernation.warmCount`). */
+  warmProviders(): number {
+    return this.hibernation.warmCount()
+  }
+
+  /** The machine was read short of memory: the idle providers past the number now kept warm hibernate at once. */
+  memoryPressed(): void {
+    this.hibernation.enforceWarmLimit("memory-pressure")
+  }
+
   setArchived(id: string, archived: boolean): void {
     // A conversation not in memory is read in only when it has a compaction to withdraw, as its listing says:
     // archiving otherwise reads no journal (a report over the host's conversations must load none of them).
-    const pending = archived && !this.records.has(id) && this.records.listing().some((summary) => summary.session.id === id && summary.hasCompactionRecovery)
+    const pending = archived && !this.records.has(id) && Boolean(this.records.summary(id)?.hasCompactionRecovery)
     const resident = this.records.has(id) || pending ? this.records.load(id) : undefined
     if (archived && resident && this.compactions.withdraw(resident, "archive")) this.flush(resident)
     this.hibernation.setArchived(id, archived)
@@ -926,6 +994,20 @@ export class LiveConversations {
    * before it, and a person's second message could overtake their first. Each send's wait starts as it arrives, so
    * they overlap; only admission waits for the ones ahead. One refused lets the next go.
    */
+  /**
+   * Keeps a message's attachments before it is admitted: hashed and copied off this thread (`LiveAssets.hold`), so
+   * admitting it, which runs in one turn, only takes the kept files by the message's ID. A caller that doesn't is
+   * still served; its files are then copied as it's admitted.
+   */
+  holdAttachments(requestId: string, attachments: readonly PromptAttachment[] | undefined): Promise<void> {
+    return attachments?.length ? this.assets.hold(requestId, attachments) : Promise.resolve()
+  }
+
+  /** Lets go of what `holdAttachments` kept for a message that was admitted or refused. */
+  releaseAttachments(requestId: string): void {
+    this.assets.release(requestId)
+  }
+
   admitInOrder<Ready, Admitted>(id: string, ready: Promise<Ready>, admit: (ready: Ready) => Admitted): Promise<Admitted> {
     // Its refusal is this send's own answer, read once the sends ahead are in; until then nothing else watches it.
     ready.catch(() => undefined)
@@ -967,6 +1049,7 @@ export class LiveConversations {
     // Settings may finish resolving after stop cleared the residents. A replay's earlier admission may be durable;
     // callers must read its receipt from the next host under the same ID, not treat this as a definitive refusal.
     if (this.records.stopping()) throw new RuntimeDisconnectedError(true, id)
+    if (liveStages.heard) liveStages.publish({ stage: "submit", conversation: id, request: requestId })
     this.admission.assert()
     const resident = this.records.require(id)
     if (resident.rewinding)
@@ -1233,7 +1316,7 @@ export class LiveConversations {
 
   /** Record a new request in the journal and start it when the session is free. */
   private admit(resident: Resident, request: LiveRequest): LiveRequest {
-    request.attachments = this.assets.retainPrompt(request.attachments)
+    request.attachments = this.assets.retainPrompt(request.attachments, request.id)
     const previousSnapshot = resident.snapshot
     const control = request.continues?.auto ? conversationControl(resident) : retireQuestionsForInput(conversationControl(resident), request.id)
     // A fork's first request is the version of the prompt it was made before: kept with its ancestry, and indexed.
@@ -1255,6 +1338,7 @@ export class LiveConversations {
       const indexed = this.records.forks.get(resident.snapshot.session.id)
       if (indexed) indexed.firstRequest = request.id
     }
+    if (liveStages.heard) liveStages.publish({ stage: "admitted", conversation: resident.snapshot.session.id, request: request.id })
     this.dispatch.drain(resident)
     return request
   }
@@ -1700,7 +1784,8 @@ export class LiveConversations {
     const threads = this.dependencies.threads
     const placement = threads?.journalPlacement(id)
     if (!threads || !placement) return false
-    return threads.edges().of(placement.thread) !== undefined || threads.edges().children(placement.thread).some((edge) => edge.closedAt === undefined)
+    // A Fin closed as finished counts as before it closed: only a stop takes its Apex out of the tree.
+    return threads.edges().of(placement.thread) !== undefined || threads.edges().children(placement.thread).some((edge) => !edgeStopped(edge))
   }
 
   private ordinaryCrashIds(): readonly string[] {
@@ -1975,8 +2060,9 @@ export class LiveConversations {
   }
 
   /**
-   * The message a stop was for goes once the stop settled. A harness that ends its process on Stop (Claude Code) left
-   * nothing to send it to: its session opens again under its native ID, as a message to a sleeping one does.
+   * The message a stop was for goes once the stop settled. A Stop that had to end its harness's process (Claude Code's,
+   * where its CLI couldn't end the turn and keep it) left nothing to send it to: its session opens again under its
+   * native ID, as a message to a sleeping one does.
    */
   private sendAfterStop(id: string): void {
     const resident = this.records.get(id)
@@ -2209,7 +2295,7 @@ export class LiveConversations {
     // The person's Stop: nothing of this conversation goes by itself after it (`stopHolds`).
     if (why === "person") this.stopHolds(id)
     const loaded = this.records.get(id)
-    const pauseGoal = loaded ? await this.goals.stopping(loaded) : undefined
+    const pauseGoal = loaded ? await stagedWait(id, "goal pause", () => this.goals.stopping(loaded)) : undefined
     await this.cancelTurn(id, why)
     await pauseGoal?.()
   }
@@ -2290,10 +2376,16 @@ export class LiveConversations {
       return
     }
     if (!resident.driver) throw new Error("The provider is disconnected")
-    await resident.driver.setMode(
-      conversationControl(resident).activeBindingId,
-      modeId
-    )
+    const driver = resident.driver
+    // A message behind this change waits for the harness's answer (`Resident.modeChanging`), taken or refused: refused,
+    // the session is where every window shows it, and the change's own caller says so.
+    resident.modeChanging = (resident.modeChanging ?? 0) + 1
+    try {
+      await stagedCall(id, "driver.setMode", () => driver.setMode(conversationControl(resident).activeBindingId, modeId))
+    } finally {
+      resident.modeChanging -= 1
+      if (!resident.modeChanging) this.dispatch.drain(resident)
+    }
   }
 
   /**
@@ -2339,7 +2431,13 @@ export class LiveConversations {
     const now = performance.now()
     // A long answer going on waits for a reader's pace; anything else comes back to the frame (`flushFrameMs`).
     const frame = flushFrameMs(BATCH_MS, resident.snapshot.blocks, resident.updates, resident.snapshot !== resident.journalSnapshot)
-    const due = resident.flushedAt === undefined ? now : resident.flushedAt + frame
+    // A turn's first words go at once: its own status flushes (running, the prompt's row, its delivery) have just
+    // started a frame, which its first token once waited out, 46 to 51 ms in every turn measured. Only the first:
+    // what follows keeps the frame, however many status changes land beside it.
+    const first = !resident.saidWords && resident.updates.some(carriesWords)
+    const due = resident.flushedAt === undefined || first ? now : resident.flushedAt + frame
+    // Until the batch goes, this machine's windows hear what waits for it, unless it goes within their own frame.
+    if (Math.min(due, resident.timer ? resident.timerDue ?? now : due) - now >= LIVE_AHEAD_MS) this.ahead(resident)
     if (resident.timer) {
       if (due >= (resident.timerDue ?? now)) return
       clearTimeout(resident.timer)
@@ -2352,6 +2450,38 @@ export class LiveConversations {
         this.storageFailed(resident, { error })
       }
     }, Math.max(0, due - now))
+  }
+
+  /**
+   * Says the text that waits for the conversation's next batch to this machine's windows, at most once a paint frame
+   * (`LIVE_AHEAD_MS`), the first of a burst at once. The batch stream is untouched by it: the journal, the gateway's
+   * link and every watching device get the batches they always did, on the frame and the long answer's pace, and a
+   * window gets them too, each carrying what was said ahead of it.
+   */
+  private ahead(resident: Resident): void {
+    if (resident.aheadTimer) return
+    const wait = resident.aheadAt === undefined ? 0 : resident.aheadAt + LIVE_AHEAD_MS - performance.now()
+    if (wait <= 0) return this.sayAhead(resident)
+    resident.aheadTimer = setTimeout(() => {
+      resident.aheadTimer = undefined
+      this.sayAhead(resident)
+    }, wait)
+    resident.aheadTimer.unref?.()
+  }
+
+  private sayAhead(resident: Resident): void {
+    resident.aheadAt = performance.now()
+    if (!resident.updates.length || this.records.isReleased(resident)) return
+    // Only what goes on with the last block, as the compact form reads it (`more`): text a window can add to the
+    // block it holds and take back for the batch, with nothing else of the conversation to keep in step.
+    let more = ""
+    for (const update of compactLiveUpdates(resident.snapshot.blocks, resident.updates)) {
+      if (update.kind !== "more") return
+      more += update.text
+    }
+    if (!more || more.length === resident.aheadSaid) return
+    resident.aheadSaid = more.length
+    this.dependencies.emit({ type: "live-ahead", ahead: { id: resident.snapshot.session.id, revision: resident.snapshot.revision, epoch: this.epoch, more } })
   }
 
   /** See `LiveAccess.keep`. */
@@ -2426,7 +2556,13 @@ export class LiveConversations {
     resident.flushedAt = performance.now()
     resident.storageFault = false
     if (recoveringStorage) queueMicrotask(() => { this.recoverSignedIn(); this.compactions.resume(resident) })
+    // Whether the turn has said any of its words yet, as of this flush: a turn's start forgets the last turn's.
+    for (const update of resident.updates) {
+      if (update.kind === "user" || update.kind === "provider-turn") resident.saidWords = false
+      else if (carriesWords(update)) resident.saidWords = true
+    }
     resident.updates = []
+    resident.aheadSaid = undefined
     resident.pendingCharacters = 0
     resident.snapshot = snapshot
     resident.journalSnapshot = snapshot
@@ -2484,6 +2620,7 @@ export class LiveConversations {
     // Readers hold `previous`; its updates were reduced against the blocks it held only when nothing replaced them since.
     const compact = compactLiveBatch(batch, { blocks: previous.blocks === delivered ? delivered : [], requests: previous.requests, ...(previous.control && { control: previous.control }) })
     const rostered = rosteredLiveBatch(compact, previous.nativeAgents)
+    emittedBatches.publish(batch)
     this.dependencies.emit({ type: "live-batch", batch, compact, ...(rostered && { rostered }) })
     this.relocations.changed(resident)
     // A turn that ended, as it ended, failed included: what its record holds is all it will.
@@ -2512,7 +2649,7 @@ export class LiveConversations {
     }
     if (why === "not-saved") hostWarn("live", "Mako stops the provider's turn", fields)
     else hostLog("live", "Mako stops the provider's turn", fields)
-    return driver.cancel(conversationControl(resident).activeBindingId)
+    return stagedCall(id, "driver.cancel", () => driver.cancel(conversationControl(resident).activeBindingId))
   }
 
   /**
@@ -2562,6 +2699,11 @@ export class LiveConversations {
  * every device, and written to the journal.
  */
 const BATCH_MS = LIVE_FRAME_MS
+
+/** Whether an update is the agent's own words, an answer's text or its thinking. */
+function carriesWords(update: LiveBatch["updates"][number]): boolean {
+  return update.kind === "text" || update.kind === "thinking"
+}
 
 /**
  * Whether a batch says when the conversation last showed work: when it moved into another second. It moves with every

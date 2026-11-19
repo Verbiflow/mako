@@ -1,6 +1,6 @@
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { DEVIN_ACP_HOOKS, devinUsageReading } from "@mako/sessions/harnesses"
-import { prepareDevinMcp } from "./session-mcp.js"
+import { devinHoldsWrites, prepareDevinMcp } from "./session-mcp.js"
 import { devinResumePolicy } from "./resume.js"
 import type { ProviderAcpSource } from "../acp-source.js"
 import { devinExecutable } from "./executable.js"
@@ -49,6 +49,11 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
     planning: { via: "mode", mode: "plan", proposal: "write_plan's rendered plan file, built by answering exit_plan_mode's permission request",
       feedback: { kind: "next-message", reason: "its plan approval is ACP's session/request_permission, whose answer is an option id, and devin 3000.10.23 reads no words with a rejection." } },
     ...DEVIN_ACP_HOOKS,
+    hookWrites: {
+      via: "The PreToolUse command hook the launch's copy of `config.json` appends for every tool of its that may write (the shell, the file tools, a subagent's and an MCP server's included; its reads don't run it), posting to the conversation server, which answers once the turn's checkpoint holds the workspace; Devin runs no tool before its hooks exit. Only on a launch that routes calls and where no hook or process MCP server of the person's own runs beside it.",
+      // A slash command or a shell line may run on submission with no tool call between; which do can't be told surely.
+      submitRuns: (text) => /^\s*[/!]/.test(text),
+    },
     clientCapabilities: { _meta: { "cognition.ai/subagentSupport": true } },
     nativeRouting: { kind: "at-launch", via: "`subagents_enabled: false` in the copy of the person's `config.json` its launch's own config folder holds, which removes `run_subagent` and `read_subagent`; leaving out `cognition.ai/subagentSupport` doesn't.", verified: { version: "3000.11.234", how: "harness:native-tools records each mode as a lead without them on 3000.11.234 and 3000.10.23, and with them when the capability is left out (2026-11-01); test:native-routing-live: a lead's call was refused as unavailable, an ordinary Thread's child ran and was observed" } },
     layer: DEVIN_LAYER,
@@ -98,7 +103,8 @@ export function createDevinAcpSource(stores: NativeStores): ProviderAcpSource {
         // launch runs is what Mako stamps the session's records with, which a restore weighs (`restoreGate`).
         versionArgs: ["--version"],
         configureEnvironment: configureDevinEnvironment,
-        prepareMcp: (servers, env) => prepareDevinMcp(servers, env, options.nativeSpawnsOff === true, options.routesCalls === true),
+        prepareMcp: (servers, env, holdsWrites) => prepareDevinMcp(servers, env, options.nativeSpawnsOff === true, options.routesCalls === true, holdsWrites === true),
+        ...options.routesCalls === true && { holdsWrites: devinHoldsWrites },
         async prepareApprovals({ previous, publish }) {
           const { DevinApprovalObserver, readDevinApprovalDecisions } = await adapters.devinApprovals.load("devin approvals")
           if (options.nativePath && options.resume) {

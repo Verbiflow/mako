@@ -400,7 +400,8 @@ console.log("composer settings: choosing the recommended default keeps following
     const entry = { harness, model: "native-variant" }
     const ready: HarnessProfile = { ...profile, id: harness, models: [{ id: "current", label: "Current model", options: [], variants: [{ id: "native-variant", label: "Native variant", values: {} }] }] }
     assert.equal(loadoutAvailability(entry, ready).kind, "ready")
-    assert.equal(loadoutAvailability(entry, { ...ready, pending: true }).kind, "loading")
+    assert.equal(loadoutAvailability(entry, { ...ready, models: [], pending: true }).kind, "loading")
+    assert.equal(loadoutAvailability(entry, { ...ready, stale: true }).kind, "ready", "a held list switches while the harness is asked again")
     assert.equal(loadoutAvailability(entry, { ...ready, available: false }).kind, "unavailable")
     assert.equal(loadoutAvailability(entry, { ...ready, configurationError: "Defaults unreported." }).kind, "ready", "a catalog that sends also switches")
     const refusing = { ...ready, models: ready.models.map((model) => ({ ...model, unavailable: "Needs an update." })) }

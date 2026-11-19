@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react"
+import { everyWhileShown } from "@/lib/window-shown"
 import { CheckIcon, RotateCcwIcon } from "lucide-react"
 import { Action, Chip, Meter } from "@/components/ui/kit"
 import { HarnessIcon } from "@/components/ui/provider-icon"
@@ -45,8 +46,7 @@ type Density = "menu" | "page"
 function useMinuteClock(): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 30_000)
-    return () => clearInterval(timer)
+    return everyWhileShown(30_000, () => setNow(Date.now()))
   }, [])
   return now
 }

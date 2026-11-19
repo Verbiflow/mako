@@ -14,7 +14,9 @@ import { openSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { Divider } from "@/components/shell/divider"
 import { ErrorBoundary } from "@/components/shell/error-boundary"
 import { useSurfaces } from "@/extend/surfaces"
-import { stage, useStage } from "@/state/stage"
+import { APEX_COMPANION, shownCompanion, stage, useStage } from "@/state/stage"
+import { useRailAcp } from "@/state/acp-state"
+import { apexOnScreen } from "@/state/agents-offered"
 import { useTabs } from "@/state/tabs"
 import { useThreads } from "@/state/threads"
 import { activeAcp, useAcp } from "@/state/acp"
@@ -70,8 +72,9 @@ export function Stage() {
     seeded.current = true
     const last = prefsStore.get().lastCompanion
     const remembered = surfaces.find((surface) => surface.id === last)
+    // Not a pick: an Apex on screen at boot opens on its own, over what the rail last showed.
     if (remembered && remembered.placement !== "bottom")
-      stage.open(remembered.id)
+      stage.open(remembered.id, { remember: false })
     else if (last) setPref("lastCompanion", null)
   }, [activeId, surfaces])
 
@@ -102,8 +105,13 @@ export function Stage() {
   const companionRef = useRef<HTMLDivElement>(null)
   const dockRef = useRef<HTMLDivElement>(null)
   const workbenchRef = useRef<HTMLDivElement>(null)
-  const sideSurface = tabStage.companion
-    ? surfaces.find((entry) => entry.id === tabStage.companion)
+  // An Apex opens on its Overview, or on what the person picked for that Thread; a pick no longer registered is no pick.
+  const apex = useRailAcp(apexOnScreen)
+  const chosen = usePrefs((prefs) => (apex ? prefs.apexCompanions[apex] : undefined))
+  const companion = shownCompanion(tabStage, apex, chosen)
+  const sideSurface = companion
+    ? (surfaces.find((entry) => entry.id === companion) ??
+      surfaces.find((entry) => entry.id === (apex ? APEX_COMPANION : tabStage.companion)))
     : undefined
   const dockSurface = tabStage.dock
     ? surfaces.find((entry) => entry.id === tabStage.dock)

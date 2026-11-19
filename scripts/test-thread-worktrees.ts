@@ -22,6 +22,7 @@ import { ThreadStore } from "@mako/host/threads/store"
 import { worktreeCheckout, worktreeSlug, type WorktreeBranchPull, type WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
 import { openWorkspaces } from "@mako/host/workspaces"
 import { ThreadWorktreeService, type CheckoutConversations } from "@mako/host/workspaces/thread-worktrees"
+import { WorktreeSpares } from "@mako/host/workspaces/worktree-spares"
 import { bringFiles, carryOutputs, carryReport, type CheckoutSetup, holdsCredentials, LINKED_MARK, linkedCarry, linkReach, outputNames, throughLinks } from "@mako/host/workspaces/worktree-carry"
 
 // Comparison observes every field and row order, including in-place changes; work yields while a large pass is made.
@@ -278,9 +279,18 @@ assert.deepEqual(listed.worktrees.map((worktree) => worktree.path).sort(), [prep
 const detail = async (path: string) => (await worktrees.inventory()).worktrees.find((worktree) => worktree.path === path)
 assert.deepEqual((await detail(prepared.path))?.landing, { kind: "open", into: "main", commits: 1 })
 assert.deepEqual((await detail(other.path))?.landing, { kind: "empty" })
+// The list is drawn from what's held and read behind its answer, sizes too: the next list has them.
+await worktrees.settled()
+assert.deepEqual([(await detail(other.path))?.changes, (await detail(other.path))?.refreshing], [0, undefined])
 writeFileSync(join(other.path, "scratch.txt"), "x\n")
+// What decides a removal is read as it's asked, whatever the list holds.
+assert.match((await worktrees.removal(other.path)).held ?? "", /has changes that aren't committed/)
+// A tool's write there is the list's signal: listed as being read again, then with what was read.
+worktrees.wrote([join(other.path, "scratch.txt")])
+assert.equal((await detail(other.path))?.refreshing, true, "a worktree whose files changed is listed as being read again")
+await worktrees.settled()
 const dirty = await detail(other.path)
-assert.equal(dirty?.changes, 1)
+assert.deepEqual([dirty?.changes, dirty?.refreshing], [1, undefined])
 assert.ok((dirty?.bytes ?? 0) > 0, "its own files are measured")
 rmSync(join(other.path, "scratch.txt"))
 busy.set(other.path, ["“Other”"])
@@ -419,6 +429,63 @@ writeFileSync(join(spareRecords, wantedFile), String(Date.now() - 25 * 60 * 60_0
 await service().tidy()
 assert.deepEqual(spares().filter((spare) => spare.repoRoot === shop), [])
 for (const spare of idle) assert.equal(existsSync(spare.path), false, "an idle spare's folder is moved aside at once")
+
+// A fill under way anywhere when another host finds the project idle makes nothing more, and gives back what it was making.
+{
+  const project = repository("idle-race")
+  const pool = join(root, "idle-race-pool")
+  const folder = () => join(pool, "idle-race-1")
+  const wanted = join(pool, "spares", "idle-race-1.wanted")
+  const dayAgo = () => String(Date.now() - 25 * 60 * 60_000)
+  const raceRecords = () => readdirSync(join(pool, "spares")).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(readFileSync(join(pool, "spares", name), "utf8")))
+  let adds = 0
+  let held: (() => void) | undefined
+  let holdNext = false
+  class HeldGit extends Git {
+    override async output(cwd: string, args: readonly string[], background = false): Promise<string> {
+      if (args[0] === "worktree" && args[1] === "add") {
+        adds += 1
+        if (holdNext) {
+          holdNext = false
+          await new Promise<void>((resolve) => { held = resolve })
+        }
+      }
+      return super.output(cwd, args, background)
+    }
+  }
+  const settles = async (spares: WorktreeSpares) => {
+    let done = false
+    const settling = spares.settled().then(() => { done = true })
+    for (const deadline = Date.now() + 10_000; !done && Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 50))) { /* waiting */ }
+    assert.equal(done, true, "the fill ends instead of making and giving back spares for an idle project")
+    await settling
+  }
+
+  // Asked for while wanted, idle by the time it looks.
+  const asked = new WorktreeSpares(new HeldGit(), pool, folder)
+  await asked.want(project)
+  writeFileSync(wanted, dayAgo())
+  await settles(asked)
+  assert.equal(adds, 0, "a fill for a project gone idle makes no spare")
+  assert.deepEqual(raceRecords(), [])
+
+  // Mid-checkout when another host's tidy gives the project's spares back.
+  const making = new WorktreeSpares(new HeldGit(), pool, folder)
+  holdNext = true
+  await making.want(project)
+  for (const deadline = Date.now() + 10_000; !held && Date.now() < deadline; await new Promise((resolve) => setTimeout(resolve, 10))) { /* waiting */ }
+  assert.ok(held, "the fill reached its checkout")
+  assert.deepEqual(raceRecords().map((spare) => spare.state), ["preparing"])
+  writeFileSync(wanted, dayAgo())
+  await new WorktreeSpares(new Git(), pool, folder).sweep()
+  assert.deepEqual(raceRecords(), [], "the other host gives back the spare being made")
+  held()
+  await settles(making)
+  assert.equal(adds, 1, "nothing more is made for the idle project")
+  assert.deepEqual(raceRecords(), [], "the half-made spare isn't saved again")
+  assert.deepEqual(readdirSync(folder()).filter((name) => name.startsWith(".spare-")), [], "its checkout is given back")
+  assert.doesNotMatch(git(project, "worktree", "list", "--porcelain"), /\.spare-/)
+}
 
 // Its work since it branched, committed and not, and merging it into the project's branch only when that's safe.
 assert.equal(git(shop, "status", "--porcelain", "--untracked-files=no"), "")
@@ -1067,8 +1134,8 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
 }
 
 // A worktree is read again on its own events (its index or HEAD moved, a turn in it ended), and the windows hear it:
-// however often they ask, one nothing happened in is read only past the backstop. One with a conversation at work is
-// read as often as they ask, and one asked of alone is read then.
+// however often they ask, one nothing happened in is read only past the backstop, a conversation at work in it or
+// not. One asked of alone is read then.
 {
   const quiet = repository("quiet")
   const id = randomUUID()
@@ -1132,16 +1199,18 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
       return reads - before
     }
     await passes(1)
-    // A quiet worktree's status is read again as its own wait runs out, doubling to five minutes while nothing
-    // changes: however often windows ask, a handful of reads in nine and a half minutes.
-    assert.ok(await passes(19) <= 6, "nine and a half quiet minutes of windows asking read it a handful of times, not nineteen")
-    assert.ok(await passes(20) >= 1, "a quiet worktree is still read now and then")
+    // A quiet worktree is read on its own events alone: however often windows ask, nothing of its moved, so nothing
+    // is asked of Git. Past the hour's backstop it's read whatever was heard, should an event have been missed.
+    assert.equal(await passes(19), 0, "nine and a half quiet minutes of windows asking read it not once")
+    now += 76 * 60_000
+    assert.equal(await passes(1), 1, "a quiet worktree is still read now and then")
+    // A conversation at work there is read when its turn ends or its index moves, not on every pass meanwhile.
     at = [made.path]
-    assert.equal(await passes(4), 4, "a conversation at work there keeps it current")
+    assert.equal(await passes(4), 0, "a conversation at work there isn't read on every pass")
     at = [join(made.path, "packages")]
-    assert.equal(await passes(2), 2, "so does one in a folder inside it")
+    assert.equal(await passes(2), 0, "nor one in a folder inside it")
     at = [dirname(made.path)]
-    assert.equal(await passes(2), 2, "and one in the project folder around it")
+    assert.equal(await passes(2), 0, "nor one in the project folder around it")
     at = []
     await passes(2)
     // A terminal's `git add`, the window left focused and asking nothing: the index's own event reads it, though no

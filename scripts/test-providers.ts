@@ -11,6 +11,7 @@ import {
   mkdtemp,
   readFile,
   rm,
+  stat,
   utimes,
   writeFile,
 } from "node:fs/promises"
@@ -24,7 +25,8 @@ import {
   resolveExecutable,
 } from "@mako/host/base/executable"
 import { ProviderActivityEngine } from "@mako/host/threads/activity-engine"
-import { ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
+import { CONFIRMED_EVERY_MS, ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
+import { mock } from "node:test"
 import {
   claudeProcessProbeFor,
   parseClaudeActiveSessions,
@@ -393,6 +395,7 @@ await assert.rejects(
 
 const cacheDir = await mkdtemp(join(tmpdir(), "mako-provider-cache-"))
 const cachePath = join(cacheDir, "profiles.json")
+let cacheNow = Date.now()
 const cachedProfile = {
   id: "cursor",
   label: "Cursor",
@@ -401,27 +404,93 @@ const cachedProfile = {
   models: [],
 } satisfies HarnessProfile
 try {
+  // A model list is the account's: one entry and one snapshot for it, and a line for each folder's own defaults.
+  const clock = mock.method(Date, "now", () => cacheNow)
+  const account = "cursor:default:"
+  const listed = { ...cachedProfile, models: [{ id: "model-one", label: "One", options: [] }], defaultModel: "model-one" } satisfies HarnessProfile
   const firstCache = new ProviderProfileCache(cachePath)
-  await firstCache.put("cursor:default", cachedProfile)
-  await firstCache.put("cursor:other", cachedProfile)
+  assert.equal(await firstCache.put(account, `${account}/work/one`, { ...listed, settings: { model: "model-one" }, configuredModel: "model-one" }, "runtime-1"), true)
+  for (let folder = 0; folder < 30; folder++)
+    await firstCache.put(account, `${account}/work/folder-${folder}`, listed, "runtime-1")
   const restartedCache = new ProviderProfileCache(cachePath)
-  assert.deepEqual(await restartedCache.get("cursor:default"), cachedProfile)
+  assert.deepEqual(await restartedCache.get(account, `${account}/work/one`), {
+    profile: { ...listed, settings: { model: "model-one" }, configuredModel: "model-one" }, savedAt: cacheNow, stamp: "runtime-1",
+  }, "the next host reads the account's list with the folder's own defaults")
+  assert.equal(await restartedCache.get(account, `${account}/work/never`), null, "a folder never discovered has no snapshot of its own")
+  assert.deepEqual((await restartedCache.catalog(account))?.profile, listed, "and lists the account's models, without another folder's defaults")
+  assert.equal(await restartedCache.get("cursor:other:", `cursor:other:/work/one`), null, "nothing of one account answers for another")
+  assert.equal(await restartedCache.catalog("cursor:other:"), null)
+  assert.deepEqual(await restartedCache.nearest("cursor:"), listed)
   const cacheFileSchema = z.object({
+    entries: z.record(z.string(), z.unknown()),
     snapshots: z.record(z.string(), z.unknown()),
+    folders: z.record(z.string(), z.unknown()),
   })
-  const stored = cacheFileSchema.parse(
-    JSON.parse(await readFile(cachePath, "utf8"))
-  )
+  const stored = cacheFileSchema.parse(JSON.parse(await readFile(cachePath, "utf8")))
+  assert.deepEqual(Object.keys(stored.entries), [account], "thirty folders of an account are one entry")
   assert.equal(Object.keys(stored.snapshots).length, 1)
-  // A cache written by a build whose profiles carried capability tags still
-  // loads; the stale tags are dropped, not served.
+  assert.equal(Object.keys(stored.folders).length, 31)
+
+  // A discovery that found what is kept writes nothing; an hour on it says the list was confirmed.
+  const written = async () => (await stat(cachePath)).ino
+  const before = await written()
+  cacheNow += 60_000
+  assert.equal(await firstCache.put(account, `${account}/work/one`, { ...listed, settings: { model: "model-one" }, configuredModel: "model-one" }, "runtime-1"), false)
+  assert.equal(await written(), before, "an unchanged snapshot is not written again")
+  assert.equal((await new ProviderProfileCache(cachePath).catalog(account))?.savedAt, cacheNow - 60_000)
+  assert.equal(await firstCache.put(account, `${account}/work/one`, { ...listed, settings: { model: "model-one" } }, "runtime-1"), true, "a folder whose defaults changed is")
+  assert.equal(await firstCache.put(account, `${account}/work/one`, { ...listed, models: [] }, "runtime-1"), true, "and a list that changed")
+  await firstCache.put(account, `${account}/work/one`, listed, "runtime-1")
+  const confirmed = await written()
+  cacheNow += CONFIRMED_EVERY_MS
+  assert.equal(await firstCache.put(account, `${account}/work/one`, listed, "runtime-1"), true)
+  assert.notEqual(await written(), confirmed, "an unchanged list is stamped as confirmed once an hour has passed")
+  assert.equal((await new ProviderProfileCache(cachePath).catalog(account))?.savedAt, cacheNow)
+
+  // Hosts share the file: each reads it again before it writes, and keeps what the other saved.
+  const sharedPath = join(cacheDir, "shared.json")
+  const left = new ProviderProfileCache(sharedPath)
+  const right = new ProviderProfileCache(sharedPath)
+  await left.get("codex:left:", "codex:left:/work")
+  await right.get("codex:right:", "codex:right:/work")
+  await left.put("codex:left:", "codex:left:/work", { ...listed, id: "codex" })
+  await right.put("codex:right:", "codex:right:/work", { ...listed, id: "codex", models: [] })
+  cacheNow += 1
+  await left.put("codex:left:", "codex:left:/other", { ...listed, id: "codex", settings: { model: "model-one" } })
+  const shared = new ProviderProfileCache(sharedPath)
+  assert.deepEqual((await shared.catalog("codex:left:"))?.profile.models, listed.models, "two hosts sharing the file keep each other's entries")
+  assert.deepEqual((await shared.catalog("codex:right:"))?.profile.models, [])
+  assert.deepEqual((await right.catalog("codex:left:"))?.profile.models, listed.models, "and each learns the other's as it writes")
+
+  // A cache written by an earlier build kept a whole profile per folder, and
+  // by one whose profiles carried capability tags: both still load, the stale
+  // tags are dropped, and the folders are folded into their account as it is
+  // next saved. Fields this build does not name are written back.
   const olderPath = join(cacheDir, "older.json")
   await writeFile(olderPath, JSON.stringify({
     version: 3,
-    entries: { "cursor:default": { hash: "older", savedAt: 1 } },
-    snapshots: { older: { ...cachedProfile, capabilities: ["start", "resume-acp"] } },
+    later: { kept: true },
+    entries: {
+      "cursor:default:/work/old": { hash: "older", savedAt: 1, note: "kept" },
+      "cursor:default:/work/older": { hash: "oldest", savedAt: 0 },
+      "cursor:second:/work/old": { hash: "older", savedAt: 1, note: "kept" },
+    },
+    snapshots: {
+      older: { ...listed, settings: { model: "model-one" }, capabilities: ["start", "resume-acp"] },
+      oldest: { ...listed, models: [] },
+    },
   }))
-  assert.deepEqual(await new ProviderProfileCache(olderPath).get("cursor:default"), cachedProfile)
+  const older = new ProviderProfileCache(olderPath)
+  assert.deepEqual((await older.get(account, `${account}/work/old`))?.profile, { ...listed, settings: { model: "model-one" } })
+  assert.deepEqual((await older.catalog(account))?.profile, listed, "an earlier build's newest folder is the account's list")
+  await older.put(account, `${account}/work/new`, listed)
+  const rewritten = z.object({ later: z.unknown(), entries: z.record(z.string(), z.unknown()), snapshots: z.record(z.string(), z.unknown()) })
+    .parse(JSON.parse(await readFile(olderPath, "utf8")))
+  assert.deepEqual(Object.keys(rewritten.entries).sort(), [account, "cursor:second:/work/old"], "the account's folders are folded into it; another account's stay")
+  assert.deepEqual(rewritten.entries["cursor:second:/work/old"], { hash: "older", savedAt: 1, note: "kept" }, "an entry's unknown field is written back")
+  assert.deepEqual(rewritten.later, { kept: true }, "and the file's")
+  assert.equal(Object.keys(rewritten.snapshots).length, 2)
+  clock.mock.restore()
 } finally {
   await rm(cacheDir, { recursive: true, force: true })
 }

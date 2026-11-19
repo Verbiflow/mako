@@ -46,10 +46,11 @@ const size = (strip: AgentStrip) => JSON.stringify(strip).length + 1
  * nothing open always folds; one needing attention never does, even past `budget`. The rest, idle then ended, newest
  * first, are kept while the rows fit `budget` characters of JSON, so the whole answer fits `LIST_BUDGET_CHARS` unless what
  * needs attention alone doesn't; past it they first lose their bulk (`shed`), and only then fold. The rows kept stay in
- * the list's order.
+ * the list's order. `unlisted`: ended Fins the list folded before it built their rows (`Agents.unlisted`), counted with
+ * the rest.
  */
-export function foldList(strips: readonly AgentStrip[], now: number, budget = LIST_BUDGET_CHARS - ENVELOPE_CHARS): ListFold {
-  const folded = { idle: 0, ended: 0 }
+export function foldList(strips: readonly AgentStrip[], now: number, budget = LIST_BUDGET_CHARS - ENVELOPE_CHARS, unlisted = 0): ListFold {
+  const folded = { idle: 0, ended: unlisted }
   const kept = new Map<number, AgentStrip>()
   const rest: { strip: AgentStrip; index: number; rank: Rank; moved: number }[] = []
   let used = 0

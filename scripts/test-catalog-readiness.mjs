@@ -50,6 +50,9 @@ class Client {
     onSnapshot?.(refs)
     return refs
   }
+  async saved() {
+    return state.saved ?? []
+  }
   async refresh() {
     return this.stats
   }
@@ -510,6 +513,23 @@ try {
   assert.equal(oldClient.closed, true)
   assert.ok(!threads.list().some((ref) => ref.path === "old-catalog"))
   assert.equal(threads.ready(), true)
+  threads.stop()
+
+  // A reader's saved list draws the rail while its discovery runs. Only its list makes the catalog ready, and replaces
+  // what was drawn: a session deleted since the last run goes, one made since comes.
+  state.list = deferred()
+  state.saved = [{ harness: "codex", path: "saved-last-run" }, { harness: "codex", path: "deleted-since" }]
+  install()
+  await threads.page("drawn-early")
+  await tick()
+  assert.deepEqual(threads.list().map((ref) => ref.path).sort(), ["deleted-since", "saved-last-run"], "the last run's list is drawn at once")
+  assert.equal(threads.ready(), false, "and is not taken for discovered")
+  state.list.resolve([{ harness: "codex", path: "saved-last-run" }, { harness: "codex", path: "made-since" }])
+  await tick()
+  assert.equal(threads.ready(), true)
+  assert.deepEqual(threads.list().map((ref) => ref.path).sort(), ["made-since", "saved-last-run"], "the discovered list replaces it whole")
+  state.saved = undefined
+  state.list = null
   threads.stop()
 
   // Login opt-out still shares an on-demand reader; disconnection recovers once.

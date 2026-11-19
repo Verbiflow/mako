@@ -1,6 +1,6 @@
 import { execFileSync, fork, spawn, spawnSync, type ChildProcess } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { appendFileSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { parseArgs } from "node:util"
 import { z } from "zod"
@@ -9,14 +9,18 @@ import { runtimeLocation } from "@mako/host/transport/service"
 import { HOST_NODE_OPTIONS } from "@mako/host/base/process-warnings"
 import { heldBy, slices, timeIn } from "./lib/cpu-slices.ts"
 import { readResident, unmeasured, type ResidentMemory } from "./lib/host-load-memory.ts"
-import { claudeSessionPath, makeWorld, TODAY, type WorldScale } from "./lib/host-load-world.ts"
+import { claudeSessionPath, makeWorld, PERSON, TODAY, type WorldScale } from "./lib/host-load-world.ts"
+import { recordedRun, SeriesSchema, threadProfile, ThreadRecordingSchema, type Phase } from "./lib/host-load-holds.ts"
+import { bySource } from "./lib/host-load-sources.ts"
 import { ownedScratch } from "./lib/owned-scratch.mjs"
 import { once } from "node:events"
 import { scriptedModel } from "./scripted-model.ts"
+import { SCRIPTED_GETS } from "./scripted-harness-env.ts"
 import { hostLoadOutcome, type HostLoadExit } from "./lib/host-load-exit.ts"
 import { fakeCloud, type AccountReports } from "./lib/sync-bench-cloud.ts"
 import { createMakoBridge } from "@mako/host/contracts/renderer-bridge"
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
+import type { LiveHistoryRead } from "@mako/host/contracts/live-history"
 import { WINDOW_LIVE_FORM } from "@mako/protocol/live-form"
 import { followHostLoadOutputs } from "./lib/host-load-output.ts"
 
@@ -54,10 +58,20 @@ import { followHostLoadOutputs } from "./lib/host-load-output.ts"
  * `--home-from <home>` runs on APFS clones of a real home's harness stores (macOS, read-only to the original).
  * `--send` times each message from the call until its harness asks the model, reporting p50, p95, p99 and every
  * sample (`sendSamples`, and per send `sendDetails`: its request, when the host accepted it and when the model heard
- * it); `--harness claude` or `--harness opencode` sends through a sealed Claude Code or OpenCode instead of Codex,
+ * it); `--harness claude`, `--harness opencode` or `--harness grok` sends through a sealed Claude Code, OpenCode or Grok instead of Codex,
  * while the Fins stay on Codex.
  *
- *   npm run bench:host-load [-- --scale today|ci] [--seconds 60] [--warmup 20] [--host <mako-host.js>] [--cpu-prof <dir>] [--out <file>] [--keep]
+ * `--record <dir>` keeps what the host's own thread did all through, by stretch of the run: its start (spawn until its
+ * catalog and rail answer), a quiet baseline (`--idle`), the measured seconds, and a burst after them (`--burst
+ * <seconds>`: every `--working` Fin ends its turn at once while a window opens the longest conversation and lists each
+ * seeded Apex). A recorder inside the host (`host-load-recorder.mjs`) keeps every gap of 20 ms or more between two
+ * 5 ms ticks with the work open in it; the run's CPU profile names the function on the thread in each
+ * (`host-load-holds.ts`), and the yardstick's delay is cut to the same stretches. `--scale person` is the world of the
+ * person's host on 2026-11-17 (`PERSON`); `--working <n>` starts n Codex Fins under its seeded Apexes, each streaming
+ * text at a model's pace and patching a file, turn after turn, until the burst. `--send-every` and `--probe-every`
+ * slow the timed sends and the stress probes to what a person and a window ask.
+ *
+ *   npm run bench:host-load [-- --scale today|ci|person] [--seconds 60] [--warmup 20] [--host <mako-host.js>] [--cpu-prof <dir>] [--out <file>] [--keep]
  */
 const { values } = parseArgs({
   options: {
@@ -88,14 +102,38 @@ const { values } = parseArgs({
     "snapshot-sends": { type: "string" },
     idle: { type: "boolean", default: false },
     "idle-only": { type: "boolean", default: false },
+    "warm-start": { type: "boolean", default: false },
+    memory: { type: "boolean", default: false },
     "summaries-every": { type: "string", default: "30000" },
     account: { type: "boolean", default: false },
     // For an explicitly pinned host predating output hints; current hosts must prove the hinted path.
     "legacy-output": { type: "boolean", default: false },
+    record: { type: "string" },
+    working: { type: "string", default: "0" },
+    burst: { type: "string", default: "0" },
+    "send-every": { type: "string", default: "3000" },
+    "probe-every": { type: "string", default: "20,100" },
+    // How the working Fins wake their Apex: `never` unless given (`decisions`, `always`).
+    wake: { type: "string", default: "never" },
+    // The budget of a recorded run (`bench:host-person`): the steady busy share and the longest hold it may reach.
+    "max-busy": { type: "string" },
+    "max-hold-ms": { type: "string" },
+    // And the longest hold the thread spent computing (its own CPU time in the gap): what the host's code did, apart
+    // from a write or a read it waited on.
+    "max-run-ms": { type: "string" },
+    // The host's niceness, 5 as it always ran here; 0 runs it as the yardstick runs, to tell a hold that is the host's
+    // from one that is the machine not running a lowered process.
+    nice: { type: "string", default: "5" },
+    // A recorded run without the CPU profile: its holds have no function, only their length and the thread's own CPU
+    // time, to tell what the sampler itself adds (it stops the thread it samples).
+    "no-profile": { type: "boolean", default: false },
+    // `NAME=value` for the host's environment, which otherwise takes none of this process's `MAKO_` settings: a
+    // switch to measure with and without (`MAKO_JOURNAL_WRITER=0`).
+    "host-env": { type: "string", multiple: true },
   },
 })
 /** The harness the timed sends go through (`--harness`). */
-const harness = z.enum(["codex", "claude", "opencode"]).parse(values.harness)
+const harness = z.enum(["codex", "claude", "opencode", "grok"]).parse(values.harness)
 const say = (line: string) => process.stderr.write(`${line}\n`)
 const delay = (ms: number) => new Promise((done) => setTimeout(done, ms))
 const SCALES = {
@@ -103,11 +141,17 @@ const SCALES = {
   ci: { threads: 29, fins: [6, 6, 4, 3, 2, 2], files: [1500, 2200], apps: 95, running: 24, processes: 400, sessions: 600 },
   /** For changing the bench itself. */
   tiny: { threads: 2, fins: [1], files: [60, 60], apps: 3, running: 1, processes: 4, sessions: 5 },
+  person: PERSON,
+  /** `person` in small, for changing what `--record` does; its first tree is past a tree's hourly limit on starts. */
+  "tiny-person": { threads: 4, fins: [2, 1], files: [60, 60], apps: 3, running: 1, processes: 4, sessions: 20, olderSessions: 40, trees: [125, 5], journalsMb: [6, 1] },
 } satisfies Record<string, WorldScale>
-const scale: WorldScale = z.enum(["today", "ci", "tiny"]).transform((name) => SCALES[name]).parse(values.scale)
+const scale: WorldScale = z.enum(["today", "ci", "tiny", "person", "tiny-person"]).transform((name) => SCALES[name]).parse(values.scale)
 const hostScript = resolve(values.host ?? join(import.meta.dirname, "../packages/host/dist/mako-host.js"))
 if (!existsSync(hostScript)) throw new Error(`${hostScript} isn't built: npx tsgo -b packages/host`)
 const budget = Number(values["budget-ms"])
+/** `--record <dir>`: where the run's recording, its profiles, every hold and the host's log are kept. */
+const record = values.record && resolve(values.record)
+if (record) mkdirSync(record, { recursive: true })
 /** The host's peak resident memory this run may reach; 0 reports it without judging. */
 const peakLimit = Number(values["peak-limit-mb"])
 const times = Number(values.times)
@@ -194,6 +238,18 @@ if (values["home-from"]) {
 }
 
 
+/** What the world holds, for a recorded run's report: its worktrees, its seeded trees, and its journals by size. */
+const journalSizes = existsSync(join(world.dataRoot, "conversations")) ? readdirSync(join(world.dataRoot, "conversations")).filter((name) => name.endsWith(".sqlite")).map((name) => statSync(join(world.dataRoot, "conversations", name)).size / 1_048_576).sort((a, b) => a - b) : []
+const worldSaid = {
+  checkouts: world.checkouts.length, worktrees: world.checkouts.reduce((sum, checkout) => sum + checkout.repositories.length, 0), files: scale.files,
+  trees: world.trees.map((tree) => tree.fins), long: world.long.map((long) => [long.megabytes, long.fileMb]), sessions: scale.sessions + (scale.olderSessions ?? 0),
+  journals: {
+    count: journalSizes.length, totalMb: Math.round(journalSizes.reduce((sum, size) => sum + size, 0)), medianMb: Math.round((journalSizes[Math.floor(journalSizes.length / 2)] ?? 0) * 100) / 100,
+    over1Mb: journalSizes.filter((size) => size >= 1).length, over10Mb: journalSizes.filter((size) => size >= 10).length, over100Mb: journalSizes.filter((size) => size >= 100).length, largestMb: Math.round(journalSizes.at(-1) ?? 0),
+  },
+}
+if (record) say(`world holds ${JSON.stringify(worldSaid)}`)
+
 /** With `--send`: when the stand-in model first heard each `BENCH-S<n>` message, by its tag. */
 const heardAt = new Map<string, number>()
 const completedTools = new Set<string>()
@@ -203,6 +259,18 @@ const TOOL_TURNS = 13
 const LiveStateStatus = z.object({ status: z.string() }).loose()
 /** With `--fins <n>` (and `--send`): the Apex the sends go to starts this many Fins, each a Codex turn, before the probe. */
 const finCount = Number(values.fins)
+/** With `--working <n>`: Fins started under the seeded Apexes that work turn after turn until the burst. */
+const workingCount = Number(values.working)
+if (workingCount > 0 && !world.trees.length) throw new Error("--working needs a scale with seeded Apexes (--scale person)")
+/** Each working Fin's steps so far, whether the burst has begun, and the Fins waiting at its gate to end together. */
+const workSteps = new Map<string, number>()
+const workDone = new Set<string>()
+const gate = { bursting: false, waiting: new Set<string>(), open: () => {} }
+/** The working Fins' conversations, to say whose journal commits were slow. */
+const workingConversations = new Set<string>()
+const gateOpened = new Promise<void>((opened) => { gate.open = opened })
+const WORK_WORDS = "reading the module and its callers then changing the one function that decides it and running the checks again before the next part".split(" ")
+const workText = (seed: number, words: number) => Array.from({ length: words }, (_, index) => WORK_WORDS[(seed * 7 + index * 13) % WORK_WORDS.length]).join(" ")
 // `--account`: the host signs in to the protocol's fake gateway in this process, which counts what it reports of its
 // Sessions (frames, rows, bytes), so the account's message rate is measured beside the loop.
 const cloud = values.account ? await fakeCloud() : undefined
@@ -215,10 +283,33 @@ if (cloud) {
   mkdirSync(join(world.home, ".mako"), { recursive: true })
   writeFileSync(join(world.home, ".mako", "syncd-login-optout"), "")
 }
-const model = values.send || finCount > 0 ? await scriptedModel({
+const model = values.send || finCount > 0 || workingCount > 0 ? await scriptedModel({
   ...values["model-port"] && { port: z.coerce.number().int().min(1).max(65535).parse(values["model-port"]) },
-  reply: (heard) => {
-    for (const match of heard.matchAll(/BENCH-([SF]\d+)/g)) if (!heardAt.has(match[1]!)) heardAt.set(match[1]!, performance.now())
+  // What a harness reads before it asks (Grok's model list), as the live tests' stand-in answers it.
+  answers: SCRIPTED_GETS,
+  reply: async (heard) => {
+    for (const match of heard.matchAll(/BENCH-([SFW]\d+)/g)) if (!heardAt.has(match[1]!)) heardAt.set(match[1]!, performance.now())
+    const worker = [...heard.matchAll(/BENCH-(W\d+)/g)].at(-1)?.[1]
+    if (worker) {
+      if (workDone.has(worker)) return { text: "Done." }
+      if (gate.bursting) {
+        // Every working Fin ends in the same moment: each waits here until all have asked, or eight seconds.
+        gate.waiting.add(worker)
+        if (gate.waiting.size >= workSteps.size) gate.open()
+        await Promise.race([gateOpened, delay(8_000)])
+        workDone.add(worker)
+        return { text: "Done." }
+      }
+      const step = (workSteps.get(worker) ?? 0) + 1
+      workSteps.set(worker, step)
+      // A model's wait for its first token, then thinking and an answer at 40 tokens a second, then a file patched.
+      await delay(1_000 + Math.random() * 2_500)
+      const lines = Array.from({ length: 96 }, (_, line) => `+export const v${line} = ${step * 128 + line}`).join("\n")
+      return {
+        reasoning: workText(step, 60), text: workText(step + 3, 140), pace: 25,
+        call: { id: `work_${worker}_${step}`, name: "apply_patch", input: `*** Begin Patch\n*** Add File: app/host-load-${worker}-${step}.ts\n${lines}\n*** End Patch\n` },
+      }
+    }
     if (values["tool-heavy"]) {
       const tag = [...heard.matchAll(/BENCH-(S\d+)/g)].at(-1)?.[1]
       if (!tag) throw new Error("The tool-heavy turn has no bench tag")
@@ -248,8 +339,8 @@ if (model) {
 
   const { directory, socket } = runtimeLocation(world.dataRoot)
   mkdirSync(directory, { recursive: true, mode: 0o700 })
-  const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(MAKO_|CLAUDE_|CODEX_HOME|CURSOR_)/.test(name)))
-  const profileDir = values["cpu-prof"] && resolve(values["cpu-prof"])
+  const env: NodeJS.ProcessEnv = Object.fromEntries(Object.entries(process.env).filter(([name]) => !/^(MAKO_|CLAUDE_|CODEX_HOME|CURSOR_|GROK_|XAI_)/.test(name)))
+  const profileDir = values["cpu-prof"] ? resolve(values["cpu-prof"]) : record && !values["no-profile"] ? join(record, "profiles") : undefined
   if (profileDir) mkdirSync(profileDir, { recursive: true })
   // `--node-arg` passes options to the host's Node (a heap limit, `--heap-prof`); `--gc` traces its collections.
   // The host's own options first, as the app starts it (`hostCommand`): the program's first line isn't read when Node runs it.
@@ -257,8 +348,43 @@ if (model) {
   // `--snapshot-sends` names is answered ("20,80"), to tell what the host keeps per send from what it collects.
   const snapshots = values["heap-snapshots"] && resolve(values["heap-snapshots"])
   if (snapshots) mkdirSync(snapshots, { recursive: true })
-  const nodeArgs = [...HOST_NODE_OPTIONS, ...(values["node-arg"] ?? []), ...(values.gc ? ["--trace-gc"] : []), ...(snapshots ? ["--heapsnapshot-signal=SIGUSR2"] : [])]
-  host = spawn("nice", ["-n", "5", process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
+  const nodeArgs = [...HOST_NODE_OPTIONS, ...(values["node-arg"] ?? []), ...(values.gc ? ["--trace-gc"] : []), ...(snapshots ? ["--heapsnapshot-signal=SIGUSR2"] : []),
+    ...(record ? ["--import", join(import.meta.dirname, "lib/host-load-recorder.mjs")] : [])]
+  // A recorded run's yardstick runs from before the host starts, every tick kept, so each stretch has its own.
+  const yardstickOut = join(root, "yardstick.json")
+  const startYardstick = () => {
+    const started = spawn(process.execPath, [join(import.meta.dirname, "lib/host-load-yardstick.mjs"), yardstickOut, "300", ...(record ? ["series"] : [])], { stdio: ["ignore", "inherit", "inherit"] })
+    children.push(started)
+    return started
+  }
+  const earlyYardstick = record ? startYardstick() : undefined
+  if (earlyYardstick) await delay(1_500)
+  const hostEnv = { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off" }
+  // `--warm-start`: the host is started and stopped once on this world before the start that is measured, as an
+  // installed host is one that ran before: its compiled code is in the data root's cache and its stores were opened.
+  if (values["warm-start"]) {
+    host = spawn("nice", ["-n", values.nice, process.execPath, ...HOST_NODE_OPTIONS, hostScript], { env: hostEnv, stdio: ["ignore", "ignore", "inherit"] })
+    const first = host
+    const gone = new Promise<void>((done) => first.once("exit", () => done()))
+    for (const deadline = Date.now() + 60_000; ; await delay(100)) {
+      const probe = await probeRuntime(socket, { timeoutMs: 2_000 }).catch(() => undefined)
+      if (probe?.state === "ready") break
+      if (Date.now() > deadline) throw new Error("the host's first start didn't answer /health within a minute")
+    }
+    const firstClient = randomUUID()
+    for (const deadline = Date.now() + 180_000; ; await delay(500)) {
+      const listed = z.object({ ready: z.boolean() }).loose().parse(await invokeRuntime(socket, firstClient, "mako:threads", [], 1, { timeoutMs: 600_000 }))
+      if (listed.ready) break
+      if (Date.now() > deadline) throw new Error("the host's first start hasn't read its catalog within three minutes")
+    }
+    first.kill("SIGTERM")
+    await Promise.race([gone, delay(60_000)])
+    if (first.exitCode === null && first.signalCode === null) throw new Error("the host's first start didn't quit within a minute")
+    say("started and stopped once; the measured start is a warm one")
+  }
+  const phases: Phase[] = []
+  const spawnedAt = Date.now()
+  host = spawn("nice", ["-n", values.nice, process.execPath, ...nodeArgs, ...(profileDir ? ["--cpu-prof", "--cpu-prof-dir", profileDir, "--cpu-prof-interval", "1000"] : []), hostScript], {
     // Claude Code's config folder named outright: its login, and so its keychain item, are the world's own
     // (`Claude Code-credentials-<hash of the folder>`), never the person's.
     env: { ...env, HOME: world.home, TMPDIR: world.temporary, MAKO_DATA_ROOT: world.dataRoot, ...harness === "claude" && { CLAUDE_CONFIG_DIR: join(world.home, ".claude") },
@@ -266,7 +392,12 @@ if (model) {
       ...harness === "opencode" && model && {
         OPENCODE_CONFIG_CONTENT: JSON.stringify({ enabled_providers: ["anthropic"], provider: { anthropic: { options: { baseURL: `${model.url}/v1`, apiKey: "mako-host-load" } } } }),
         OPENCODE_DISABLE_MODELS_FETCH: "1", OPENCODE_DISABLE_AUTOUPDATE: "1",
-      }, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
+      },
+      // A sealed Grok (`--harness grok`): its home the world's, its key and every endpoint the stand-in's, as `pointAt` points it.
+      ...harness === "grok" && model && {
+        GROK_HOME: join(world.home, ".grok"), XAI_API_KEY: "mako-host-load", GROK_DISABLE_AUTOUPDATER: "1",
+        GROK_XAI_API_BASE_URL: `${model.url}/v1`, GROK_CLI_CHAT_PROXY_BASE_URL: `${model.url}/v1`, GROK_MODELS_BASE_URL: `${model.url}/v1`,
+      }, MAKO_WEB_SOCKET: socket, MAKO_PROD: "1", MAKO_TELEMETRY: "off", ...values.memory && { MAKO_HOST_LOAD_HEAP: "1" }, ...Object.fromEntries((values["host-env"] ?? []).map((pair) => [pair.slice(0, pair.indexOf("=")), pair.slice(pair.indexOf("=") + 1)])), ...finCount > 0 && { MAKO_FIN_SLOTS: "8" }, ...workingCount > 0 && { MAKO_FIN_SLOTS: String(workingCount + 2) }, ...record && { MAKO_HOST_LOAD_RECORD: record }, ...cloud && { MAKO_CLOUD_URL: cloud.url } },
     stdio: ["ignore", values.gc ? "pipe" : "ignore", "inherit"],
     ...profileDir && values["node-arg"]?.some((arg) => arg.startsWith("--heap-prof")) && { cwd: profileDir },
     ...snapshots && { cwd: snapshots },
@@ -298,11 +429,18 @@ if (model) {
     const kb = Number(spawnSync("ps", ["-o", "rss=", "-p", hostPid], { encoding: "utf8" }).stdout.trim())
     if (kb > 0) rssSeries.push([Date.now(), Math.round(kb / 1024)])
   }, 5_000)
+  // `--memory`: what the host's memory is made of, as the system counts its regions, at the end of the quiet minute
+  // and of the measured seconds. Reading it stops the host for a moment, so it is taken after a phase, never in one.
+  const regions = (name: string) => {
+    if (!values.memory || !record || process.platform !== "darwin") return
+    writeFileSync(join(record, `regions-${name}.txt`), spawnSync("vmmap", ["--summary", hostPid], { encoding: "utf8", timeout: 60_000 }).stdout)
+  }
   for (const deadline = Date.now() + 60_000; ; await delay(100)) {
     const probe = await probeRuntime(socket, { timeoutMs: 2_000 }).catch(() => undefined)
     if (probe?.state === "ready") break
     if (Date.now() > deadline) throw new Error("the host didn't answer /health within a minute")
   }
+  const healthAt = Date.now()
   const client = randomUUID()
   const call = (channel: string, ...args: unknown[]) => invokeRuntime(socket, client, channel, args, 1, { timeoutMs: 600_000 })
   for (const deadline = Date.now() + 180_000; ; await delay(500)) {
@@ -310,7 +448,25 @@ if (model) {
     if (listed.ready) break
     if (Date.now() > deadline) throw new Error("the host hasn't read its catalog within three minutes")
   }
-  say(`host ready in ${Math.round(performance.now() - began)} ms`)
+  const catalogAt = Date.now()
+  // What a window draws first: the rail, and the worktrees' summaries.
+  const rail = z.object({ threads: z.array(z.json()) }).loose().parse(await call("mako:threads")).threads.length
+  const railAt = Date.now()
+  if (record) await call("mako:worktree-summaries")
+  const startedAt = Date.now()
+  phases.push({ name: "start", from: spawnedAt, to: startedAt })
+  const start = { healthMs: healthAt - spawnedAt, catalogMs: catalogAt - spawnedAt, railMs: railAt - spawnedAt, summariesMs: startedAt - spawnedAt, rail }
+  // The same reads the burst asks, with nothing else going on: what each costs by itself, apart from what it waits behind.
+  const alone = async (channel: string, ...args: unknown[]) => {
+    const at = performance.now()
+    await call(channel, ...args).catch(() => undefined)
+    return Math.round((performance.now() - at) * 10) / 10
+  }
+  const listsAlone: number[] = []
+  const quiet = record ? { railMs: await alone("mako:threads"), listMs: listsAlone } : undefined
+  if (quiet) for (const tree of world.trees) for (let again = 0; again < 2; again += 1) listsAlone.push(await alone("mako:agents-list", { kind: "agent", session: tree.session }, { scope: "all" }))
+  if (quiet) say(`alone: the rail ${quiet.railMs} ms; each Apex's list, twice, ${quiet.listMs.join(", ")} ms`)
+  say(`host ready in ${Math.round(performance.now() - began)} ms: /health ${start.healthMs} ms after its spawn, its catalog ${start.catalogMs} ms, a rail of ${rail} ${start.railMs} ms`)
   if (cloud) {
     const Account = z.object({ state: z.object({ status: z.string(), url: z.string().optional() }).loose() }).loose()
     let account = Account.parse(await call("mako:cloud-sign-in"))
@@ -343,6 +499,8 @@ if (model) {
     const jobs = Object.fromEntries([...after.jobs].map(([name, runs]) => [name, runs - (before.jobs.get(name) ?? 0)] as const).filter(([, runs]) => runs > 0).sort((a, b) => b[1] - a[1]))
     const jobRuns = Object.values(jobs).reduce((sum, runs) => sum + runs, 0)
     idle = { hostPercent: Math.round(((toCpu - fromCpu) / ((to - from) / 1000)) * 1000) / 10, from, to, jobRuns, loopChecks: after.checks - before.checks, jobs }
+    phases.push({ name: "baseline", from, to })
+    regions("rest")
     say(`idle: the host used ${idle.hostPercent}% of a core; ${jobRuns} job runs and ${idle.loopChecks} event loop checks in 60 s`)
     for (const [name, runs] of Object.entries(jobs)) say(`  ${String(runs).padStart(4)} ${name}`)
   }
@@ -441,6 +599,22 @@ if (model) {
   const sends: [number, number | null][] = []
   const sendDetails: { tag: string; request: string; acceptedMs: number | null; modelMs: number | null }[] = []
   let conversation: string | undefined
+  if (workingCount > 0) {
+    // Each under a seeded Apex in proportion to its tree, in a checkout the churn edits too, never waking the Apex:
+    // its harness is the seed's script, which a real host can't resume.
+    const all = world.trees.reduce((sum, tree) => sum + tree.fins, 0)
+    for (let i = 0, of = 0, within = world.trees[0]!.fins; i < workingCount; i += 1) {
+      while (of < world.trees.length - 1 && (i / workingCount) * all >= within) within += world.trees[++of]!.fins
+      const started = z.object({ refused: z.string().optional(), conversation: z.string().optional() }).loose().parse(await call("mako:agents-start", { kind: "agent", session: world.trees[of]!.session }, {
+        brief: { objective: `BENCH-W${i} work on part ${i}.` }, harness: "codex", name: `work-${i}`, clientKey: `work-${i}`, cwd: fins[i % fins.length]!.path, mode: "background", wake: values.wake, queue: true,
+      }))
+      if (started.refused) throw new Error(`Working Fin ${i} was refused: ${JSON.stringify(started)}`)
+      if (started.conversation) workingConversations.add(started.conversation)
+    }
+    say(`${workingCount} working Fins started; waiting for each to ask the model`)
+    for (const deadline = Date.now() + 10 * 60_000; workSteps.size < workingCount; await delay(500))
+      if (Date.now() > deadline) throw new Error(`only ${workSteps.size} of ${workingCount} working Fins asked the model in 10 minutes`)
+  }
   if (values.send || finCount > 0) {
     conversation = randomUUID()
     // By default the send's checkout is one the Fins edit all through; `--send-quiet` takes one nothing edits but the send.
@@ -468,11 +642,9 @@ if (model) {
   }
   say(`warming up for ${values.warmup} s with ${fins.length} Fins at work`)
   await delay(Number(values.warmup) * 1000)
-  const yardstickOut = join(root, "yardstick.json")
-  const yardstick = spawn(process.execPath, [join(import.meta.dirname, "lib/host-load-yardstick.mjs"), yardstickOut, "300"], { stdio: ["ignore", "inherit", "inherit"] })
-  children.push(yardstick)
+  const yardstick = earlyYardstick ?? startYardstick()
   const probeOut = join(root, "probe.json")
-  const prober = spawn(process.execPath, ["--import", "tsx", join(import.meta.dirname, "lib/host-load-probe.ts"), socket, probeOut, "mako:worktrees", "20", "100", "30000"], {
+  const prober = spawn(process.execPath, ["--import", "tsx", join(import.meta.dirname, "lib/host-load-probe.ts"), socket, probeOut, "mako:worktrees", ...z.tuple([z.string().regex(/^\d+$/), z.string().regex(/^\d+$/)]).parse(values["probe-every"].split(",")), "30000"], {
     stdio: ["ignore", "inherit", "inherit"], env: { ...process.env, TSX_TSCONFIG_PATH: join(import.meta.dirname, "../tsconfig.scripts.json") },
   })
   children.push(prober)
@@ -509,7 +681,7 @@ if (model) {
   }
   const sending = (async () => {
     for (let n = 1; probing && conversation && (!values["tool-heavy"] || n < TOOL_TURNS); n += 1) {
-      await delay(3_000)
+      await delay(Number(values["send-every"]))
       const tag = `S${n}`
       const began = performance.now()
       const request = randomUUID()
@@ -536,6 +708,52 @@ if (model) {
   const probedFrom = Date.now()
   const reportsFrom = cloud?.reported?.()
   await delay(Number(values.seconds) * 1000)
+  phases.push({ name: "steady", from: probedFrom, to: Date.now() })
+  regions("working")
+  // The burst: every working Fin's turn ends in one moment, while a window opens the longest conversation and reads
+  // it back a page at a time, and each seeded Apex's Fins are listed, as its own turn and its window's crew ask.
+  let burst: { seconds: number; finsEnded: number; finsGated: number; openMs: number | null; pages: number; bytes: number; listMs: (number | null)[]; railMs: number | null } | undefined
+  if (Number(values.burst) > 0) {
+    const burstFrom = Date.now()
+    gate.bursting = true
+    // Its first read's milliseconds; below zero until it answers.
+    const opened = { openMs: -1, pages: 0, bytes: 0 }
+    const opening = (async () => {
+      const long = world.long[0]
+      if (!long) return
+      // A window's read of history, whole: the answer comes in parts, each asked for by where the last one ended.
+      const Part = z.object({ record: z.string(), data: z.string(), next: z.number().nullable() }).loose()
+      const Window = z.object({ history: z.object({ token: z.string(), before: z.object({ blocks: z.number(), base: z.number() }).nullable() }).loose() }).loose()
+      const read = async (input: LiveHistoryRead) => {
+        let part = Part.parse(await call("mako:live-read", long.conversation, input))
+        let text = part.data
+        while (part.next !== null) {
+          part = Part.parse(await call("mako:live-read", long.conversation, { kind: "part", record: part.record, offset: part.next }))
+          text += part.data
+        }
+        opened.bytes += text.length
+        return Window.safeParse(JSON.parse(text)).data
+      }
+      const at = performance.now()
+      let view = await read({ kind: "snapshot" })
+      opened.openMs = Math.round(performance.now() - at)
+      for (; view?.history.before && opened.pages < 40 && Date.now() - burstFrom < Number(values.burst) * 1000; opened.pages += 1)
+        view = await read({ kind: "earlier", token: view.history.token, before: view.history.before })
+    })()
+    const timed = async (work: () => Promise<void>) => {
+      const at = performance.now()
+      return work().then(() => Math.round(performance.now() - at), () => null)
+    }
+    const [railMs, ...listMs] = await Promise.all([
+      timed(async () => { await call("mako:threads") }),
+      ...world.trees.flatMap((tree) => [0, 1, 2].map(() => timed(async () => { await call("mako:agents-list", { kind: "agent", session: tree.session }, { scope: "all" }) }))),
+    ])
+    await opening.catch((error: Error) => say(`burst: the long conversation's read failed: ${error.message}`))
+    await delay(Math.max(0, Number(values.burst) * 1000 - (Date.now() - burstFrom)))
+    phases.push({ name: "burst", from: burstFrom, to: Date.now() })
+    burst = { seconds: Number(values.burst), finsEnded: workDone.size, finsGated: gate.waiting.size, pages: opened.pages, bytes: opened.bytes, openMs: opened.openMs < 0 ? null : opened.openMs, listMs, railMs: railMs ?? null }
+    say(`burst: ${burst.finsEnded} of ${workingCount} working Fins ended (${burst.finsGated} together); the long conversation opened in ${burst.openMs} ms and ${burst.pages} earlier pages (${burst.bytes} characters); lists ${listMs.join(", ")} ms`)
+  }
   const reportsTo = cloud?.reported?.()
   probing = false
   await reading
@@ -575,7 +793,7 @@ if (model) {
     return { n: times.length, failed: times.length - answered.length, p50: at(0.5), p95: at(0.95), p99: at(0.99), p999: at(0.999), max: answered.at(-1) ?? null, overBudget: over, overShare: times.length ? over / times.length : 1 }
   }
   // One profile per thread: the main thread's is numbered 0 (`CPU.<date>.<time>.<pid>.0.<n>.cpuprofile`).
-  const profile = profileDir && readdirSync(profileDir).filter((name) => /\.\d+\.0\.\d+\.cpuprofile$/.test(name)).map((name) => join(profileDir, name)).sort().at(-1)
+  const profile = profileDir && readdirSync(profileDir).filter((name) => (record ? new RegExp(`\\.${hostPid}\\.0\\.\\d+\\.cpuprofile$`) : /\.\d+\.0\.\d+\.cpuprofile$/).test(name)).map((name) => join(profileDir, name)).sort().at(-1)
   const found = profile ? slices(profile, 50) : []
   const answers = { health: summary(probed.health), reads: summary(probed.reads), checkoutReads: summary(checkoutReads), ...model && { sends: summary(sends) } }
   const peakMb = Math.round(memory.peakKb / 1024)
@@ -589,8 +807,57 @@ if (model) {
   const rss = rssProbed.length ? { min: rssProbed[0]!, median: rssProbed[Math.floor(rssProbed.length / 2)]!, max: rssProbed.at(-1)!, series: rssSeries } : undefined
   const gc = values.gc ? { major: pauses(/^Mark-(Compact|Sweep)$/), minor: pauses(/^(Scavenge|Minor Mark-Sweep)$/) } : undefined
   const unread = unmeasured(memory, sampled)
+  // A recorded run: every hold with its function goes to `holds.json` beside the report, and the host's log is kept.
+  let recorded: Omit<ReturnType<typeof recordedRun>, "every"> | undefined
+  let sources: ReturnType<typeof bySource> | undefined
+  let slowCommits: Record<string, { count: number; ms: number; worstMs: number }> | undefined
+  const overBudget: string[] = []
+  let threads: { threadId: number; busyShare: number; delayMs: { p50: number; p99: number; max: number }; profile?: ReturnType<typeof threadProfile> }[] | undefined
+  if (record && profile && profileDir) {
+    const series = SeriesSchema.safeParse(z.object({ series: z.json() }).loose().safeParse(JSON.parse(readFileSync(yardstickOut, "utf8"))).data?.series).data
+    const { every, ...rest } = recordedRun({ recording: join(record, `main-${hostPid}.json`), profile, phases, ...series && { yardstick: series } })
+    recorded = rest
+    // The budget, judged beside the yardstick as every limit here is: a hold counts past the limit by more than the
+    // yardstick's own worst wait over the same stretch, so a machine that stopped every process fails nothing. The
+    // host's start and its stop are not judged: what they hold is said, and nobody is streaming through them.
+    const judged = new Set(["baseline", "steady", "burst"])
+    if (values["max-hold-ms"]) {
+      const limit = Number(values["max-hold-ms"])
+      const over = every.filter((hold) => judged.has(hold.phase) && hold.ms > limit + (hold.yardstickMs ?? 0)).sort((a, b) => b.ms - a.ms)
+      if (over.length) overBudget.push(`${over.length} holds past ${limit} ms outside start and stop; the longest ${over[0]!.ms} ms in ${over[0]!.phase}, in ${over[0]!.top}`)
+    }
+    if (values["max-run-ms"]) {
+      const limit = Number(values["max-run-ms"])
+      const over = every.filter((hold) => judged.has(hold.phase) && (hold.cpuMs ?? 0) > limit).sort((a, b) => (b.cpuMs ?? 0) - (a.cpuMs ?? 0))
+      if (over.length) overBudget.push(`${over.length} holds in which the thread computed past ${limit} ms; the longest ${over[0]!.cpuMs} ms in ${over[0]!.phase}, in ${over[0]!.top}`)
+    }
+    if (values["max-busy"]) {
+      const steady = rest.phases.find((phase) => phase.name === "steady")
+      if (steady && steady.busyShare > Number(values["max-busy"])) overBudget.push(`the thread was busy ${Math.round(steady.busyShare * 1000) / 10}% of the steady stretch, past ${Number(values["max-busy"]) * 100}%`)
+    }
+    // Whose commits were slow: a working Fin's, a seeded Apex's (which takes its Fins' roster at rest), the timed sends'.
+    const seededApexes = new Set(world.trees.map((tree) => tree.conversation))
+    const whose = (id: string) => workingConversations.has(id) ? "working Fin" : seededApexes.has(id) ? "seeded Apex" : id === conversation ? "timed sends" : "another"
+    const slowBy = new Map<string, { count: number; ms: number; worstMs: number }>()
+    for (const commit of rest.commits?.slowOnes ?? []) {
+      const key = `${whose(commit.conversation)}, ${commit.running ? "turn running" : "at rest"}, ${commit.background ? "worker checkpoints" : "own checkpoints"}`
+      const held = slowBy.get(key) ?? { count: 0, ms: 0, worstMs: 0 }
+      slowBy.set(key, { count: held.count + 1, ms: Math.round(held.ms + commit.ms), worstMs: Math.max(held.worstMs, commit.ms) })
+    }
+    slowCommits = Object.fromEntries(slowBy)
+    sources = bySource(join(record, `main-${hostPid}.json`), profile, phases)
+    writeFileSync(join(record, "holds.json"), JSON.stringify(every))
+    threads = readdirSync(record).filter((name) => name.startsWith(`thread-${hostPid}-`)).map((name) => {
+      const thread = ThreadRecordingSchema.parse(JSON.parse(readFileSync(join(record, name), "utf8")))
+      const own = readdirSync(profileDir).find((each) => new RegExp(`\\.${hostPid}\\.${thread.threadId}\\.\\d+\\.cpuprofile$`).test(each))
+      return { threadId: thread.threadId, busyShare: Math.round((thread.activeMs / Math.max(1, thread.activeMs + thread.idleMs)) * 1000) / 1000, delayMs: thread.delayMs, ...own && { profile: threadProfile(join(profileDir, own)) } }
+    })
+    const log = join(world.dataRoot, "logs", "host.log")
+    if (existsSync(log)) copyFileSync(log, join(record, "host.log"))
+  }
   const report = {
     scale: values.scale, host: hostScript, seconds: Number(values.seconds), fins: fins.length, windows, windowCalls, windowFailures,
+    ...record && { world: worldSaid, start, ...quiet && { quiet }, phases, working: { fins: workingCount, steps: [...workSteps.values()].reduce((sum, steps) => sum + steps, 0) }, ...burst && { burst }, ...recorded && { recorded }, ...sources && { sources }, ...slowCommits && { slowCommits }, ...threads && { threads } },
     measuredWindow: { from: probedFrom, to: probedTo }, outputs,
     ...values["tool-heavy"] && { toolWorkload: { callsPerTurn: TOOL_CALLS, requestedTurns: TOOL_TURNS, steps: Object.fromEntries(toolSteps), completed: [...completedTools] } },
     ...answers, ...model && { sendSamples: sends, sendDetails }, eventLoop: health.eventLoop, peakMb: unread ? null : peakMb, memoryReadings: memory.readings, memoryMisses: memory.misses,
@@ -624,6 +891,7 @@ if (model) {
   if ((answers.reads.p99 ?? Infinity) > readLimit) failures.push(`one read in a hundred waited ${answers.reads.p99} ms, past ${readLimit} ms`)
   if (peakLimit && peakMb > peakLimit) failures.push(`the host peaked at ${peakMb} MB, past ${peakLimit} MB`)
   if (peakLimit && unread) failures.push(`the host's memory can't be judged: ${unread}`)
+  failures.push(...overBudget)
   const row = (name: string, result: { p50: number | null; p99: number | null; max: number | null }, limit: string) => `| ${name} | ${result.p50} | ${result.p99} | ${result.max} | ${limit} |`
   const table = [
     `### bench:host-load (${values.scale}${values.host ? `, ${values.host}` : ""}): ${failures.length ? "failed" : "passed"}`,

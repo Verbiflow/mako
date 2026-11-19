@@ -3,8 +3,8 @@ import { useLayoutEffect, useRef, type RefObject } from "react"
 /**
  * Rows that change place glide there instead of teleporting.
  *
- * Every rail row and header carries a `data-flip-key`. After each commit the
- * rows' positions are read once; a row whose place in the list moved since
+ * Every rail row and header carries a `data-flip-key`. After each commit that
+ * can have changed their order the rows' positions are read once; a row whose place in the list moved since
  * the previous commit is animated from where it was to where it is, over
  * transform only, so the main thread pays nothing while tokens land next
  * door. A row that was not there before arrives with the same short ease-out
@@ -25,6 +25,8 @@ import { useLayoutEffect, useRef, type RefObject } from "react"
 const FLIP = "rail-flip"
 const MOVE_MS = 220
 const ENTER_MS = 160
+/** Past a folder's fold and a row's glide: when what a commit started has come to rest. */
+const SETTLE_MS = 400
 /** How far outside the scroller a row may sit and still be worth moving. */
 const NEAR_PX = 80
 
@@ -62,25 +64,51 @@ function measure(root: HTMLElement, nodes: HTMLElement[]) {
   return { bounds, origin, tops }
 }
 
+interface Places {
+  scene: string
+  order: string
+  tops: Map<string, number>
+}
+
+/**
+ * Reads the rows' order and places as they stand now, for the next commit that moves one to start from. Not while a
+ * row glides: its place would be read mid-way.
+ */
+function notePlaces(root: HTMLElement, previous: { current: Places | null }): void {
+  const held = previous.current
+  if (!held) return
+  const nodes = [...root.querySelectorAll<HTMLElement>("[data-flip-key]")]
+  if (nodes.some((node) => node.getAnimations().some((running) => running.id === FLIP))) return
+  previous.current = { scene: held.scene, order: nodes.map((node) => node.dataset["flipKey"] ?? "").join("\n"), tops: measure(root, nodes).tops }
+}
+
 /**
  * Most commits (a selection, a status pip, the minute timer) leave every
- * row where it was. Reading each row's rectangle forces layout inside the
- * commit, so those commits only note the order, and the places are read
- * again when the frame is idle, ready for the next commit that moves a row.
+ * row where it was. `order` is the caller's word on that, whatever it draws
+ * its rows from: one value while nothing that places a row has changed, and
+ * the page is read only on a commit that brings a new one. Of those, most still leave the rows in
+ * order. Reading each row's rectangle forces layout inside the commit, so
+ * they only note the order, and the places are read again when the frame is
+ * idle, ready for the next commit that moves a row. They're read once more
+ * when what the commit started has settled (`SETTLE_MS`): a folder folding
+ * away moves every row under it and takes its own rows out of the page
+ * without another commit here, and places read before that would send those
+ * rows gliding the next time anything moved. A commit that brings no new
+ * `order` reads nothing itself, and asks for the same idle reading.
  */
-export function useRowFlip(
+export function useRowFlip<Order>(
   scroller: RefObject<HTMLElement | null>,
-  scene: string
+  scene: string,
+  order: Order
 ): void {
-  const previous = useRef<{
-    scene: string
-    order: string
-    tops: Map<string, number>
-  } | null>(null)
+  const previous = useRef<Places | null>(null)
   const refresh = useRef<number | null>(null)
+  const settle = useRef<number | undefined>(undefined)
   useLayoutEffect(() => {
     const root = scroller.current
     if (!root) return
+    window.clearTimeout(settle.current)
+    settle.current = window.setTimeout(() => notePlaces(root, previous), SETTLE_MS)
     const nodes = [...root.querySelectorAll<HTMLElement>("[data-flip-key]")]
     const order = nodes.map((node) => node.dataset["flipKey"] ?? "").join("\n")
     if (refresh.current !== null) {
@@ -119,7 +147,8 @@ export function useRowFlip(
       if (now === undefined) continue
       const was = before.tops.get(key)
       if (was === undefined) {
-        if (near(now))
+        // A folder opening brings its rows back as it unfolds: they come in with the fold, not each on its own.
+        if (near(now) && !node.closest("[data-folding]"))
           node.animate(
             [
               { opacity: 0, transform: "translateY(4px)" },
@@ -136,10 +165,19 @@ export function useRowFlip(
         { id: FLIP, duration: MOVE_MS, easing: easing() }
       )
     }
+  }, [scroller, scene, order])
+  useLayoutEffect(() => {
+    const root = scroller.current
+    if (!root || refresh.current !== null) return
+    refresh.current = whenIdle(() => {
+      refresh.current = null
+      notePlaces(root, previous)
+    })
   })
   useLayoutEffect(
     () => () => {
       if (refresh.current !== null) cancelIdle(refresh.current)
+      window.clearTimeout(settle.current)
     },
     []
   )
