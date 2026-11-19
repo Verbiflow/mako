@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises"
 import { basename, join, relative, resolve, sep } from "node:path"
 import { z } from "zod"
 import { MERGE_METHODS, PULL_REQUEST_WRITING, type MergeMethod } from "../contracts/git-actions.js"
-import { mergePullRequest, openedSentence, openPullRequest, pullRequestReport, rerunFailedChecks, type PersonOf, type PullRequestDraft, type PullRequestReport } from "./pull-requests.js"
+import { mergePullRequest, namedLog, openedSentence, openPullRequest, pullRequestByNumber, pullRequestReport, rerunFailedChecks, type PersonOf, type PullRequestDraft, type PullRequestReport } from "./pull-requests.js"
 import { authorWords, MAKO_GITHUB_APP } from "../contracts/github-person.js"
 import { PULL_REQUESTS_AS, PULL_REQUESTS_FALLBACK_SENTENCE, type PullRequestsAs } from "../contracts/github-authorship.js"
 import { MACHINE_IDENTITY_DIR } from "../contracts/machine-agent.js"
@@ -52,8 +52,21 @@ export async function machinePullRequestsAs(dir = MACHINE_IDENTITY_DIR): Promise
   return PULL_REQUESTS_AS.find((value) => value === said)
 }
 
+/** What `pull_request_status` reads: this branch's pull request, or another of its repository by number, or one job's or run's log. */
+export interface StatusOptions {
+  logs?: boolean
+  repository?: string
+  checks?: "all"
+  /** Another pull request of the same repository, read only. */
+  number?: number
+  /** One GitHub Actions job's log, by the id its check's link ends with. */
+  job?: number
+  /** One GitHub Actions run's failed log. */
+  run?: number
+}
+
 export interface PullRequestTools {
-  status(conversationId: string, options?: { logs?: boolean; repository?: string }): Promise<string>
+  status(conversationId: string, options?: StatusOptions): Promise<string>
   open(conversationId: string, draft: PullRequestDraft & { repository?: string }): Promise<string>
   merge(conversationId: string, options?: { method?: MergeMethod; repository?: string; as?: "app" }): Promise<string>
   rerun(conversationId: string, options?: { repository?: string }): Promise<string>
@@ -99,7 +112,7 @@ function standing(report: PullRequestReport): string {
 const GITHUB_POLLING = "Use this and waitingOn, so Mako wakes you, instead of gh --watch. If you must poll gh yourself, no faster than once per 60 seconds per repository, reusing the answer, with no polling loop of your own; a state-changing operation may have one readback. On a secondary 403 or 429, stop GitHub requests across your work until Retry-After or the rate-limit reset allows them (at least 60 seconds without a header, longer after repeated limits). Fetch a terminal failure's log once."
 
 export function pullRequestTools(deps: Deps): PullRequestTools {
-  const report = (repository: ReachableRepository, logs = false) => pullRequestReport(deps.git, repository.root, { startedFrom: repository.startedFrom, logs })
+  const report = (repository: ReachableRepository, logs = false, checks?: "all") => pullRequestReport(deps.git, repository.root, { startedFrom: repository.startedFrom, logs, checks })
   const toldFallback = new Set<string>()
   /** The fallback sentence for a Thread's first pull request that went as the App only for want of a token; empty after. */
   const fallbackNote = async (conversationId: string): Promise<string> => {
@@ -135,15 +148,23 @@ export function pullRequestTools(deps: Deps): PullRequestTools {
       : `None of this project's repositories has an open pull request:\n${lines}`)
   }
   return {
-    async status(conversationId, { logs = false, repository } = {}) {
+    async status(conversationId, { logs = false, repository, checks, number, job, run } = {}) {
       const place = await deps.place(conversationId)
+      if (number !== undefined || job !== undefined || run !== undefined) {
+        const one = meant(place, repository)
+        if (!one) throw new Error(`${place.folder} holds several repositories: pass repository to say whose ${number !== undefined ? "pull request" : "log"} to read. Pass one of: ${place.repositories.map((each) => each.name).join(", ")}.`)
+        const named = place.repositories.length > 1 ? { repository: one.name } : {}
+        const log = job !== undefined ? await namedLog(one.root, { job }) : run !== undefined ? await namedLog(one.root, { run }) : undefined
+        if (number === undefined) return toolText({ ...named, ...log })
+        return toolText({ ...named, ...await pullRequestByNumber(one.root, number, { logs: logs && !log, checks }), ...log && { log } })
+      }
       const one = meant(place, repository)
-      if (one && place.repositories.length === 1) return toolText(await report(one, logs))
+      if (one && place.repositories.length === 1) return toolText(await report(one, logs, checks))
       if (one) {
         const others = place.repositories.filter((other) => other !== one).map((other) => other.name)
-        return toolText({ repository: one.name, ...await report(one, logs), otherRepositories: others })
+        return toolText({ repository: one.name, ...await report(one, logs, checks), otherRepositories: others })
       }
-      const reports = await Promise.all(place.repositories.map(async (each) => ({ repository: each.name, ...await report(each, logs) })))
+      const reports = await Promise.all(place.repositories.map(async (each) => ({ repository: each.name, ...await report(each, logs, checks) })))
       return toolText({ projectFolder: place.folder, repositories: reports })
     },
     async open(conversationId, { repository, ...draft }) {
@@ -227,14 +248,18 @@ export function registerPullRequestTools(server: McpServer, tools: PullRequestTo
     "pull_request_status",
     {
       description:
-        `Call before opening, updating or merging this branch's pull request, and when the user asks about its checks or reviews. Reads the pull request of the branch this Session edits on: each check with its state and link, reviews, unresolved review comments by file and line, whether GitHub would merge it, and with logs: true the end of each failed GitHub Actions job's output. With none open, says what opening one would do: the base it targets, the commits it carries, the repository's pull request template, and what's in the way. ${ONE_PER_REPOSITORY} in the project folder itself it reports every repository, each under its name. Changes nothing. ${GITHUB_POLLING}`,
+        `Call before opening, updating or merging this branch's pull request, and when the user asks about its checks or reviews. Reads the pull request of the branch this Session edits on: check counts by state, each check not passed or skipped with its link, reviews, unresolved review comments by file and line, whether GitHub would merge it, and with logs: true the end of each failed GitHub Actions job's output. With none open, what opening one would do: its base and commits, the repository's PR template, and what's in the way. With number, reads another pull request of the same repository the same way, such as a Fin's, instead of \`gh pr view\` or \`gh api .../pulls/<n>\`. With job or run, the end of that GitHub Actions job's or run's log, instead of \`gh run view\` or \`gh api .../actions/jobs/<id>/logs\`; a check's link ends with them (\`.../actions/runs/<run>/job/<job>\`). ${ONE_PER_REPOSITORY} in the project folder itself it reports every repository, each under its name. Changes nothing. ${GITHUB_POLLING}`,
       inputSchema: z.object({
         logs: z.boolean().optional().describe("Include the end of each failed GitHub Actions job's log."),
+        checks: z.literal("all").optional().describe("List every check, passed ones too."),
+        number: z.number().int().positive().optional().describe("Another pull request of this repository to read, by its number; this branch's own when left out."),
+        job: z.number().int().positive().optional().describe("A GitHub Actions job of this repository whose log to read: the last number of its check's link."),
+        run: z.number().int().positive().optional().describe("A GitHub Actions run of this repository whose failed jobs' log to read."),
         repository: REPOSITORY,
       }).strict(),
       annotations: { readOnlyHint: true, openWorldHint: true },
     },
-    ({ logs, repository }) => reply(() => tools.status(conversationId(), { logs, repository }))
+    ({ logs, checks, number, job, run, repository }) => reply(() => tools.status(conversationId(), { logs, checks, number, job, run, repository }))
   )
   server.registerTool(
     "pull_request_open",

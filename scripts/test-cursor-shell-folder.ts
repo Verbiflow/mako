@@ -77,7 +77,7 @@ try {
     assert.equal(denied.code, 1, `${shell}: a denied command fails`)
     const warned = await run(shell, [...args, "lsof -i :1 ; echo it-ran"], workspace)
     assert.ok(warned.stdout.includes("it-ran"), `${shell}: a warned command runs`)
-    assert.match(warned.stderr, /port_holder names who holds a port/, `${shell}: and the agent reads the note`)
+    assert.match(warned.stderr, /Call `port_holder\(\{"port":1\}\)` instead: it names who holds the port/, `${shell}: and the agent reads the note, naming the call to make`)
     const plain = await run(shell, [...args, "echo plain"], workspace)
     assert.ok(plain.stdout.includes("plain") && !plain.stderr.trim(), `${shell}: an ordinary command is untouched`)
   }

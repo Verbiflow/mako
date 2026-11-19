@@ -462,7 +462,8 @@ function toCheck(raw: RawCheck): CheckSummary {
   ) {
     return { name, state: "running", url }
   }
-  if (verdict === "SUCCESS" || verdict === "NEUTRAL" || verdict === "SKIPPED") {
+  if (verdict === "SKIPPED") return { name, state: "passed", skipped: true, url }
+  if (verdict === "SUCCESS" || verdict === "NEUTRAL") {
     return { name, state: "passed", url }
   }
   if (verdict === "FAILURE" || verdict === "ERROR" || verdict === "TIMED_OUT") {
@@ -532,6 +533,19 @@ export async function pullForBranch(cwd: string): Promise<PullRequest | null> {
     parseRawPull
   )
   return raw ? toPull(raw) : null
+}
+
+/**
+ * A pull request of the folder's repository by its number, whatever branch it's on, with its head commit; null when
+ * the repository has none of that number. Read only.
+ */
+export async function pullByNumber(cwd: string, number: number): Promise<(PullRequest & { headCommit?: string }) | null> {
+  const raw = await ghJson(cwd, ["pr", "view", String(number), "--json", `${PULL_FIELDS},headRefOid`], (value) => {
+    const pull = parseRawPull(value)
+    return pull && { pull, head: isJsonObject(value) ? stringValue(value.headRefOid) : undefined }
+  })
+  if (!raw) return null
+  return { ...toPull(raw.pull), ...(raw.head && { headCommit: raw.head }) }
 }
 
 export async function listPulls(
@@ -994,7 +1008,17 @@ export async function failedRuns(cwd: string, branch: string, commit: string): P
 
 /** What a failed run's failed steps printed, as `job  step  line`; the last `lines` only. */
 export async function failedRunLog(cwd: string, id: number, lines: number): Promise<string> {
-  const log = await gh(cwd, ["run", "view", String(id), "--log-failed"]).catch((cause) => { throw ghFailure(cause) })
+  return logTail(await gh(cwd, ["run", "view", String(id), "--log-failed"]).catch((cause) => { throw ghFailure(cause) }), lines)
+}
+
+/** What one job printed, as `job  step  line`: its failed steps, or all of it when none failed; the last `lines` only. */
+export async function jobLog(cwd: string, job: number, lines: number): Promise<string> {
+  const read = (which: "--log-failed" | "--log") => gh(cwd, ["run", "view", "--job", String(job), which]).catch((cause) => { throw ghFailure(cause) })
+  const failed = await read("--log-failed")
+  return logTail(failed.trim() ? failed : await read("--log"), lines)
+}
+
+function logTail(log: string, lines: number): string {
   // Each line is "job\tstep\ttimestamp text"; the timestamp says nothing a reader needs.
   const rows = log.split("\n").filter(Boolean).map((line) => line.replace(/\t\uFEFF?\d{4}-\d\d-\d\dT[\d:.]+Z /, "\t"))
   return rows.slice(-lines).join("\n")

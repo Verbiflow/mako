@@ -7,6 +7,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { callGateAnswer, HookCall } from "@mako/host/harnesses/call-gate"
+import { CallNotes } from "@mako/host/harnesses/call-notes"
 import { GROK_CALL_HOOKS } from "@mako/host/harnesses/grok/call-hooks"
 import { prepareDevinMcp } from "@mako/host/harnesses/devin/session-mcp"
 import { codexCallsConfig } from "@mako/host/harnesses/codex/routing"
@@ -55,7 +56,17 @@ const CASES: Case[] = [
   { name: "gh pr merge", thread: inWorktree, command: "gh pr merge 297 --squash", cwd: worktree, route: "deny", rule: "gh-pr-merge" },
   { name: "gh pr checks", thread: inWorktree, command: "gh pr checks", cwd: worktree, route: "warn", rule: "gh-pr-status" },
   { name: "gh pr checks --watch", thread: inWorktree, command: "gh pr checks --watch --interval 30", cwd: worktree, route: "warn", rule: "gh-watch" },
-  { name: "a failed run's log", thread: inWorktree, command: "gh run view 123 --log-failed | tail -50", cwd: worktree, route: "warn", rule: "gh-pr-status" },
+  { name: "a failed run's log", thread: inWorktree, command: "gh run view 123 --log-failed | tail -50", cwd: worktree, route: "warn", rule: "gh-run-view" },
+  { name: "another PR by number", thread: inWorktree, command: "gh pr view 926 --json headRefOid,statusCheckRollup", cwd: worktree, route: "warn", rule: "gh-pr-status" },
+  { name: "a PR's REST reading", thread: inWorktree, command: "gh api repos/Verbiflow/mako/pulls/838 --jq .head.sha", cwd: worktree, route: "warn", rule: "gh-api-pull-request" },
+  { name: "a job's log over REST", thread: inWorktree, command: "gh api repos/Verbiflow/mako/actions/jobs/5512/logs | tail -80", cwd: worktree, route: "warn", rule: "gh-api-pull-request" },
+  { name: "a review comment written over REST", thread: inWorktree, command: "gh api -X POST repos/o/r/pulls/12/comments -f body=x", cwd: worktree, route: "allow" },
+  { name: "a field sent over REST", thread: inWorktree, command: "gh api repos/o/r/pulls/12 -f state=closed", cwd: worktree, route: "allow" },
+  { name: "GraphQL", thread: inWorktree, command: "gh api graphql -f query='{ viewer { login } }'", cwd: worktree, route: "allow" },
+  { name: "an issue over REST", thread: inWorktree, command: "gh api repos/o/r/issues/12", cwd: worktree, route: "allow" },
+  { name: "review bodies, which pull_request_status doesn't return", thread: inWorktree, command: "gh api repos/o/r/pulls/12/reviews --jq '.[-1].body'", cwd: worktree, route: "allow" },
+  { name: "a pull request's files", thread: inWorktree, command: "gh api repos/o/r/pulls/12/files", cwd: worktree, route: "allow" },
+  { name: "runs listed", thread: inWorktree, command: "gh run list --branch mako/x --limit 5", cwd: worktree, route: "warn", rule: "gh-run-list" },
   { name: "reading an issue", thread: inWorktree, command: "gh issue view 12", cwd: worktree, route: "allow" },
   { name: "a PR in a repository elsewhere", thread: inWorktree, command: "cd /tmp/other && gh pr create --fill", cwd: worktree, route: "allow" },
   // the app
@@ -122,6 +133,73 @@ assert.equal(routeNativeTool(inMain, { tool: "EnterWorktree" }).kind, "deny")
 assert.equal(routeNativeTool(inMain, { tool: "mcp__claude-in-chrome__navigate", server: "claude-in-chrome" }).kind, "warn", "a browser beside mako-computer is a warn: its misses come after js fails")
 assert.equal(routeNativeTool(noRecipe, { tool: "mcp__claude-in-chrome__navigate", server: "claude-in-chrome" }).kind, "allow", "without Mako's computer server the person's browser tools stay")
 assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: "linear" }).kind, "allow")
+
+// A note for a call that clearly fits names the exact Mako call to make, arguments and all.
+{
+  const message = (command: string, thread: CallThread = inWorktree) => {
+    const route = routeShellCall(thread, { command, cwd: worktree }, (tool) => `mcp__mako__${tool}`)
+    assert.equal(route.kind, "warn", command)
+    return route.kind === "warn" ? route.message : ""
+  }
+  assert.match(message("gh pr checks"), /^Call `mcp__mako__pull_request_status\(\{\}\)` instead/)
+  assert.match(message("gh pr checks 926 --repo Verbiflow/mako | awk '{print $2}' | sort | uniq -c"), /`mcp__mako__pull_request_status\(\{"number":926\}\)`/)
+  assert.match(message("gh pr view https://github.com/Verbiflow/mako/pull/838 --json state"), /`mcp__mako__pull_request_status\(\{"number":838\}\)`/)
+  assert.match(message("gh api repos/Verbiflow/mako/pulls/838"), /`mcp__mako__pull_request_status\(\{"number":838\}\)`/)
+  assert.match(message("gh api repos/Verbiflow/mako/actions/jobs/5512/logs"), /`mcp__mako__pull_request_status\(\{"job":5512\}\)`/)
+  assert.match(message(`for j in 1 2; do gh api "repos/Verbiflow/mako/actions/jobs/$j/logs" 2>/dev/null | tail -40; done`), /`mcp__mako__pull_request_status\(\{"job":"<job id in \$j>"\}\)`/, "an id the shell fills in is named as a placeholder")
+  assert.match(message("gh api -H 'Accept: application/vnd.github+json' repos/o/r/actions/runs/77/jobs"), /`mcp__mako__pull_request_status\(\{"run":77\}\)`/)
+  assert.match(message("gh run view 991 --log-failed"), /`mcp__mako__pull_request_status\(\{"run":991\}\)`/)
+  assert.match(message("gh run view --job 5512 --log"), /`mcp__mako__pull_request_status\(\{"job":5512\}\)`/)
+  assert.match(message("gh pr checks 926 --watch"), /`mcp__mako__wait\(\{"on":\[\{"pull":"<owner\/name>#926","until":"checks"\}\]\}\)`/)
+  assert.match(message(`gh pr create --title "Fix login" --body "Why" --base release`), /`mcp__mako__pull_request_open\(\{"title":"Fix login","body":"Why","base":"release"\}\)`/)
+  assert.match(message(`gh pr edit --title "Fix login"`), /`mcp__mako__pull_request_open\(\{"title":"Fix login"\}\)`/, "an edit names only what it changes: a placeholder body would be written as the body")
+  assert.doesNotMatch(message("gh pr edit 926 --add-label bug"), /<title>|\(\{/, "an edit of neither title nor body names no call to copy, so no placeholder title is written")
+  assert.match(message("gh pr ready"), /mcp__mako__pull_request_open updates this branch's own pull request's title and body/)
+  assert.doesNotMatch(message(`gh pr edit 926 --title "Fix login"`), /\(\{/, "another pull request by number isn't the one pull_request_open edits")
+  assert.match(message("nohup npm run dev > /tmp/dev.log 2>&1 &"), /^Call `mcp__mako__app_start\(\{\}\)` instead/)
+  assert.match(message("curl -s localhost:20540/health"), /`mcp__mako__app_status\(\{\}\)`/)
+  assert.match(message("lsof -nP -iTCP:20930 -sTCP:LISTEN"), /^Call `mcp__mako__port_holder\(\{"port":20930\}\)` instead/)
+  assert.match(message("kill $(lsof -ti :3000)"), /`mcp__mako__port_holder\(\{"port":3000\}\)`/)
+  assert.match(message("sleep 600"), /`mcp__mako__wait\(\{"seconds":600\}\)`/)
+  assert.match(message("until gh pr checks 926 | grep -q pass; do sleep 30; done"), /`mcp__mako__wait\(\{"on":\[\{"pull":"<owner\/name>#926","until":"checks"\}\]\}\)`/)
+  assert.match(message("while ! curl -s localhost:3000; do sleep 2; done"), /`mcp__mako__app_status\(\{\}\)`/)
+}
+
+// Each rule's note is given once per conversation; a refusal every time.
+{
+  const notes = new CallNotes()
+  const Answer = z.object({ hookSpecificOutput: z.object({ permissionDecision: z.string().optional(), additionalContext: z.string().optional() }) })
+  const claude = (conversation: string, command: string) => {
+    const hook: PreToolUseHookInput = { hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command }, tool_use_id: "u", session_id: "s", transcript_path: "/t", cwd: worktree }
+    const routed = claudeRoutedCall({ calls: () => inWorktree, teams: false, conversation, notes }, hook)
+    return routed && Answer.parse(routed).hookSpecificOutput
+  }
+  assert.match(claude("a", "gh pr checks 926")?.additionalContext ?? "", /pull_request_status/, "the first gh pr checks hears the note")
+  assert.equal(claude("a", "gh pr checks 927"), undefined, "the same rule again, even on another PR, is let go unremarked")
+  assert.equal(claude("a", "gh pr view 926"), undefined, "gh pr view is the same rule")
+  assert.match(claude("a", "lsof -i :3000")?.additionalContext ?? "", /port_holder/, "another rule's note is still given once")
+  assert.equal(claude("a", "lsof -i :3001"), undefined)
+  assert.match(claude("b", "gh pr checks")?.additionalContext ?? "", /pull_request_status/, "another conversation hears it")
+  for (let index = 0; index < 3; index += 1) assert.equal(claude("a", "gh pr merge --squash")?.permissionDecision, "deny", "a refusal is never held back")
+  notes.forget("a")
+  assert.match(claude("a", "gh pr checks")?.additionalContext ?? "", /pull_request_status/, "a conversation that forgot hears it again")
+
+  const gate = (conversation: string, event: "post" | "before", command: string) => callGateAnswer(event, HookCall.parse({ tool_name: "Bash", tool_input: { command } }), inWorktree, conversation, notes)
+  assert.match(JSON.stringify(gate("codex", "before", "sleep 120")), /wait/)
+  assert.deepEqual(gate("codex", "before", "sleep 300"), {}, "the gate gives a rule's note once too")
+  assert.deepEqual(gate("codex", "post", "sleep 300"), {})
+  assert.equal(Answer.parse(gate("codex", "before", "gh pr merge")).hookSpecificOutput.permissionDecision, "deny")
+  assert.equal(Answer.parse(gate("codex", "before", "gh pr merge")).hookSpecificOutput.permissionDecision, "deny", "and denies every time")
+  assert.match(JSON.stringify(callGateAnswer("before", HookCall.parse({ tool_name: "Bash", tool_input: { command: "sleep 300" } }), inWorktree, "codex")), /wait/, "without a ledger every note is given, as before")
+
+  const bounded = new CallNotes(2)
+  assert.equal(bounded.first("x", "r"), true)
+  assert.equal(bounded.first("y", "r"), true)
+  assert.equal(bounded.first("x", "r"), false, "x is the most recent now")
+  assert.equal(bounded.first("z", "r"), true)
+  assert.equal(bounded.first("y", "r"), true, "past its limit the conversation heard from least recently is forgotten")
+  assert.equal(bounded.first("x", "r"), true, "and so on")
+}
 
 // Claude's PreToolUse: a deny carries the message, a warn rides on an allowed call as context, and a spawn still goes to spawn routing.
 {
