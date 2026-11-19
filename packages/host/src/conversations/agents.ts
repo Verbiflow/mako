@@ -357,13 +357,13 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
+  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "leftSignInHold" | "turnCut" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
 > & Partial<Pick<LiveConversations, "waitChanged" | "expect">>
 
 /** What starting a Fin in the cloud asks of the account and this device (`AgentsDeps.cloudFins`). */
 export interface CloudFins {
-  /** The harnesses the cloud's machines run. */
-  harnesses(): string[]
+  /** The harnesses the cloud's machines run, as the cloud says. */
+  harnesses(): Promise<readonly string[]>
   /** The Fin's folder as a committed, pushed source (`captureFinSource`); throws, saying why, when it isn't one. */
   capture(folder: string): Promise<CommittedFinSource>
   reserve(start: CloudFinStart): Promise<CloudFinAnswer>
@@ -1194,7 +1194,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       const last = store.reportsOf(edge.child, 0).at(-1)
       const conversation = this.conversationOf(edge.child)
       // A Fin that finished is read in only when the last host left a message of it waiting, paused or running.
-      if ((last?.status !== "done" && last?.status !== "failed") || (conversation && this.deps.live.leftUnsettled(conversation))) this.resumePaused(edge)
+      // So is one holding work for a sign-in: its row reads it from its conversation, as waiting for an execution place.
+      if ((last?.status !== "done" && last?.status !== "failed") || (conversation && (this.deps.live.leftUnsettled(conversation) || this.deps.live.leftSignInHold(conversation)))) this.resumePaused(edge)
       // Whatever the last host left of it, a cut turn nothing picks up reaches its Apex.
       if (conversation) this.watchCut(conversation)
       // One at work as this host starts is watched from the last activity its journal kept: a turn hung across a
@@ -1537,9 +1538,14 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * The person archived a conversation's Thread: a Fin's work ends there, once.
-   * One at work is stopped as a stop would, in those words; one stopped
-   * already keeps its stop. A message to it is refused until it's restored.
+   * A conversation was archived. Once that leaves its Thread with no Session
+   * the person hasn't archived, the person archived the Thread: a Fin's work
+   * ends there, once. One at work is stopped as a stop would, in those words;
+   * one stopped already keeps its stop. A message to it is refused until it's
+   * restored. A Session archived while another of the Thread goes on (the one
+   * a move into its worktree forked from, or one the person archived alone)
+   * ends nothing: on 2026-11-18 four Fins' own `worktree_move` forks ended
+   * them "the person archived it".
    */
   async archived(conversation: string): Promise<boolean> {
     // Its own wait ends with it, a Fin's or not.
@@ -1547,6 +1553,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
     if (!edge) return false
+    const goesOn = this.conversationsOfThread(edge.child).find((other) => other !== conversation && !this.deps.archived?.(other))
+    if (goesOn) {
+      hostLog("agents", "a Session of a Fin's Thread was archived; another goes on", { op: edge.op, child: edge.child, archived: conversation, goesOn })
+      return false
+    }
     return this.end(edge, "the person archived it")
   }
 
@@ -1863,7 +1874,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
     const { target, where } = resolved
     const name = placeName(target)
-    const offers = cloud ? { harnesses: cloud.harnesses() } : await places.capabilities(target, where)
+    const offers = cloud ? { harnesses: await cloud.harnesses() } : await places.capabilities(target, where)
     if ("refused" in offers) return this.refuse(op, offers.refused, offers.why)
     const policy = this.deps.finPolicy?.()
     const followed = input.rule === undefined ? undefined : policy?.rules[input.rule - 1]
@@ -5211,7 +5222,9 @@ export class Agents implements AgentOperations, ConversationChildren {
    * stale (`AgentWakes.notice`), a stored report its Apex never heard.
    */
   private watchCut(conversation: string): void {
-    if (this.stopped) return
+    // Read from memory, or from its journal's summary: a host starting with a hundred Fins on disk read each in to learn it,
+    // and the residency budget had let most go again since `resumeInSlices` read them, so each came back on the loop.
+    if (this.stopped || !this.deps.live.turnCut(conversation)) return
     const snapshot = this.deps.live.snapshot(conversation)
     const last = snapshot?.requests.filter((request) => request.status !== "queued" && request.status !== "held" && request.status !== "canceled").at(-1)
     if (!snapshot || (last?.status !== "interrupted" && last?.status !== "uncertain") || !last.interruption || last.interruption.reason === "stopped" || last.interruption.reason === "steered") return

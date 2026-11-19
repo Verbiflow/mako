@@ -764,6 +764,9 @@ export function connectDaemonPort(
   return connectDaemonLink(portLink(port, MAX_RESPONSE_FRAME_BYTES), timeoutMs)
 }
 
+/** How late a request's timer fires before it's taken as fired after this thread was held, not on time. */
+const HELD_LATE_MS = 100
+
 async function connectDaemonLink(
   link: DaemonLink,
   timeoutMs: number
@@ -863,15 +866,33 @@ async function connectDaemonLink(
   const send = (frame: DaemonRequestFrame): void => {
     link.send(serializeDaemonFrame(frame))
   }
+  /**
+   * Request `id` is said to have timed out once the daemon has said nothing of it for `requestTimeout` of time this
+   * thread could hear it. A timer that fires `HELD_LATE_MS` or more late fired after this thread was held, and Node runs
+   * an overdue timer before it reads the link: an answer that came meanwhile is waiting there, unread. So the time the
+   * thread was held past the deadline is waited again, with the link read first. On the person's Mac, 110 of 218
+   * timeouts in 45 minutes were said within 50 ms of the host's loop coming free from a hold.
+   */
   const requestTimer = (
     id: number,
     reject: (error: Error) => void,
     requestTimeout = timeoutMs
-  ): ReturnType<typeof setTimeout> =>
-    setTimeout(() => {
-      if (!pending.delete(id)) return
+  ): ReturnType<typeof setTimeout> => {
+    let due = performance.now() + requestTimeout
+    const fire = () => {
+      const waiter = pending.get(id)
+      if (!waiter) return
+      const late = performance.now() - due
+      if (late >= HELD_LATE_MS) {
+        due = performance.now() + late
+        waiter.timer = setTimeout(fire, late)
+        return
+      }
+      pending.delete(id)
       reject(new Error("The sync daemon request timed out"))
-    }, requestTimeout)
+    }
+    return setTimeout(fire, requestTimeout)
+  }
 
   const requestPing = (): Promise<DaemonStats> =>
     new Promise((resolve, reject) => {
