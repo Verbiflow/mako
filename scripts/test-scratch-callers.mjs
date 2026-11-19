@@ -68,7 +68,7 @@ for (const cleanupFails of [false, true]) {
   await assert.rejects(run(
     () => { calls.push("builder"); throw undefined }, { execPath: "/fixture-only" }, (...parts) => parts.join("/"), "/fixture-only",
     { dispose: async () => { calls.push("scratch"); if (cleanupFails) throw cleanup } },
-    async () => ({ unregisterBundle: () => {} }), async () => { calls.push("prune") }, "/fixture-only/output", { warn: () => {} },
+    async () => ({ unregisterOutsideHost: () => {} }), async () => { calls.push("prune") }, "/fixture-only/output", { warn: () => {} },
   ), error => cleanupFails ? error instanceof AggregateError && error.errors[0] === undefined && error.errors[1] === cleanup : error === undefined)
   assert.deepEqual(calls, ["builder", "scratch", "prune"])
 }

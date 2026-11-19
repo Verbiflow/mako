@@ -335,8 +335,8 @@ try {
 } catch (error) { failed = true; primary = error } finally {
   try { await stageOwner.dispose() } catch (cleanup) { cleanupFailed = true; cleanupError = cleanup }
   // Every package used to stay in release/ for good; 72 of them filled 42 GB.
-  const { unregisterBundle } = await import("@mako/host/application/local-update-installer")
-  await pruneReleaseBuilds({ project, output, unregister: unregisterBundle }).catch((error) =>
+  const { unregisterOutsideHost } = await import("@mako/host/application/local-update-installer")
+  await pruneReleaseBuilds({ project, output, unregister: unregisterOutsideHost }).catch((error) =>
     console.warn(`Could not remove older packaged builds from release/: ${error instanceof Error ? error.message : error}`)
   )
 }
