@@ -36,6 +36,9 @@ export const STEPS = [
   [1, "npx tsx scripts/test-owned-files.ts"],
   [13, "npx tsx scripts/test-cloud-returns.ts"],
   [1, "npm run test:keep-awake"],
+  [4, "npm run test:flush-costs"],
+  [4, "npx tsx --tsconfig tsconfig.scripts.json scripts/test-host-boundaries.ts"],
+  [6, "npm run test:journal-writer"],
   // The renderer's and the live state's own suites, in Node without a window, and the web client's build.
   [4, "npm run build -w @mako/web-client"],
   // What the desk loads before it draws: no Office viewer, and within its byte budget (builds the renderer in memory).
@@ -244,7 +247,7 @@ export const STEPS = [
   // on main on a Mac before it came in, as its npm script runs it. Not yet here: test-thread-processes.ts (160 s, past
   // a shard's floor, to be split), the manual proofs (live harnesses, packaged builds, arguments), the *-ui suites of
   // those npm scripts, and the ones red on main (test-control-recording-failures.ts, test-update-performance.ts, test-local-update-startup.ts,
-  // test-repository-discovery.ts, test-transcript-residency.ts).
+  // test-repository-discovery.ts).
   [2, "tsx scripts/test-acp-background.ts"],
   [2, "tsx scripts/test-acp-notifications.ts"],
   [7, "node scripts/test-acp-provider-turn.mjs"],
@@ -298,6 +301,7 @@ export const STEPS = [
   [4, "tsx scripts/test-process-group-held.ts"],
   [4, "tsx scripts/test-grok-agents.ts"],
   [2, "tsx scripts/test-grok-connection.ts"],
+  [2, "tsx scripts/test-grok-inspect-cache.ts"],
   [2, "tsx --tsconfig tsconfig.app.json scripts/test-grok-store.ts"],
   [11, "tsx scripts/test-harness-update-paths.ts"],
   [2, "tsx scripts/test-heap-watch.ts"],
@@ -360,15 +364,20 @@ export const STEPS = [
   [3, "tsx scripts/test-refreshed-fork.ts"],
   [2, "tsx scripts/test-release-timelines.ts"],
   [3, "node scripts/test-remove-fixture-desk.mjs"],
+  [1, "tsx --tsconfig tsconfig.app.json scripts/test-render-caches.ts"],
   [1, "tsx scripts/test-repeated-calls.ts"],
   [3, "tsx scripts/test-replay-setup-notices.ts"],
+  [1, "tsx --tsconfig tsconfig.app.json scripts/test-reveal-pace.ts"],
   [1, "tsx scripts/test-review-notes.ts"],
   [9, "node scripts/test-role-rules-window.mjs"],
   [1, "esbuild scripts/test-room-view.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-room-view.mjs --log-level=warning"],
   [4, "tsx scripts/test-roster-turn-ends.ts"],
+  [1, "tsx --tsconfig tsconfig.app.json scripts/test-row-heights.ts"],
   [1, "tsx scripts/test-run-output.ts"],
   [2, "tsx scripts/test-runtime-updates.ts"],
   // Every script that runs a harness gives it a scratch or sealed home; red on main until 2026-11-17.
+  // A moved Grok session's replayed context and summary name its new folder (relocateGrokSession).
+  [1, "tsx scripts/test-grok-retarget.ts"],
   [6, "tsx scripts/test-scratch-home.ts"],
   [1, "tsx scripts/test-session-usage.ts"],
   [1, "tsx scripts/test-shared-continuation-upgrade.ts"],
@@ -391,8 +400,12 @@ export const STEPS = [
   [1, "tsx scripts/test-thread-store-read-only.ts"],
   [2, "tsx scripts/test-thread-store.ts"],
   [3, "tsx scripts/test-trace-history-holds.ts"],
+  [3, "tsx scripts/test-transcript-residency.ts"],
+  // Restoring a released live turn recaptures the window; what the original capture never held stays refused.
+  [3, "tsx scripts/test-released-live-turn.ts"],
   [1, "tsx scripts/test-transport-agreement.ts"],
   [1, "node scripts/test-ui-feedback.mjs"],
+  [2, "tsx --tsconfig tsconfig.app.json scripts/test-warm-open.ts"],
   [2, "node scripts/test-web-proxy.mjs"],
   [2, "tsx scripts/test-window-shutdown.ts"],
   [1, "tsx scripts/test-window-tree.ts"],

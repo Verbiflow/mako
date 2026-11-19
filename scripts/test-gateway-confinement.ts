@@ -103,7 +103,7 @@ try {
   {
     const methods = new HostMethods({ fixtureDesk: false, route: async () => ({ handled: false }), presentHistory: (value) => value, breadcrumb: () => {}, declaring: async () => {}, work: unwatchedWork })
     const ran: string[] = []
-    for (const channel of ["mako:thread-file", "mako:stage-file-path", "mako:resolve-turn-media", "mako:watch-file"] as const) {
+    for (const channel of ["mako:thread-file", "mako:stage-file", "mako:stage-file-part", "mako:stage-file-path", "mako:resolve-turn-media", "mako:watch-file"] as const) {
       assert.equal(GATEWAY_ALLOWED.has(channel), false, `${channel} isn't another device's call`)
       const refused = fromHostOperation(toHostOperation(channel, hostCallInput([key], false), { id: randomUUID(), target: { kind: "runtime", runtimeId: "laptop" }, actor: { kind: "client", client: "web", deviceId: "phone" }, correlationId: "c", attempt: 1 }))
       assert.ok(refused.kind === "refused" && refused.problem.type.endsWith("forbidden"), `${channel} is refused at the gateway`)

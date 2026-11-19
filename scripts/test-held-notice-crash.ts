@@ -4,6 +4,7 @@ import { spawn } from "node:child_process"
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { readFinReports } from "@mako/host/contracts/fin-reports"
 import { AgentsWorld } from "./lib/agents-world"
 
 /**
@@ -24,11 +25,12 @@ async function until(check: () => boolean, what: string): Promise<void> {
 
 /** A host whose first digest holding both dies at `when`, around its submit. */
 async function host(root: string, when: string): Promise<void> {
-  const w = new AgentsWorld({ root, script: (turn) => (turn.text.includes("You're fin:") ? REPORTED : "Noted.") })
+  // The Apex stays in its turn, so both wait for its end in one digest: an idle Apex would hear the first at once.
+  const w = new AgentsWorld({ root, script: (turn) => (turn.text.includes("You're fin:") ? REPORTED : turn.text.endsWith("Warm up.") ? turn.world.hold(turn.conversation).then(() => "Noted.") : "Noted.") })
   const apex = await w.apex("claude", "full")
   writeFileSync(join(root, "apex"), apex.conversation)
   w.say(apex.conversation, "Warm up.")
-  await w.settle()
+  await until(() => w.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.endsWith("Warm up.")), "the Apex at work")
   // The digest holding both: new in the queue, or one waiting there that took the other in.
   const dying = <A extends unknown[], R>(call: (...args: A) => R, text: (args: A) => string) => (...args: A): R => {
     const said = text(args)
@@ -71,7 +73,8 @@ else {
       await until(() => world.store.queuedSpawns().length === 0, "its row to leave the queue")
       await world.settle()
       assert.equal(told(), 1, `killed ${when} the digest was taken: it's explained once`)
-      assert.equal(world.prompts.filter((prompt) => prompt.conversation === apex && prompt.text.startsWith("[mako · from your Fins")).length, 1, "in the one digest that carried the report")
+      // The digest waited for the Apex's turn that the kill cut: it goes as its own or folded into the turn after it.
+      assert.equal(world.prompts.filter((prompt) => prompt.conversation === apex && readFinReports(prompt.text).reports.some((card) => card.name === "working")).length, 1, "in the one digest that carried the report")
     } finally {
       await w?.close()
       rmSync(root, { recursive: true, force: true })

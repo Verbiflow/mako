@@ -12,7 +12,7 @@ import { HostJobs } from "@mako/host/base/host-jobs"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
 import { openAttribution } from "@mako/host/attribution/index"
 import { sharedJournalFolder } from "@mako/host/attribution/shared-journal"
-import { partition, storedView, turnChanges } from "@mako/host/attribution/queries"
+import { changes, partition, storedView, threadSummary, threadTotals, turnChanges } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { nodeFileSystem } from "@mako/host/attribution/ports"
 import { contentRef } from "@mako/host/attribution/content"
@@ -131,6 +131,74 @@ test("the activity a gap's changes are attributed from reads the same on the jou
     store.close()
   } finally {
     await reader.close()
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+test("a Thread's changes made are summed from counts on the reader, as reading its whole history summed them", async () => {
+  const folder = scratch()
+  const now = Date.now()
+  const { store, refs } = journal(folder, now)
+  const reader = new JournalReader(store.path)
+  const whole = { activityOfThread: JournalStore.prototype.activityOfThread, entriesBy: JournalStore.prototype.entriesBy, footprint: JournalStore.prototype.footprint }
+  try {
+    const own = { certainty: "exact" as const, author: { thread: "t", session: "s", turn: "turn" }, effect: "modify" as const }
+    store.insertEntry({ at: now, changedAt: now, root: "r", path: "count.ts", kind: "modify", before: refs.oldOnly[0]!, after: refs.oldOnly[1]!, text: true, stored: true, observed: "event", author: own, settled: true })
+    store.saveActivity({ kind: "turn", id: "turn", session: "s", thread: "t", turn: "turn", checkout: folder, named: [], start: now, end: now + 1 })
+    const call = (id: string, thread: string, effects: StoredActivity["effects"]): StoredActivity => ({ kind: "call", id, session: "s", thread, turn: "turn", named: [], start: now, end: now + 1, effects })
+    store.saveActivity(call("c1", "t", [{ kind: "command", command: "ls" }, { kind: "read", path: "/x/command" }, { kind: "command", command: "echo '\"command\"'", cwd: folder, exitCode: 1 }]))
+    store.saveActivity(call("c2", "t", [{ kind: "modify", path: "/x/a.ts" }, { kind: "rename", from: "/x/command", to: "/x/b" }]))
+    store.saveActivity(call("c3", "t", undefined))
+    store.saveActivity(call("c4", "t", [{ kind: "command", command: "pwd", named: ["command"] }]))
+    store.saveActivity(call("c5", "another", [{ kind: "command", command: "theirs" }]))
+    const outside = (path: string, evidence: "strong" | "weak", turn: string, access: "read" | "write" = "write") =>
+      store.addFootprint({ thread: "t", session: "s", turn, path, access, evidence, at: now, secret: false })
+    outside("/out/a", "strong", "turn")
+    outside("/out/a", "strong", "turn", "read")
+    outside("/out/a", "weak", "later")
+    outside("/out/b", "weak", "turn")
+    outside("/out/c", "weak", "turn")
+    store.addFootprint({ thread: "another", session: "s2", turn: "turn", path: "/out/d", access: "write", evidence: "strong", at: now, secret: false })
+    store.saveTurnChanges(turnChanges(storedView(store), "t", "turn", "settled", 0), "s")
+
+    const expected = threadTotals(store.turnChangesOf("t"), changes(storedView(store), "t"))
+    assert.deepEqual([expected.commands, expected.outside, expected.files.changed], [3, { named: 1, maybe: 3 }, 1], "the fixture has commands, outside paths and a counted turn to sum")
+    assert.equal(store.commandsOf("t"), 3, "only effects that are commands count, not a path or an argument spelled like one, nor another Thread's")
+    assert.deepEqual(store.outsideCounts("t"), { named: 1, maybe: 3 }, "each path once per evidence, however many turns and accesses hold it")
+    assert.deepEqual([store.commandsOf("nobody"), store.outsideCounts("nobody")], [0, { named: 0, maybe: 0 }])
+    assert.deepEqual(threadSummary(store, "t"), expected)
+    for (const read of ["activityOfThread", "entriesBy", "footprint"] as const) JournalStore.prototype[read] = () => { throw new Error(`a Thread's whole ${read} must not be read for its counts`) }
+    assert.deepEqual(threadSummary(store, "t"), expected, "summed without the Thread's entries, calls or footprint rows")
+    assert.deepEqual(await reader.threadChanges("t"), expected, "and the same on the reader")
+    assert.deepEqual(await reader.threadChanges("nobody"), threadSummary(store, "nobody"))
+  } finally {
+    Object.assign(JournalStore.prototype, whole)
+    await reader.close()
+    store.close()
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
+
+test("a root's paths and where entries put files read the same narrow as whole", () => {
+  const folder = scratch()
+  const { store, refs } = journal(folder, Date.now())
+  try {
+    for (const path of ["src/z.ts", "a.ts", "src/deep/b.ts"]) store.saveStat("r", path, { dev: 1, ino: 2, size: 3, mode: 0o100644, mtimeNs: 4n, ctimeNs: 5n, ref: null, checkedNs: 6n })
+    store.saveStat("other", "elsewhere.ts", { dev: 1, ino: 2, size: 3, mode: 0o100644, mtimeNs: 4n, ctimeNs: 5n, ref: null, checkedNs: 6n })
+    const person = { certainty: "person" as const, via: "no-activity" as const }
+    const at = Date.now()
+    store.insertEntry({ at, changedAt: at, root: "r", path: "src/moved.ts", kind: "rename", from: "src/a.ts", before: refs.oldOnly[0]!, after: refs.oldOnly[0]!, text: true, stored: true, observed: "event", author: person, settled: true })
+    store.insertEntry({ at, changedAt: at, root: "other", path: "gone.ts", kind: "delete", before: refs.oldOnly[0]!, after: null, text: true, stored: true, observed: "event", author: person, settled: false })
+    assert.deepEqual(store.statPaths("r"), [...store.stats("r").keys()], "the same paths in the same order")
+    assert.equal(store.statPaths("r").length, 4)
+    assert.deepEqual(store.statPaths("nowhere"), [])
+    const narrow = (after: number, limit: number) => store.entries(after, limit).map((entry) => ({ seq: entry.seq, root: entry.root, path: entry.path, from: entry.from, kind: entry.kind }))
+    assert.deepEqual(store.entryPaths(0), narrow(0, 1000))
+    assert.equal(store.entryPaths(0).length, 5)
+    assert.deepEqual(store.entryPaths(2, 2), narrow(2, 2), "from where it left off, a page at a time")
+    assert.deepEqual(store.entryPaths(store.lastSeq()), [])
+  } finally {
+    store.close()
     rmSync(folder, { recursive: true, force: true })
   }
 })

@@ -24,6 +24,7 @@ export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" 
     available: () => claudeRuntime() !== null,
     configure: async (...args) =>
       (await import("./sdk-options.js")).claudeSdkOptions(...args),
+    loadSdk: async () => void await heavy.claudeAgentSdk.load("claude session"),
     query: async (input) => (await heavy.claudeAgentSdk.load("claude session")).query(input),
     prepareApprovals: input =>
       prepareClaudePermissionObserver({ ...input, root: approvalRoot(context), settings }),
@@ -39,6 +40,14 @@ export function createClaudeLiveDriver(context: Pick<HarnessContext, "dataRoot" 
     stop: () => {
       driver.stop?.()
       settings.close()
+    },
+    hostWarmup: {
+      via: "What a host's first Claude launch loads into the host: the settings reader's worker (which loads the Agent SDK to resolve Claude Code's settings), the Agent SDK's package, and the module that builds a session's options. A first launch took about 300 ms a later one doesn't, most of it these (2026-11-18).",
+      pieces: [
+        { name: "the settings reader's worker", load: async () => void await settings.warm() },
+        { name: "the Agent SDK", load: async () => void await heavy.claudeAgentSdk.load("a first launch, ahead") },
+        { name: "session options", load: async () => void await import("./sdk-options.js") },
+      ],
     },
     startPrefetch: {
       via: "The Claude Code build a session runs, in the SDK's stream-JSON mode, through `initialize`, with its binary read alongside: its first `initialize` on a copy took 3.5 s alone, 0.9 s so (2026-10-20); and the settings reader each start checks before it spawns, its SDK loaded.",

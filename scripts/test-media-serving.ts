@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises"
+import { copyFile, mkdir, mkdtemp, open, readFile, realpath, rename, rm, stat, symlink, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Git } from "@mako/git"
@@ -9,6 +9,7 @@ import { PAGE_FIT_SCRIPT, PAGE_HEIGHT_MESSAGE } from "@mako/host/contracts/page-
 import { filePolicyHeaders, fitPage, INERT_POLICY, PAGE_POLICY, SVG_POLICY } from "@mako/host/base/file-policy"
 import { ArtifactPreviews } from "@mako/host/workspaces/artifact-previews"
 import { FILE_PREVIEW_TTL_MS, fileIdentity, filePreviewUrl, verifyFilePreview } from "@mako/host/workspaces/file-previews"
+import { readSignedFile } from "@mako/host/workspaces/file-readers"
 import { fileResponse, localFile } from "@mako/host/workspaces/file-response"
 import { ConversationFiles } from "@mako/host/workspaces/files"
 import { mediaDimensions } from "@mako/host/workspaces/media-dimensions"
@@ -262,6 +263,34 @@ try {
     assert.equal(one, thumbnail)
     assert.equal(two, thumbnail)
     assert.equal(runs, 2, "a kept rendition runs no ffmpeg")
+    // A picture alone in the column draws the `inline` rendition, kept by what the picture holds: Mako's copies of
+    // one attachment (the staged file, the one a conversation keeps) share it, and a rewritten file gets its own.
+    const wide = join(root, "wide.png")
+    execFileSync(ffmpeg, ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=3840x2160", "-frames:v", "1", "-y", wide])
+    const inline = await renditions.rendition(wide, fileIdentity(await stat(wide)), "inline")
+    assert.deepEqual(await dimensionsOf(inline!, "image/png"), { width: 1440, height: 810 }, "sized for a picture's box, in its shape")
+    assert.equal(runs, 3)
+    const copy = join(root, "kept-copy-of-wide.png")
+    await copyFile(wide, copy)
+    const [first, second] = await Promise.all([wide, copy].map(async (path) => renditions.rendition(path, fileIdentity(await stat(path)), "inline")))
+    assert.deepEqual([first, second], [inline, inline], "a copy of the same picture draws the same rendition")
+    assert.equal(runs, 3, "and runs no ffmpeg")
+    assert.notEqual(await renditions.rendition(wide, fileIdentity(await stat(wide)), "thumbnail"), inline, "each size is its own file")
+    await writeFile(copy, await readFile(still))
+    assert.notEqual(await renditions.rendition(copy, fileIdentity(await stat(copy)), "inline"), inline, "a rewritten file gets a new one")
+    // Served by the signed URL of the file itself, asked for at that size; the bare URL is still the original.
+    const signedWide = filePreviewUrl(wide, fileIdentity(await stat(wide)))
+    const served = await readSignedFile(new Request(`${signedWide}?rendition=inline`), renditions)
+    assert.equal(served.status, 200)
+    assert.equal(Number(served.headers.get("content-length")), (await stat(inline!)).size, "the rendition's bytes, not the picture's")
+    await served.body?.cancel()
+    const original = await readSignedFile(new Request(signedWide), renditions)
+    assert.equal(Number(original.headers.get("content-length")), (await stat(wide)).size, "the lightbox's URL serves the original")
+    await original.body?.cancel()
+    const unknown = await readSignedFile(new Request(`${signedWide}?rendition=enormous`), renditions)
+    assert.equal(Number(unknown.headers.get("content-length")), (await stat(wide)).size, "a size nobody makes is the file")
+    await unknown.body?.cancel()
+    assert.equal((await readSignedFile(new Request(`${signedWide.replace(/\/[a-f0-9]{64}\//, `/${"0".repeat(64)}/`)}?rendition=inline`), renditions)).status, 404, "a URL this host didn't sign gets no rendition either")
     const none = new MediaRenditions({ folder: join(root, "none"), ffmpeg: () => { throw new Error("no ffmpeg") } })
     assert.equal(await none.rendition(clip, fileIdentity(await stat(clip)), "poster"), null)
     assert.equal(await renditions.rendition(join(root, "broken.mp4"), fileIdentity(await stat(join(root, "broken.mp4"))), "poster"), null)

@@ -10,7 +10,8 @@ import { useCopy } from "@/components/ui/use-copy"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import type { LiveRequest } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { acp, acpStore, useAcp } from "@/state/acp"
+import { acp, acpStore } from "@/state/acp"
+import { useAcpConversation } from "@/state/acp-state"
 import { continueTurn, holdUntil, sendTo } from "@/state/acp-queue"
 import { failureKey, noteFailureVisible } from "@/state/failure-visibility"
 import { remindAtReset, useLimitReset } from "@/state/limit-reset"
@@ -44,10 +45,7 @@ export function TurnError({ error, failure: failureKind }: { error: string; fail
   const [open, setOpen] = useState(false)
   const { liveId } = useTranscriptSource()
   useHarnessIdentity()
-  const harness = useAcp((state) => {
-    const conversation = liveId ? state.conversations[liveId] : undefined
-    return conversation?.kind === "live" ? conversation.session.harness : undefined
-  })
+  const harness = useAcpConversation(liveId, (conversation) => (conversation?.kind === "live" ? conversation.session.harness : undefined))
   const failure = describeProviderFailure(PROVIDER_FAILURE_KINDS.find(kind => kind === failureKind) ?? "unknown", harness ? harnessLabel(harness) : "The agent")
   const known = failure.kind !== "unknown"
   return (
@@ -102,23 +100,16 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
   compact?: boolean
 }) {
   useHarnessIdentity()
-  const harness = useAcp((state) => {
-    const conversation = state.conversations[conversationId]
-    return conversation?.kind === "live" ? conversation.session.harness : undefined
-  })
-  const compacted = useAcp((state) => {
-    const conversation = state.conversations[conversationId]
-    return conversation?.kind === "live" && (conversation.control?.actions?.some((action) =>
-      action.input.kind === "compact" && action.input.requestId === request.id && action.state.kind === "completed") ?? false)
-  })
-  const idle = useAcp((state) => {
-    const live = state.conversations[conversationId]
+  const harness = useAcpConversation(conversationId, (conversation) => (conversation?.kind === "live" ? conversation.session.harness : undefined))
+  const compacted = useAcpConversation(conversationId, (conversation) =>
+    conversation?.kind === "live" && (conversation.control?.actions?.some((action) =>
+      action.input.kind === "compact" && action.input.requestId === request.id && action.state.kind === "completed") ?? false))
+  const idle = useAcpConversation(conversationId, (live) => {
     return live?.kind === "live" && compactionAvailable(live.session, live.control?.actions ?? [],
       live.requests?.some((item) => item.status === "queued" || item.status === "dispatching") ?? false, live.control?.activeBindingId)
   })
   // Sent again already: a later request carries the same words, or a timed send waits for this one.
-  const followed = useAcp((state) => {
-    const live = state.conversations[conversationId]
+  const followed = useAcpConversation(conversationId, (live) => {
     if (live?.kind !== "live") return undefined
     const requests = live.requests ?? []
     const index = requests.findIndex((item) => item.id === request.id)
@@ -134,10 +125,7 @@ export function FailureRow({ conversationId, request, quoted = false, compact = 
   const recovery = requestRecovery(request, { provider, compacted, canCompact: compactable, resetAt })
   const text = request.displayText ?? request.text
   // Which message it was, by its words; a continuation says Mako's words to the agent, so it is named by the turn it continued.
-  const quote = useAcp((state) => {
-    const live = state.conversations[conversationId]
-    return quoted && live?.kind === "live" ? turnWords(live.requests ?? [], request) : text
-  })
+  const quote = useAcpConversation(conversationId, (live) => (quoted && live?.kind === "live" ? turnWords(live.requests ?? [], request) : text))
   const { copy, copied } = useCopy(text)
   const [busy, setBusy] = useState<RecoveryAction["kind"] | null>(null)
   const [done, setDone] = useState<RecoveryAction["kind"] | null>(null)

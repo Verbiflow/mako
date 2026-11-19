@@ -20,6 +20,8 @@ export function openCodeProfileLoader(servers: OpenCodeServers, versions = new O
     label: "OpenCode",
     defaults: { work: [], none: "OpenCode's models are the person's own providers, so it starts on the model they configured." },
     transport: "sdk",
+    // The default model, and the providers behind the list, come from these and from plugins a server must load.
+    folder: { files: ["opencode.json", "opencode.jsonc", ".opencode/opencode.json", ".opencode/opencode.jsonc"] },
     cacheKey: (env) => {
       const configuration = JSON.stringify([env.XDG_DATA_HOME, env.XDG_CACHE_HOME, env.XDG_CONFIG_HOME, env.OPENCODE_CONFIG_DIR,
         env.OPENCODE_CONFIG, env.OPENCODE_CONFIG_CONTENT, env.OPENCODE_BIN_PATH, env.OPENCODE2_BIN_PATH])

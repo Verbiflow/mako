@@ -69,6 +69,11 @@ try {
     await waitFor(/reader available/, "what it prints is kept")
     const client = await connectDaemon(socket)
     await waitFor(/info  syncd client connected clients=1/, "a client is logged")
+    // The reader retires ten seconds after its last client leaves and ends its pass with it, and the pass runs below
+    // everything else: on a busy machine it had not written a line in those ten seconds. So the client stays until the
+    // pass has said it started, however long that takes it.
+    const [, pass] = await waitFor(/info  syncd backfill pass started pid=(\d+) heapMb=768/, "the backfill pass's start is logged")
+    await waitFor(new RegExp(`info  backfill started pid=${pass} ppid=${reader.pid} role=backfill`), "the pass logs its own start", 120_000)
     client.close()
     await waitFor(/info  syncd client left clients=0/, "a client leaving is logged")
     const { code } = await ended
@@ -76,9 +81,6 @@ try {
     const text = await logged()
     assert.match(text, /info  syncd retiring reason="no clients" clients=0 idleMs=10000/)
     assert.match(text, new RegExp(`info  syncd exited pid=${reader.pid} code=0 reason="retired: no clients"\\n`))
-    const [, pass] = /info  syncd backfill pass started pid=(\d+) heapMb=768/.exec(text) ?? []
-    assert.ok(pass, "the backfill pass's start is logged")
-    assert.match(text, new RegExp(`info  backfill started pid=${pass} ppid=${reader.pid} role=backfill`), "the pass logs its own start")
     assert.match(text, new RegExp(`syncd backfill pass ended pid=${pass} code=(0|-) signal=(-|SIGTERM) ms=\\d+`), "and how it ended")
     assert.match(text, /info  syncd memory rssMb=\d+ heapUsedMb=\d+/)
   }

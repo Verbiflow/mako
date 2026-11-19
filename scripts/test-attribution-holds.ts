@@ -287,6 +287,9 @@ async function letGoOfIdleRoots(): Promise<void> {
     }
     referenceCpu.push((await longestHold(() => inSlices(referenceWork(), SLICE_BUDGET_MS))).cpuMs)
     const atOnce = await longestHold(() => readAtOnce(clock.now() + 15 * DAY))
+    // The journal keeps each root's last change as it writes, and reads that. What is measured here is the one reading
+    // of a journal from before it did, entries and calls in slices: its note that the reading was made is taken away.
+    raw.exec("DELETE FROM meta WHERE key='recency'")
     const keptStep = await longestHold(() => inSlices(yardstick.recency(clock.now(), () => false), 0), STEP_CPU_FLOOR_MS)
     assert.equal(keptStep.value.worked.size, 0, "the no-idle yardstick skips the call pages too")
     keptStepCpu.push(keptStep.cpuMs)
@@ -298,6 +301,7 @@ async function letGoOfIdleRoots(): Promise<void> {
     assert.deepEqual(kept.value, [], "a root tracked a moment ago stays")
     // Fifteen days on, nothing changed there and nobody worked in or around it: let go.
     clock.advance(15 * DAY)
+    raw.exec("DELETE FROM meta WHERE key='recency'")
     const letGo = await longestHold(() => tracker.letGoIdle())
     assert.deepEqual(letGo.value, [folder], "the root idle past retention is let go, and only it")
     atOnceHolds.push(atOnce.holdMs)

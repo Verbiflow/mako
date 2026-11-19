@@ -3,7 +3,7 @@ import type { WorktreeRetentionSettings, WorktreeRetentionReport } from "../cont
 import type { MethodTable } from "../base/methods.js"
 import type { ThreadWorktreeService } from "./thread-worktrees.js"
 import type { GitDiff } from "../contracts/git-workspace-search.js"
-import type { ThreadWorktrees, WorktreeBranch, WorktreeBranchPull, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
+import type { ThreadWorktrees, WorktreeBranch, WorktreeBranchPull, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummariesHeld, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 
 interface PullLists {
   /** Open pull requests a new Thread can work on. */
@@ -29,8 +29,16 @@ export function declareWorktreeMethods(methods: MethodTable, worktrees: ThreadWo
   methods.handle("mako:worktree-branches", async (cwd: string): Promise<WorktreeBranch[]> =>
     (await worktrees?.branches(cwd)) ?? [])
   methods.handle("mako:worktree-pulls", (cwd: string): Promise<WorktreePull[] | null> => pulls.heads(cwd))
-  methods.handle("mako:worktree-summaries", async (): Promise<WorktreeSummary[]> =>
-    (await worktrees?.summaries(pulls.branches)) ?? [])
+  // Answers at once with what's held, and a pass reads behind it: a window never waits for Git. `form` is how the
+  // window takes what follows: `changes` for the summaries that changed, each as it's read; none for the whole list
+  // on every change, the only form a window of an earlier build knows, which also gets a plain list back. `why` is
+  // `focus` when the window asks because it came to the front: the worktrees it shows that no tree watch covers are
+  // read then, since nothing else says an editor changed a file in one.
+  methods.handle("mako:worktree-summaries", async (form?: "changes", why?: "focus"): Promise<WorktreeSummary[] | WorktreeSummariesHeld> => {
+    if (!worktrees) return form === "changes" ? { summaries: [], reading: [] } : []
+    const held = await worktrees.heldNow(pulls.branches, form === "changes" ? "changes" : "whole", why === "focus")
+    return form === "changes" ? held : held.summaries
+  })
   methods.handle("mako:worktree-skip", (conversationId: string): void => {
     worktrees?.skip(conversationId)
   })

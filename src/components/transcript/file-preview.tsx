@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useRef, useState, useContext } from
 import { ChevronDownIcon, ExpandIcon, RotateCwIcon } from "lucide-react"
 import { FileIcon } from "@/components/ui/file-icon"
 import { ExpandedFilePreview } from "@/components/viewer/expanded-file-preview"
-import { readTranscriptFile } from "@/state/transcript-media"
+import { heldTranscriptFile, readTranscriptFile } from "@/state/transcript-media"
 import { viewer } from "@/state/viewer"
 import { formatBytes } from "@/lib/attachments"
 import { filePreviewFormat } from "@mako/host/contracts/file-preview"
@@ -78,9 +78,15 @@ export function InlineFilePreview({
     file?: FileContents
     error?: string
   }>()
+  // A read this window already holds draws at once: a row scrolled back into view, a Thread opened again. A
+  // Retry or Refresh (`attempt`) asks the host again.
+  const held = useMemo(
+    () => (resolvedFile || attempt > 0 ? undefined : heldTranscriptFile({ path, liveId: context.liveId, threadPath: context.threadPath, purpose })),
+    [resolvedFile, attempt, path, context.liveId, context.threadPath, purpose]
+  )
   useEffect(() => {
     const element = host.current
-    if (!element || resolvedFile || loaded?.key === key) return
+    if (!element || resolvedFile || held || loaded?.key === key) return
     let current = true
     const read = () => {
         void readTranscriptFile({
@@ -88,7 +94,7 @@ export function InlineFilePreview({
           liveId: context.liveId,
           threadPath: context.threadPath,
           purpose,
-        }).then(
+        }, { fresh: attempt > 0 }).then(
           (file) => {
             if (current) setLoaded({ key, file })
           },
@@ -123,8 +129,8 @@ export function InlineFilePreview({
       current = false
       observer.disconnect()
     }
-  }, [path, context.liveId, context.threadPath, key, resolvedFile, galleryOpen, loaded?.key, purpose, tile?.kind])
-  const result = loaded?.key === key ? loaded : undefined
+  }, [path, context.liveId, context.threadPath, key, resolvedFile, held, attempt, galleryOpen, loaded?.key, purpose, tile?.kind])
+  const result = loaded?.key === key ? loaded : held ? { key, file: held, error: undefined } : undefined
   const file = resolvedFile ?? result?.file
   const collection = useAssetPreview(file, mode, result?.error)
   const enlarged = collection?.enlarged ?? localEnlarged

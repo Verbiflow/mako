@@ -80,6 +80,8 @@ const reads = [
   "mako:thread-app-marks",
   /** Connection-local sampling demand; replaying its generation cannot undo a newer demand. */
   "mako:thread-app-demand",
+  /** Connection-local too: whether the window shows, said again whenever it changes and on every new stream. */
+  "mako:window-shown",
   "mako:conversation-app-demand",
   "mako:conversation-app",
   /** Reads the app's processes and files; what it records of them only moves its own read point forward. */

@@ -2,8 +2,8 @@ import assert from "node:assert/strict"
 import { toHtml } from "hast-util-to-html"
 import { streamPieces, streamingMarkdown } from "../src/lib/streaming-markdown"
 import { parseProse } from "../src/lib/parsed-markdown"
-import { LIVE_FRAME_MS } from "@mako/host/contracts/live-conversations"
-import { STREAM_FRAME_MAX_MS, STREAM_FRAME_MS, StreamFrames, streamFrameMs, type StreamClock } from "../src/lib/stream-frames"
+import { LIVE_AHEAD_MS, LIVE_FRAME_MS } from "@mako/host/contracts/live-conversations"
+import { STREAM_FRAME_MAX_MS, STREAM_FRAME_MIN_MS, STREAM_FRAME_MS, StreamFrames, streamFrameMs, type StreamClock } from "../src/lib/stream-frames"
 
 // What a streaming answer draws: whole structure, never half of one.
 {
@@ -154,34 +154,49 @@ if (process.env.MAKO_STREAM_CORPUS) {
   frames.next("I")
   advance(0)
   assert.deepEqual(painted, [[0, "I"]], "the first token paints at once, not a frame later")
-  // A steady stream, a token every 20 ms: a paint every frame, each the latest text.
+  // A steady stream, a token every 4 ms: a paint every frame (two of the display's, for a piece this small), each the latest text.
   let text = "I"
-  for (let at = 20; at <= 200; at += 20) {
+  for (let at = 4; at <= 128; at += 4) {
     advance(at)
     text += ` t${at}`
     frames.next(text)
   }
   advance(400)
-  assert.deepEqual(painted.map(([at]) => at), [0, 50, 100, 150, 200, 250], "at most once a frame under a steady stream")
+  assert.deepEqual(painted.map(([at]) => at), [0, 32, 64, 96, 128, 160], "at most once a frame under a steady stream")
   assert.equal(painted.at(-1)?.[1], text, "and the last paint is the latest text")
+  assert.equal(frames.pending, false)
+  // A paint that parses a big piece waits by that piece's size, whatever the text's own length.
+  const big = new StreamFrames((shown) => painted.push([now, shown]), clock)
+  big.next("a", 1_500)
+  advance(400)
+  big.next("ab", 1_500)
+  assert.equal(big.pending, true)
+  big.next("abc", 1)
+  advance(449)
+  assert.notEqual(painted.at(-1)?.[1], "abc", "a pending paint keeps its time, whatever comes meanwhile")
+  advance(450)
+  assert.deepEqual(painted.at(-1), [450, "abc"], "1,500 characters to parse paint every 50 ms")
   // A pause, then the next burst: its first token paints at once again.
   frames.next(`${text} after a tool call`)
-  advance(400)
-  assert.deepEqual(painted.at(-1), [400, `${text} after a tool call`])
+  advance(600)
+  assert.deepEqual(painted.at(-1), [450, `${text} after a tool call`])
   // StrictMode's remount: the cleanup stops a pending paint, the effect runs again, and that paint comes.
   frames.next(`${text} more`)
   frames.stop()
   frames.next(`${text} more`)
-  advance(500)
-  assert.deepEqual(painted.at(-1), [450, `${text} more`], "a stop leaves nothing that looks pending")
+  advance(700)
+  assert.deepEqual(painted.at(-1), [600, `${text} more`], "a stop leaves nothing that looks pending")
   frames.next("settled")
   frames.stop()
   advance(1_000)
   assert.notEqual(painted.at(-1)?.[1], "settled", "a stopped paint never comes")
-  // A long piece is parsed again on every paint: it paints less often, never less than every STREAM_FRAME_MAX_MS.
-  assert.equal(streamFrameMs(500), STREAM_FRAME_MS)
-  assert.equal(streamFrameMs(9_000), STREAM_FRAME_MS)
-  assert.ok(streamFrameMs(16_000) > 80 && streamFrameMs(16_000) <= STREAM_FRAME_MAX_MS)
+  // A piece is parsed again on every paint: a small one paints each frame of the display, a long one less often, never
+  // less than every STREAM_FRAME_MAX_MS.
+  assert.equal(streamFrameMs(500), STREAM_FRAME_MIN_MS)
+  assert.equal(streamFrameMs(900), STREAM_FRAME_MIN_MS)
+  assert.equal(streamFrameMs(1_500), STREAM_FRAME_MS)
+  assert.equal(STREAM_FRAME_MIN_MS, 2 * LIVE_AHEAD_MS, "two of the frames text is said ahead on")
+  assert.ok(streamFrameMs(5_000) > 80 && streamFrameMs(5_000) <= STREAM_FRAME_MAX_MS)
   assert.equal(streamFrameMs(1_000_000), STREAM_FRAME_MAX_MS)
   // The host sends a stream's batches on this frame (`LIVE_FRAME_MS`): each one paints as it lands, none waits on a paint.
   assert.equal(STREAM_FRAME_MS, LIVE_FRAME_MS)
