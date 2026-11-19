@@ -161,7 +161,7 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
 
 function openSessionMemory(userRoot: string, ledger: SessionMemoryHost, readOnly: boolean, jobs: HostJobs, writer: string): SessionMemory | null {
   try {
-    const memory = new SessionMemory(sessionMemoryPath(userRoot), ledger, { readOnly, writer })
+    const memory = new SessionMemory(sessionMemoryPath(userRoot), ledger, { readOnly, writer, versionPerTurn: true })
     memory.startHeartbeat(jobs)
     return memory
   } catch (error) {

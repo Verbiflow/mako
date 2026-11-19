@@ -1,6 +1,7 @@
 import type { Git } from "@mako/git"
-import { createReadStream, readdirSync, realpathSync } from "node:fs"
-import { lstat, readdir, readFile } from "node:fs/promises"
+import { readdirSync, realpathSync } from "node:fs"
+import { lstat, readFile } from "node:fs/promises"
+import { physicalFileSystem } from "../base/physical-files.js"
 import { join, resolve } from "node:path"
 import { z } from "zod"
 import type { RootPath, TrackerChangeListener, TrackerEventSource, TrackerFileStat, TrackerFileSystem } from "@mako/protocol"
@@ -16,11 +17,17 @@ const Errno = z.object({ code: z.string() })
 /** Nothing there, or not a file or folder the path can reach. */
 const MISSING = new Set(["ENOENT", "ENOTDIR", "ELOOP"])
 
+/**
+ * The disk as it is: under Electron's Node, `node:fs` opens an `.asar` it meets as an archive, and one being written
+ * (another app's update staged in the temporary folder, a Mako build an agent was packaging) failed the whole read of
+ * a turn's footprint with "Invalid package" (17 times on 2026-11-18).
+ */
 export function nodeFileSystem(): TrackerFileSystem {
+  const disk = physicalFileSystem()
   return {
     async stat(path) {
       try {
-        const stat = await lstat(path, { bigint: true })
+        const stat = await (await disk).promises.lstat(path, { bigint: true })
         const kind: TrackerFileStat["kind"] = stat.isFile() ? "file" : stat.isDirectory() ? "directory" : stat.isSymbolicLink() ? "symlink" : "other"
         return { kind, dev: Number(stat.dev), ino: Number(stat.ino), size: Number(stat.size), mode: Number(stat.mode), mtimeNs: stat.mtimeNs, ctimeNs: stat.ctimeNs }
       } catch (error) {
@@ -30,20 +37,21 @@ export function nodeFileSystem(): TrackerFileSystem {
     },
     async read(path) {
       try {
-        return await readFile(path)
+        return await (await disk).promises.readFile(path)
       } catch (error) {
         const code = Errno.safeParse(error).data?.code ?? ""
         if (MISSING.has(code) || code === "EISDIR") return null
         throw error
       }
     },
-    stream: (path) => createReadStream(path, { highWaterMark: 1024 * 1024 }),
+    stream: (path) => streamOf(disk, path),
     async walk(root, skip) {
+      const files = (await disk).promises
       const out: RootPath[] = []
       const visit = async (folder: string, prefix: string) => {
         let entries
         try {
-          entries = await readdir(folder, { withFileTypes: true })
+          entries = await files.readdir(folder, { withFileTypes: true })
         } catch (error) {
           if (MISSING.has(Errno.safeParse(error).data?.code ?? "")) return
           throw error
@@ -59,6 +67,11 @@ export function nodeFileSystem(): TrackerFileSystem {
       return out
     },
   }
+}
+
+/** A file's pieces from the disk as it is, once the module that reads it is loaded. */
+async function* streamOf(disk: ReturnType<typeof physicalFileSystem>, path: string): AsyncGenerator<Uint8Array> {
+  for await (const piece of (await disk).createReadStream(path, { highWaterMark: 1024 * 1024 })) yield piece
 }
 
 /**

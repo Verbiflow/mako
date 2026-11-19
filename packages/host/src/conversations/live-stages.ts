@@ -27,3 +27,6 @@ export const observedDriverEvents = topic<LiveDriverEvent>("mako:live-driver-eve
 
 /** Each batch a flush made, as it is handed to whoever sends it on. */
 export const emittedBatches = topic<LiveBatch>("mako:live-batch-emitted")
+
+// What has no request to be a stage of (a steer, a Stop, an access change, an approval's answer, a wake) is said as a
+// step, on `mako:live-step` (`base/live-steps.ts`, which a harness's driver says its own round trips on too).

@@ -18,6 +18,7 @@ import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import { updateBinding } from "./live-sources.js"
 import { reconnectError } from "./live-transfers.js"
 import { WARM_FLOOR } from "./warm-limit.js"
+import { liveStep, stagedCall, stagedWait } from "../base/live-steps.js"
 
 export const PROVIDER_IDLE_MS = 10 * 60_000
 /** The idle providers kept warm where the host gives no number of its own (`Dependencies.warmLimit`): the rule's floor. */
@@ -447,10 +448,15 @@ export class LiveHibernation {
   wake(resident: Resident, ahead = false): Promise<void> {
     if (resident.waking) return resident.waking
     const hibernating = resident.hibernating
+    const conversation = resident.snapshot.session.id
+    liveStep(conversation, "wake", "begin")
     const operation = (async () => {
+      if (hibernating) liveStep(conversation, "hibernation ending", "begin")
       await hibernating
+      if (hibernating) liveStep(conversation, "hibernation ending", "end")
       await this.wakeNow(resident, ahead)
     })().finally(() => {
+      liveStep(conversation, "wake", "end")
       if (resident.waking === operation) {
         resident.waking = undefined
         this.access.drain(resident)
@@ -525,7 +531,7 @@ export class LiveHibernation {
     let startedSession: LiveSessionState | undefined
     try {
       const request = resident.snapshot.requests.find((request) => request.status === "queued")
-      if (!await this.access.reconcileCut(resident, request?.continues)) {
+      if (!await stagedWait(resident.snapshot.session.id, "cut reconciled", () => this.access.reconcileCut(resident, request?.continues))) {
         if (resident.generation === generation && !resident.closing && !resident.driver) {
           const completed = request && resident.snapshot.requests.find((candidate) => candidate.id === request.continues?.requestId)?.status === "completed"
           resident.snapshot = { ...resident.snapshot, session: { ...resident.snapshot.session, status: "ready", connection: "hibernated" },
@@ -538,7 +544,8 @@ export class LiveHibernation {
         }
         return
       }
-      const verdict = await dependencies.resumeVerdict?.(binding)
+      const resumeVerdict = dependencies.resumeVerdict
+      const verdict = await (resumeVerdict ? stagedWait(resident.snapshot.session.id, "resume verdict", () => resumeVerdict(binding)) : undefined)
       // Inspection is awaited: Stop, close, or a different binding may have won while it read the record.
       if (resident.generation !== generation || resident.closing || activeBinding(resident)?.id !== binding.id) return
       if (!this.access.moves.executes(resident))
@@ -593,10 +600,12 @@ export class LiveHibernation {
         )?.tuning ??
         resident.snapshot.session.settings ??
         binding.tuning
+      liveStep(resident.snapshot.session.id, "launch tools and environment", "begin")
       const conversationTools = await dependencies.tools?.(binding.id, resident.snapshot.session.id)
       const { title, cwd } = resident.snapshot.session
       const threadEnvironment = this.keptEnvironment(resident, binding.id) ?? await dependencies.threadEnvironment?.(resident.snapshot.session.id, title, cwd)
       noteStartedWith(resident, binding.id, cwd, title, threadEnvironment)
+      liveStep(resident.snapshot.session.id, "launch tools and environment", "end")
       // Close or an ownership move may have happened during asynchronous preparation.
       // Keep this check and start in the same event-loop turn.
       if (resident.generation !== generation || resident.closing) {
@@ -605,7 +614,7 @@ export class LiveHibernation {
         return
       }
       if (!this.access.moves.executes(resident)) throw new Error("Execution ownership changed while preparing native recovery.")
-      const session = await nativeStart(resident, driver, binding.id, () => driver.start(resident.snapshot.session.cwd, {
+      const session = await stagedCall(resident.snapshot.session.id, "driver.start", () => nativeStart(resident, driver, binding.id, () => driver.start(resident.snapshot.session.cwd, {
         unattended: dependencies.unattended,
         conversationId: binding.id,
         resume: binding.nativeId,
@@ -627,7 +636,7 @@ export class LiveHibernation {
         nativeRouting: launchRouting(dependencies, resident.snapshot.session.id, conversationTools),
         nativeCalls: launchCalls(dependencies, resident.snapshot.session.id, resident.snapshot.session.cwd, conversationTools, threadEnvironment),
         pinnedAccount: launchAccount(resident, binding.provider),
-      }))
+      })))
       startedSession = session
       if (resident.generation !== generation) {
         await driver.close(binding.id)
@@ -650,7 +659,7 @@ export class LiveHibernation {
         throw new Error(
           "The provider returned a different session while waking. The saved conversation was not replaced."
         )
-      await verifyRecoveredSession(binding, session, driver)
+      await stagedWait(resident.snapshot.session.id, "native verification", () => verifyRecoveredSession(binding, session, driver))
       if (
         modeId &&
         modeId !== session.currentMode &&
@@ -660,7 +669,7 @@ export class LiveHibernation {
           "The saved agent mode is no longer available after waking"
         )
       if (modeId && modeId !== session.currentMode)
-        await driver.setMode(binding.id, modeId)
+        await stagedCall(resident.snapshot.session.id, "driver.setMode", () => driver.setMode(binding.id, modeId))
       if (resident.generation !== generation) {
         await driver.close(binding.id)
         await revokeTools(dependencies, binding.id, resident.snapshot.session.id)

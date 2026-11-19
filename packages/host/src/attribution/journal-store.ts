@@ -1246,7 +1246,11 @@ export class JournalStore {
    * is kept, so the next reading is the short one.
    */
   *recency(now: number, wanted: (changed: ReadonlyMap<string, number>) => boolean): Steps<Recency> {
-    if (!this.recencyKept()) yield* this.fillRecency()
+    if (!this.recencyKept()) {
+      yield* this.fillRecency()
+      // The fill's write is a step of its own; reading the tables it filled is the next.
+      yield
+    }
     if (!this.recencyKept()) return yield* this.recencyWhole(now, wanted)
     const changed = this.changedRoots()
     return { changed, worked: wanted(changed) ? this.workedFolders(now) : new Map() }
@@ -1283,6 +1287,8 @@ export class JournalStore {
     if (this.db.isTransaction || Count.parse(this.statement("SELECT count(*) AS count FROM sqlite_master WHERE name IN ('root_changed', 'folder_worked')").get()).count !== 2) return
     if (this.readOnly) return
     const read = yield* this.recencyWhole(0, () => true, true)
+    // The reading's last page and the write are each a step: together they held the loop past a slice.
+    yield
     this.transaction(() => {
       const root = this.statement("INSERT INTO root_changed (root, at) VALUES (?, ?) ON CONFLICT (root) DO UPDATE SET at = excluded.at WHERE excluded.at > at")
       for (const [id, at] of read.changed) root.run(id, at)

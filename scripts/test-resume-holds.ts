@@ -179,7 +179,13 @@ async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: b
   })
   assert.ok(world)
   if (inSlices) assert.deepEqual(whole, [], "resuming in slices reads nothing whole")
-  else assert.ok(whole.length >= FINS, `resuming at once reads every Fin whole: ${whole.length}`)
+  else {
+    // At once, the resume reads whole the Fins it takes up (those the exit cut), and no finished one: whether a Fin's
+    // turn was cut comes from its journal's summary (`LiveRecords.turnCut`). Read whole to learn it, a host starting with
+    // 139 Fins on disk reloaded 81 of them on its loop, 11.5 s, after the residency budget let them go.
+    assert.ok(whole.length >= FINS / 2, `resuming at once reads whole the Fins it takes up: ${whole.length}`)
+    assert.ok(whole.length < FINS, `a finished Fin isn't read whole to learn whether its turn was cut: ${whole.length} of ${FINS}`)
+  }
   await world.settle()
   const sent: Record<string, string[]> = {}
   const requests: Record<string, string[][]> = {}

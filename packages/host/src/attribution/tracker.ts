@@ -183,6 +183,8 @@ const PRUNE_STEP = 512
 const PRUNE_STEPS = 400
 /** How many times `whatWasHeard` journals what flushing turned up (a folder that came stands for its files) before it answers. */
 const HEARD_PASSES = 3
+/** A settle of what was heard that took this long says what it waited on. */
+const SLOW_SETTLE_MS = 5_000
 /** Spacing past which a root is reported as rescanned less often because its losses keep coming. */
 const BACKED_OFF_MS = 60_000
 
@@ -229,6 +231,10 @@ interface RootState {
   ignored?: GitIgnored & { moves: number }
   /** Times a `.gitignore`, Git's exclude file, the index or HEAD moved: a listing taken at fewer is stale. */
   ignoreMoves: number
+  /** The listing being taken again behind a flush that went on with the stale one (`ignoredForFlush`). */
+  ignoring?: Promise<void>
+  /** Paths a flush left unread by a stale listing: read once the new listing no longer has Git ignore them. */
+  unreadStale?: Set<string>
   /** The next rescan for lost events: waiting out its spacing, on the queue, running, or wanted again once the running one ends. */
   rescanTimer?: ReturnType<typeof setTimeout>
   rescanQueued: boolean
@@ -856,7 +862,7 @@ export class LaptopTracker implements AttributionTracker {
    * undefined for a folder that isn't a repository, or when Git can't say,
    * and then every path is read as before.
    */
-  private async gitIgnored(state: RootState, fresh = false): Promise<GitIgnored | undefined> {
+  private async gitIgnored(state: RootState, fresh = false): Promise<(GitIgnored & { moves: number }) | undefined> {
     const { repo } = state
     if (!repo?.ignoredEntries) return undefined
     if (!fresh && state.ignored?.moves === state.ignoreMoves) return state.ignored
@@ -872,6 +878,35 @@ export class LaptopTracker implements AttributionTracker {
     } catch (error) {
       this.log("ignored files could not be listed", { root: state.root.path, error: error instanceof Error ? error.message : String(error) })
       state.ignored = undefined
+    }
+    return state.ignored
+  }
+
+  /**
+   * What Git ignores, for a flush: a listing already held answers at once, however many moves stale, and is taken again
+   * behind it; only a root with none waits for one. The listing is `ls-files --others --ignored` over the checkout, and
+   * the index moves with every `git add` or `status` that refreshes it: on 2026-11-18 it ran 157 times in two hours at
+   * 3.5 s each (15 s at most), and each flush after a move waited on it (a 4-file flush's stats took 4.4 s). What the
+   * stale listing left unread is read once the new one no longer has Git ignore it.
+   */
+  private async ignoredForFlush(state: RootState): Promise<(GitIgnored & { moves: number }) | undefined> {
+    if (!state.ignored) return this.gitIgnored(state)
+    if (state.ignored.moves !== state.ignoreMoves && !state.ignoring) {
+      state.ignoring = (async () => {
+        try {
+          await this.gitIgnored(state)
+        } finally {
+          state.ignoring = undefined
+        }
+        const left = state.unreadStale
+        state.unreadStale = undefined
+        const fresh = state.ignored
+        if (!left || this.states.get(state.root.id) !== state) return
+        const unread = fresh && this.unreadIn(state, fresh)
+        const read = [...left].filter((path) => !unread || !unread(path))
+        if (read.length) this.heard(state, read)
+        // Moved again while it listed: listed again at the next flush that asks.
+      })().catch(() => {})
     }
     return state.ignored
   }
@@ -1000,8 +1035,14 @@ export class LaptopTracker implements AttributionTracker {
     // A folder that went or came stands for every file under it.
     const expanded = new Map<string, ObservationSource>()
     const stats = new Map<string, TrackerFileStat | null>()
-    const ignored = batch.some(([path]) => !state.stats.has(path)) ? await this.gitIgnored(state) : undefined
-    const unread = ignored ? this.unreadIn(state, ignored) : () => false
+    const ignored = batch.some(([path]) => !state.stats.has(path)) ? await this.ignoredForFlush(state) : undefined
+    const unreadNow = ignored ? this.unreadIn(state, ignored) : () => false
+    const stale = ignored !== undefined && ignored.moves !== state.ignoreMoves
+    const unread = (path: string) => {
+      if (!unreadNow(path)) return false
+      if (stale) (state.unreadStale ??= new Set()).add(path)
+      return true
+    }
     await mapLimit(batch, PARALLEL, async ([path, how]) => {
       // Never stat, let alone walk, what is never tracked, nor what Git ignores.
       if (untrackable(path, state.tracked.has(path)) || unread(path)) return
@@ -2156,6 +2197,8 @@ export class LaptopTracker implements AttributionTracker {
         for (const wake of this.waking) wake()
         await this.rescanTurns
         await Promise.all(states.map((state) => state.chain))
+        // What a stale ignore listing left unread is heard again once the new listing is in, and flushed next pass.
+        await this.staleListings(states)
         await Promise.all(this.scriptReads)
         await this.footprints?.settled()
         while (this.reattribution) await this.reattribution
@@ -2167,12 +2210,30 @@ export class LaptopTracker implements AttributionTracker {
     }
   }
 
+  /** The listings being taken again behind a flush that left paths unread by a stale one: those paths may be changes. */
+  private async staleListings(states: readonly RootState[]): Promise<void> {
+    await Promise.all(states.filter((state) => state.unreadStale?.size).map((state) => state.ignoring))
+  }
+
   /** What was heard journaled, rescans left to their own pace: a root rescanning now is passed over, its changes found by the rescan. */
   private async whatWasHeard(checkouts?: readonly string[]): Promise<boolean> {
+    // How long each wait took, said when the whole took long: the shared journal's caller gives up at 15 s, and its
+    // line says only that it did (172 times on 2026-11-18).
+    const began = performance.now()
+    const waits: Record<string, number> = {}
+    const timed = async <T>(name: string, work: Promise<T>): Promise<T> => {
+      const started = performance.now()
+      try {
+        return await work
+      } finally {
+        waits[name] = Math.round((waits[name] ?? 0) + performance.now() - started)
+      }
+    }
     const states = [...this.states.values()].filter((state) => checkouts === undefined || checkouts.some((path) => within(path, state.root.path) || within(state.root.path, path)))
-    await Promise.all(states.map((state) => this.tracking.get(state.root.path)))
-    const complete = await this.shells.heard(states.map((state) => state.root.id))
+    await timed("tracking", Promise.all(states.map((state) => this.tracking.get(state.root.path))))
+    const complete = await timed("shells", this.shells.heard(states.map((state) => state.root.id)))
     for (let pass = 0; pass < HEARD_PASSES; pass++) {
+      await timed("ignoreListings", this.staleListings(states))
       const runs: Promise<void>[] = []
       for (const state of states) {
         if (state.rescanning) continue
@@ -2187,11 +2248,13 @@ export class LaptopTracker implements AttributionTracker {
         }
       }
       if (!runs.length) break
-      await Promise.all(runs)
+      await timed("flushes", Promise.all(runs))
     }
-    await Promise.all(this.scriptReads)
-    await this.footprints?.settled(checkouts)
-    while (this.reattribution) await this.reattribution
+    await timed("scripts", Promise.all(this.scriptReads))
+    await timed("footprints", this.footprints?.settled(checkouts) ?? Promise.resolve())
+    await timed("reattribution", (async () => { while (this.reattribution) await this.reattribution })())
+    const ms = Math.round(performance.now() - began)
+    if (ms >= SLOW_SETTLE_MS) this.log("settled slowly", { ms, roots: states.length, ...waits })
     return complete
   }
 
@@ -2307,6 +2370,9 @@ export class LaptopTracker implements AttributionTracker {
     }
     const paths: string[] = []
     for (const state of this.idle(read, before)) {
+      // A turn of the loop between the sliced reading and each root's check-and-let-go: run together after the reading's
+      // last step, they held the loop past a slice and a step (scripts/test-attribution-holds.ts, "one idle").
+      await new Promise<void>((resolve) => setImmediate(resolve))
       if (stopping()) break
       // Other work ran since the reading, and runs while each root is let go: what was journaled or began there since
       // keeps it. Nothing stops between this reading and `untrack` taking the root out of `states`.
@@ -2314,6 +2380,7 @@ export class LaptopTracker implements AttributionTracker {
       await this.untrack(state.root.id)
       paths.push(state.root.path)
     }
+    await new Promise<void>((resolve) => setImmediate(resolve))
     paths.push(...await this.letGoClean())
     if (paths.length) this.log("let go of idle roots", { roots: paths.length, paths: paths.join(", ").slice(0, 500) })
     return paths
