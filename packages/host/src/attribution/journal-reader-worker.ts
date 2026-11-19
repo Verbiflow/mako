@@ -2,6 +2,7 @@ import { homedir } from "node:os"
 import { DatabaseSync } from "node:sqlite"
 import { parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
+import { exitWhenStopped } from "../base/worker-stop.js"
 import { decompress } from "./content.js"
 import { GitAnswerSchema, JournalReadSchema } from "./journal-reader.js"
 import { CheckpointFingerprints } from "./checkpoint-fingerprints.js"
@@ -15,6 +16,7 @@ import { turnOnlyPair, turnWriters, undoPlan } from "./turn-lines.js"
  * Read-only: in WAL a reader never stops the owner's writes, nor they it, and it sees what was committed.
  */
 const { path } = z.object({ path: z.string() }).parse(workerData)
+exitWhenStopped()
 const BlobRow = z.object({ data: z.instanceof(Uint8Array) })
 
 let db: DatabaseSync | undefined

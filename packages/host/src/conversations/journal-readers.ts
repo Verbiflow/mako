@@ -1,4 +1,4 @@
-import { Worker } from "node:worker_threads"
+import { StoppableWorker } from "../base/worker-stop.js"
 import { availableParallelism } from "node:os"
 import { z } from "zod"
 import { errorMessage } from "../base/error-message.js"
@@ -17,7 +17,7 @@ const ReplySchema = z.object({ id: z.number(), rows: z.unknown().optional(), sca
 const PartSchema = z.object({ id: z.number(), part: z.enum(["base", "blocks"]), entries: z.array(z.unknown()) })
 
 interface Reader {
-  worker: Worker
+  worker: StoppableWorker
   busy: number
   idle?: ReturnType<typeof setTimeout>
   closing?: Promise<number>
@@ -107,7 +107,7 @@ export class JournalReaders {
     clearTimeout(reader.idle)
     const at = this.readers.indexOf(reader)
     if (at >= 0) this.readers.splice(at, 1)
-    const closing = reader.closing = reader.worker.terminate()
+    const closing = reader.closing = reader.worker.stop()
     this.retiring.add(closing)
     // An unknown failed termination stays owned for stop() to report; a completed one holds nothing.
     void closing.then(() => this.retiring.delete(closing), () => {})
@@ -119,7 +119,7 @@ export class JournalReaders {
     if (free && (free.busy === 0 || this.readers.length >= READERS)) return free
     // A reader's young generation grows to 120 MB while it parses a journal and stays that size while it is idle
     // with 3 MB of it in use: held to `READER_YOUNG_MB`, it collects more often, on its own thread.
-    const worker = new Worker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 1024, maxYoungGenerationSizeMb: READER_YOUNG_MB } })
+    const worker = new StoppableWorker(this.entry, { resourceLimits: { maxOldGenerationSizeMb: 1024, maxYoungGenerationSizeMb: READER_YOUNG_MB } })
     const reader: Reader = { worker, busy: 0 }
     worker.on("message", (message) => {
       const part = PartSchema.safeParse(message)

@@ -3,6 +3,7 @@ import { parentPort } from "node:worker_threads"
 import { z } from "zod"
 import { atOnce } from "@mako/sessions/slices"
 import { errorMessage } from "../base/error-message.js"
+import { exitWhenStopped } from "../base/worker-stop.js"
 import { buildTurnIndex, coldScan, journalRowSteps, readTurnIndex } from "./live-journal.js"
 
 /**
@@ -13,6 +14,7 @@ import { buildTurnIndex, coldScan, journalRowSteps, readTurnIndex } from "./live
 const ENTRIES_PER_PART = 150
 const AskSchema = z.object({ id: z.number(), path: z.string(), withLog: z.boolean(), scan: z.literal(true).optional() })
 
+exitWhenStopped()
 parentPort?.on("message", (message) => {
   const ask = AskSchema.parse(message)
   let db: DatabaseSync | undefined

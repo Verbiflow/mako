@@ -11,6 +11,7 @@ import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { LiveRecords } from "@mako/host/conversations/live-records"
 import { JournalReclaims } from "@mako/host/conversations/journal-reclaim"
 import { JournalReaders } from "@mako/host/conversations/journal-readers"
+import { STOP_PORT } from "@mako/host/base/worker-stop"
 import { WalPrimer, CHECKPOINT_WAL_LIMIT, type WalCheckpoint } from "@mako/host/conversations/wal-primer"
 import { auditSnapshot } from "./performance-audit-fixtures.ts"
 
@@ -327,19 +328,20 @@ test("the actual compaction worker observes cancellation without deleting staged
   }
 })
 
-const readerEntry = new URL("data:text/javascript," + encodeURIComponent("import{parentPort}from'node:worker_threads';parentPort.on('message',m=>parentPort.postMessage({id:m.id,rows:null}))"))
+// A reader that answers every read with nothing, and ends itself when stopped, as `exitWhenStopped` does.
+const readerEntry = new URL("data:text/javascript," + encodeURIComponent(`import{parentPort,workerData}from'node:worker_threads';const stop=workerData.${STOP_PORT};stop.once('message',()=>process.exit(0));stop.unref();parentPort.on('message',m=>parentPort.postMessage({id:m.id,rows:null}))`))
 
-test("journal reader stop calls share the actual termination completion", async context => {
+test("journal reader stop calls share the worker's actual exit", async context => {
   const readers = new JournalReaders(readerEntry)
   await readers.read("/unused-lifetime-fixture", false)
   const thread = readers["readers"][0]!.worker
-  const terminate = thread.terminate.bind(thread)
+  const stop = thread.stop.bind(thread)
   let deliver!: () => void
   const gate = new Promise<void>(resolve => { deliver = resolve })
-  context.mock.method(thread, "terminate", () => terminate().then(async code => { await gate; return code }))
+  context.mock.method(thread, "stop", () => stop().then(async code => { await gate; return code }))
   const closed = readers.stop()
   try {
-    assert.equal(readers.stop(), closed, "a second stop cannot return before the first termination")
+    assert.equal(readers.stop(), closed, "a second stop cannot return before the first exit")
     let done = false
     void closed.then(() => { done = true }, () => {})
     await until(() => thread.threadId === -1)
@@ -352,7 +354,7 @@ test("journal reader stop calls share the actual termination completion", async 
   }
 })
 
-test("idle journal reader termination is still joined by stop", async context => {
+test("an idle journal reader's exit is still joined by stop", async context => {
   context.mock.timers.enable({ apis: ["setTimeout"] })
   const readers = new JournalReaders(readerEntry)
   let deliver!: () => void
@@ -361,14 +363,14 @@ test("idle journal reader termination is still joined by stop", async context =>
   try {
     await readers.read("/unused-lifetime-fixture", false)
     const thread = readers["readers"][0]!.worker
-    const terminate = thread.terminate.bind(thread)
-    context.mock.method(thread, "terminate", () => terminate().then(async code => { await gate; return code }))
+    const stop = thread.stop.bind(thread)
+    context.mock.method(thread, "stop", () => stop().then(async code => { await gate; return code }))
     context.mock.timers.tick(60_000)
     closed = readers.stop()
     let done = false
     void closed.then(() => { done = true }, () => {})
     await until(() => thread.threadId === -1)
-    assert.equal(done, false, "removing the idle reader from the pool is not its termination")
+    assert.equal(done, false, "removing the idle reader from the pool is not its exit")
     deliver()
     await closed
   } finally {

@@ -289,6 +289,12 @@ conversations?.live`) rather than a domain importing another's files.
   `bench:host-load --memory` writes what the host's memory is made of
   (`regions-*.txt`, each thread's heap, a sample of the live heap by the
   function that allocated it).
+- **A worker that can reach zlib ends itself.** It is a `StoppableWorker`
+  (`base/worker-stop.ts`) whose entry calls `exitWhenStopped()`; the host
+  `stop()`s it and terminates it only past a 10 s grace. `terminate()` that
+  lands between a zlib handle's construction and its `init` aborts the whole
+  process in Node 24 (nodejs/node#67485): the attribution reader, closed while
+  it decompressed stored content, did. `test-worker-stop.ts` holds it.
 - **Follow, don't poll.** What only says where something stands (a line a
   window shows) reads what each owner already holds, and is woken by the
   owner's own change (its event or callback). That read never sets off the

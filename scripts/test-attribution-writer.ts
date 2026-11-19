@@ -305,7 +305,8 @@ for (const fault of ["throws", "never-starts", "invalid-ready", "never-answers"]
     const root = scratch()
     const deps = dependencies(root)
     const marker = join(root, "first-start")
-    const timing = { startMs: 2_000, askMs: 300, probeMs: 300 }
+    // A worker blocked in the fault never reads its stop: it is terminated once its short grace ends.
+    const timing = { startMs: 2_000, askMs: 300, probeMs: 300, stopMs: 100 }
     context.mock.timers.enable({ apis: ["setTimeout"] })
     let entered!: () => void
     const faultEntered = new Promise<void>(resolve => { entered = resolve })

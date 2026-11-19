@@ -1,10 +1,12 @@
 import { parentPort } from "node:worker_threads"
 import { z } from "zod"
+import { exitWhenStopped } from "../../base/worker-stop.js"
 import { codexQuestionHistory } from "./question-history.js"
 
 const input = z.object({ id: z.number().int(), path: z.string().min(1), nativeId: z.string().min(1) })
 const port = parentPort
 if (!port) throw new Error("Native question reader requires a worker port")
+exitWhenStopped()
 let pending = Promise.resolve()
 port.on("message", (raw) => {
   const request = input.parse(raw)

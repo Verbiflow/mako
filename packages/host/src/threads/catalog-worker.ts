@@ -15,6 +15,7 @@
 import { MessagePort, parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
 import { defaultCatalog, serveCatalogOnPort } from "@mako/sessions"
+import { exitWhenStopped } from "../base/worker-stop.js"
 import { attachmentReaders } from "./attachment-readers.js"
 
 const catalogWorkerData = z.object({
@@ -97,4 +98,5 @@ async function main(): Promise<void> {
   }
 }
 
+exitWhenStopped()
 void main()
