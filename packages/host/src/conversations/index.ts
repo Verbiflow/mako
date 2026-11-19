@@ -82,6 +82,7 @@ import { harnessOrder } from "../contracts/harness-defaults.js"
 
 export { CloudConversations, folderRepository } from "./cloud-conversations.js"
 export { cloudFinLimits } from "./fin-capacity.js"
+export { placeLink } from "./place-link.js"
 export { FinCapacity } from "./fin-capacity-host.js"
 export { FinCostModel } from "./fin-cost.js"
 export { FinCostSampler } from "./fin-cost-sampler.js"

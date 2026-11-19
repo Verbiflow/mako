@@ -27,11 +27,8 @@ import type { CompactLiveBatch, LiveAhead, LiveBatch, LiveSummary } from "./live
 import type {
   ThreadRef as CatalogThreadRef,
 } from "@mako/sessions"
-import type {
-  Automation,
-  AutomationRun,
-  UpdateState,
-} from "./automations-usage-updates.js"
+import type { UpdateState } from "./automations-usage-updates.js"
+import type { AutomationProjectReading, AutomationRun } from "./automations.js"
 import type {
   ChatMessage,
   ModelInfo,
@@ -214,7 +211,9 @@ export type HostEventBody =
   | { type: "plugins-changed" }
   /** Update progress. Window-wide, not tied to any tab. */
   | { type: "update"; update: UpdateState }
-  | { type: "automations"; automations: Automation[] }
+  /** A project's automations, their state on this Mac or their proposals changed: its whole reading (`contracts/automations.ts`). */
+  | { type: "automations-changed"; reading: AutomationProjectReading }
+  /** A run was recorded or moved: the newest record of its occurrence. */
   | { type: "automation-run"; run: AutomationRun }
   /**
    * The cross-harness session catalog changed: a session somewhere on this

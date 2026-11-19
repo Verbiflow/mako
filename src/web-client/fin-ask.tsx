@@ -63,7 +63,16 @@ function AnswerableFinAskCard({ apex, ask, more, answerTyped, from, onOpen }: { 
           </div>
         ) : null}
         <div className="web-ask-options" role="group" aria-label="Answers">
-          {approval ? (
+          {ask.ask.review ? (
+            // An automation proposal: approved only where its change is shown, in Automations on the Mac.
+            <>
+              <p data-fin-review className="web-ask-hint">Approve it in Automations or the Inbox on your Mac, where its change is shown.</p>
+              <button type="button" data-fin-answer="refuse" disabled={Boolean(sent)} data-chosen={sent?.allow === false || undefined} onClick={() => send({ allow: false })} className="web-ask-option">
+                <XIcon className="size-4 shrink-0" />
+                Decline
+              </button>
+            </>
+          ) : approval ? (
             <>
               <button type="button" data-fin-answer="allow" data-primary disabled={Boolean(sent)} data-chosen={sent?.allow === true || undefined} onClick={() => send({ allow: true })} className="web-ask-option">
                 <CheckIcon className="size-4 shrink-0" />

@@ -49,6 +49,11 @@ export const FinAskSchema = z.object({
    * agent's ask through Mako's tools does ("Move to the cloud", "Keep here"), where a harness's says "Allow once".
    */
   named: z.literal(true).optional(),
+  /**
+   * Approved only where its change is shown (an agent's automation proposal): Automations or the Inbox, never from
+   * this ask. Its options only decline; a surface offers a way to the change, or says where it is.
+   */
+  review: z.object({ project: z.string().max(4096), automation: z.string().max(200), proposal: z.string().max(200) }).optional(),
 })
 export type FinAsk = z.infer<typeof FinAskSchema>
 
