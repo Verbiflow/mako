@@ -97,8 +97,8 @@ async function rehearse(args) {
       process.removeListener("SIGINT", interrupted)
     }
   } finally {
-    const { unregisterBundle } = await import("@mako/host/application/local-update-installer")
-    await finishRehearsal(root, { keep: options.keep, unregister: unregisterBundle })
+    const { unregisterOutsideHost } = await import("@mako/host/application/local-update-installer")
+    await finishRehearsal(root, { keep: options.keep, unregister: unregisterOutsideHost })
   }
 }
 

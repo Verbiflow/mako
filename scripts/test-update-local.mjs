@@ -7,7 +7,7 @@ import { join } from "node:path"
 import { extractFile } from "@electron/asar"
 import { packArchive } from "./lib/pack-archive.mjs"
 import { readLocalAppMetadata } from "./local-app-metadata.mjs"
-import { buildOf, prepareSource, readCheckoutUncommitted, selectLocalSigner, sweepLocalUpdates, updateLocal, useCheckoutSource } from "./update-local.mjs"
+import { buildOf, prepareSource, readCheckoutUncommitted, removeOutput, selectLocalSigner, sweepLocalUpdates, updateLocal, useCheckoutSource } from "./update-local.mjs"
 
 // As the CLI does: the checkout's packages from their source.
 useCheckoutSource()
@@ -237,6 +237,108 @@ const stuckFailure = fixture({
   },
 })
 await assert.rejects(updateLocal(options, stuckFailure.dependencies), /Build failed/)
+// The old app quits while checking its quit fails (as when the check's own error class went missing): the person
+// already said yes and has no app running, so the verified build installs and opens, and the quit isn't "cancelled".
+for (const failure of [new TypeError("Right-hand side of 'instanceof' is not an object"), new Error("socket hang up")]) {
+  let polls = 0
+  const said = []
+  const quitDuringCheck = fixture({
+    say: (text) => said.push(text),
+    running: async () => (polls++ < 1 ? [2284, 2289] : []),
+    prepareToClose: async () => {
+      quitDuringCheck.calls.push({ command: "prepare" })
+      return {
+        check: async () => {
+          quitDuringCheck.calls.push({ command: "check" })
+          throw failure
+        },
+        cancel: async () => {
+          quitDuringCheck.calls.push({ command: "cancel" })
+        },
+      }
+    },
+  })
+  await updateLocal(options, quitDuringCheck.dependencies)
+  assert.deepEqual(
+    quitDuringCheck.calls.map((call) => call.command),
+    ["space", "source", "packages", "uncommitted", "npm", "reserve", "prepare", "check", process.execPath, "open", "verify-startup", "release", "remove"]
+  )
+  assert.ok(said.some((line) => line.includes(failure.message) && line.endsWith("Installing the build.")))
+}
+// The old app quits while its check passes: the next poll finds nothing running and the build installs.
+{
+  let polls = 0
+  const quitAfterCheck = fixture({
+    running: async () => (polls++ < 1 ? [2284] : []),
+    prepareToClose: async () => {
+      quitAfterCheck.calls.push({ command: "prepare" })
+      return {
+        check: async () => {
+          quitAfterCheck.calls.push({ command: "check" })
+        },
+        cancel: async () => {
+          quitAfterCheck.calls.push({ command: "cancel" })
+        },
+      }
+    },
+  })
+  await updateLocal(options, quitAfterCheck.dependencies)
+  assert.deepEqual(
+    quitAfterCheck.calls.map((call) => call.command),
+    ["space", "source", "packages", "uncommitted", "npm", "reserve", "prepare", "check", "wait", process.execPath, "open", "verify-startup", "release", "remove"]
+  )
+}
+// A failure after the old app quit, before anything installed: the previous app is opened again, never left closed.
+{
+  const said = []
+  const installFailed = fixture({
+    say: (text) => said.push(text),
+    running: async () => [],
+    run: async (command, args) => {
+      installFailed.calls.push({ command, args })
+      if (command === process.execPath) throw new Error("install failed")
+    },
+  })
+  await assert.rejects(updateLocal(options, installFailed.dependencies), /install failed/)
+  assert.deepEqual(
+    installFailed.calls.map((call) => call.command),
+    ["space", "source", "packages", "uncommitted", "npm", "reserve", "prepare", process.execPath, "open", "release", "remove"]
+  )
+  assert.deepEqual(installFailed.calls.at(-3).args, ["/Applications/Mako.app"])
+  assert.ok(said.includes("Nothing was installed. The previous app was reopened."))
+  // Ctrl+C after the app has quit: no install against the person's wish, but the previous app reopens.
+  let polls = 0
+  const cancelledAfterQuit = fixture({
+    running: async () => (polls++ < 1 ? [2284] : []),
+    wait: async () => {
+      throw new Error("Cancelled")
+    },
+  })
+  await assert.rejects(updateLocal(options, cancelledAfterQuit.dependencies), /Cancelled/)
+  assert.deepEqual(
+    cancelledAfterQuit.calls.map((call) => call.command),
+    ["space", "source", "packages", "uncommitted", "npm", "reserve", "prepare", "open", "release", "remove"]
+  )
+}
+// Every name update:local takes from a module it imports on demand exists there. The fixtures above replace those
+// calls, so a renamed or moved export (RuntimeDisconnectedError, unregisterBundle's runner) only showed in a real run.
+{
+  const text = await readFile(new URL("./update-local.mjs", import.meta.url), "utf8")
+  const imports = [...text.matchAll(/const \{([^}]+)\}\s*=\s*await import\("([^"]+)"\)/g)]
+  assert.ok(imports.length >= 10, "the on-demand imports were found")
+  for (const [, names, specifier] of imports) {
+    const loaded = await import(specifier)
+    for (const name of names.split(",").map((part) => part.split(":")[0].trim()).filter(Boolean))
+      assert.notEqual(loaded[name], undefined, `${specifier} has no export ${name}`)
+  }
+}
+// The real build-output removal: drops the bundle's LaunchServices record with its own runner, then the folder.
+{
+  const output = await mkdtemp(join(tmpdir(), "mako-update-output-"))
+  await mkdir(join(output, "mac-arm64/Mako.app"), { recursive: true })
+  await removeOutput(output)
+  await assert.rejects(readdir(output), { code: "ENOENT" })
+}
 
 const root = await mkdtemp(join(tmpdir(), "mako-update-command-"))
 async function app(path, distribution, makoBuild) {
@@ -389,7 +491,7 @@ try {
   await writeFile(join(sourceCheckout, "draft.md"), "draft\n")
   assert.deepEqual(await readCheckoutUncommitted(sourceCheckout), { count: 2, files: [{ path: "app.txt", change: "edited" }, { path: "draft.md", change: "untracked" }] })
   console.log(
-    "One-command update: names every uncommitted file before building and passes the same list to packaging, reads each build's own record of them, reads the checkout against origin and fast-forwards it on yes, removed build output on install, decline and failure, disk refusal before building, stale output sweep, fresh metadata after archive replacement, verified signer reuse, no fallback from a bad installed signature, ambiguity refusal, ordered build/install, confirmation, wait cancellation, failures, and literal paths passed"
+    "One-command update: names every uncommitted file before building and passes the same list to packaging, reads each build's own record of them, reads the checkout against origin and fast-forwards it on yes, removed build output on install, decline and failure, disk refusal before building, stale output sweep, fresh metadata after archive replacement, verified signer reuse, no fallback from a bad installed signature, ambiguity refusal, ordered build/install, confirmation, wait cancellation, install once the old app quits even if its quit check fails, the previous app reopened when nothing installed after it quit, on-demand imports that exist, real build-output removal, failures, and literal paths passed"
   )
 } finally {
   await rm(root, { recursive: true, force: true })
