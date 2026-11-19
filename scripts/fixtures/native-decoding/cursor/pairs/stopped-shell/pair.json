@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.4.0"
+    "version": "1.4.1"
   },
   "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-78a6fb0b6a422f55d8af2713a8185638044c8e28bb5d12e5784146363f7cdda6/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-9e3877da31fcbbc93fe0fc056c13bdda0f82428b64dcf78a3b02b2a9643b6836/store.db",
       "known": [
         {
           "side": "+",

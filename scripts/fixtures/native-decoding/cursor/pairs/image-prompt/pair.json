@@ -1,13 +1,13 @@
 {
   "harness": "cursor",
   "native": {
-    "version": "1.4.0"
+    "version": "1.4.1"
   },
   "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
   "stores": [
     {
       "reader": "cursor",
-      "path": ".mako/cursor-sdk/agents/agent-36dc7c1b9523ee591d01e973ec56591c2537e64298326ef391c012b7ef72c941/store.db",
+      "path": ".mako/cursor-sdk/agents/agent-67f70293e6e11de2d7d4270f11475735f86120ffec8eb7848bff7b169c0d00c1/store.db",
       "known": [
         {
           "side": "-",
