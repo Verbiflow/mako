@@ -26,7 +26,7 @@ function catalogAt(home: string, stores: NativeStores, translator?: string): Ses
     recordsHome: home,
     viewsPath: join(home, ".mako", "views"),
     readBack: { readers: SAVED_HISTORY_READERS, stores },
-    translator,
+    ...translator !== undefined && { translator: () => translator },
   })
 }
 
@@ -295,8 +295,8 @@ async function decodesAside(): Promise<void> {
       }
     }
     const aside = new Counted()
-    const catalog = new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores)), { viewsPath: join(home, ".mako", "views"), decodeAside: aside, translator: "build-aside" })
-    const here = new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores)), { translator: "build-here" })
+    const catalog = new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores)), { viewsPath: join(home, ".mako", "views"), decodeAside: aside, translator: () => "build-aside" })
+    const here = new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores)), { translator: () => "build-here" })
     try {
       const page = await catalog.page(path, undefined, 50, VIEWER_PAGE)
       assert.deepEqual([aside.runs, aside.decoded], [1, 1], "the decode ran aside")
@@ -359,7 +359,7 @@ async function decodesAside(): Promise<void> {
     await writeFile(small, `${lines.slice(0, 2).join("\n")}\n`)
     const archivePath = join(home, ".mako", "archive")
     const archiving = new SessionCatalog(SAVED_HISTORY_READERS.map((reader) => reader(stores)), {
-      viewsPath: join(home, ".mako", "views"), decodeAside: new DecodeAside(), translator: "build-aside", archivePath,
+      viewsPath: join(home, ".mako", "views"), decodeAside: new DecodeAside(), translator: () => "build-aside", archivePath,
       recordsPath: join(home, ".mako", "records"), recordsHome: home, readBack: { readers: SAVED_HISTORY_READERS, stores },
     })
     await archiving.scan()

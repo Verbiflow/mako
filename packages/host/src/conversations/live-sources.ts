@@ -34,6 +34,10 @@ const MERGE_ATTEMPTS = 3
 
 /** `settleBases` lets the host breathe this long between journals, and checks this often whether work it waits on finished. */
 const SETTLE_PAUSE_MS = 2_000
+/** How long after a window last read a conversation `settleBases` reads none in: what the person opens goes first. */
+const PERSON_QUIET_MS = 10_000
+/** The sweep, as the host's work is named (`HostWork.run`): who it reads in is counted to it. */
+export const SETTLE_WORK = "move journals' copies onto their sessions' records"
 
 /** What `settleBases` did: each journal that kept a copy, how long it took, and why the copy stays when it does. */
 export interface SettledBases {
@@ -64,6 +68,8 @@ export class LiveSources {
   /** A history page read from its session whose merge was overtaken: the next `readBase` merges it without reading again. */
   private readonly pagesRead = new WeakMap<Resident, { source: BaseSource; page: ThreadPage }>()
   private readonly baseHolds = new WeakMap<Resident, Promise<void>>()
+  /** Spans of a first session read again by this build (`refreshSpan`), one at a time per conversation. */
+  private readonly spanRefreshes = new WeakMap<Resident, Promise<void>>()
   /** Why a history that went on in several sessions keeps its copy though its first session is held: its reading wasn't found exact. */
   private readonly unspanned = new WeakMap<Resident, string>()
   /**
@@ -81,6 +87,9 @@ export class LiveSources {
    */
   private readonly settledAt = new Map<string, { journal: string; session?: { source: BaseSource; stamp: string } }>()
   private settling: Promise<SettledBases> | undefined
+  /** Windows' reads of conversations under way (`windowSnapshot`), and when one last began or ended. */
+  private personReads = 0
+  private personReadAt = -Infinity
 
   constructor(access: SourcesAccess) {
     this.access = access
@@ -204,21 +213,26 @@ export class LiveSources {
     return work
   }
 
-  private async readBaseNow(resident: Resident): Promise<void> {
+  /**
+   * `stale`: the base read before, by an earlier build's decoder, which this reads again by this build's and replaces
+   * (`refreshSpan`); without it, the base still to be read. Read again, a failure leaves the base as it was.
+   */
+  private async readBaseNow(resident: Resident, stale?: ThreadPage): Promise<void> {
     const { dependencies } = this.access
     const id = resident.snapshot.session.id
     const source = resident.snapshot.baseSource
     if (!source) return
     const started = performance.now()
+    const replacing = stale ?? null
     // A page read before and not yet merged (its merge kept being overtaken) is merged again, not read again: a queued
     // message waited on a whole history read on every drain.
-    const kept = this.pagesRead.get(resident)
+    const kept = stale ? undefined : this.pagesRead.get(resident)
     let page: ThreadPage | null = kept?.source === source ? kept.page : null
     let failure: string | undefined
     for (const wait of page ? [] : [...BASE_READ_RETRIES, undefined]) {
       try {
         const path = this.located(source)
-        page = (dependencies.staleHistory && await captureNativeHistory(path, dependencies.staleHistory)) ||
+        page = (!stale && dependencies.staleHistory && await captureNativeHistory(path, dependencies.staleHistory)) ||
           await captureNativeHistory(path, dependencies.history)
         failure = page ? undefined : "Neither its harness nor Mako's record store has this session any more."
         // A span of its session: as it begins now, else as Mako had captured it when the journal let its copy go.
@@ -244,15 +258,19 @@ export class LiveSources {
       failure = "The session at its path is another one now."
       page = null
     }
-    if (this.access.resident(id) !== resident || resident.snapshot.base || resident.snapshot.baseSource !== source) return
+    if (this.access.resident(id) !== resident || (resident.snapshot.base ?? null) !== replacing || resident.snapshot.baseSource !== source) return
     const ms = Math.round(performance.now() - started)
+    if (!page && stale) {
+      hostLog("live", "a conversation's history stays as an earlier build read it", { conversation: id, harness: source.harness, ms, error: failure })
+      return
+    }
     if (!page) {
       hostWarn("live", "a conversation's history could not be read from its session", { conversation: id, harness: source.harness, ms, error: failure })
       resident.snapshot = { ...resident.snapshot, historyFailure: failure }
     } else {
-      hostLog("live", "history read from its session", {
+      hostLog("live", stale ? "history read again from its session by this build" : "history read from its session", {
         conversation: id, harness: source.harness, ms, entries: page.entries.length,
-        translator: page.translator ?? "none", restored: page.ref.archived === true,
+        translator: page.translator ?? "none", restored: page.ref.archived === true, ...stale && { was: stale.translator ?? "none" },
       })
       for (let attempt = 1; ; attempt++) {
         const snapshot = resident.snapshot
@@ -263,13 +281,13 @@ export class LiveSources {
         const blocks = await readBack(snapshot.blocks.slice(0, snapshot.baseCoveredBlocks ?? 0))
         // A slice at a time: a history of 150MB merged in one stretch held the loop for a third of a second.
         const merged = await inSlices(mergedBaseSteps(page, blocks, snapshot.baseCoveredBlocks ?? 0, recordStart, { inherited, cutOff: cutOffRequests(snapshot.requests) }))
-        if (this.access.resident(id) !== resident || resident.snapshot.base || resident.snapshot.baseSource !== source) return
+        if (this.access.resident(id) !== resident || (resident.snapshot.base ?? null) !== replacing || resident.snapshot.baseSource !== source) return
         // What changed meanwhile (the blocks paged, a turn streaming past them) keeps the merge, unless it changed what was merged.
         const now = resident.snapshot
         if (now !== snapshot && !sameMergeInputs(snapshot, now)) {
           if (attempt < MERGE_ATTEMPTS) continue
-          // Merged when the history is next needed (`readBase`), from the page read now.
-          this.pagesRead.set(resident, { source, page })
+          // Merged when the history is next needed (`readBase`), from the page read now; read again, at the next refresh.
+          if (!stale) this.pagesRead.set(resident, { source, page })
           hostLog("live", "what a conversation's history merges with kept changing while it merged", { conversation: id, attempts: attempt })
           return
         }
@@ -285,6 +303,35 @@ export class LiveSources {
       }
     }
     this.access.flush(resident)
+  }
+
+  /**
+   * A conversation that went on in more than one session shows a span of its first as its history
+   * (`BaseSource.span`), read back when it loads, where an earlier build's view of that session answers first
+   * (`staleHistory`). A refresh reads a session again only while one session holds every live block, so that span
+   * stayed as the earlier build's decoder read it until the conversation was read in again. Now, once the session's
+   * newest page as this build serves it names another decoder of its harness than the span's (`translator`, each
+   * harness's own), the span is read again by this build and replaces it; a span read by this build's decoder is
+   * not read again. In the background: whatever waits on the history has the span it read, and the next revision
+   * says the history changed.
+   */
+  refreshSpan(resident: Resident): Promise<void> {
+    const running = this.spanRefreshes.get(resident)
+    if (running) return running
+    const work = this.refreshSpanNow(resident).catch((error) => {
+      hostLog("live", "a span of a conversation's first session wasn't read again", { conversation: resident.snapshot.session.id, error: errorMessage({ error }) })
+    }).finally(() => this.spanRefreshes.delete(resident))
+    this.spanRefreshes.set(resident, work)
+    return work
+  }
+
+  private async refreshSpanNow(resident: Resident): Promise<void> {
+    const { baseSource: source, base } = resident.snapshot
+    if (!source?.span || !base) return
+    const latest = await this.access.dependencies.history(this.located(source))
+    if (!latest || latest.ref.harness !== source.harness || latest.ref.nativeId !== source.nativeId || latest.translator === base.translator) return
+    if (this.access.resident(resident.snapshot.session.id) !== resident || resident.snapshot.base !== base || resident.snapshot.baseSource !== source) return
+    await this.readBaseNow(resident, base)
   }
 
   /**
@@ -410,7 +457,8 @@ export class LiveSources {
    * while that session is unchanged too; one sweep runs at a time.
    */
   settleBases(pauseMs = SETTLE_PAUSE_MS): Promise<SettledBases> {
-    this.settling ??= this.settleNow(pauseMs).finally(() => { this.settling = undefined })
+    const work = this.access.dependencies.work
+    this.settling ??= (work?.run ? work.run(SETTLE_WORK, () => this.settleNow(pauseMs)) : this.settleNow(pauseMs)).finally(() => { this.settling = undefined })
     return this.settling
   }
 
@@ -463,8 +511,10 @@ export class LiveSources {
     copies.sort((a, b) => b.changed - a.changed)
     const journals: SettledBases["journals"] = []
     for (const [index, { id, bytes }] of copies.entries()) {
-      while (!this.access.admission.closed && this.access.hasActiveWork())
-        await new Promise((resolve) => setTimeout(resolve, SETTLE_PAUSE_MS))
+      // A window reading a conversation goes first: each journal read in here weighs on the memory what it opens holds,
+      // and its session's read waits on the same catalog.
+      while (!this.access.admission.closed && (this.access.hasActiveWork() || this.personReading(pauseMs ? PERSON_QUIET_MS : 0)))
+        await new Promise((resolve) => setTimeout(resolve, Math.min(SETTLE_PAUSE_MS, pauseMs || 50)))
       if (this.access.admission.closed) break
       const began = performance.now()
       const loaded = Boolean(this.access.resident(id))
@@ -552,6 +602,46 @@ export class LiveSources {
     return applied
   }
 
+  /**
+   * What a window opening conversation `id` is answered with: `refreshedSnapshot`, unless its history is still to be
+   * read from its session (`readBase`), which reads every page of it and merges it whole: seconds for a long one, and
+   * the window showed nothing meanwhile (13 to 18 s for 15 to 23 thousand entries, 2026-11-19). Then the window is
+   * answered as soon as the newest page is read (`newestBase`), as a cold view of it is; the whole read goes on, and
+   * once it lands the conversation's next revision says its history changed, which the window reads again.
+   */
+  async windowSnapshot(id: string): Promise<LiveSnapshot | null> {
+    this.personReads += 1
+    this.personReadAt = performance.now()
+    try {
+      const resident = this.access.resident(id) ? this.access.load(id) : await this.access.loadSliced(id)
+      if (!resident) return null
+      const source = resident.snapshot.baseSource
+      if (!source || !baseUnread(resident.snapshot)) return await this.refreshedSnapshot(id)
+      const whole = this.refreshedSnapshot(id)
+      // Whichever comes first: a history read whole from a view at hand is as quick as its newest page.
+      type First = { snapshot: LiveSnapshot | null } | { page: ThreadPage } | undefined
+      const first = await Promise.race<First>([
+        whole.then((snapshot) => ({ snapshot }), () => undefined),
+        this.newestBase(source).then((page): First | Promise<First> => (page ? { page } : whole.then((snapshot) => ({ snapshot })))),
+      ])
+      if (!first) return await whole
+      if ("snapshot" in first) return first.snapshot
+      void whole.catch(() => undefined)
+      // Read whole meanwhile, or another conversation now: answered as it stands.
+      if (this.access.resident(id) !== resident || !baseUnread(resident.snapshot) || resident.snapshot.baseSource !== source) return await whole
+      hostLog("live", "a window shows a history's newest page while the rest is read", { conversation: id, harness: source.harness, entries: first.page.entries.length, of: first.page.total })
+      return { ...this.access.stamp(resident.snapshot), base: first.page }
+    } finally {
+      this.personReads -= 1
+      this.personReadAt = performance.now()
+    }
+  }
+
+  /** Whether a window read a conversation within `ms`, or is reading one: background work waits for it. */
+  personReading(ms: number): boolean {
+    return this.personReads > 0 || performance.now() - this.personReadAt < ms
+  }
+
   async refreshedSnapshot(id: string, completion?: { request: LiveRequest; applied(): void }, recovery?: { id: string; bindingId: string; applied(): void }): Promise<LiveSnapshot | null> {
     // A window opening a conversation only on disk reads it in a slice at a time; one in memory is read on now.
     const resident = this.access.resident(id) ? this.access.load(id) : await this.access.loadSliced(id)
@@ -560,6 +650,8 @@ export class LiveSources {
       await this.readBase(resident)
       if (this.access.resident(id) !== resident) return this.access.snapshot(id)
     }
+    // A span of a first session an earlier build's decoder read is read again by this build's, after this answers.
+    if (resident.snapshot.baseSource?.span && resident.snapshot.base) void this.refreshSpan(resident)
     try {
       const catchup = this.access.reconcileQuestions(resident)
       if (catchup) await catchup

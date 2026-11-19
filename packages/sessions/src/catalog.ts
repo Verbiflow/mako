@@ -29,7 +29,7 @@ import {
   CATALOG_CACHE_VERSION,
   type CacheEntry,
 } from "./catalog-cache.js"
-import { translatorBuild } from "./translator.js"
+import { translatorBuilds } from "./translator.js"
 import { pageOf, ThreadView, VIEW_MIN_DECODE_MS, ViewCache, type SessionView } from "./view-cache.js"
 import { isReplyEntry, type Entry } from "./entries.js"
 import {
@@ -370,8 +370,8 @@ export class SessionCatalog {
   /** Decodes running, by path and stamp, which a second ask for the same one shares. */
   private decoding = new Map<string, Promise<{ view: SessionView; decoded?: Thread } | null>>()
   private workspaces = new WorkspaceRoots()
-  /** `translatorBuild()`, given or hashed on the first page this catalog serves. */
-  private translator?: string
+  /** Each harness's `translatorBuild`, or what the catalog was given instead; each hashed on its first use. */
+  private readonly translators: (harness: string) => string
   /** How this build stamps a store format it sets (`storeWriter`). */
   private writer?: string
 
@@ -442,9 +442,8 @@ export class SessionCatalog {
   private readonly restoring = new Map<string, Promise<KeptRestore>>()
 
   /**
-   * `translator` is `translatorBuild()` for a process that makes many
-   * catalogs: it hashes the package's code, which costs a catalog's first
-   * page more than reading the page.
+   * `translator` stands for `translatorBuild`, each harness's fingerprint
+   * of the code that decodes its records, as a test fakes it.
    */
   constructor(
     providers: SessionProvider[],
@@ -475,7 +474,7 @@ export class SessionCatalog {
        * its harness's records state none (`observedInstall`).
        */
       runtimeReadings?: string
-      translator?: string
+      translator?: (harness: string) => string
       /** How this build stamps a store format it sets (`storeWriter`): the record store's and the unread index's. */
       writer?: string
       /**
@@ -501,7 +500,7 @@ export class SessionCatalog {
     this.readOnly = options.readOnly ?? false
     this.strictStores = options.readBack?.stores.strict ?? true
     this.readerPlace = options.readBack?.place
-    this.translator = options.translator
+    this.translators = options.translator ?? translatorBuilds()
     if (options.archivePath)
       this.archive = new SessionArchive(options.archivePath, { readOnly: this.readOnly })
     this.recordsHome = options.recordsHome ?? homedir()
@@ -512,7 +511,7 @@ export class SessionCatalog {
     this.attachments = options.attachmentReaders ? { readers: options.attachmentReaders, views: options.viewsPath, ...options.decodeAside && { aside: options.decodeAside.executable } } : null
     if (options.recordsPath && !this.readOnly) this.records = this.openRecords(options.recordsPath, options.recordsHome, options.readBack, options.backfill ? options.log ?? null : undefined)
     this.recordsFolder = options.recordsPath && !this.readOnly ? options.recordsPath : null
-    const build = () => this.translator ??= translatorBuild()
+    const build = this.translators
     // Every view's unread records, the large ones on disk and the small ones held in memory alike (`unread-index.ts`).
     this.unread = openUnreadIndex(options.viewsPath && !this.readOnly ? join(options.viewsPath, UNREAD_INDEX_FILE) : null, options.writer)
     if (options.viewsPath) {
@@ -693,11 +692,10 @@ export class SessionCatalog {
    * counts in diagnostics drop as a decoder learns a kind.
    */
   private async rebuildStaleViews(control: { stopped(): boolean; yieldToPerson(): Promise<void> }): Promise<ViewRebuild> {
-    const build = this.translator ??= translatorBuild()
     const started = Date.now()
     const paths = new Set<string>()
-    for (const view of (await this.views?.list()) ?? []) if (view.translator !== build) paths.add(view.path)
-    for (const path of this.unread.stalePaths(build)) paths.add(path)
+    for (const view of (await this.views?.list()) ?? []) if (view.translator !== this.translators(view.ref.harness)) paths.add(view.path)
+    for (const path of this.unread.stalePaths(this.translators)) paths.add(path)
     const listed = new Set(this.list().map((ref) => ref.path))
     const report: ViewRebuild = { stale: paths.size, rebuilt: 0, gone: 0, failed: 0, ms: 0 }
     for (const path of paths) {
@@ -710,7 +708,7 @@ export class SessionCatalog {
         continue
       }
       try {
-        if (await this.open(path, false)) report.rebuilt += 1
+        if (await this.open(path, false, true)) report.rebuilt += 1
         else report.failed += 1
       } catch {
         report.failed += 1
@@ -911,9 +909,12 @@ export class SessionCatalog {
     return unfiltered ? ordered.slice() : ordered
   }
 
-  /** Full translation of one session, via whichever store owns its path. */
-  async open(path: string, trackForFollow = true): Promise<Thread | null> {
-    const served = await this.served(path)
+  /**
+   * Full translation of one session, via whichever store owns its path. `background` when nobody waits on it: a large
+   * record's decode goes after every one someone waits on (`DecodeAside`).
+   */
+  async open(path: string, trackForFollow = true, background = false): Promise<Thread | null> {
+    const served = await this.served(path, background)
     if (!served) return null
     const thread = served.decoded ?? served.view.thread()
     const shown = thread.ref === served.ref ? thread : { ...thread, ref: served.ref }
@@ -928,19 +929,19 @@ export class SessionCatalog {
    * store's copy, which decodes as the original did, and last the archive's
    * translation. `decoded` is the thread when this call decoded it.
    */
-  private async served(path: string): Promise<{ view: SessionView; ref: ThreadRef; decoded?: Thread } | null> {
+  private async served(path: string, background = false): Promise<{ view: SessionView; ref: ThreadRef; decoded?: Thread } | null> {
     const provider = this.ownerOf(path)
     const stamp = provider ? await nativeFileOf(provider, path) : null
-    const native = provider && stamp ? await this.viewOf(provider, path, stamp) : provider ? await this.unstamped(provider, path) : null
+    const native = provider && stamp ? await this.viewOf(provider, path, stamp, background) : provider ? await this.unstamped(provider, path) : null
     if (native) {
       this.restoredFrom.delete(path)
       const ref = this.workspaces.ref(native.view.ref) ?? native.view.ref
       return { ...native, ref }
     }
-    const restored = await this.restored(path)
+    const restored = await this.restored(path, undefined, background)
     if (restored) return restored
     const archived = this.archive ? await this.archive.read(path) : null
-    return archived && { view: new ThreadView(archived, this.translator ??= translatorBuild()), ref: archived.ref, decoded: archived }
+    return archived && { view: new ThreadView(archived, this.translators(archived.ref.harness)), ref: archived.ref, decoded: archived }
   }
 
   /**
@@ -949,7 +950,7 @@ export class SessionCatalog {
    * read from its parent's records (`RecordStore.parentAt`), by the reader
    * that read it live, at the same path.
    */
-  private async restored(path: string, asOf?: number): Promise<{ view: SessionView; ref: ThreadRef; decoded?: Thread } | null> {
+  private async restored(path: string, asOf?: number, background = false): Promise<{ view: SessionView; ref: ThreadRef; decoded?: Thread } | null> {
     const reads = this.recordReads
     const own = this.recordStore?.sessionAt(path) ?? null
     const session = own ?? this.recordStore?.parentAt(path) ?? null
@@ -957,7 +958,7 @@ export class SessionCatalog {
     const restored = await this.readKept(session, path, asOf, own !== null)
     if (!restored) return null
     const stamp = await nativeFileOf(restored.provider, restored.path)
-    const found = stamp ? await this.viewOf(restored.provider, restored.path, stamp) : await this.unstamped(restored.provider, restored.path)
+    const found = stamp ? await this.viewOf(restored.provider, restored.path, stamp, background) : await this.unstamped(restored.provider, restored.path)
     if (!found) return null
     // A reading as of a time is that span alone; what follows `path` is the session as it is.
     if (asOf === undefined) this.restoredFrom.set(path, restored.path)
@@ -1162,10 +1163,14 @@ export class SessionCatalog {
    * on disk, a faster one (or any, for a catalog that writes nothing) in
    * memory. Two asks for one stamp share its decode.
    */
-  private viewOf(provider: SessionProvider, path: string, stamp: NativeFile): Promise<{ view: SessionView; decoded?: Thread } | null> {
+  private viewOf(provider: SessionProvider, path: string, stamp: NativeFile, background = false): Promise<{ view: SessionView; decoded?: Thread } | null> {
     const key = `${path}\0${stamp.bytes}\0${stamp.mtimeMs}\0${stamp.revision ?? ""}`
     const running = this.decoding.get(key)
-    if (running) return running.then((found) => found && { view: found.view })
+    if (running) {
+      // Asked in the background and waited on now: its decode goes before the rest.
+      if (!background) this.aside?.promote(path)
+      return running.then((found) => found && { view: found.view })
+    }
     const decode = (async () => {
       const kept = (await this.memoryViews.view(path, stamp)) ?? (await this.views?.view(path, stamp).catch(() => null))
       if (kept) return { view: kept }
@@ -1178,7 +1183,7 @@ export class SessionCatalog {
           })
         : null
       if (grown) return { view: grown }
-      const aside = await this.decodedAside(provider, path, stamp)
+      const aside = await this.decodedAside(provider, path, stamp, background)
       if (aside !== undefined) return aside
       const started = performance.now()
       const thread = await provider.read(path).catch(() => null)
@@ -1204,12 +1209,12 @@ export class SessionCatalog {
    * the decode holds out of this one. Undefined where it decodes here: a
    * small record, a catalog that keeps no views, or no child could start.
    */
-  private async decodedAside(provider: SessionProvider, path: string, stamp: NativeFile): Promise<{ view: SessionView } | null | undefined> {
+  private async decodedAside(provider: SessionProvider, path: string, stamp: NativeFile, background: boolean): Promise<{ view: SessionView } | null | undefined> {
     const reader = this.providers.indexOf(provider)
     if (!this.aside || !this.views || !this.viewsPath || this.readOnly || reader < 0 || !(await this.decodesLarge(provider, path, stamp))) return undefined
-    const job: AsideJob = { reader, path, stamp: { bytes: stamp.bytes, mtimeMs: stamp.mtimeMs }, viewsPath: this.viewsPath, translator: this.translator ??= translatorBuild(), strict: this.strictStores, ...this.readerPlace && { place: this.readerPlace } }
+    const job: AsideJob = { reader, path, stamp: { bytes: stamp.bytes, mtimeMs: stamp.mtimeMs }, viewsPath: this.viewsPath, translator: this.translators(provider.harness), strict: this.strictStores, ...this.readerPlace && { place: this.readerPlace } }
     if (stamp.revision !== undefined) job.stamp.revision = stamp.revision
-    const decoded = await this.aside.decode(job)
+    const decoded = await this.aside.decode(job, background)
     if (!decoded.ok) {
       if (!decoded.started) return undefined
       console.warn("A session could not be decoded", path, decoded.error)
@@ -1230,7 +1235,7 @@ export class SessionCatalog {
   /** A session its store gives no stamp for, which no view can be kept of: decoded for each ask. */
   private async unstamped(provider: SessionProvider, path: string): Promise<{ view: SessionView; decoded: Thread } | null> {
     const thread = await provider.read(path).catch(() => null)
-    return thread && { view: new ThreadView(thread, this.translator ??= translatorBuild()), decoded: thread }
+    return thread && { view: new ThreadView(thread, this.translators(thread.ref.harness)), decoded: thread }
   }
 
   /** Where a follow of `path` picks up after what was just served of it. */
@@ -1334,7 +1339,7 @@ export class SessionCatalog {
         total: aligned.length,
         hasEarlier: true,
         preview: true,
-        translator: this.translator ??= translatorBuild(),
+        translator: this.translators(ref.harness),
       }
     }
     return null
@@ -1828,9 +1833,9 @@ export class SessionCatalog {
     if (this.readingCopies || !this.recordsFolder || this.readOnly || this.stopped) return this.readingCopies
     const log = (level: "info" | "warn", message: string, fields: Record<string, string | number>) => (level === "warn" ? console.warn : console.info)(`Reading copies: ${message}`, JSON.stringify(fields))
     this.readingCopies = new ReadingCopies(join(this.recordsFolder, "copies"), {
-      view: (path) => this.served(path),
+      view: (path) => this.served(path, true),
       stamp: (path) => this.stampOf(path),
-      translator: () => (this.translator ??= translatorBuild()),
+      translator: (harness) => this.translators(harness),
     }, log, { budget: this.uploadBudget, ...this.work && { work: this.work }, linkDue: () => this.emit({ type: "link-due", form: "copies" }) })
     return this.readingCopies
   }

@@ -80,7 +80,7 @@ try {
   }
   assert.equal(builds().length, 1)
   const logged = []
-  const updated = new SessionCatalog([new ClaudeProvider(home, stores)], { recordsPath, viewsPath, recordsHome: home, backfill: true, translator: "a-newer-build", log: (message, fields) => logged.push([message, fields]) })
+  const updated = new SessionCatalog([new ClaudeProvider(home, stores)], { recordsPath, viewsPath, recordsHome: home, backfill: true, translator: () => "a-newer-build", log: (message, fields) => logged.push([message, fields]) })
   await updated.scan()
   updated.startWatching()
   const deadline = Date.now() + 20_000

@@ -23,6 +23,10 @@ const PRUNE_MS = 30_000
 /** Views let go, remembered by token so a read naming one says why. */
 const GONE_KEPT = 256
 const IDLE_MS = 10 * 60_000
+/** A conversation a window read this recently is on screen (`shown`), of the few read last. */
+const SHOWN_MS = 10 * 60_000
+/** How many conversations at most are on screen at once: a person reads a few side by side, not the rail's every row. */
+const SHOWN_MOST = 4
 /**
  * A capture a window reads from. `cold`: its blocks are read where the journal lies, a page at a time, under a read
  * transaction the view holds until it's let go (`ColdJournal`); `snapshot.blocks` is then empty.
@@ -105,6 +109,19 @@ export class LiveHistoryReader {
   holds(key: string): boolean {
     for (const view of this.views.values()) if (view.cold?.key === key) return true
     return false
+  }
+
+  /**
+   * Whether a window shows conversation `id`: one of the `SHOWN_MOST` it read last, within `SHOWN_MS`, from memory
+   * (a cold view holds nothing of it in memory). The host keeps one shown in memory (`LiveRecords.pinned`): let go, its
+   * next read starts over, its history read from its session again.
+   */
+  shown(id: string, now = Date.now()): boolean {
+    const latest = new Map<string, number>()
+    for (const view of this.views.values())
+      if (!view.cold && now - view.used < SHOWN_MS) latest.set(view.id, Math.max(latest.get(view.id) ?? 0, view.used))
+    if (!latest.has(id)) return false
+    return [...latest].sort((left, right) => right[1] - left[1]).slice(0, SHOWN_MOST).some(([shown]) => shown === id)
   }
 
   /** What cold views hold: the blocks they've read, about two bytes a character. */

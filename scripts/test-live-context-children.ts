@@ -103,12 +103,12 @@ try {
 
   // A base this build decoded is not read again; a child already rendered is not either.
   reads.length = 0
-  const current = await prepareLiveContext({ snapshot: snapshot(translatorBuild()), root: join(root, "context"), fromBlock: 0, includesBase: true, bundles })
+  const current = await prepareLiveContext({ snapshot: snapshot(translatorBuild("claude")), root: join(root, "context"), fromBlock: 0, includesBase: true, bundles })
   assert.deepEqual(reads, [], "nothing is read when the base is current and the child unchanged")
   assert.ok(current.resources?.includes(childFile))
 
   // A bundle of only the turns after the base carries no child its calls didn't start.
-  const later = await prepareLiveContext({ snapshot: snapshot(translatorBuild(), [{ type: "user", text: "Thanks" }]), root: join(root, "context"), fromBlock: 0, includesBase: false, bundles })
+  const later = await prepareLiveContext({ snapshot: snapshot(translatorBuild("claude"), [{ type: "user", text: "Thanks" }]), root: join(root, "context"), fromBlock: 0, includesBase: false, bundles })
   assert.doesNotMatch(await readFile(later.file, "utf8"), /## Child agents/)
 
   // Without the catalog, a bundle carries no children and still renders.
