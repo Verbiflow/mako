@@ -7,7 +7,8 @@ import { invokeRuntime, probeRuntime } from "@mako/host/transport/connection"
  * The person's side of `bench:host-load`, in a process of its own: a health check every `everyMs` and a read every
  * `readEveryMs` (`channel`), each timed from send to answer, as a window and the desktop's watchdog ask. Each probe
  * waits for the last, so a held host shows as one long answer, not a queue of short ones. On SIGTERM it writes every
- * time to `out`: `[sentAt, ms]`, with `ms` null for a probe that failed or passed `timeoutMs`.
+ * time to `out`: `[sentAt, ms]`, with `ms` null for a probe that failed or passed `timeoutMs`, and `origin`, the
+ * wall-clock time `sentAt` counts from.
  */
 
 const [socket, out, channel, everyMs, readEveryMs, timeoutMs] = z.tuple([z.string(), z.string(), z.string(), z.coerce.number(), z.coerce.number(), z.coerce.number()]).parse(process.argv.slice(2))
@@ -33,6 +34,6 @@ void loop(reads, readEveryMs, async () => {
 })
 process.on("SIGTERM", () => {
   stopped = true
-  writeFileSync(out, JSON.stringify({ health, reads }))
+  writeFileSync(out, JSON.stringify({ origin: performance.timeOrigin, health, reads }))
   process.exit(0)
 })

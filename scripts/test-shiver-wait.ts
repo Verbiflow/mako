@@ -2,12 +2,12 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { SHIVER_WAIT, SHIVER_WAIT_S } from "@mako/host/contracts/turn-waits"
+import { SHIVER_WAIT, SHIVER_WAIT_S, turnWaitDescription } from "@mako/host/contracts/turn-waits"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
 /*
- * The shiver check-in (`npm run test:turn-waits`): an Apex whose turn ends with a Fin at work and no wait of its own
- * armed waits an hour for the shiver (Mako's own wait, `armedBy: mako`); at the hour it hears how each Fin stands, as
+ * The Shiver check-in (`npm run test:turn-waits`): an Apex whose turn ends with a Fin at work and no wait of its own
+ * armed waits an hour for the Shiver (Mako's own wait, `armedBy: mako`); at the hour it hears how each Fin stands, as
  * Mako's words. A wait its agent armed is never replaced by it; one due while the Apex is at work, or with no Fin at
  * work, passes quietly; with no Fin at work none is armed. Time is moved by hand.
  */
@@ -60,7 +60,7 @@ try {
   fins.add(started.conversation!)
   await new Promise((resolve) => setTimeout(resolve, 300))
 
-  // Its turn ends with the Fin at work: Mako waits an hour for the shiver, as Mako's own wait.
+  // Its turn ends with the Fin at work: Mako waits an hour for the Shiver, as Mako's own wait.
   world.say(apex.conversation, "Start the docs Fin and wait")
   await apexDone("its turn")
   const shiver = shiverOf()
@@ -70,8 +70,12 @@ try {
   assert.deepEqual(shiver.items, [], "on time alone: each Fin's report wakes the Apex as ever")
   assert.ok(shiver.endsBy! - now() > (SHIVER_WAIT_S - 5) * 1000 && shiver.endsBy! - now() <= SHIVER_WAIT_S * 1000, "an hour on")
   assert.deepEqual(world.live.snapshot(apex.conversation)?.turnWait?.description, SHIVER_WAIT, "the person's line says so")
+  // A check-in armed by a build before the Shiver keeps its words in its record; it reads in today's. An agent's own wait
+  // in those words is its own.
+  assert.equal(turnWaitDescription({ description: "Waiting for the crew", armedBy: "mako" }), SHIVER_WAIT, "a stored check-in reads as the Shiver's")
+  assert.equal(turnWaitDescription({ description: "Waiting for the crew" }), "Waiting for the crew", "an agent's wait keeps its words")
 
-  // At the hour, the Apex hears how the shiver stands, as Mako's words.
+  // At the hour, the Apex hears how the Shiver stands, as Mako's words.
   const before = apexTexts.length
   offset += SHIVER_WAIT_S * 1000 + 1000
   world.agents.turnWaits.check()
@@ -178,7 +182,7 @@ try {
   assert.ok(!apexTexts.slice(finished).some((text) => text.startsWith("Mako: an hour passed")), "with no Fin at work, it says nothing")
   assert.equal(shiverOf(), undefined)
 
-  process.stdout.write("ok shiver check-in: armed when an Apex's turn ends with Fins at work, its hour's note, never over the agent's own wait, quiet mid-turn or with no Fin at work\n")
+  process.stdout.write("ok Shiver check-in: armed when an Apex's turn ends with Fins at work, its hour's note, never over the agent's own wait, quiet mid-turn or with no Fin at work\n")
   await world.close()
 } finally {
   rmSync(root, { recursive: true, force: true })

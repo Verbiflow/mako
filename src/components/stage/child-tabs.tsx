@@ -25,7 +25,7 @@ export function FinMark({ agent, state, read, lit, cut, size }: { agent: NativeA
 
 /**
  * The Fin opened in place, the one tab a Fin gets. A tab is something opened on purpose, so a Fin earns one only by
- * being opened (from the shiver card, the rail or the Inbox) and gives it up on close; the rest of an Apex's Fins live in
+ * being opened (from the Shiver card, the rail or the Inbox) and gives it up on close; the rest of an Apex's Fins live in
  * those places, never here as they spawn.
  */
 export function OpenFinTab({ thread }: { thread: string }) {

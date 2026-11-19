@@ -1474,7 +1474,7 @@ diffs-container {
 }
 
 /*
- * An Apex's shiver (`FinPips`): a 6 px pip per Fin. The working stretch moves as
+ * An Apex's Shiver (`FinPips`): a 6 px pip per Fin. The working stretch moves as
  * one: a veil in the row's own paint (`--pips-under`, and `--pips-over` for a
  * translucent hover fill over it) dims the pips under it and has a clear hole
  * that sweeps across them on `transform` alone, so a row's wave is one
@@ -1558,7 +1558,7 @@ diffs-container {
 }
 
 /*
- * The shiver card's header bar: a thin strip split by group, the working
+ * The Shiver card's header bar: a thin strip split by group, the working
  * stretch alone in motion. A crest of light slides across it, transform
  * only, so the compositor moves it and the gate
  * (`src/lib/visible-animation.ts`) can stop it off screen or under reduced
@@ -2076,6 +2076,31 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   content-visibility: auto;
 }
 
+/*
+ * A streaming answer's reveal (stream-reveal.ts): the text is in the page as it lands, drawn transparent until its
+ * turn in the reveal comes, then at a few steps toward its own colour. Custom highlights over the text nodes that are
+ * there: nothing is added to the page for it.
+ */
+::highlight(mako-reveal-hidden) {
+  color: transparent;
+}
+
+::highlight(mako-reveal-0) {
+  color: color-mix(in oklab, var(--foreground) 20%, transparent);
+}
+
+::highlight(mako-reveal-1) {
+  color: color-mix(in oklab, var(--foreground) 45%, transparent);
+}
+
+::highlight(mako-reveal-2) {
+  color: color-mix(in oklab, var(--foreground) 70%, transparent);
+}
+
+::highlight(mako-reveal-3) {
+  color: color-mix(in oklab, var(--foreground) 88%, transparent);
+}
+
 .scroll-fade-scroller[data-preserve-scroll] .contain-turn,
 .scroll-fade-scroller[data-preserve-scroll] [data-estimated-paragraph],
 .contain-turn[data-preserve-height],
@@ -2085,6 +2110,16 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 [data-virtual-transcript] .contain-turn,
 [data-virtual-transcript] [data-estimated-paragraph] {
   content-visibility: visible;
+}
+
+/*
+ * A windowed row is laid out for real, since its measured size is what places every row after it. One kept mounted
+ * out of view (`data-sized`, conversation-timeline.tsx) is skipped until it's read, standing at the height it was
+ * laid out at: the rows around the pane then cost no layout or paint.
+ */
+[data-virtual-transcript] > [data-sized] > .contain-turn {
+  content-visibility: auto;
+  contain-intrinsic-size: auto var(--row-size);
 }
 
 .scroll-fade-top {

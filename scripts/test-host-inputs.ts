@@ -72,7 +72,7 @@ await assert.rejects(bridge.liveAction("conversation", action), /routing probe/)
 await assert.rejects(bridge.liveAction("conversation", { ...action, kind: "steer" }), /routing probe/)
 assert.deepEqual(routed, ["mako:live-steer-queued", "mako:live-action"], "web and desktop advertise queued steering separately while preserving ordinary steering")
 
-// The shiver notice extends existing UI calls; old Thread calls remain valid, with bounded exact work for a new press.
+// The Shiver notice extends existing UI calls; old Thread calls remain valid, with bounded exact work for a new press.
 const choice = { notice: "limit:fixture", place: "codex", waits: [{ thread: "21111111-1111-4111-8111-111111111111", request: "31111111-1111-4111-8111-111111111111" }] }
 assert.deepEqual(hostCallSchema("mako:agents-next-place").parse(["conversation"]), ["conversation"])
 assert.deepEqual(hostCallSchema("mako:agents-next-place").parse(["conversation", choice.notice]), ["conversation", choice.notice])

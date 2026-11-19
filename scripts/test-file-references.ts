@@ -4,7 +4,7 @@ import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import { test } from "node:test"
 import { Git } from "@mako/git"
 import { SLICE_MS } from "@mako/sessions/slices"
@@ -538,6 +538,53 @@ for (const [name, change] of Object.entries({
     }
   })
 }
+
+test("a Thread's places are the roots it ran in, under or touched, indexed from paths alone and kept up from where entries put files", async () => {
+  const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-places-")))
+  const store = JournalStore.open(join(folder, "journal.sqlite"), { device: "d-1" })
+  const whole = { stats: store.stats.bind(store), entries: store.entries.bind(store) }
+  try {
+    let tracked = 0
+    const root = (id: string, active = true) => store.saveRoot({ id, path: join(folder, id), kind: "workspace", repository: false, head: null, mark: null, seenAt: 1, trackedAt: ++tracked, active })
+    for (const id of ["ran", "outer/inner", "touched", "current", "far", "ran-2", "kept"]) {
+      mkdirSync(join(folder, id), { recursive: true })
+      root(id, id !== "kept")
+    }
+    root("gone", false)
+    const call = (id: string, fields: Partial<StoredActivity>): StoredActivity => ({ kind: "call", id, session: "s", thread: "t", named: [], start: 100, end: 101, ...fields })
+    store.saveActivity(call("in", { cwd: join(folder, "ran", "sub") }))
+    store.saveActivity(call("over", { checkout: join(folder, "outer") }))
+    store.saveActivity(call("names", { named: [join(folder, "touched", "src", "x.ts"), join(folder, "gone", "a.ts"), join(folder, "kept", "b.ts")] }))
+    store.saveActivity(call("removed", { checkout: join(folder, "removed") }))
+    const stat = { dev: 1, ino: 2, size: 3, mode: 0o100644, mtimeNs: 4n, ctimeNs: 5n, ref: null, checkedNs: 6n }
+    for (const path of ["src/x.ts", "src/y.ts"]) store.saveStat("touched", path, stat)
+    store.stats = () => { throw new Error("a root's stats must not be read whole for its paths") }
+    store.entries = () => { throw new Error("entries must not be read whole for where they put files") }
+    const files = new ThreadFiles({ git: new Git(), home: folder })
+    const read = () => files.context(store, { thread: "t", current: [join(folder, "current", "deep")] })
+    const places = (await read()).places
+    const at = (id: string) => places.find((place) => place.root === join(folder, id))
+    assert.deepEqual(places.map((place) => relative(folder, place.root)).sort(), ["current", "gone", "kept", "outer/inner", "ran", "removed", "touched"], "never one it didn't go near, nor one whose name only starts alike")
+    assert.deepEqual(["gone", "kept", "removed", "ran"].map((id) => at(id)?.gone ?? false), [true, false, true, false], "a root let go counts as gone only once its folder is")
+    assert.deepEqual(["current", "ran", "removed"].map((id) => at(id)?.current), [true, false, false])
+    assert.deepEqual(at("touched")?.index?.find("y.ts"), ["src/y.ts"])
+    assert.equal(at("kept")?.index, undefined, "only a root still tracked has an index")
+
+    const entry = (path: string, kind: "create" | "delete" | "rename", from?: string) => store.insertEntry({
+      at: 200, changedAt: 200, root: "touched", path, kind, ...(from && { from }), before: null, after: null, text: false, stored: false, observed: "event",
+      author: { certainty: "person", via: "no-activity" }, settled: true,
+    })
+    entry("src/new.ts", "create")
+    entry("src/z.ts", "rename", "src/y.ts")
+    entry("src/x.ts", "delete")
+    const index = (await read()).places.find((place) => place.root === join(folder, "touched"))?.index
+    assert.deepEqual(["new.ts", "z.ts", "y.ts", "x.ts"].map((name) => index?.find(name)), [["src/new.ts"], ["src/z.ts"], [], []], "caught up from the entries since")
+  } finally {
+    Object.assign(store, whole)
+    store.close()
+    rmSync(folder, { recursive: true, force: true })
+  }
+})
 
 test("a Thread's writes follow its entries as they're settled, and a call moved away leaves it", async () => {
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-moved-")))

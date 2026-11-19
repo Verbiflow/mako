@@ -205,7 +205,7 @@ function noteLiveOutcome(
 
 /**
  * A wake turn that said nothing to the person: its Apex read its Fins' digest and answered no words of its own. What
- * the Fins asked is announced as their asks (`noteFinAsks`) and the shiver card shows the rest, so a "finished" banner
+ * the Fins asked is announced as their asks (`noteFinAsks`) and the Shiver card shows the rest, so a "finished" banner
  * for it would be noise, once per wake.
  */
 function quietWake(conversation: LiveAcpConversation): boolean {

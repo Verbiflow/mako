@@ -5,7 +5,7 @@ import { SessionIdSchema, ThreadIdSchema } from "../packages/host/src/contracts/
 import { lastStep } from "../packages/host/src/conversations/agent-runs"
 
 /*
- * What a shiver row says about a Fin. Its time is how long it has stood as it stands, from `since`: a working Fin's
+ * What a Shiver row says about a Fin. Its time is how long it has stood as it stands, from `since`: a working Fin's
  * current turn, not its age; one waiting on its own Fins from when its turn ended; the rest from when they got there;
  * nothing at all when the start isn't known. Its line says what it's doing, always, and "answered" only for an answer
  * to the turn it's on, in plain words.

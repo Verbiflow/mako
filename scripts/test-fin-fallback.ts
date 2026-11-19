@@ -234,7 +234,7 @@ try {
     assert.deepEqual(edgeOf(r).tuned?.rerouted?.to, { why: "harness", harness: "codex" })
     assert.equal(r.world.agents.roster(r.apex.conversation)[0]!.child!.moved, line)
     assert.ok(noted(r, "Moved to Claude (work)") && noted(r, "Moved to Codex"), "each move is a line in its transcript")
-    // And in its Apex's, where the person reads the shiver: the Fin's name, where it went, and why under it.
+    // And in its Apex's, where the person reads the Shiver: the Fin's name, where it went, and why under it.
     const apexLines = (r.world.live.snapshot(r.apex.conversation)?.blocks ?? []).flatMap((block) => (block.type === "event" ? [[block.label, block.detail]] : []))
     const title = r.world.store.thread(edgeOf(r).child)?.title ?? edgeOf(r).name
     assert.deepEqual(apexLines.filter(([label]) => label?.startsWith(`${title} moved to`)), [

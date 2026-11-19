@@ -7,6 +7,10 @@ import { useMediaAnswers } from "@/state/turn-media"
 import type { AttachmentContent } from "@mako/sessions"
 import { Paragraph } from "./paragraph"
 import { useParsedProse } from "./use-parsed-prose"
+import { useStreamReveal } from "./stream-reveal"
+import { useStreamedText } from "./use-live-answer"
+import { forgetWarmedProse, warmedProse } from "@/lib/prose-parser-client"
+import { rememberSettledProse, settledProse } from "./settled-prose"
 import {
   skipMarkdownParse,
   reuseParsedProse,
@@ -23,7 +27,6 @@ import type { PromptReference, SentProse } from "@/lib/prompt-markdown"
 import { isSkillName } from "@/lib/skill-references"
 import { ProseStreamingContext } from "./prose-layout-context"
 import { streamPieces, streamingMarkdown } from "@/lib/streaming-markdown"
-import { StreamFrames } from "@/lib/stream-frames"
 import { ChangingLabel } from "@/components/ui/changing-label"
 import { useCopy } from "@/components/ui/use-copy"
 import {
@@ -32,8 +35,9 @@ import {
   useMemo,
   isValidElement,
   memo,
-  useEffect,
   useContext,
+  useEffect,
+  useRef,
   useState,
   type ComponentProps,
   type ReactElement,
@@ -105,31 +109,6 @@ export interface AnswerMedia {
   at: number
 }
 
-/**
- * Settled prose, rendered once per text. `Markdown` is a pure function of
- * its input, and the elements it returns read references and the transcript
- * source from context when they render, so a thread switched back to or a
- * turn scrolled back into view reuses them instead of parsing again.
- */
-const SETTLED_PROSE_ENTRIES = 600
-const SETTLED_PROSE_CHARS = 6_000_000
-const settledProse = new Map<string, ReactElement>()
-let settledProseChars = 0
-
-function rememberSettledProse(text: string, element: ReactElement) {
-  settledProse.set(text, element)
-  settledProseChars += text.length
-  while (
-    settledProse.size > SETTLED_PROSE_ENTRIES ||
-    settledProseChars > SETTLED_PROSE_CHARS
-  ) {
-    const oldest = settledProse.keys().next().value
-    if (oldest === undefined) break
-    settledProse.delete(oldest)
-    settledProseChars -= oldest.length
-  }
-}
-
 export const Prose = memo(function Prose({
   text,
   streaming,
@@ -159,20 +138,29 @@ export const Prose = memo(function Prose({
     const entries = sent?.items.flatMap((item) => (item.kind === "skill" ? [item.skill] : [])) ?? []
     return entries.length > 0 ? new Map(entries.map((entry) => [entry.name, entry])) : EMPTY_SKILLS
   }, [sent])
-  const throttled = useThrottled(text, Boolean(streaming))
+  // A reply being written takes its words from its conversation as they land, not from the turn's paced draw.
   // A streaming answer draws only whole structure, and keeps the pieces
   // before the last as parsed (`streamPieces`); the last piece is the one that grows.
   const pieced = Boolean(streaming) && !sent && !urlTransform
+  const { shown: throttled, parsed: parsedChars } = useStreamedText(text, Boolean(streaming), sent ? undefined : answerId)
   const pieces = useMemo(
     () => (pieced ? streamPieces(streamingMarkdown(throttled)) : [throttled]),
     [pieced, throttled]
   )
   const growing = pieces.at(-1) ?? ""
+  // The next paint waits by what this one parsed: the piece being written, not the whole answer.
+  useEffect(() => parsedChars(growing.length), [parsedChars, growing])
   const kept = pieces.slice(0, -1)
   const keptChars = kept.reduce((total, piece) => total + piece.length, 0)
   const parsed = useParsedProse(growing, Boolean(streaming) && !sent)
   const source = parsed?.text ?? growing
-  const tree = parsed?.tree
+  // A settled answer's tree, where it was parsed before this turn mounted (`warmSettledProse`): read once per text,
+  // so prose drawn without one isn't drawn again when its tree arrives late.
+  const ahead = useMemo(
+    () => (streaming || sent || urlTransform || settledProse.has(growing) ? undefined : warmedProse(growing)),
+    [growing, streaming, sent, urlTransform]
+  )
+  const tree = parsed?.tree ?? ahead
   const hasTree = Boolean(tree)
   const referenceInput = useMemo(
     () => (sent ? { sent, references: new Map<string, PromptReference>(), text: source } : null),
@@ -197,7 +185,7 @@ export const Prose = memo(function Prose({
     [tree, assets]
   )
 
-  const settled = !streaming && !referenceInput && !urlTransform && !hasTree && !previewedFiles?.length
+  const settled = !streaming && !referenceInput && !urlTransform && !parsed && !previewedFiles?.length
   const rendered = useMemo(() => {
     const cached = settled ? settledProse.get(source) : undefined
     if (cached) {
@@ -215,16 +203,24 @@ export const Prose = memo(function Prose({
           : (urlTransform?.(url) ?? defaultUrlTransform(url)),
       children: source,
     })
-    if (settled) rememberSettledProse(source, element)
+    if (settled) {
+      rememberSettledProse(source, element)
+      forgetWarmedProse(source)
+    }
     return element
   }, [source, plugins, referenceMap, urlTransform, rehypePlugins, settled])
 
+  // A streaming answer's newest words are revealed at a steady pace and fade in (`useStreamReveal`).
+  const root = useRef<HTMLDivElement>(null)
+  useStreamReveal(root, Boolean(streaming) && !sent, keptChars + source.length)
+
   return (
     <div
+      ref={root}
       className={cn("mako-prose", className)}
       data-answer={answerId}
       data-rendered-chars={keptChars + source.length}
-      data-prose-worker={hasTree || undefined}
+      data-prose-worker={Boolean(parsed) || undefined}
     >
       <ProseStreamingContext value={Boolean(streaming)}>
         <AnswerMediaContext value={keeps}>
@@ -270,34 +266,6 @@ const KeptPiece = memo(function KeptPiece({ text, assets }: { text: string; asse
     [text, assets]
   )
 })
-
-/**
- * Latest value while it streams, painted as `StreamFrames` paces it: the first
- * change of a burst at once, then at most once a frame. Only unmount (or
- * StrictMode's simulated one) stops a pending paint, and the effect after it
- * schedules again.
- */
-function useThrottled(text: string, active: boolean): string {
-  const [shown, setShown] = useState(text)
-  const [frames] = useState(() => new StreamFrames(setShown))
-
-  // A settled message renders its exact text with no delay. Adjusting during
-  // render rather than in an effect avoids the extra pass a cascading setState
-  // would cost on the frame the turn completes.
-  if (!active && shown !== text) {
-    setShown(text)
-  }
-
-  // Settled, a paint still pending would draw a streaming text over it.
-  useEffect(() => {
-    if (active) frames.next(text)
-    else frames.stop()
-  }, [active, text, frames])
-
-  useEffect(() => () => frames.stop(), [frames])
-
-  return shown
-}
 
 const components = {
   p: Paragraph,

@@ -6,7 +6,7 @@ import type { WebThread } from "./threads"
 /**
  * The phone's Inbox: what waits on the person, from the records its marks read. A Fin asking the person, from its
  * Apex's roster this page holds (`personAsks`), answered through the Apex's host (`answerFin`), so an answer here
- * leaves the dock, the shiver and the desk at once; and a Thread the account lists as waiting, opened to answer.
+ * leaves the dock, the Shiver and the desk at once; and a Thread the account lists as waiting, opened to answer.
  */
 
 /** A Fin asking the person, with the Apex it answers through: the row "Mobile polish · Approve: npm ci". */

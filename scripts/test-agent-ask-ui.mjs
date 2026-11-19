@@ -143,12 +143,12 @@ async function check() {
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the rail")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("[...document.querySelectorAll('[data-shiver] [data-fin-ask]')].some((node) => node.innerText.includes('Dictation fallback'))", "the Fin's ask on the shiver card")
+  await until("[...document.querySelectorAll('[data-shiver] [data-fin-ask]')].some((node) => node.innerText.includes('Dictation fallback'))", "the Fin's ask on the Shiver card")
   const shiver = await evaluate("[...document.querySelectorAll('[data-shiver] [data-fin-ask]')].find((node) => node.innerText.includes('Dictation fallback')).innerText.replace(/\\s+/g, ' ')")
-  assert.ok(shiver.includes("Move to the cloud") && shiver.includes("Keep here"), `the shiver card answers in the ask's words: ${shiver}`)
+  assert.ok(shiver.includes("Move to the cloud") && shiver.includes("Keep here"), `the Shiver card answers in the ask's words: ${shiver}`)
   assert.ok(!shiver.includes("Allow once") && !shiver.includes("waits on this command"), `and not as a command's approval: ${shiver}`)
   await shoot("shiver-fin-ask", "[data-shiver]")
-  console.log("PASS: a Fin's ask reads in its own words on its Apex's shiver card and in the Inbox")
+  console.log("PASS: a Fin's ask reads in its own words on its Apex's Shiver card and in the Inbox")
 
   // An ask arriving with another Thread open is said at once, by the control-only batch that carries it.
   await window.loadURL(`${base}?mock&app=apex`)
@@ -168,12 +168,12 @@ async function check() {
   assert.equal((await answers()).at(-1).allow, true)
   console.log("PASS: the laptop browser's card, and its answer reaching the host")
 
-  // The laptop browser's shiver card answers a Fin's ask in its own words.
+  // The laptop browser's Shiver card answers a Fin's ask in its own words.
   await window.loadURL(`${base}scripts/web-desk.html?app=apex&thread=apex&ask=fin`)
-  await until("[...document.querySelectorAll('[data-shiver] [data-fin-ask]')].some((node) => node.innerText.includes('Dictation fallback'))", "the laptop browser's shiver card")
+  await until("[...document.querySelectorAll('[data-shiver] [data-fin-ask]')].some((node) => node.innerText.includes('Dictation fallback'))", "the laptop browser's Shiver card")
   const laptopFin = await evaluate("[...document.querySelectorAll('[data-shiver] [data-fin-ask]')].find((node) => node.innerText.includes('Dictation fallback')).innerText.replace(/\\s+/g, ' ')")
   assert.ok(laptopFin.includes("Move to the cloud") && !laptopFin.includes("Allow once"), `the laptop browser answers in the ask's words: ${laptopFin}`)
-  console.log("PASS: the laptop browser's shiver card answers a Fin's ask in its own words")
+  console.log("PASS: the laptop browser's Shiver card answers a Fin's ask in its own words")
 
   // The phone: the dock's card in the same words; Move to the cloud reaches the host and takes it away.
   window.setContentSize(390, 844)

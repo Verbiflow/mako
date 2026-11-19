@@ -1,3 +1,5 @@
+import type { WorktreeRestored } from "./thread-worktrees.js"
+
 /**
  * What an agent is told when its turn goes on from a point older than work it
  * already did: a harness resumed it from its last saved step after a dropped
@@ -221,6 +223,23 @@ export function finResumedText(resume: FinResume): string {
   const now = branches.length ? `\n\nWhere your branch stands now:\n${branches.join("\n")}` : ""
   return `${head}\n${opening}\n\n${since}${now}\n\nCheck what you had in flight when you stopped (a command half-run, a file half-written) and anything that landed meanwhile before going on.`
 }
+/**
+ * What a Fin reads beneath the message that opens it again when Mako had retired its worktree once it finished
+ * (`WorktreeRestored`): where it is now and on what, and that what the folder held beside its commit is gone; or,
+ * when the worktree couldn't be made again, exactly why, and to find out where it runs before it changes anything.
+ */
+export function worktreeRemadeText(restored: WorktreeRestored): string {
+  if (restored.kind === "restored") return `[mako · your worktree was removed after you finished, and is made again at ${restored.path} ${restored.note}]`
+  return `[mako · your worktree at ${restored.path} was removed after you finished, and Mako couldn't make it again: ${restored.why} You may be in the project's own folder, which isn't yours alone: check where you are (pwd, git status) before you change anything, and say so in your report.]`
+}
+
+/** The same for whoever sent the message, in one sentence of its receipt. */
+export function worktreeRemadeWords(name: string, restored: WorktreeRestored): string {
+  return restored.kind === "restored"
+    ? `Its worktree, removed after it finished, was made again ${restored.note.split(". ")[0]}.`
+    : `Mako couldn't make ${name}'s worktree again, removed after it finished: ${restored.why}`
+}
+
 /** A Fin whose turn stopped on its account's usage limit, going on elsewhere (`finMovedText`). */
 export interface FinMovedOn {
   /** Where it was, where it goes on, and why, in the person's words (`movedWords`). */

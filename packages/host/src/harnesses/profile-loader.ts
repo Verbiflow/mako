@@ -1,14 +1,36 @@
 import type { HarnessModelCatalog } from "@mako/sessions/model-catalog"
+import type { SessionModel } from "@mako/sessions/settings"
 import type { HarnessProfile } from "../contracts/providers-acp.js"
 import type { ProviderCapability } from "./registry.js"
 import { hostWarn } from "../base/host-log.js"
 import { workDefault, workDefaultProblems, type HarnessDefaults } from "../contracts/harness-defaults.js"
+import type { FolderDefaults } from "./provider-profile-cache.js"
 
 /** This query's owner, independent of a session's native execution authority.
  * Stop only this query's process on cancellation and await cleanup. A waiter
  * borrowing another query's catalog must not dispose that other owner's process. */
 export interface ProfileLoadContext {
   signal: AbortSignal
+  /**
+   * The models this account listed the last time, read from the runtime `runtimeStamp` still names. What the harness
+   * said of each then (whether it runs it, each option's value) need not be asked again.
+   */
+  kept?: readonly SessionModel[]
+}
+
+export interface FolderConfiguration {
+  /**
+   * The project-level configuration files the harness reads, relative to each folder from the checkout's root down
+   * to the folder asked. Two checkouts of one repository whose files are the same bytes configure it the same.
+   */
+  files: readonly string[]
+  /** The profile names the model the folder is configured with, whatever Mako's defaults are. */
+  configuredModel?: true
+  /**
+   * The folder's fields read without starting a process, where the harness's configuration can be parsed as the
+   * harness itself resolves it. Undefined when it can't say.
+   */
+  read?(env: NodeJS.ProcessEnv, cwd: string, models: readonly SessionModel[]): Promise<FolderDefaults | undefined>
 }
 
 export interface ProviderProfileLoader extends ProviderCapability {
@@ -19,6 +41,17 @@ export interface ProviderProfileLoader extends ProviderCapability {
   transport: HarnessProfile["transport"]
   nativeModelIds?: true
   cacheKey(env: NodeJS.ProcessEnv): string
+  /**
+   * What names the runtime a discovery reads, for a harness whose answers about each model are costly and change
+   * only with it: the same stamp and account hand the next discovery what the last one read (`ProfileLoadContext.kept`).
+   */
+  runtimeStamp?(env: NodeJS.ProcessEnv): Promise<string | undefined>
+  /**
+   * Declared by a harness whose profile says something of the folder's own configuration (`settings` where Mako's
+   * default isn't offered, `configuredModel`). A send in a folder never discovered must launch on what that folder
+   * configures, so it takes those from here rather than from the account's list alone (`HarnessProfiles`).
+   */
+  folder?: FolderConfiguration
   load(env: NodeJS.ProcessEnv, cwd?: string, context?: ProfileLoadContext): Promise<HarnessProfile>
   loadForSend?(env: NodeJS.ProcessEnv, cwd?: string, context?: ProfileLoadContext): Promise<HarnessProfile>
 }

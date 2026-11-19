@@ -120,7 +120,7 @@ export function sentByMako(text: string): boolean {
 export function briefIntro(name: string): string {
   return `You're fin:${name}${INTRO_TAIL}`
 }
-const INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation. agents_list with scope shiver shows your ${SHIVER_WORD}: it and the other ${FIN_WORD}s it started.`
+const INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation. agents_list with scope shiver shows your ${SHIVER_WORD}: ${YOUR_APEX} and the other ${FIN_WORD}s it started.`
 /** The intro's tail as builds before the Shiver wrote it, its scope then named crew: kept briefs still hold it. */
 const CREW_INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation. agents_list with scope crew shows it and the other ${FIN_WORD}s it started.`
 /** The intro's tail before a Fin could read its Shiver. */
@@ -411,10 +411,15 @@ function listedFinState(state: ChildState): ListedFinState {
 
 /**
  * An Apex's Fins as its row lists them for every other device (`ListedFin`, link version 19 on): its roster, in the
- * order every surface on its owner draws it. Undefined while it has none.
+ * order every surface on its owner draws it. Undefined while it has none. The same list while the roster is the same
+ * one (a roster is built again, never changed), so whoever reads it on every batch orders and writes out nothing, and
+ * tells that no Fin moved by the list being the one it had.
  */
 export function listedFins(children: readonly NativeAgent[] | undefined): ListedFin[] | undefined {
-  const fins = orderedChildren((children ?? []).filter((agent) => agent.child)).slice(0, LISTED_FINS).map((agent): ListedFin => ({
+  if (!children?.length) return undefined
+  const held = listedOfRoster.get(children)
+  if (held) return held.fins
+  const fins = orderedChildren(children.filter((agent) => agent.child)).slice(0, LISTED_FINS).map((agent): ListedFin => ({
     thread: agent.child!.thread,
     name: finNote(agent.child!.name ?? agent.title ?? FIN_WORD),
     harness: agent.provider,
@@ -422,8 +427,13 @@ export function listedFins(children: readonly NativeAgent[] | undefined): Listed
     state: listedFinState(childStateOf(agent)),
     startedAt: new Date(agent.startedAt ?? agent.observedAt).toISOString(),
   }))
-  return fins.length ? fins : undefined
+  const listed = fins.length ? fins : undefined
+  listedOfRoster.set(children, { fins: listed })
+  return listed
 }
+
+/** Each roster's Fins as listed (`listedFins`), kept for as long as the roster is. */
+const listedOfRoster = new WeakMap<readonly NativeAgent[], { fins: ListedFin[] | undefined }>()
 
 const childrenOfFins = new WeakMap<readonly ListedFin[], readonly NativeAgent[]>()
 

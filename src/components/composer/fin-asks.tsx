@@ -17,7 +17,7 @@ import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
 
 /**
- * One line while the shiver card is scrolled away and Fins need the person:
+ * One line while the Shiver card is scrolled away and Fins need the person:
  * their marks and the count. It brings the card's Needs you group back.
  * Nothing while the card is in view, since the asks live there. A Thread
  * with no card doesn't render this; its dock keeps the asks themselves.
@@ -113,7 +113,7 @@ export function FinAsks() {
 
 /**
  * The Fin on screen, when it's opened in its Apex's Thread: what it asks of the person, read from its Apex's roster as
- * the shiver card reads it, and the Apex's conversation that answers it.
+ * the Shiver card reads it, and the Apex's conversation that answers it.
  */
 function useShownFinAsks(): { apex: string | undefined; asks: readonly PersonAsk[]; waits?: string } {
   const here = useOnScreen().thread

@@ -3,7 +3,7 @@
  *
  * A CI Mac's screen is 1024×768, and a window asked for larger is cut to it as it's made (1024×653 inside). At that
  * width a side surface covers the conversation, as the stage means it to, so what a test looks for there is hidden:
- * the shiver card's rows never draw, its marks never move. A window's size set once it exists isn't cut, so
+ * the Shiver card's rows never draw, its marks never move. A window's size set once it exists isn't cut, so
  * `atSize` sets it again.
  *
  * The same Mac asks for reduced motion, which pauses every animation the app gates on it (`visible-animation.ts`):

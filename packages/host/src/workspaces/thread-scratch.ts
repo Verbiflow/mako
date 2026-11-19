@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { lstat, mkdir, readFile, readdir, realpath, rename, rm, rmdir, writeFile } from "node:fs/promises"
 import { dirname, join, sep } from "node:path"
 import { z } from "zod"
+import { edgeStopped } from "../contracts/agents.js"
 import { ThreadIdSchema, type ThreadId } from "../contracts/thread-identity.js"
 import type { ThreadStore } from "../threads/index.js"
 import type { ThreadScratchEntry, ThreadScratchReport, ThreadScratchSettings } from "../contracts/thread-scratch.js"
@@ -47,7 +48,9 @@ export function threadDataAncestorsClosed(store: Pick<ThreadStore, "thread" | "e
     if (seen.has(ancestor) || !store.thread(ancestor)) return false
     seen.add(ancestor)
     const parent = edges.of(ancestor)
-    if (parent?.closedAt === undefined) {
+    // Stopped, never only closed for having finished (`closedFinished`): that close is Mako's own, and says nothing of
+    // whether its Thread's data is still wanted.
+    if (!edgeStopped(parent)) {
       const sessions = store.threadConversations([ancestor]).get(ancestor)
       if (!sessions?.length || !sessions.every(journals => {
         const current = journals.at(-1)

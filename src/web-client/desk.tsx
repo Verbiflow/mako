@@ -488,7 +488,7 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
   }, [addSessionRef, canAdd])
   const tabs = useThreadTabs(useMemo(() => ({ thread: threadId, session: session?.row.session }), [threadId, session?.row.session]))
   const shown = session?.row.session
-  // The Fin opened from the shiver card or Agents, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
+  // The Fin opened from the Shiver card or Agents, in this pane as the phone opens it: its one tab beside the Apex's Sessions.
   const apexConversation = session?.row.conversation
   const child = useDeskFin((state) => (state.fin?.thread === threadId ? state.fin.agent : null))
   const openChild = useCallback(

@@ -120,11 +120,11 @@ async function check() {
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await until("Boolean(document.querySelector('[data-composer]'))", "the Apex's composer")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-shiver]'))", "the shiver card")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the Shiver card")
   await settle()
 
   console.log("LOADED the desk")
-  // 1. The shiver card: a move reads as one, a Fin out of accounts stands apart from what finished, never folded.
+  // 1. The Shiver card: a move reads as one, a Fin out of accounts stands apart from what finished, never folded.
   const header = await text("[data-shiver] header")
   assert.match(header, /1 failed/, `an unfinished Fin counts apart from done: ${header}`)
   const moved = await rows("[data-shiver] [data-shiver-row] [data-fin-moved]")
@@ -144,7 +144,7 @@ async function check() {
   assert.equal(await evaluate("[...document.querySelectorAll('[data-shiver] [data-shiver-row]')].find((each) => each.innerText.includes('Review screen hunks')).querySelector('[title^=Out]')?.title ?? ''"), OUT, "its whole line is one hover away, where the row cuts it")
   await shoot("shiver-card-end", "[data-shiver]")
   await evaluate("(() => { const el = document.querySelector('[data-shiver-scroller]'); el.scrollTop = 0; return true })()")
-  console.log("PASS: the shiver card shows moves, and a Fin out of accounts apart from what finished")
+  console.log("PASS: the Shiver card shows moves, and a Fin out of accounts apart from what finished")
 
   // 2. The Thread says it once, and the composer warned before the wall.
   await until(`[...document.querySelectorAll('[data-fin-asks], [data-composer]')].length > 0`, "the composer")
@@ -204,15 +204,15 @@ async function check() {
   await until("document.querySelectorAll('[data-fin-row]').length > 0", "the phone's rows")
   await evaluate("[...document.querySelectorAll('button, a')].find((each) => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
   await until("Boolean(document.querySelector('[data-apex-count]'))", "the phone's Thread")
-  // The notice stands in the shiver card, which mounts after the bar does: the card is what a read of it waits for.
-  await until("Boolean(document.querySelector('[data-shiver]'))", "the phone's shiver card")
+  // The notice stands in the Shiver card, which mounts after the bar does: the card is what a read of it waits for.
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the phone's Shiver card")
   await settle()
   assert.equal(await evaluate("document.querySelectorAll('[data-limit-notice]').length"), 1, "a phone's Thread says the notice once")
   assert.ok(await evaluate("Boolean(document.querySelector('[data-limit-notice] [data-limit-seen]'))"), "and Got it is there")
   // A long line ends in its ellipsis, short of the time: a `nowrap` line takes its whole width unless the row gives it one.
   const shiver = await evaluate("[...document.querySelectorAll('button[data-shiver-row]')].map((row) => ({ text: row.innerText, over: [...row.querySelectorAll('.truncate')].some((each) => each.getBoundingClientRect().right > row.children[1].getBoundingClientRect().right + 1) }))")
-  assert.ok(shiver.length > 0, "the phone's shiver rows")
-  assert.deepEqual(shiver.filter((row) => row.over).map((row) => row.text), [], "a phone's shiver line stops short of its time")
+  assert.ok(shiver.length > 0, "the phone's Shiver rows")
+  assert.deepEqual(shiver.filter((row) => row.over).map((row) => row.text), [], "a phone's Shiver line stops short of its time")
   await screen("phone-thread", phoneTheme)
   await evaluate("document.querySelector('[data-apex-count]').click(); true")
   await until("Boolean(document.querySelector('[data-agents-sheet]'))", "the phone's Agents sheet")
@@ -224,7 +224,7 @@ async function check() {
   assert.equal(line.cut, false, "and all of it, on a phone with no hover to read the rest")
   console.log("PASS: the phone shows the notice once, and a move whole")
 
-  // 5. The laptop's browser: the Apex's Fins and their moves are on its shiver card, its only list.
+  // 5. The laptop's browser: the Apex's Fins and their moves are on its Shiver card, its only list.
   await viewport(1280, 800)
   await load(`${base}scripts/web-desk.html?app=apex&thread=apex&fins=limit`)
   await until("document.querySelectorAll('[data-shiver] [data-shiver-row]').length > 0 || document.body.innerText.includes('Mobile polish')", "the laptop's Apex")
@@ -317,7 +317,7 @@ async function check() {
   }
   console.log("PASS: a Thread a limit holds gets one card, on the desk, the laptop's browser and a phone")
 
-  // 8. A pending shiver limit is status, not a Got it task. Its one action binds exact held work.
+  // 8. A pending Shiver limit is status, not a Got it task. Its one action binds exact held work.
   for (const [name, width, height, mobile, path] of [["shiver-reset-desk", 1440, 900, false, "?mock&app=apex&fins=limit"], ["shiver-reset-phone", 390, 844, true, "scripts/phone-apex.html?app=apex&fins=limit"]]) {
     await viewport(width, height, mobile)
     await load(`${base}${path}`)
@@ -372,7 +372,7 @@ async function check() {
     assert.equal(await evaluate("window.apexScene.responds().length"), before, `${name}: the move is never a Got it response`)
     await until("!document.querySelector('[data-limit-notice]')", `${name}: recovery clears its notice`)
   }
-  console.log("PASS: pending shiver limits have exact reset/retry status, no dismissal with no room, and one verified move on desk and phone")
+  console.log("PASS: pending Shiver limits have exact reset/retry status, no dismissal with no room, and one verified move on desk and phone")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])
   console.log("Limit notice UI: passed")

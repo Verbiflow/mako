@@ -2,13 +2,13 @@ import { rollupLabel } from "@mako/host/contracts/children"
 import { memo } from "react"
 import { observePhaseLockedAnimation } from "@/lib/visible-animation"
 import { apexPips, pipsCounts, settledWords, type Pips } from "@/state/fin-pips"
-import { useAcp } from "@/state/acp-state"
+import { useRailAcp } from "@/state/acp-state"
 
 const PIP = new Map([["n", "needs"], ["w", "working"], ["l", "lead"], ["q", "queued"], ["i", "idle"], ["f", "failed"], ["d", "done"]])
 const MAX_PIPS = 16
 
 /**
- * An Apex's shiver in one line: a 6 px pip per Fin that needs the person or is live (needs you, working, asking its
+ * An Apex's Shiver in one line: a 6 px pip per Fin that needs the person or is live (needs you, working, asking its
  * Apex, queued, failed), in the order every surface lists them, past sixteen "+N"; done and idle ones are only in the
  * count beside them. The
  * working stretch is one box under one veil in the row's own colour, which sweeps across it on the shared clock: a
@@ -42,7 +42,7 @@ export function FinPips({ pips }: { pips: Pips }) {
 
 /** The second line of an Apex's rail row: its pips and how many Fins. Repaints when a pip changes, never its row. */
 export const ApexShiverLine = memo(function ApexShiverLine({ thread }: { thread: string | undefined }) {
-  const pips = useAcp((state) => apexPips(state, thread))
+  const pips = useRailAcp((state) => apexPips(state, thread))
   if (!pips) return null
   const label = rollupLabel(pipsCounts(pips))
   return (

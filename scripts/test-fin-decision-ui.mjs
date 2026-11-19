@@ -9,9 +9,9 @@ import { atSize, withMotion } from "./lib/test-window.mjs"
 // Done · needs you, on the production components and the mock bridge's Apex scene with two Fins that finished with a
 // decision (`?mock&app=apex&fins=decisions`): Thread list swipe leaves the person "Merge #371 into main?", Pull to
 // refresh leaves its Apex a pick. The person's reads "Done · needs you: …" with its options as buttons, the
-// recommended one first and labelled, in the shiver card, the Inbox, the rail's pips and the phone, and counts under
+// recommended one first and labelled, in the Shiver card, the Inbox, the rail's pips and the phone, and counts under
 // needs you; the Apex's counts as done and says it asks its Apex. An answer in the Inbox reaches the Apex's host and
-// the Fin's row says "You answered: Merge". Screenshots of the shiver card and the Inbox row, dark and light, land in
+// the Fin's row says "You answered: Merge". Screenshots of the Shiver card and the Inbox row, dark and light, land in
 // the printed folder (or `MAKO_DECISION_UI_SHOTS`).
 if (process.versions.electron) {
   void check().catch(async (error) => {
@@ -91,10 +91,10 @@ async function check() {
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await until("Boolean(document.querySelector('[data-composer]'))", "the Apex's composer")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-shiver]'))", "the shiver card")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the Shiver card")
   await settle()
 
-  // 1. The shiver card: counted under needs you, its words, its options as buttons, the recommended one first and labelled.
+  // 1. The Shiver card: counted under needs you, its words, its options as buttons, the recommended one first and labelled.
   const header = await evaluate("document.querySelector('[data-shiver] header').innerText.replace(/\\s+/g, ' ')")
   assert.match(header, /12 Fins 3 need you · 5 working · 2 queued · 1 idle · 1 done/, "the person's decision counts as needs you, the Apex's as done")
   await until("Boolean(document.querySelector('[data-shiver] [data-fin-decision]'))", "the decision's row")
@@ -118,7 +118,7 @@ async function check() {
   assert.doesNotMatch(fold.text, /done/, "and the fold doesn't count the Fin whose decision is open")
   await shoot("shiver-card-end", "[data-shiver]")
   await evaluate("(() => { const el = document.querySelector('[data-shiver-scroller]'); el.scrollTop = 0; return true })()")
-  console.log("PASS: the shiver card says Done · needs you with its options, recommended first")
+  console.log("PASS: the Shiver card says Done · needs you with its options, recommended first")
 
   // 2. The rail's pips count it, and the Inbox lists it with its buttons.
   const pips = await evaluate("document.querySelector('.thread-jump-scope [data-apex-row] [data-fin-pips]')?.getAttribute('aria-label') ?? ''")

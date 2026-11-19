@@ -10,7 +10,7 @@ import { testScratch } from "./lib/test-scratch.mjs"
 /**
  * An Apex's row through the production rail and phone list, on the mock bridge's Apex (`?mock&app=apex`): one pip per
  * Fin in `orderedChildren`' order, counted as `rollup` counts them; each Fin that needs the person hung under it and
- * nothing else of the shiver in the rail; a Fin going to needs-you nests and leaves once answered, rows below it moving
+ * nothing else of the Shiver in the rail; a Fin going to needs-you nests and leaves once answered, rows below it moving
  * by that row alone while every other row keeps its place, the folder's paging untouched; a nested row opens its Fin
  * in place, and answering one in the Inbox takes it from under its Apex at once. On the phone the Apex's row wears the
  * pips on its second line, and its asking Fins stay the Needs you rows they are, listed once.

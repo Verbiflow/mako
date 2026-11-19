@@ -9,8 +9,8 @@ import { testScratch } from "./lib/test-scratch.mjs"
 /**
  * The newest turn stays in view while reports pour into a long Apex, on the desk, in a laptop's browser and on a phone,
  * and only the reader's own scrolling of the transcript lets go of it. Trusted input through the real pipeline: bursts,
- * a queued digest, a steer, a shrinking column, a reconnect and the shiver card growing all keep the end; a wheel over
- * the shiver card's own list doesn't release it, nor does a tap or a click; a reader back at the end follows again;
+ * a queued digest, a steer, a shrinking column, a reconnect and the Shiver card growing all keep the end; a wheel over
+ * the Shiver card's own list doesn't release it, nor does a tap or a click; a reader back at the end follows again;
  * a browser with no `scrollend` keeps its input from going stale. A reader who's truly up stays exactly where they are
  * through the burst, with what's mounted bounded, and a button they clicked doesn't hold the conversation's memory.
  * Screenshots land in the printed directory.
@@ -184,7 +184,7 @@ async function check() {
     await keeps("a steer landing in the turn", undefined, () => batch("{ updates: [{ kind: 'user', text: 'A steer', steeringFor: at.requests?.at(-1)?.id, requestId: crypto.randomUUID() }] }"))
     await keeps("a reply retracted, the column shrinking", undefined, () => batch("{ updates: [{ kind: 'retract', ids: ['reply-2', 'reply-3'] }] }"))
     await keeps("a reconnect reading the snapshot again", undefined, () => evaluate(`Promise.all([import('/src/state/live-recovery.ts'), import('/src/state/acp-state.ts')]).then(async ([recovery, acp]) => { await new Promise((done) => setTimeout(done, 200)); const now = acp.activeLiveAcp(acp.acpStore.get()); recovery.applyLiveSnapshot({ session: now.session, revision: (now.revision ?? 0) + 1, epoch: 'reconnected', createdAt: Date.now(), threadPath: now.threadPath, threadId: now.threadId, sessionId: now.sessionId, base: null, permissions: [], requests: now.requests, blocks: now.blocks, control: now.control, nativeAgents: now.nativeAgents }); return true })`))
-    await keeps("the shiver card growing", undefined, () => evaluate("(() => { const fins = window.apexScene?.children?.(); if (fins) window.apexScene.setChildren(fins.map((fin) => ({ ...fin }))); return true })()"))
+    await keeps("the Shiver card growing", undefined, () => evaluate("(() => { const fins = window.apexScene?.children?.(); if (fins) window.apexScene.setChildren(fins.map((fin) => ({ ...fin }))); return true })()"))
     const stale = async (name, input) => {
       // Input that moved nothing must leave nothing behind: the layout shifting a moment later isn't the reader.
       await open()
@@ -194,7 +194,7 @@ async function check() {
     if (form !== "phone") {
       await open()
       await keeps("a wheel down at the end", async () => { const at = await centre("[data-transcript-viewport]"); await wheel(at.x, at.y, 40) })
-      await keeps("a wheel up over the shiver card's own list", async () => {
+      await keeps("a wheel up over the Shiver card's own list", async () => {
         const at = await centre("[data-shiver-scroller]")
         if (!at) return
         await wheel(at.x, at.y, 200)
@@ -210,7 +210,7 @@ async function check() {
         await wait(250)
       })
       // Up, then exactly as far back, and the hand stops: inside one wheel window its net is nothing, which fingers at
-      // rest also come to, and main left the end it came back to unfollowed. Clear of the shiver card, so no wheel goes
+      // rest also come to, and main left the end it came back to unfollowed. Clear of the Shiver card, so no wheel goes
       // to its list.
       await open()
       await keeps("read up, then wheeled exactly back to the end", async () => {
@@ -228,7 +228,7 @@ async function check() {
       const { traces } = JSON.parse(await readFile(resolve("scripts/fixtures/wheel-traces.json"), "utf8"))
       for (const [name, trace] of Object.entries(traces)) {
         await open()
-        // Over the transcript itself, clear of the shiver card's list, which would take the wheel.
+        // Over the transcript itself, clear of the Shiver card's list, which would take the wheel.
         const point = await evaluate(`(() => { const box = ${VIEW}.getBoundingClientRect(); return { x: box.left + 200, y: box.top + 60 } })()`)
         if (trace.expect === "keeps") {
           await keeps(name, () => replay(point, trace.events))

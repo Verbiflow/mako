@@ -101,6 +101,14 @@ const heavy = residencyPlan([
   { id: "older", usedAt: 1, weight: 1, pinned: false },
 ], { bytes: 100, recent: 1 })
 assert.deepEqual(heavy.evict, ["older"], "The most recent stays whatever it weighs, and its weight still counts")
+const idleRest = residencyPlan([
+  { id: "pinned-idle", usedAt: 0, weight: 1, pinned: true },
+  { id: "idle", usedAt: 10, weight: 1, pinned: false },
+  { id: "recent-idle", usedAt: 20, weight: 1, pinned: false },
+  { id: "fresh", usedAt: 95, weight: 1, pinned: false },
+], { bytes: 100, recent: 1, idleMs: 50 }, 100)
+assert.deepEqual(idleRest.evict, ["recent-idle", "idle"], "The host's: one unused past idleMs goes under budget too; the most recent and the pinned stay")
+assert.deepEqual(residencyPlan([{ id: "idle", usedAt: 10, weight: 1, pinned: false }, { id: "b", usedAt: 20, weight: 1, pinned: false }], { bytes: 100, recent: 0, idleMs: 50 }).evict, [], "and without the time, as a window asks, nothing does")
 const block = { type: "text" as const, id: "text-0", text: "x".repeat(1000) }
 const once = weights.of({ blocks: [block] })
 assert.ok(once > 2000 && once === weights.of({ blocks: [block] }), "Weight is about twice the JSON and stable")
@@ -230,6 +238,7 @@ const host = (conversationMemory: { bytes: number; recent: number; sweepMs: numb
   })
 const owner = host({ bytes: 0, recent: 1, sweepMs: 0 })
 let restarted: LiveConversations | undefined
+let asking: LiveConversations | undefined
 try {
   const ids = [1, 2, 3].map(auditId)
   for (const [index, id] of ids.entries()) {
@@ -265,12 +274,31 @@ try {
     "A restart reads what the journal kept"
   )
   assert.ok(closed.mock.callCount() >= 1)
+  await restarted.stop()
+
+  // An agent's open ask of the person keeps its conversation in memory, as an approval or a question does: every row
+  // says what it waits on without reading it back. Answered, it may go.
+  asking = host({ bytes: 0, recent: 0, sweepMs: 0 })
+  asking.asks.raise(ids[0]!, { id: "ask-1", at: 1, want: { kind: "back" } })
+  for (const id of ids.slice(1)) asking.snapshot(id)
+  await idle()
+  const records = asking["records"]
+  assert.ok(records.has(ids[0]!), "a conversation with an open ask stays in memory")
+  assert.ok(!records.has(ids[1]!) && !records.has(ids[2]!), "while the others go")
+  assert.ok(asking.waitingOn(ids[0]!), "and its row says it waits on the person")
+  assert.equal(asking.waitingOn(ids[1]!), undefined, "one out of memory waits on nothing, and isn't read back to say so")
+  assert.ok(!records.has(ids[1]!))
+  asking.asks.settle(ids[0]!, "ask-1")
+  asking.snapshot(ids[1]!)
+  await idle()
+  assert.ok(!records.has(ids[0]!), "answered, it goes as any other")
   console.log(
     "Live retention: lazy background history, fresh activation, window and host memory bounded by size and recency at idle, pinned work kept, and exact reload verified"
   )
 } finally {
   await owner.stop()
   await restarted?.stop()
+  await asking?.stop()
   closed.mock.restore()
   await rm(root, { recursive: true, force: true })
 }

@@ -45,7 +45,7 @@ try {
         world.release(child.conversation)
       }
       const notice = () => world.agents.roster(apex.conversation).find(agent => agent.child?.limitNotice)?.child?.limitNotice
-      await until("one typed shiver notice", () => notice()?.waiting?.count === 2)
+      await until("one typed Shiver notice", () => notice()?.waiting?.count === 2)
       assert.equal(notice()!.waiting!.at, reset)
       assert.equal(notice()!.waiting!.resets, true)
       assert.equal(world.agents.roster(apex.conversation).filter(agent => agent.child?.limitNotice).length, 1)
@@ -87,5 +87,5 @@ try {
       assert.equal(notice(), undefined, "settled recovery does not leave a Got it task")
     } finally { await world.close() }
   }
-  console.log("PASS: one shiver reset notice; real fallback, no room, exact request/tree, stale receipt, Stop and restart controls")
+  console.log("PASS: one Shiver reset notice; real fallback, no room, exact request/tree, stale receipt, Stop and restart controls")
 } finally { rmSync(root, { recursive: true, force: true }) }

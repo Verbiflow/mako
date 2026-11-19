@@ -2,7 +2,7 @@ import { useCallback, useSyncExternalStore } from "react"
 import { scrollReaderTo } from "@/lib/reader-scroll"
 
 /**
- * Whether an Apex's shiver card is on screen. The card registers itself; the
+ * Whether an Apex's Shiver card is on screen. The card registers itself; the
  * dock reads it, so a Fin's ask is drawn in one place. `null` means this
  * Thread has no card mounted, and the dock keeps its own asks.
  */

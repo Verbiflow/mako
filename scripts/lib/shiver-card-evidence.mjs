@@ -48,7 +48,7 @@ export function shiverEvidencePlugin() {
     enforce: "pre",
     transform(code, id) {
       if (!id.split("?")[0].replaceAll("\\", "/").endsWith("/src/state/shiver-card-view.ts")) return null
-      if (createHash("sha256").update(code).digest("hex") !== "cbcb62f98f576ffb6594f7ffb1e0219fcc8ffbe9c082127a77e6adf656ae83d4")
+      if (createHash("sha256").update(code).digest("hex") !== "0596da26c2f390f754d13c5ded2ca9566f7bad7e6280b6ec6fdab02a92c4b8b6")
         throw new Error("Shiver evidence requires exact 40b8 controller source")
       const marker = (stage, extra = "") =>
         `try { globalThis.dispatchEvent(new CustomEvent(${JSON.stringify(EVENT)}, { detail: { stage: ${JSON.stringify(stage)}${extra} } })) } catch { /* Evidence must not replace the original action. */ }`

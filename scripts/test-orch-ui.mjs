@@ -145,7 +145,7 @@ async function check() {
   // The Apex opens from its row.
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
   // The strip: the Apex's Sessions, and no tab a Fin didn't earn by being opened, however many it has.
-  await until("Boolean(document.querySelector('[data-shiver]'))", "the Apex's shiver card")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the Apex's Shiver card")
   const strip = await evaluate(`(() => ({ tabs: document.querySelectorAll('[data-child-tab]').length, sessions: document.querySelectorAll('[data-session-tab]').length, count: document.querySelector('[data-apex-count]') !== null }))()`)
   console.log("STRIP", JSON.stringify(strip))
   assert.deepEqual(strip, { tabs: 0, sessions: 1, count: false }, "twelve Fins add nothing to the strip")
@@ -225,7 +225,8 @@ async function check() {
   await both("direct-sent", "orch-names-")
 
   // The composer's chip opens the Agents panel: the Apex's Fins by group, above what its harness runs in the turn.
-  await click("[data-agents-toggle]")
+  // An Apex's rail opens on its Overview, so the chip, which puts the panel away when it's showing, is pressed only when it isn't.
+  if (!(await evaluate("Boolean(document.querySelector('[data-apex-fins]'))"))) await click("[data-agents-toggle]")
   await until("Boolean(document.querySelector('[data-apex-fins]'))", "the panel's Fins section")
   const panel = await evaluate(`(() => {
     const section = document.querySelector('[data-apex-fins]')
@@ -234,9 +235,13 @@ async function check() {
   console.log("PANEL", JSON.stringify(panel))
   assert.match(panel.heading, /12 Fins · 2 need you · 5 working · 2 queued · 1 idle · 2 done/)
   assert.match(panel.heading, /Stop all/)
-  // Finished and idle Fins fold into one line, as the shiver card folds them.
-  assert.deepEqual(panel.groups, ["Needs you 2", "Working 5", "Queued 2"])
-  assert.equal(await evaluate("document.querySelector('[data-apex-fins] [data-shiver-settled]')?.innerText.trim()"), "2 done · 1 idle")
+  // The Overview's sections, each only while it holds something: the queued and the idle wait, and the finished are listed.
+  assert.deepEqual(panel.groups, ["Needs you 2", "Working 5", "Waiting 3", "Done 2"])
+  assert.deepEqual(
+    await evaluate("['waiting', 'done'].map((section) => document.querySelectorAll('[data-apex-fins] [data-overview-section=' + section + '] [data-child-row]').length)"),
+    [3, 2],
+    "2 queued and 1 idle wait, 2 are done"
+  )
   await both("panel")
 
   // Opening a Fin opens it in place: its breadcrumb, its brief from the Apex first, the approval it waits on, its
@@ -337,7 +342,7 @@ async function check() {
   await until("!document.querySelector('[data-agents-diagnostics]')", "Settings closing")
 
   // The phone: the list shows the Apex as one row with the same pips, and each Fin that needs the person as a row of
-  // its own under Needs you, no other; its shiver card opens a Fin, whose back reads the Apex's name; Stop asks
+  // its own under Needs you, no other; its Shiver card opens a Fin, whose back reads the Apex's name; Stop asks
   // first, full width.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
@@ -349,7 +354,7 @@ async function check() {
   assert.equal(list.label, "12 Fins: 2 need you · 5 working · 2 queued · 1 idle · 2 done")
   await both("phone-list")
   await click("[data-thread]")
-  await until("Boolean(document.querySelector('[data-shiver]'))", "the Apex's shiver card on the phone")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the Apex's Shiver card on the phone")
   assert.equal(await evaluate("document.querySelector('[data-apex-count]')?.dataset.apexCount"), "12", "the bar counts the Fins")
   assert.equal(await evaluate("document.querySelectorAll('[data-child-chip]').length"), 0, "no chip a Fin repeating the card")
   await until("Boolean(document.querySelector('[data-send-action=stop]'))", "the Apex's transcript and dock on the phone")
@@ -400,12 +405,12 @@ async function check() {
   assert.ok(phonePopover.height <= 120)
   await both("phone-stop")
 
-  // What the Fins ask the person is answered in the shiver card on the desk, which stays through the Apex's turn, each in
+  // What the Fins ask the person is answered in the Shiver card on the desk, which stays through the Apex's turn, each in
   // a click as the person's own answer, under a request ID; the rail marks the Apex with the first; an answered ask
   // leaves. An ask is drawn in one place: the composer holds none while the card is on screen.
   window.setContentSize(1440, 900)
   await window.loadURL(`${base}?mock&app=apex`)
-  await until("document.querySelectorAll('[data-shiver] [data-fin-ask]').length === 2", "the Fins' asks in the shiver card through the Apex's turn")
+  await until("document.querySelectorAll('[data-shiver] [data-fin-ask]').length === 2", "the Fins' asks in the Shiver card through the Apex's turn")
   assert.equal(await evaluate("document.querySelectorAll('[data-fin-asks] [data-fin-ask]').length"), 0, "and none over the composer as well")
   const deskAsks = await evaluate(`(() => ({
     rows: [...document.querySelectorAll('[data-shiver] [data-fin-ask]')].map((row) => ({ kind: row.dataset.finAsk, fin: row.dataset.fin, text: row.innerText.replace(/\\s+/g, ' '), recommended: row.querySelector('[data-recommended]')?.innerText.replace(/\\s+/g, ' ') })),
@@ -431,12 +436,12 @@ async function check() {
   await until("document.querySelectorAll('[data-shiver] [data-fin-ask]').length === 1", "the answered ask leaving the desk")
   await both("desk-asks-answered", "orch-gaps-")
 
-  // On the phone the same: the shiver card stays through the Apex's turn and holds its Fins' asks, each a tap; the dock
+  // On the phone the same: the Shiver card stays through the Apex's turn and holds its Fins' asks, each a tap; the dock
   // holds none of them while the card is drawn.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
   await click("[data-thread]")
-  await until("document.querySelectorAll('[data-shiver] [data-fin-ask]').length === 2", "the Fins' asks in the phone's shiver card")
+  await until("document.querySelectorAll('[data-shiver] [data-fin-ask]').length === 2", "the Fins' asks in the phone's Shiver card")
   assert.equal(await evaluate("Boolean(document.querySelector('.web-dock [data-ask=fin]'))"), false, "none in the dock as well")
   await both("phone-ask", "orch-gaps-")
   await click('[data-shiver] [data-fin-ask=approval] [data-fin-answer="allow"]')

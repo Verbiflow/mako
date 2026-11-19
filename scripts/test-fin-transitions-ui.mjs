@@ -8,7 +8,7 @@ import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * An opened Fin through everything that can happen to it, on the desk, in a laptop's browser and on a phone. From each
- * way in (the shiver card, the left rail, Agents, the phone's list by way of its Apex) a Fin opens with one tab or screen; hiding and showing
+ * way in (the Shiver card, the left rail, Agents, the phone's list by way of its Apex) a Fin opens with one tab or screen; hiding and showing
  * the rail, closing it, going to another Thread and reloading each leave no Fin behind and no other Thread's roster on
  * show. What the rail reads and what Agents draws always agree, which is the invariant every step checks.
  * Screenshots land in the printed directory. `--url <base>` uses a running Vite server instead of starting one.
@@ -121,7 +121,7 @@ async function check() {
   const fin = await evaluate(`window.apexScene.children().find((agent) => agent.title === ${JSON.stringify(FIN)}).child.thread`)
   const shiver = `[data-shiver-row="${fin}"] button`
   const deskEntries = {
-    "the shiver card": () => click(shiver),
+    "the Shiver card": () => click(shiver),
     "the left rail": () => click(`[data-asking-fin="${fin}"]`),
     "Agents": async () => {
       await rail()
@@ -171,7 +171,7 @@ async function check() {
   }
   const otherThread = "Thread Environments"
   const webEntries = {
-    "the shiver card": () => click(shiver),
+    "the Shiver card": () => click(shiver),
     "the left rail": () => click(`[data-asking-fin="${fin}"]`),
     "Agents": async () => {
       await rail()
@@ -269,7 +269,7 @@ async function check() {
     await gone("[data-agents-sheet] [data-apex-fins]")
   }
   const phoneEntries = {
-    "the shiver card": async () => {
+    "the Shiver card": async () => {
       await phoneApex()
       await click(`${shiver}`)
     },

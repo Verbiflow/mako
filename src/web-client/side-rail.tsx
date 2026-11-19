@@ -6,7 +6,7 @@ import { AgentsReading } from "@/components/stage/side-readings"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { recordedTurnChanges } from "@/lib/turn-changes"
 import { useAcp } from "@/state/acp"
-import { useAgentsOffered } from "@/state/agents-offered"
+import { useAgentsLabel, useAgentsOffered } from "@/state/agents-offered"
 import { shallowEqual } from "@/state/store"
 import { openAgents, useDeskFin } from "./agents-open"
 import { openFiles } from "./files-open"
@@ -31,6 +31,7 @@ function ChangesReading({ conversation }: { conversation: string }) {
 export function WebSideRail({ active, conversation }: { active: "changes" | "files" | "agents" | "setup"; conversation: string }) {
   const apex = useDeskFin((state) => state.fin?.apex)
   const offered = useAgentsOffered(apex)
+  const agentsLabel = useAgentsLabel(apex)
   return (
     <nav role="tablist" aria-label="Right rail" aria-orientation="vertical" data-side-rail className="flex shrink-0 flex-col gap-px px-2 pt-1.5 pb-2" onKeyDown={moveInRail}>
       <RailRow
@@ -68,7 +69,7 @@ export function WebSideRail({ active, conversation }: { active: "changes" | "fil
           tabIndex={active === "agents" ? 0 : -1}
           data-surface-id="agents"
           icon={<ApexMark />}
-          label="Agents"
+          label={agentsLabel}
           open={active === "agents"}
           end={<AgentsReading conversation={apex} />}
           onClick={() => active !== "agents" && openAgents()}

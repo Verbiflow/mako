@@ -129,6 +129,23 @@ if (!reloaded) {
     assert.deepEqual(asked, [{ how: "steer", id: refused }, { how: "prompt", id: refused }])
     assert.equal(errors.mock.callCount(), 0, "nothing unexplained comes back, and nothing needs saying")
 
+    // 3b. The host is busy for a moment (the turn's checkpoint is still read, another steer is on its way): the steer
+    // is asked again shortly, under the same ID, and lands as a steer, not as the next message.
+    asked.length = 0
+    applyLiveSnapshot(snapshot(true))
+    let busy = 2
+    steering.mock.mockImplementation(async (_id: string, input: LiveActionInput) => {
+      asked.push({ how: "steer", id: input.id })
+      if (busy-- > 0) throw new Error("Wait for this conversation to connect and finish its pending operation")
+      return { input, digest: "fixture", bindingId: auditId(902), createdAt: 1, state: { kind: "accepted" } } satisfies LiveAction
+    })
+    const early = crypto.randomUUID()
+    const began = performance.now()
+    assert.equal(await steerTo(conversation, "a moment early", [], early), true)
+    assert.deepEqual(asked, [{ how: "steer", id: early }, { how: "steer", id: early }, { how: "steer", id: early }], "asked again until the host took it, never sent as a message")
+    assert.ok(performance.now() - began < 1_500, "well inside the two seconds a busy host is waited on")
+    assert.equal(errors.mock.callCount(), 0, "and nothing needs saying")
+
     // 4. The page dies while the steer is on its way: the outbox and the draft both still hold it.
     applyLiveSnapshot(snapshot(true))
     steering.mock.mockImplementation(() => new Promise<never>(() => {}))

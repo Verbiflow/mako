@@ -17,6 +17,7 @@ import {
 import { projectAcp } from "@/state/live-projection"
 import { toast } from "sonner"
 import { hostConnectionStore } from "@/state/host-connection"
+import { modeSettled, refusedNarrowing } from "@/state/live-mode"
 import { WAITING_FOR_MAKO, quietTimer, waitsFor, withinPatience } from "@/state/delivery-policy"
 import { commandId, durableAttachments, pendingMessages, saveMessage, settleMessage } from "@/state/message-outbox"
 
@@ -36,9 +37,13 @@ const retryDelays = new Map<string, number>()
 /** A waiting message is asked again after 1 s, then 2, 4, 8 and every 16 s: under its one id, so never twice. */
 const FIRST_RETRY_MS = 1_000
 const LAST_RETRY_MS = 16_000
-/** How long a steer the host is busy with another (a steer on its way, a turn ending) is tried again before it queues. */
+/**
+ * How long a steer the host is busy with another (a steer on its way, a turn ending, its checkpoint still read) is
+ * tried again before it queues, and how often: each try is one small call the host refuses at once, and at 250 ms a
+ * steer sent a moment too early landed a quarter of a second after the host could have taken it.
+ */
 const STEER_BUSY_MS = 2_000
-const STEER_BUSY_STEP_MS = 250
+const STEER_BUSY_STEP_MS = 50
 
 function scheduleRecovery(id: string): void {
   if (retries.has(id)) return
@@ -136,6 +141,9 @@ async function attemptSend(
       markWaiting(id, requestId, held)
       return true
     }
+    // An access change on its way settles first: no turn starts under the level the person just left (`live-mode.ts`).
+    const refusal = refusedNarrowing(id, await modeSettled(id))
+    if (refusal) throw new Error(refusal)
     if (bindingId) await withinPatience(getMako().liveContinue(id, bindingId, requestId, text, attachments, tuning))
     else await withinPatience(getMako().livePrompt(id, requestId, text, attachments, tuning))
     settleMessage(requestId)
@@ -210,6 +218,14 @@ async function attemptSteer(id: string, text: string, attachments: PromptAttachm
     return true
   }
   const input: Extract<LiveActionInput, { kind: "steer" }> = { kind: "steer", id: requestId, requestId: turn.id, text, attachments }
+  // As a message does: a steer some harnesses land by starting the next turn with it.
+  const refusal = refusedNarrowing(id, await modeSettled(id))
+  if (refusal) {
+    settleMessage(requestId)
+    removePendingPrompt(id, requestId)
+    toast.error(refusal)
+    return false
+  }
   let steered = await steerOnce(id, input)
   for (const by = Date.now() + STEER_BUSY_MS; steered !== "steered" && "busy" in steered && Date.now() < by;) {
     await new Promise((resolve) => setTimeout(resolve, STEER_BUSY_STEP_MS))

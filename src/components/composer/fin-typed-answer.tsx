@@ -2,7 +2,7 @@ import { useState } from "react"
 import { cn } from "@/lib/utils"
 
 /**
- * A Fin's question answered in the person's own words, wherever its options are drawn: the composer, the shiver card
+ * A Fin's question answered in the person's own words, wherever its options are drawn: the composer, the Shiver card
  * and the Inbox. Always there for a question, beside its options or as the one way to answer when it has none, so an
  * ask never leaves the person with nothing to answer with.
  */

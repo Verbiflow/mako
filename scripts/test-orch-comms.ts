@@ -88,7 +88,7 @@ async function shiver(): Promise<void> {
     })
 
     const brief = world.prompts.find((prompt) => prompt.conversation === docs)!.text
-    assert.ok(brief.includes("agents_list with scope shiver shows your Shiver: it and the other Fins it started."), "its brief says it can read its Shiver")
+    assert.ok(brief.includes("agents_list with scope shiver shows your Shiver: your Apex and the other Fins it started."), "its brief says it can read its Shiver")
     const oldBrief = `${fromAgent(YOUR_APEX)}\nYou're fin:docs, a Fin: another Thread, your Apex, started you for one piece of work. It reads your reports, not this conversation. agents_list with scope ${LEGACY_SHIVER_SCOPE} shows it and the other Fins it started.\n\nWrite the router's docs.`
     assert.equal(agentWords(oldBrief)?.body, "Write the router's docs.", "a brief from before the Shiver reads the same")
     assert.equal(agentWords(brief.slice(brief.indexOf(fromAgent(YOUR_APEX))))?.body, "Write the router's docs.", "the person's card of the brief leaves its lines for the Fin out")
@@ -115,7 +115,7 @@ async function shiver(): Promise<void> {
     assert.equal(port.state.kind, "working", "the port still works")
     assert.ok(!("direct" in port), "the person's words to a Fin stay its own")
     const shiverText = agentToolText({ ...view })
-    assert.ok(shiverText.length < 900, `the shiver of two in ${shiverText.length} characters`)
+    assert.ok(shiverText.length < 900, `the Shiver of two in ${shiverText.length} characters`)
     // An agent of a build before the Shiver still asks with scope crew, and reads the same view.
     assert.deepEqual(await world.agents.list(world.caller(docs), { scope: LEGACY_SHIVER_SCOPE }), seen, "scope crew is scope shiver")
 
@@ -194,7 +194,7 @@ async function shiver(): Promise<void> {
     assert.equal(below.apex.asked, "Lead the review of the router port.", "an Apex that is a Fin too says what it was asked")
 
     const top = await world.agents.list(apex.caller, { scope: "shiver" })
-    assert.ok("refused" in top && top.refused === "no-parent", "a Thread with no Apex has no shiver")
+    assert.ok("refused" in top && top.refused === "no-parent", "a Thread with no Apex has no Shiver")
   } finally {
     await world.close()
   }
@@ -405,7 +405,7 @@ try {
   await manyReports()
   await shiver()
   await apexes()
-  console.log("test:orch-comms: compact answers, finished lines, every digest entry's structured twin, bursts past one wake's cards, the shiver view and its brief line, and other Apexes read and messaged pass")
+  console.log("test:orch-comms: compact answers, finished lines, every digest entry's structured twin, bursts past one wake's cards, the Shiver view and its brief line, and other Apexes read and messaged pass")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

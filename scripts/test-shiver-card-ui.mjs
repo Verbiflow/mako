@@ -7,7 +7,7 @@ import { testScratch } from "./lib/test-scratch.mjs"
 import { atSize, navigate, withMotion } from "./lib/test-window.mjs"
 import { shiverEvidencePlugin, SHIVER_EVIDENCE_PRELOAD, withShiverFailureEvidence, saveShiverInteraction } from "./lib/shiver-card-evidence.mjs"
 
-// The shiver card (`shiver-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
+// The Shiver card (`shiver-card.tsx`) that replaces "Waiting on N agents" at the end of an Apex's own transcript once
 // its own turn settles and its Fins still work, on the mock bridge's Apex scene (`?mock&app=apex`): every Fin
 // shown, needs-you first, an ask answered in place through the same action the Agents panel and the dock use,
 // moving the Fin everywhere at once (the card, its tab, the rail's badge); forty Fins, bounded and scrolled; the
@@ -69,7 +69,7 @@ if (process.versions.electron) {
  * Counts each commit's renders by component, as React DevTools does: a fiber rendered in a commit if it did work
  * (`PerformedWork`) and began anew (`actualStartTime`, which a subtree React skipped keeps). Installed before React
  * loads, in the counting window only: the walk costs frames. Adapted from `test-orch-ui.mjs`'s own, without its
- * areas (the shiver card has none of its own, only components).
+ * areas (the Shiver card has none of its own, only components).
  */
 const COMMIT_COUNTER = `
 const PERFORMED = 1
@@ -139,7 +139,7 @@ async function checkPage({ window, page, shots, base }) {
   })
   const evaluate = (code) => page.executeJavaScript(code)
   // Each look asks for a frame first. The window is hidden, and what the page learns only when it draws, such as the
-  // shiver card's IntersectionObserver saying the card is back in view, waits for a frame it may not get. Screenshots
+  // Shiver card's IntersectionObserver saying the card is back in view, waits for a frame it may not get. Screenshots
   // drew it before a step; after a scroll that nothing else draws, a step waited out its 20 s on the runner.
   const until = async (code, what = code) => {
     const deadline = Date.now() + 20_000
@@ -228,9 +228,9 @@ async function checkPage({ window, page, shots, base }) {
   )
 
   // The Apex's own turn settles (its last request read, the digest); its twelve Fins keep running in the roster.
-  // The shiver card draws in the footer the old line used, replacing "Waiting on 12 agents".
+  // The Shiver card draws in the footer the old line used, replacing "Waiting on 12 agents".
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-shiver]'))", "the shiver card")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the Shiver card")
   await settle()
 
   const header = await evaluate(`(() => {
@@ -320,11 +320,12 @@ async function checkPage({ window, page, shots, base }) {
   )
   assert.match(starting?.text ?? "", /\d+s\b/, "under a minute stays seconds")
 
-  // One place for an ask. While the card is in view the dock draws none of it; scrolled away, one line, and that
+  // One place for an ask in the conversation (`main`: the card and the dock; the Overview beside it lists the same ask
+  // with the same buttons). While the card is in view the dock draws none of it; scrolled away, one line, and that
   // line brings Needs you back.
   assert.equal(
     await evaluate(
-      "document.querySelectorAll('[data-fin-answer=allow]').length"
+      "document.querySelectorAll('main [data-fin-answer=allow]').length"
     ),
     1,
     "the approval is drawn once, in the card"
@@ -357,7 +358,7 @@ async function checkPage({ window, page, shots, base }) {
   assert.match(away, /2 Fins need you/)
   assert.equal(
     await evaluate(
-      "document.querySelectorAll('[data-fin-answer=allow]').length"
+      "document.querySelectorAll('main [data-fin-answer=allow]').length"
     ),
     1,
     "the ask is still only in the card"
@@ -458,7 +459,8 @@ async function checkPage({ window, page, shots, base }) {
   const railBefore = await evaluate(
     "document.querySelector('.thread-jump-scope [data-fin-pips]').getAttribute('aria-label')"
   )
-  await click("[data-agents-toggle]")
+  // An Apex's rail opens on its Overview, so the chip, which puts the panel away when it's showing, is pressed only when it isn't.
+  if (!(await evaluate("Boolean(document.querySelector('[data-apex-fins]'))"))) await click("[data-agents-toggle]")
   await until(
     "Boolean(document.querySelector('[data-apex-fins]'))",
     "the Agents panel's Fins section"
@@ -525,7 +527,7 @@ async function checkPage({ window, page, shots, base }) {
   await evaluate("window.apexScene.setRunning(false); true")
   await until(
     "Boolean(document.querySelector('[data-shiver]'))",
-    "the shiver card again"
+    "the Shiver card again"
   )
   await settle()
 
@@ -641,7 +643,7 @@ async function checkPage({ window, page, shots, base }) {
   )
   await until("Boolean(document.querySelector('[data-composer]'))", "the long Apex's composer")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-shiver]'))", "the long Apex's shiver card")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the long Apex's Shiver card")
   await settle()
   assert.equal(
     await evaluate("document.querySelector('[data-transcript-viewport]').hasAttribute('data-virtualized')"),
@@ -675,13 +677,13 @@ async function checkPage({ window, page, shots, base }) {
   await evaluate("window.apexScene.setRunning(false); true")
   await until(
     "Boolean(document.querySelector('[data-shiver]'))",
-    "the shiver card on the phone"
+    "the Shiver card on the phone"
   )
   await settle()
   assert.doesNotMatch(await evaluate("document.querySelector('[data-shiver]').innerText"), /\b\d+h\b/, "no row on the phone says the Fin's age")
   // A laptop's browser draws the same rows from the same roster.
   await navigate(window, `${base}scripts/web-desk.html?thread=apex&theme=dark`)
-  await until("document.querySelectorAll('[data-shiver] [data-shiver-row]').length > 0", "the shiver card in a laptop's browser")
+  await until("document.querySelectorAll('[data-shiver] [data-shiver-row]').length > 0", "the Shiver card in a laptop's browser")
   const laptop = await evaluate("document.querySelector('[data-shiver]').innerText")
   assert.match(laptop, /Composer chips on iPad[\s\S]*?18m/, `its working row counts its turn: ${laptop}`)
   assert.doesNotMatch(laptop, /\b\d+h\b/, "no row in the browser says the Fin's age")
@@ -691,7 +693,7 @@ async function checkPage({ window, page, shots, base }) {
   await navigate(window, `${base}scripts/phone-apex.html?app=apex`)
   await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone again")
   await click("[data-thread]")
-  await until("Boolean(document.querySelector('[data-shiver]'))", "the shiver card on the phone again")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the Shiver card on the phone again")
   await evaluate("window.apexScene.setRunning(false); true")
   await settle()
   const phone = await evaluate(`(() => {
@@ -778,7 +780,7 @@ async function checkPage({ window, page, shots, base }) {
   await until("document.querySelector('[data-child-note=direct]')?.innerText.includes('Offline outbox retry')", "Message addresses the Apex's composer to the quiet Fin")
   console.log("PASS: a quiet Fin reads quiet, says for how long, and offers Message and Stop")
 
-  // Every Fin row, in the shiver card and the side rail, can be written to or stopped: on hover, always for a quiet one.
+  // Every Fin row, in the Shiver card and the side rail, can be written to or stopped: on hover, always for a quiet one.
   const rowActions = await evaluate(`(() => {
     const shiver = [...document.querySelectorAll('[data-shiver] [data-fin-actions]')].map((node) => ({ fin: node.dataset.finActions, actions: [...node.querySelectorAll('[data-fin-action]')].map((each) => each.dataset.finAction), shown: getComputedStyle(node).opacity }))
     const side = [...document.querySelectorAll('[data-child-row]')].map((row) => Boolean(row.parentElement.querySelector('[data-fin-actions]')))
@@ -792,7 +794,7 @@ async function checkPage({ window, page, shots, base }) {
   assert.ok(rowActions.side.length > 0 && rowActions.side.every(Boolean), "the side rail's Fin rows offer them too")
   console.log("PASS: every Fin row offers Message and Stop, shown on hover and always for a quiet Fin")
 
-  // The phone: the same quiet Fin in its Apex's compact shiver card, still and saying so.
+  // The phone: the same quiet Fin in its Apex's compact Shiver card, still and saying so.
   window.setContentSize(390, 844)
   await navigate(window, `${base}scripts/phone-apex.html?app=apex&fins=quiet&open=1ead1ead-0000-4000-8000-000000001ead`)
   await until("Boolean(document.querySelector('[data-shiver-row][data-quiet]'))", "the phone's quiet Fin row")
@@ -800,48 +802,52 @@ async function checkPage({ window, page, shots, base }) {
   const phoneQuiet = await evaluate("document.querySelector('[data-shiver-row][data-quiet]').innerText.replace(/\\s+/g, ' ')")
   assert.match(phoneQuiet, /Quiet 18m · last step: .+, still running/, `the phone says it the same way: ${phoneQuiet}`)
   await both("quiet-phone")
-  console.log("PASS: the phone's shiver card shows the quiet Fin the same way")
+  console.log("PASS: the phone's Shiver card shows the quiet Fin the same way")
 
-  // A wake of six reports is one shiver update: what needs the person open, the rest one line, opened on Show.
+  // A wake of six reports is one Shiver update: what needs the person open, the rest one line, opened on Show.
   window.setContentSize(1440, 900)
   await navigate(window, `${base}?mock&app=apex&wake=shiver`)
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, shiver wake")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-shiver-update]'))", "the shiver update")
-  await evaluate("document.querySelector('[data-shiver-update]').scrollIntoView({ block: 'center' }); true")
-  const update = await evaluate(`(() => {
-    const block = document.querySelector('[data-shiver-update]')
+  // The wake's turn: what needs the person stands as its own block, the rest behind the turn's one line.
+  const WAKE = "document.querySelector('[data-standing-reports]').closest('[data-exchange]')"
+  const READ = `(() => {
+    const turn = ${WAKE}
     return {
-      head: block.querySelector('[data-shiver-update-head]').innerText.replace(/\\s+/g, ' '),
-      open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.dataset.fin),
-      options: block.querySelectorAll('[data-fin-report-option]').length,
-      fold: block.querySelector('[data-shiver-update-fold]')?.innerText.replace(/\\s+/g, ' '),
+      line: turn.querySelector('[data-turn-fold] [data-fold-title]')?.innerText.replace(/\\s+/g, ' '),
+      open: [...turn.querySelectorAll('[data-standing-reports] [data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
+      options: turn.querySelectorAll('[data-standing-reports] [data-fin-report-option]').length,
+      hidden: turn.querySelectorAll('[data-turn-fold="closed"]').length,
     }
-  })()`)
+  })()`
+  await until("Boolean(document.querySelector('[data-standing-reports]'))", "the Shiver update")
+  await evaluate(`${WAKE}.scrollIntoView({ block: 'center' }); true`)
+  const update = await evaluate(READ)
   console.log("SHIVER UPDATE", JSON.stringify(update))
-  assert.match(update.head, /^5 reported · Quiet-hours push wording needs you/, "the head says what the wake carried, needs-you named")
+  assert.ok(update.open.some((text) => text.includes("Quiet-hours push wording") && text.includes("asks you")), `what needs the person is named, as theirs: ${JSON.stringify(update.open)}`)
   assert.equal(update.open.length, 1, "only what needs the person stays open")
   assert.ok(update.options >= 2, "with its answers live")
-  assert.match(update.fold ?? "", /^Thread list swipe, Haptics audit and 3 more reported 2 PRs Show$/, `the rest fold into one line: ${update.fold}`)
+  assert.match(update.line ?? "", /^5 Fins finished/, `the rest fold into one line that says what the wake carried: ${update.line}`)
+  assert.equal(update.hidden, 1, "closed until it's opened")
   // Only the person's own scroll lets the transcript stop following its end: a wheel up first, then to the update.
   await page.sendInputEvent({ type: "mouseWheel", x: 800, y: 400, deltaX: 0, deltaY: 1200 })
   await new Promise((done) => setTimeout(done, 200))
-  await evaluate("document.querySelector('[data-shiver-update]').scrollIntoView({ block: 'center' }); true")
+  await evaluate(`${WAKE}.scrollIntoView({ block: 'center' }); true`)
   await new Promise((done) => setTimeout(done, 400))
   await capture("shiver-update")
-  await evaluate("document.querySelector('[data-shiver-update-fold]').click(); true")
-  await until("document.querySelectorAll('[data-shiver-update] [data-fin-report]').length === 6", "Show opens every report")
+  await evaluate(`${WAKE}.querySelector('[data-turn-fold] > button').click(); true`)
+  await until(`${WAKE}.querySelectorAll('[data-fin-report]').length === 6`, "the line opens every report")
   // A decision left to the Apex isn't the person's to pick: its options aren't drawn as buttons that do nothing.
-  const settled = await evaluate("[...document.querySelectorAll('[data-shiver-update] [data-fin-report]')].filter((node) => node.innerText.includes('asks its Apex')).map((node) => node.querySelectorAll('[data-fin-report-option]').length)")
+  const settled = await evaluate(`[...${WAKE}.querySelectorAll('[data-fin-report]')].filter((node) => node.innerText.includes('asks its Apex')).map((node) => node.querySelectorAll('[data-fin-report-option]').length)`)
   assert.deepEqual(settled, [0], `an Apex's decision shows no inert options: ${JSON.stringify(settled)}`)
   await capture("shiver-update-shown")
   window.setContentSize(390, 844)
   await navigate(window, `${base}scripts/phone-apex.html?app=apex&wake=shiver&open=1ead1ead-0000-4000-8000-000000001ead`)
-  await until("Boolean(document.querySelector('[data-shiver-update]'))", "the phone's shiver update")
-  await evaluate("document.querySelector('[data-shiver-update]').scrollIntoView({ block: 'start' }); true")
+  await until("Boolean(document.querySelector('[data-standing-reports]'))", "the phone's Shiver update")
+  await evaluate(`${WAKE}.scrollIntoView({ block: 'start' }); true`)
   await both("shiver-update-phone")
-  console.log("PASS: a wake of six reports is one shiver update, open where it needs the person, the rest on Show")
+  console.log("PASS: a wake of six reports is one Shiver update, open where it needs the person, the rest behind one line")
 
   // A done Fin's decision its Apex still has to make stays open in the update, among three finished ones: it isn't folded away.
   window.setContentSize(1440, 900)
@@ -849,24 +855,18 @@ async function checkPage({ window, page, shots, base }) {
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, decisions wake")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-shiver-update]'))", "the shiver update, decisions")
-  const leadUpdate = await evaluate(`(() => {
-    const block = document.querySelector('[data-shiver-update]')
-    return {
-      open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
-      fold: block.querySelector('[data-shiver-update-fold]')?.innerText.replace(/\\s+/g, ' '),
-    }
-  })()`)
+  await until("Boolean(document.querySelector('[data-standing-reports]'))", "the Shiver update, decisions")
+  const leadUpdate = await evaluate(READ)
   console.log("LEAD UPDATE", JSON.stringify(leadUpdate))
   assert.equal(leadUpdate.open.length, 2, `the person's ask and the Apex's open decision stay open: ${JSON.stringify(leadUpdate.open)}`)
   assert.ok(leadUpdate.open.some((text) => text.includes("Pull to refresh") && text.includes("asks its Apex")), "the Apex's decision is one of them")
-  assert.match(leadUpdate.fold ?? "", /^Thread list swipe, Haptics audit and 2 more finished 2 PRs Show$/, `the finished ones fold without it: ${leadUpdate.fold}`)
+  assert.match(leadUpdate.line ?? "", /^4 Fins finished/, `the finished ones fold without it: ${leadUpdate.line}`)
   await page.sendInputEvent({ type: "mouseWheel", x: 800, y: 400, deltaX: 0, deltaY: 1200 })
   await new Promise((done) => setTimeout(done, 200))
-  await evaluate("document.querySelector('[data-shiver-update]').scrollIntoView({ block: 'center' }); true")
+  await evaluate(`${WAKE}.scrollIntoView({ block: 'center' }); true`)
   await new Promise((done) => setTimeout(done, 400))
   await capture("shiver-update-lead")
-  console.log("PASS: a done Fin's open decision for its Apex stays open in the shiver update")
+  console.log("PASS: a done Fin's open decision for its Apex stays open in the Shiver update")
 
   // Left past its time, the Apex's decision went to the person: its report still says the Apex decides, the roster says
   // the person does. It stays open then too, the moment it needs them, never folded.
@@ -874,30 +874,27 @@ async function checkPage({ window, page, shots, base }) {
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, escalated wake")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-shiver-update]'))", "the shiver update, escalated")
-  const escalated = await evaluate(`(() => {
-    const block = document.querySelector('[data-shiver-update]')
-    return {
-      head: block.querySelector('[data-shiver-update-head]').innerText.replace(/\\s+/g, ' '),
-      open: [...block.querySelectorAll('[data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
-      fold: block.querySelector('[data-shiver-update-fold]')?.innerText.replace(/\\s+/g, ' '),
-    }
-  })()`)
+  await until("Boolean(document.querySelector('[data-standing-reports]'))", "the Shiver update, escalated")
+  const escalated = await evaluate(READ)
   console.log("ESCALATED UPDATE", JSON.stringify(escalated))
   assert.ok(escalated.open.some((text) => text.includes("Pull to refresh") && text.includes("finished · needs you")), `an escalated decision stays open, as the person's: ${JSON.stringify(escalated.open)}`)
-  assert.match(escalated.head, /· 2 need you$/, `the head counts it as needing the person: ${escalated.head}`)
-  assert.match(escalated.fold ?? "", /^Thread list swipe, Haptics audit and 2 more finished 2 PRs Show$/, `the finished ones fold without it: ${escalated.fold}`)
-  console.log("PASS: a done Fin's decision escalated to the person stays open in the shiver update")
+  assert.equal(escalated.open.filter((text) => /asks you|needs you/.test(text)).length, 2, `two of them read as needing the person: ${JSON.stringify(escalated.open)}`)
+  assert.match(escalated.line ?? "", /^4 Fins finished/, `the finished ones fold without it: ${escalated.line}`)
+  console.log("PASS: a done Fin's decision escalated to the person stays open in the Shiver update")
 
-  // One shiver list: the side rail folds finished and idle Fins as the card does, and the phone has Stop all too.
+  // One Shiver list: the side rail holds the finished and idle Fins the card folds, and the phone has Stop all too.
   window.setContentSize(1440, 900)
   await navigate(window, `${base}?mock&app=apex`)
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, one list")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("document.querySelectorAll('[data-shiver-settled]').length === 2", "the card and the side rail each fold their settled Fins")
-  const folds = await evaluate("[...document.querySelectorAll('[data-shiver-settled]')].map((node) => node.innerText.trim())")
-  assert.equal(folds[0], folds[1], `the two surfaces fold alike: ${JSON.stringify(folds)}`)
+  // The card folds them into a line; the rail's Overview lists the same Fins under Done and, the idle ones, Waiting.
+  await until("document.querySelectorAll('[data-shiver-settled]').length === 1 && Boolean(document.querySelector('[data-apex-fins] [data-overview-section=done]'))", "the card's settled line and the Overview's Done section")
+  const folds = await evaluate(`(() => {
+    const count = (selector) => document.querySelectorAll('[data-apex-fins] ' + selector).length
+    return [document.querySelector('[data-shiver-settled]').innerText.trim(), count('[data-overview-section=done] [data-child-row]') + ' done · ' + count('[data-overview-section=waiting] [data-child-state=idle]') + ' idle']
+  })()`)
+  assert.equal(folds[0], folds[1], `the two surfaces count the settled Fins alike: ${JSON.stringify(folds)}`)
   const deskWords = await evaluate("document.querySelector('.thread-jump-scope [data-fin-pips]')?.innerText.trim()")
   window.setContentSize(390, 844)
   await navigate(window, `${base}scripts/phone-apex.html?app=apex`)
@@ -905,7 +902,7 @@ async function checkPage({ window, page, shots, base }) {
   const phoneWords = await evaluate("document.querySelector('[data-fin-pips]').innerText.trim()")
   assert.equal(phoneWords, deskWords, "the phone's list says the desk rail's words")
   await navigate(window, `${base}scripts/phone-apex.html?app=apex&open=1ead1ead-0000-4000-8000-000000001ead`)
-  await until("Boolean(document.querySelector('[data-shiver] [data-stop-all]'))", "Stop all on the phone's shiver card")
+  await until("Boolean(document.querySelector('[data-shiver] [data-stop-all]'))", "Stop all on the phone's Shiver card")
   // On the phone, Stop all asks first: one tap opens the question and stops nothing; Cancel closes it; Stop stops them.
   const stopTitle = await evaluate("document.querySelector('[data-shiver] [data-stop-all]').title")
   await evaluate("document.querySelector('[data-shiver] [data-stop-all]').click(); true")
@@ -921,16 +918,16 @@ async function checkPage({ window, page, shots, base }) {
   await evaluate("document.querySelector('[data-stop-all-yes]').click(); true")
   await until("!document.querySelector('[data-stop-all-confirm]') && !document.querySelector('[data-shiver] [data-stop-all]')", "Stop stops every Fin it can")
   console.log(`PASS: the phone's Stop all asks first ("${question.replace(/ Cancel Stop$/, "")}"), Cancel keeps them, Stop stops them`)
-  console.log(`PASS: one shiver list: the side rail folds as the card does (${folds[0]}), the phone says "${phoneWords}" and has Stop all`)
+  console.log(`PASS: one Shiver list: the side rail lists what the card folds (${folds[0]}), the phone says "${phoneWords}" and has Stop all`)
 
-  // What changed in the shiver outside the Apex's turns reads as lines of its own in its transcript, desk and phone.
+  // What changed in the Shiver outside the Apex's turns reads as lines of its own in its transcript, desk and phone.
   window.setContentSize(1440, 900)
   await navigate(window, `${base}?mock&app=apex&shiver=moves`)
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, moves")
   await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await evaluate("window.apexScene.setRunning(false); true")
   const membership = "[...document.querySelectorAll('[data-event-line]')].filter((node) => /moved to Claude Code|stopped by you/.test(node.innerText))"
-  await until(`${membership}.length === 2`, "the shiver's membership lines")
+  await until(`${membership}.length === 2`, "the Shiver's membership lines")
   const lines = await evaluate(`${membership}.map((node) => node.innerText.replace(/\\s+/g, ' ').trim())`)
   assert.match(lines[0], /^Composer chips on iPad moved to Claude Code \(work\)/, `a move names the Fin and where: ${lines[0]}`)
   assert.match(lines[1], /^Haptics audit stopped by you/, `the person's stop names the Fin: ${lines[1]}`)
@@ -940,7 +937,7 @@ async function checkPage({ window, page, shots, base }) {
   await until(`${membership}.length === 2`, "the phone's membership lines")
   await evaluate(`${membership}[0].scrollIntoView({ block: 'center' }); true`)
   await both("membership-lines-phone")
-  console.log(`PASS: the shiver's changes outside the Apex's turns read as lines: ${JSON.stringify(lines)}`)
+  console.log(`PASS: the Shiver's changes outside the Apex's turns read as lines: ${JSON.stringify(lines)}`)
 
   assert.deepEqual(
     errors.filter(

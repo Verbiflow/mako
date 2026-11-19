@@ -8,7 +8,7 @@ import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /*
  * Every surface that counts an Apex's Fins, drawn from one roster, says the same numbers in the same words: the
- * composer's chip, the shiver card, the rail's pips, the Agents panel, the stop card and the phone's row. Written for
+ * composer's chip, the Shiver card, the rail's pips, the Agents panel, the stop card and the phone's row. Written for
  * what the person saw: "Waiting on 4 agents" over "3 Fins working", because the old line counted an idle Fin as
  * work and called Fins agents. On the mock bridge's Apex scene (`?mock&app=apex`), with its roster set to three
  * Fins working (their steps raw shell commands under a home folder) and one idle. Each surface carries the words it
@@ -98,9 +98,9 @@ async function check() {
   await evaluate("[...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
   await until("Boolean(document.querySelector('[data-composer]'))", "the Apex's composer")
   await evaluate("window.apexScene.setRunning(false); true")
-  await until("Boolean(document.querySelector('[data-shiver]'))", "the shiver card")
+  await until("Boolean(document.querySelector('[data-shiver]'))", "the Shiver card")
 
-  // Three Fins at work, their steps as a harness reports them, and one idle: the screenshot's shiver.
+  // Three Fins at work, their steps as a harness reports them, and one idle: the screenshot's Shiver.
   await evaluate(`(() => {
     const steps = [
       "Shell cd /Users/someone/.mako/worktrees/makomono-0a1b2c3d/dogfood && npm run typecheck",
@@ -115,12 +115,12 @@ async function check() {
   })()`)
   const truth = { total: 4, needs: 0, working: 3, queued: 0, idle: 1, failed: 0, done: 0 }
   const label = "4 Fins: 3 working · 1 idle"
-  await until(`document.querySelector('[data-shiver] [data-fin-counts]')?.dataset.finCounts === ${JSON.stringify(label)}`, "the shiver card on the new roster")
+  await until(`document.querySelector('[data-shiver] [data-fin-counts]')?.dataset.finCounts === ${JSON.stringify(label)}`, "the Shiver card on the new roster")
   await until(`document.querySelector('[data-agents-toggle]')?.dataset.finCounts === ${JSON.stringify(label)}`, "the composer's chip on the new roster")
 
   const surfaces = {
     "the composer's chip": "[data-agents-toggle]",
-    "the shiver card": "[data-shiver] header",
+    "the Shiver card": "[data-shiver] header",
     "the rail's pips": "[data-thread-row] [data-fin-pips]",
   }
   for (const [surface, selector] of Object.entries(surfaces)) {
@@ -136,8 +136,8 @@ async function check() {
   await until("![...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes('Mobile polish'))?.innerText.includes('Needs you')", "the Apex's row standing down from Needs you")
   assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes('Mobile polish')).querySelector('[data-live-mark]')?.dataset.liveMark"), "background", "the Apex's mark says its Fins work on")
 
-  // Nothing says the Apex waits: its turn ended, and its Fins are the shiver card's, not a background line's.
-  assert.equal(await evaluate("Boolean(document.querySelector('[data-background-work]'))"), false, "no background line beside the shiver card")
+  // Nothing says the Apex waits: its turn ended, and its Fins are the Shiver card's, not a background line's.
+  assert.equal(await evaluate("Boolean(document.querySelector('[data-background-work]'))"), false, "no background line beside the Shiver card")
   assert.doesNotMatch(await text("[data-composer]"), /Waiting on/, "no 'Waiting on' over the composer")
 
   // Steps are phrases: no home folder, no shell plumbing. The idle Fin is under the settled line, opened.
@@ -150,7 +150,8 @@ async function check() {
   assert.ok(rows.some((row) => /\bIdle\b/.test(row)), `the idle Fin says it's idle: ${JSON.stringify(rows)}`)
 
   // The Agents panel, opened from the chip, counts the same.
-  await evaluate("document.querySelector('[data-agents-toggle]').click(); true")
+  // An Apex's rail opens on its Overview, so the chip, which puts the panel away when it's showing, is pressed only when it isn't.
+  if (!(await evaluate("Boolean(document.querySelector('[data-apex-fins]'))"))) await evaluate("document.querySelector('[data-agents-toggle]').click(); true")
   await until("Boolean(document.querySelector('[data-apex-fins]'))", "the Agents panel's Fins")
   assert.equal(await counts("[data-apex-fins]"), label, "the Agents panel counts the roster as every surface does")
   agrees("the Agents panel", await text("[data-apex-fins] > div"), truth)

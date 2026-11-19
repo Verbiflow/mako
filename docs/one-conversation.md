@@ -207,7 +207,7 @@ type OpenTab =
   tab names its file; a diff tab its Thread's changes.
 - **Opening.** Clicking a rail row shows the Thread in the active tab if that tab is a Thread tab nobody has typed into,
   else focuses the Thread's tab if one is open, else opens a tab. Cmd-click and middle-click always open a new tab. A
-  fork, a Fin opened from the shiver card and a file open new tabs.
+  fork, a Fin opened from the Shiver card and a file open new tabs.
 - **Persisting.** Per window in localStorage, `mako.open-tabs.v1.{profile}.{window}`: the list, the active tab and the
   version. A tab whose Thread is gone (archived elsewhere, merged) opens the Thread it was merged into or closes.
   The host's per-client workspace tabs (`workspaces/pool.ts`) stay what each conversation's workspace is; the strip is
