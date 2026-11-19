@@ -25,14 +25,15 @@ let now = 1_000_000, owner: { quietAt: number; finishedAt?: number } | undefined
 let files: string[] | undefined = [], users: string[] = [], measured: (() => void) | undefined
 const scratch = new ThreadScratch({
   root: data, registry, settings: join(root, "settings.json"), now: () => now,
-  owner: () => owner, using: async () => users,
+  owner: () => owner, fin: () => true, using: async () => users,
   openFiles: async () => { if (!files) throw new Error("Unavailable"); return files },
   privateBytes: async () => { measured?.(); return 64 },
 })
 const exists = (path: string) => access(path).then(() => true, () => false)
 const inspect = async () => (await scratch.preview()).entries[0]!
 try {
-  assert.equal((await scratch.settings()).mode, "preview")
+  assert.equal((await scratch.settings()).mode, "remove", "disposable scratch goes by default")
+  await scratch.configure({ mode: "preview", idleDays: 7, kept: [] })
   const [path, same] = await Promise.all([scratch.ensure(thread), scratch.ensure(thread)])
   assert.equal(path, same, "concurrent launch preparation shares the same root acquisition")
   await writeFile(join(dirname(path), "kept-proof"), "not scratch")
@@ -98,7 +99,7 @@ try {
   await writeFile(join(abandonedPath, "unfinished-run"), "fixture")
   const restarted = new ThreadScratch({
     root: data, registry, settings: join(root, "settings.json"), now: () => now,
-    owner: () => owner, using: async () => users,
+    owner: () => owner, fin: () => true, using: async () => users,
     openFiles: async () => { if (!files) throw new Error("Unavailable"); return files },
     privateBytes: async () => 64,
   })
@@ -146,7 +147,7 @@ try {
   let treeClosed = true, inspectData: (() => void) | undefined
   const artifacts = new ThreadScratch({
     root: join(data, "owned"), kind: "data", registry: join(root, "data-owners"), settings: join(root, "settings.json"), now: () => now,
-    owner: () => owner, ancestorsClosed: (id) => treeClosed && !(stopAfterIntent && existsSync(join(root, "data-owners", `${id}.json`)) && JSON.parse(readFileSync(join(root, "data-owners", `${id}.json`), "utf8")).retiring), using: async (_path, id) => { assert.ok(id); return users },
+    owner: () => owner, fin: () => true, ancestorsClosed: (id) => treeClosed && !(stopAfterIntent && existsSync(join(root, "data-owners", `${id}.json`)) && JSON.parse(readFileSync(join(root, "data-owners", `${id}.json`), "utf8")).retiring), using: async (_path, id) => { assert.ok(id); return users },
     openFiles: async () => { if (!files) throw new Error("Unavailable"); return files }, privateBytes: async () => { inspectData?.(); return 64 },
   })
   const artifactOwner = ThreadIdSchema.parse(randomUUID())
@@ -181,7 +182,7 @@ try {
   await artifacts.configure({ mode: "remove", dataMode: "remove", idleDays: 7, kept: [] })
   const resumedArtifacts = new ThreadScratch({
     root: join(data, "owned"), kind: "data", registry: join(root, "data-owners"), settings: join(root, "settings.json"), now: () => now,
-    owner: () => owner, ancestorsClosed: () => treeClosed, using: async () => [], openFiles: async () => [], privateBytes: async () => 64,
+    owner: () => owner, fin: () => true, ancestorsClosed: () => treeClosed, using: async () => [], openFiles: async () => [], privateBytes: async () => 64,
   })
   try {
     const report = await resumedArtifacts.run()
@@ -301,7 +302,7 @@ try {
       const managed = composed.threadData!
       const path = await managed.ensure(personalThread)
       assert.equal(path, join(root, "thread-data", "owned", personalThread, "data"))
-      assert.equal((await managed.preview()).entries.find(row => row.thread === personalThread)?.reason, "The Thread is active, elsewhere, or its state is unknown.", "a settled personal Thread is never a finished Fin")
+      assert.equal((await managed.preview()).entries.find(row => row.thread === personalThread)?.reason, "A personal Thread keeps its data until it is archived.", "a settled personal Thread is never a finished Fin")
       store.keepEdge({
         child: personalThread, parent: firstThread, parentSession: SessionIdSchema.parse(store.journalPlacement(first)!.session),
         name: "fixture-fin", role: "worker", origin: "started", asked: { brief: { objective: "Fixture only" } },
