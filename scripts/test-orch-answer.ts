@@ -523,8 +523,6 @@ try {
       access: "edits", finHarness: "codex", later: clock.later,
       asks: async (world, conversation) => void await world.agents.report(world.caller(conversation), MERGE),
       onDecision: async (world, caller, text) => {
-        // An idle Apex hears a Fin's report at once, a moment before the Fin's turn ends.
-        await until("the Fin's turn to end", () => state()?.kind !== "working")
         const decided = state()
         assert.ok(decided?.kind === "ended" && decided.outcome === "done", "it reads as done, not blocked")
         assert.deepEqual(decided.decision && { question: decided.decision.question, on: decided.decision.on, options: decided.decision.ask!.options?.map((option) => option.label) }, { question: "Merge #371?", on: "lead", options: ["Merge", "Leave open"] })
@@ -637,8 +635,6 @@ try {
       access: "full", finHarness: "codex", later: new FakeClock().later,
       asks: async (world, conversation) => void await world.agents.report(world.caller(conversation), MERGE),
       onDecision: async (world, caller) => {
-        // An idle Apex hears a Fin's report at once, a moment before the Fin's turn ends.
-        await until("the Fin's turn to end", () => state()?.kind !== "working")
         const decided = state()
         assert.ok(decided?.kind === "ended" && decided.decision)
         const id = decided.decision.ask!.id
@@ -680,8 +676,6 @@ try {
       access: "full", finHarness: "codex", later: new FakeClock().later,
       asks: async (world, conversation) => void await world.agents.report(world.caller(conversation), MERGE),
       onDecision: async (world, caller) => {
-        // An idle Apex hears a Fin's report at once, a moment before the Fin's turn ends.
-        await until("the Fin's turn to end", () => state()?.kind !== "working")
         const decided = state()
         if (decided?.kind === "ended") id = decided.decision?.ask?.id
         answered = await world.agents.answer(caller, { to: "tests", answer: "Merge", clientKey: "merge" })

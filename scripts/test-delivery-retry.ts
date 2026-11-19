@@ -226,9 +226,15 @@ try {
       await until("the Apex to sleep", () => world.live.session(apex.conversation)?.connection === "hibernated")
       faults.start.set(apex.conversation, "[unavailable] Server at capacity")
       world.release(fin)
-      // A lone report goes to an idle Apex at once: the digest's own wake meets the outage and waits, the Apex unfailed.
-      await until(`${harness} apex: the wake for the report to wait`, () => requestOf(world, apex.conversation, FROM_AGENTS)?.retry?.cause === "provider-unavailable", 10_000)
+      // Its provider is woken as the digest is queued, ahead of the digest's window: that wake meets the outage with
+      // nothing to send yet, so the Apex sleeps on, unfailed, and the digest's own wake meets it next and waits.
+      await until(`${harness} apex: the wake ahead of the report to fail`, () => !faults.start.has(apex.conversation), 10_000)
+      await until(`${harness} apex: the Apex to sleep on`, () => world.live.session(apex.conversation)?.connection === "hibernated")
+      assert.equal(world.live.session(apex.conversation)?.status, "ready", `${harness} apex: a wake ahead of its message fails nothing`)
+      assert.equal(world.live.session(apex.conversation)?.error, undefined)
       assert.equal(sentTimes(world, apex.conversation, FROM_AGENTS), 0)
+      faults.start.set(apex.conversation, "[unavailable] Server at capacity")
+      await until(`${harness} apex: the wake for the report to wait`, () => requestOf(world, apex.conversation, FROM_AGENTS)?.retry?.cause === "provider-unavailable", 10_000)
       waits(world, apex.conversation, FROM_AGENTS, "provider-unavailable", `${harness} apex`)
       await goesOnce(world, apex.conversation, FROM_AGENTS, `${harness} apex`)
       await world.close()

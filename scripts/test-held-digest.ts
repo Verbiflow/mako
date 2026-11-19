@@ -416,13 +416,12 @@ try {
     // A turn that said something heard it: what follows is a plain continuation, and the digest isn't told twice.
     {
       const { world, limits } = worldOf(`${harness}-heard`)
-      const { conversation, fins } = await apexWithFins(world, harness, names.slice(0, 1))
+      const { conversation, fins } = await apexWithFins(world, harness, names.slice(0, 2))
       limits.failing.add(conversation)
       limits.speaking.add(conversation)
-      // An idle Apex hears a lone report at once: its digest is the turn that fails, and nothing gathers before it.
-      world.release(fins[0]!)
+      await report(world, conversation, fins, names)
       await until(`${harness} heard: the turn to fail`, () => limits.knocks.length === 1 && rows(world, conversation).some((request) => request.status === "held" && request.continues !== undefined))
-      assert.ok(!rows(world, conversation).some((request) => request.status === "held" && request.text.startsWith(FROM_AGENTS) && request.text.includes(`"${names[0]}"`)), `${harness} heard: nothing retells it`)
+      assert.ok(!rows(world, conversation).some((request) => request.status === "held" && request.text.startsWith(FROM_AGENTS)), `${harness} heard: nothing retells it`)
       await world.close()
     }
 

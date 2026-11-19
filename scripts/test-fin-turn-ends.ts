@@ -168,13 +168,9 @@ async function lateNotification(): Promise<void> {
   })
   await f.w.settle()
   assert.match(f.heard(), /"queue" \(Claude\) done: #783 is green at 1a2b3c4\./, "its Apex hears the result")
-  // An idle Apex hears the end the grace inferred at once, as any first report: the result that came after is heard
-  // after it, and is what the Fin stands on.
-  const heard = f.heard()
-  assert.equal(heard.match(/• "queue" \(Claude\): A monitor it left running ended without waking it\./g)?.length ?? 0, 1, "the inferred end was heard once")
-  assert.ok(heard.lastIndexOf("#783 is green at 1a2b3c4.") > heard.lastIndexOf("ended without waking it"), "and the result after it: the last word is the result")
+  assert.doesNotMatch(f.heard(), /ended without a result|ended without waking it/, "and not first that it ended without one: one outcome")
   assert.equal(childWord((await f.state("queue")).state), "Done")
-  console.log("late notification: the end the grace inferred went at once, the result after it, and the Fin stands done")
+  console.log("late notification: the result stands alone; the end the grace inferred never reaches its Apex")
   await f.w.close()
 }
 

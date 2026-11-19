@@ -316,12 +316,9 @@ export class LiveDispatch {
    */
   private overBudget(resident: Resident, request: LiveRequest): boolean {
     const now = Date.now()
-    // A digest its harness refused before taking it (`not-accepted`) woke nobody: it keeps when it was tried, and isn't
-    // counted, or its own next try would wait out the minute it never spent.
     const recent = resident.snapshot.requests.flatMap((candidate) => {
       const at = candidate.digest?.sentAt
-      const refused = candidate.nativeDelivery?.evidence.kind === "not-accepted"
-      return at !== undefined && at > now - MINUTE_MS && !refused ? [{ at, asks: digestAsks(candidate.digest!.notices) }] : []
+      return at !== undefined && at > now - MINUTE_MS ? [{ at, asks: digestAsks(candidate.digest!.notices) }] : []
     }).sort((left, right) => left.at - right.at)
     if (recent.length < WAKES_PER_MINUTE) return false
     let at = recent[recent.length - WAKES_PER_MINUTE]!.at + MINUTE_MS

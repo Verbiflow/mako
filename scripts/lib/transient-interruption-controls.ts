@@ -114,13 +114,8 @@ export async function heldWakeLogControls(root: string): Promise<void> {
     assert.ok(lines.some(l => l.fields?.request === input && l.fields.hold === "provider-retry" && l.fields.cause === "provider-unavailable" && l.fields.attempt === 1))
     const started = await world.agents.start(apex.caller, { brief: { objective: "fin:held" }, harness: "codex", name: "held", cwd: world.root, clientKey: "held" })
     assert.ok(!("refused" in started) && started.conversation)
-    const next = await world.agents.start(apex.caller, { brief: { objective: "fin:held again" }, harness: "codex", name: "held-2", cwd: world.root, clientKey: "held-2" })
-    assert.ok(!("refused" in next) && next.conversation)
-    await until("fins running", () => world.live.session(started.conversation!)?.status === "running" && world.live.session(next.conversation!)?.status === "running")
-    // An idle Apex hears the first report at once; the next, right after it, waits out its window.
+    await until("fin running", () => world.live.session(started.conversation!)?.status === "running")
     world.release(started.conversation!)
-    await until("the first digest", () => world.live.snapshot(apex.conversation)?.requests.some(r => r.digest && r.status === "completed") === true)
-    world.release(next.conversation!)
     await until("digest coalescing hold", () => world.live.snapshot(apex.conversation)?.requests.some(r => r.wake?.after === "digest") === true)
     const digest = world.live.snapshot(apex.conversation)!.requests.find(r => r.wake?.after === "digest")!
     world.live.wakeDue(digest.wake!.at + 1)

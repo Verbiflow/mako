@@ -167,13 +167,12 @@ async function nowhereToGo(harness: string): Promise<void> {
     accounts[harness]![0]!.spentUntil = undefined
     passed = reset - clock() + 60_000
     world.live.wakeDue(Date.now() + 60 * 60_000)
-    // Reset first releases the Fins. An idle Apex hears the first new result at once; the other waits in a digest
-    // held under its own saved deadline, which the clock here only reaches when told.
-    await until(`${harness}: both completed results heard`, () => {
-      world.live.wakeDue(Date.now() + 60 * 60_000)
-      return NAMES.slice(0, 2).every((name) => reached(world, apex.conversation, name) > 0)
-    })
-    assert.ok(heardBy(world, apex.conversation).some((prompt) => prompt.text.includes(FROM_AGENTS) && prompt.harness === harness), `${harness}: on its own harness, once it reset`)
+    // Reset first releases the Fins. Their new reports then gather under a separate saved deadline.
+    const gathered = () => rows(world, apex.conversation).find(request => request.status === "held" && NAMES.slice(0, 2).every(name => request.digest?.notices.some(notice => notice.fin?.name === name)))
+    await until(`${harness}: both completed results gathered`, () => gathered() !== undefined)
+    assert.ok(gathered()!.wake, `${harness}: the new digest owns its gathering time`)
+    world.live.wakeDue(gathered()!.wake!.at + 1)
+    await until(`${harness}: the first turn after`, () => heardBy(world, apex.conversation).some((prompt) => prompt.text.includes(FROM_AGENTS) && prompt.harness === harness))
     await world.settle(40, 20_000, "ignore")
     for (const name of ["working", "queued"]) assert.equal(reached(world, apex.conversation, name), 1, `${harness}: ${name} was heard once`)
   } finally {

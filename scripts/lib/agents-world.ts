@@ -607,25 +607,14 @@ export class AgentsWorld {
     let quietSince = Date.now()
     let seen = this.prompts.length
     const before = seen
-    // What restarted the quiet, and how often: the state at the deadline can read idle when something flips on and
-    // off faster than `quietMs`, so a failure names what kept resetting it.
-    const resets = new Map<string, number>()
-    const reset = (why: string) => resets.set(why, (resets.get(why) ?? 0) + 1)
     while (Date.now() - quietSince < quietMs) {
       if (Date.now() > deadline) {
         // Everything `busy` counts, so a failure on CI names what never settled, not only turns and wakes.
         const work = this.live.lifecycleWork().map((item) => `${item.id} ${item.status}`).join(", ") || "none"
-        const why = [...resets].map(([what, times]) => `${what} ×${times}`).join(", ") || "none"
-        throw new Error(`Still busy after ${timeoutMs} ms: ${this.running.size} turns, ${this.agents.wakes.pending()} wakes, ${this.sending.size} sends, ${this.prompts.length - before} prompts meanwhile; work: ${work}; quiet reset by: ${why}`)
+        throw new Error(`Still busy after ${timeoutMs} ms: ${this.running.size} turns, ${this.agents.wakes.pending()} wakes, ${this.sending.size} sends, ${this.prompts.length - before} prompts meanwhile; work: ${work}`)
       }
       await new Promise((resolve) => setTimeout(resolve, 20))
-      const work = this.live.lifecycleWork()
-      if (this.running.size > 0) reset("turns")
-      if (this.sending.size > 0) reset("sends")
-      if (wakes === "wait" && this.agents.wakes.pending() > 0) reset("wakes")
-      for (const item of work) reset(`work ${item.id} ${item.status}`)
-      if (this.prompts.length !== seen) reset("prompts")
-      const busy = this.running.size > 0 || this.sending.size > 0 || (wakes === "wait" && this.agents.wakes.pending() > 0) || work.length > 0
+      const busy = this.running.size > 0 || this.sending.size > 0 || (wakes === "wait" && this.agents.wakes.pending() > 0) || this.live.lifecycleWork().length > 0
       if (busy || this.prompts.length !== seen) {
         seen = this.prompts.length
         quietSince = Date.now()

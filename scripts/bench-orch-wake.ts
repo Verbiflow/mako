@@ -24,8 +24,6 @@ const GAP_MS = { min: 150, spread: 450 }
 const root = mkdtempSync(join(tmpdir(), "mako-orch-wake-"))
 let made = 0
 const world = new AgentsWorld({
-  // More starts at once than a tree's guard against a spawning loop lets through (48 in ten minutes): the rest queue.
-  budget: { started: CHILDREN, hourly: CHILDREN },
   root,
   script: async (turn) => {
     if (turn.text.startsWith(FROM_AGENTS)) return "Noted."
@@ -44,7 +42,7 @@ try {
   const harnesses = ["claude", "cursor", "grok", "opencode", "devin"]
   const began = performance.now()
   for (let i = 0; i < CHILDREN; i += 1) {
-    const started = await world.agents.start(apex.caller, { brief: { objective: `Review part ${i} of the sidebar.` }, harness: harnesses[i % harnesses.length]!, name: `part-${i}`, queue: true, clientKey: `part-${i}`, cwd: root })
+    const started = await world.agents.start(apex.caller, { brief: { objective: `Review part ${i} of the sidebar.` }, harness: harnesses[i % harnesses.length]!, name: `part-${i}`, clientKey: `part-${i}`, cwd: root })
     assert.ok(!("refused" in started), JSON.stringify(started))
   }
   await world.settle(2_600, 240_000)

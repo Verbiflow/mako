@@ -879,7 +879,7 @@ export class LiveConversations {
       const hold = digest && holdOf(digest)
       const windowed = hold?.kind === "until" && hold.wake.after === DIGEST_WAITS && hold.wake.at - now <= WAKE_COALESCE_MS
       if (!digest || !(digest.status === "queued" || windowed)) return "unchanged"
-      if (requests.filter((asked) => asked.digest?.sentAt !== undefined && asked.digest.sentAt > now - 60_000 && asked.nativeDelivery?.evidence.kind !== "not-accepted").length >= WAKES_PER_MINUTE) return "unchanged"
+      if (requests.filter((asked) => asked.digest?.sentAt !== undefined && asked.digest.sentAt > now - 60_000).length >= WAKES_PER_MINUTE) return "unchanged"
     }
     return this.hibernation.prewarm(id, true)
   }
