@@ -5,7 +5,7 @@ import { FinsNeedYou } from "@/components/composer/fin-asks"
 import { sendDirect, useAddressee, useThreadAsks, useThreadRollup } from "@/state/apex-fins"
 import type { AgentAsk } from "@mako/host/contracts/agent-asks"
 import { FIN_WORD } from "@mako/host/contracts/agents"
-import { useCrewCardVisible } from "@/state/crew-card-view"
+import { useShiverCardVisible } from "@/state/shiver-card-view"
 import { ArrowDownIcon, CheckCheckIcon, CheckIcon, CornerDownLeftIcon, RotateCwIcon, ShieldQuestionIcon, XIcon } from "lucide-react"
 import { latestPendingQuestion, activeInputQuestions, type LiveInputQuestion } from "@mako/host/contracts/live-questions"
 import type { LivePermissionRequest, PromptAttachment } from "@mako/host/contracts/providers-acp"
@@ -100,9 +100,9 @@ export interface SendElsewhere {
 
 export function WebDock({ conversation, harness, target, draftKey, away, jump, reconnect, elsewhere, sendsTo }: DockProps) {
   const ask = useAsk()
-  // Its own ask goes first. While the crew card is drawn, a Fin's ask lives there; the dock keeps only this Thread's own asks, plus one line when the card has scrolled away.
+  // Its own ask goes first. While the Shiver card is drawn, a Fin's ask lives there; the dock keeps only this Thread's own asks, plus one line when the card has scrolled away.
   const threadId = useAcp((state) => state.conversations[conversation]?.threadId)
-  const card = useCrewCardVisible(threadId)
+  const card = useShiverCardVisible(threadId)
   const finAsks = useThreadAsks(threadId).filter(ask => !ask.limit?.waiting)
   const fin = ask || card !== null ? undefined : finAsks[0]
   const typedFin = fin !== undefined && fin.ask.kind !== "approval"

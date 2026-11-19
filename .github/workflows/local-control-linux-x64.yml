@@ -5,6 +5,7 @@ on:
   pull_request:
     paths:
       - .github/actions/install-dependencies/**
+      - .github/actions/restore-apt-debs/**
       - .github/workflows/local-control-linux-x64.yml
       - electron/**
       - packages/control/**
@@ -55,8 +56,23 @@ jobs:
           assert.match(readFileSync('evidence/docker-architecture.txt','utf8').trim(), /^(x86_64|amd64)$/);
           JS
       - uses: ./.github/actions/install-dependencies
-      - name: Install the media tools recordings encode with
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
+      # From Ubuntu's own .debs kept between runs, with no network, as the gate's recording shards install it.
+      - id: apt-debs
+        uses: ./.github/actions/restore-apt-debs
+        with:
+          packages: ffmpeg
+      - id: ffmpeg
+        name: Install the media tools recordings encode with
+        env:
+          DEBS: ${{ steps.apt-debs.outputs.path }}
+        run: |
+          scripts/install-apt-cached.sh "$DEBS" ffmpeg
+          if [ -f "$DEBS/complete" ]; then echo "save=true" >> "$GITHUB_OUTPUT"; fi
+      - if: steps.ffmpeg.outputs.save == 'true' && steps.apt-debs.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.apt-debs.outputs.path }}
+          key: ${{ steps.apt-debs.outputs.key }}
       - name: Verify acceptance payload boundaries
         run: node scripts/linux-control/test-acceptance-payload.mjs
       - name: Compile the shared control host and its package references

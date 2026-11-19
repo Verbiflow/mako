@@ -369,9 +369,10 @@ const HISTORY_EXIT_GRACE_MS = 500
  * stuck read is ended by killing this child alone. Each request that runs
  * out of time ends the child and every request in it; the next starts one.
  * A read whose mark is from before fseventsd last started over (`daemon`)
- * reports every root lost, whatever it found.
+ * reports every root lost, whatever it found. The child goes after `idleMs`
+ * without an ask; the next ask starts one again.
  */
-export function childHistory(script = defaultChildScript(), readings = new WatchReadings(), daemon?: DaemonRestarts): FileHistory {
+export function childHistory(script = defaultChildScript(), readings = new WatchReadings(), daemon?: DaemonRestarts, idleMs = IDLE_MS): FileHistory {
   let child: ChildProcess | undefined
   let nextId = 1
   let idle: NodeJS.Timeout | undefined
@@ -434,7 +435,7 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
     idle = setTimeout(() => {
       if (pending.size || !child) return
       end(child, new Error("The file system's history reader was idle"))
-    }, IDLE_MS)
+    }, idleMs)
     idle.unref()
   }
 

@@ -8,7 +8,7 @@ import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * An opened Fin through everything that can happen to it, on the desk, in a laptop's browser and on a phone. From each
- * way in (the crew card, the left rail, Agents, the phone's list by way of its Apex) a Fin opens with one tab or screen; hiding and showing
+ * way in (the Shiver card, the left rail, Agents, the phone's list by way of its Apex) a Fin opens with one tab or screen; hiding and showing
  * the rail, closing it, going to another Thread and reloading each leave no Fin behind and no other Thread's roster on
  * show. What the rail reads and what Agents draws always agree, which is the invariant every step checks.
  * Screenshots land in the printed directory. `--url <base>` uses a running Vite server instead of starting one.
@@ -106,7 +106,7 @@ async function check() {
   }
   const oneTab = (fin) => until(`document.querySelectorAll('[data-child-tab]').length === 1 && document.querySelector('[data-child-tab="${fin}"]')?.getAttribute('aria-selected') === 'true'`, "the Fin's one tab")
   const apexBack = () =>
-    until("!document.querySelector('[data-child-tab]') && !document.querySelector('[data-child-breadcrumb]') && !document.querySelector('[data-child-of]') && Boolean(document.querySelector('[data-crew]'))", "the Apex, with no Fin left")
+    until("!document.querySelector('[data-child-tab]') && !document.querySelector('[data-child-breadcrumb]') && !document.querySelector('[data-child-of]') && Boolean(document.querySelector('[data-shiver]'))", "the Apex, with no Fin left")
 
   // The desk.
   await viewport(1440, 900)
@@ -114,14 +114,14 @@ async function check() {
     await load("/?mock&app=apex")
     await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the desk's Apex row")
     await openThread("12 Fins")
-    await seen("[data-crew]")
+    await seen("[data-shiver]")
     await rail()
   }
   await deskApex()
   const fin = await evaluate(`window.apexScene.children().find((agent) => agent.title === ${JSON.stringify(FIN)}).child.thread`)
-  const crew = `[data-crew-row="${fin}"] button`
+  const shiver = `[data-shiver-row="${fin}"] button`
   const deskEntries = {
-    "the crew card": () => click(crew),
+    "the Shiver card": () => click(shiver),
     "the left rail": () => click(`[data-asking-fin="${fin}"]`),
     "Agents": async () => {
       await rail()
@@ -146,7 +146,7 @@ async function check() {
     await oneTab(fin)
     await openThread("Refactor the composer")
     await gone("[data-child-tab]")
-    await gone("[data-crew]")
+    await gone("[data-shiver]")
     await rail()
     // Agents was open, so its row stays, with no reading and none of the Apex's Fins; and no row stays lit for the Fin.
     assert.ok(["Agents", null].includes(await reading()), `no reading from the Apex: ${await reading()}`)
@@ -167,11 +167,11 @@ async function check() {
   const webApex = async () => {
     await load("/scripts/web-desk.html?thread=apex&theme=dark")
     await until("document.querySelectorAll('[data-thread-row]').length > 0", "the web desk")
-    await seen("[data-crew]")
+    await seen("[data-shiver]")
   }
   const otherThread = "Thread Environments"
   const webEntries = {
-    "the crew card": () => click(crew),
+    "the Shiver card": () => click(shiver),
     "the left rail": () => click(`[data-asking-fin="${fin}"]`),
     "Agents": async () => {
       await rail()
@@ -194,7 +194,7 @@ async function check() {
     await webApex()
     await open()
     await until(`Boolean(document.querySelector('[data-child-of] [data-child-tab="${fin}"][aria-selected="true"]'))`, `the Fin from ${entry}`)
-    await until("!document.querySelector('[data-crew]')", "the Fin's own transcript")
+    await until("!document.querySelector('[data-shiver]')", "the Fin's own transcript")
     await rail()
     await click(HIDE)
     await gone("[data-side-rail]")
@@ -206,7 +206,7 @@ async function check() {
     await apexBack()
     // Closed, then another Thread: pr-review's path, and the row and the panel agree on it.
     await openThread(otherThread)
-    await gone("[data-crew]")
+    await gone("[data-shiver]")
     await otherRoster(`after closing the Fin from ${entry}`)
     await openThread("12 Fins")
     await apexBack()
@@ -254,12 +254,12 @@ async function check() {
   const phoneApex = async () => {
     await phoneList()
     await click("[data-thread]")
-    await seen("[data-crew]")
+    await seen("[data-shiver]")
   }
   const phoneFin = () => until("Boolean(document.querySelector('[data-child-of]')) && !document.querySelector('[data-apex-count]')", "the Fin on the phone")
   const phoneBack = async () => {
     await click("[data-back-to-apex]")
-    await until("!document.querySelector('[data-child-of]') && Boolean(document.querySelector('[data-crew]')) && document.querySelector('[data-apex-count]')?.dataset.apexCount === '12'", "the Apex on the phone")
+    await until("!document.querySelector('[data-child-of]') && Boolean(document.querySelector('[data-shiver]')) && document.querySelector('[data-apex-count]')?.dataset.apexCount === '12'", "the Apex on the phone")
   }
   const phoneRoster = async (where) => {
     await click("[data-apex-count]")
@@ -269,9 +269,9 @@ async function check() {
     await gone("[data-agents-sheet] [data-apex-fins]")
   }
   const phoneEntries = {
-    "the crew card": async () => {
+    "the Shiver card": async () => {
       await phoneApex()
-      await click(`${crew}`)
+      await click(`${shiver}`)
     },
     "the Agents sheet": async () => {
       await phoneApex()
@@ -283,8 +283,8 @@ async function check() {
       await until("Boolean(document.querySelector('[data-fin-row]'))", "the Fin's row in the phone's list")
       // This row opens the Apex, where its card answers it; the Fin is a press away from there.
       await evaluate(`[...document.querySelectorAll('[data-fin-row]')].find((node) => node.innerText.includes(${JSON.stringify(FIN)})).click(); true`)
-      await seen("[data-crew]")
-      await click(crew)
+      await seen("[data-shiver]")
+      await click(shiver)
     },
   }
   for (const [entry, open] of Object.entries(phoneEntries)) {
@@ -293,7 +293,7 @@ async function check() {
     await phoneBack()
     await phoneRoster(`after going back, from ${entry}`)
     // Another Thread with the Fin open: the list, then another row, no Fin and no count.
-    await click(crew)
+    await click(shiver)
     await phoneFin()
     await phoneList()
     await until("Boolean(document.querySelector('[data-thread]'))", "the list after a reload")

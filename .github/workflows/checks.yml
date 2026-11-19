@@ -121,6 +121,15 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      # A shard that records installs ffmpeg from Ubuntu's own .debs kept between runs, with no network: on 2026-11-19 the
+      # runners couldn't reach Ubuntu's mirrors, and every such shard hung on `apt-get update` (`install-apt-cached.sh`).
+      - id: needs
+        run: echo "needs=$(node scripts/ci-gate.mjs --needs ${{ matrix.shard }} 45)" >> "$GITHUB_OUTPUT"
+      - id: apt-debs
+        if: contains(steps.needs.outputs.needs, 'ffmpeg')
+        uses: ./.github/actions/restore-apt-debs
+        with:
+          packages: ffmpeg
       - uses: ./.github/actions/install-dependencies
       - uses: ./.github/actions/build-control-runtime
         with:
@@ -134,6 +143,18 @@ jobs:
       - run: env -u XDG_CONFIG_HOME xvfb-run -a node scripts/ci-gate.mjs ${{ matrix.shard }} 45
         env:
           MAKO_TEST_EVIDENCE: ${{ runner.temp }}/test-evidence
+          MAKO_APT_DEBS: ${{ steps.apt-debs.outputs.path }}
+      # Saved however the shard's tests went, and only a whole set: the install writes `complete` once it succeeded.
+      - id: apt-debs-complete
+        if: always() && steps.apt-debs.outcome == 'success' && steps.apt-debs.outputs.cache-hit != 'true'
+        env:
+          DEBS: ${{ steps.apt-debs.outputs.path }}
+        run: if [ -f "$DEBS/complete" ]; then echo "save=true" >> "$GITHUB_OUTPUT"; fi
+      - if: always() && steps.apt-debs-complete.outputs.save == 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ steps.apt-debs.outputs.path }}
+          key: ${{ steps.apt-debs.outputs.key }}
       # A cancelled job (one past its timeout) too: its progress log names the part that was running.
       - if: failure() || cancelled()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
