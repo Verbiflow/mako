@@ -33,13 +33,22 @@ import type { AutomationStore } from "./automation-store.js"
  *     registered, when the account's link opens, and when the account says runs changed.
  *   * Claims. A schedule's slot or an event of a registered automation is claimed before this Mac runs it
  *     (`AutomationClaims`), so of the Mac and the cloud only one ever does.
+ *   * What the account stopped firing. A GitHub trigger whose repository its person can no longer read is found out in
+ *     the cloud, as its event arrives: the account says so (`issues`), read with the feed when a run was skipped and
+ *     every few minutes besides. Its `cloudIssue` then says why, and it's registered again, which the account takes
+ *     only once its access holds.
  */
+
+/** How often, besides when one of the account's runs was skipped, what it stopped firing is read. */
+export const ISSUES_EVERY_MS = 5 * 60_000
 
 /** The account's automations calls, through this Mac's device sign-in (`CloudAccount`). */
 export interface AutomationCloudApi {
   deviceId(): Promise<string | undefined>
   register(automation: CloudAutomation): Promise<{ ok: true } | { conflict: string }>
   unregister(project: string, id: string): Promise<void>
+  /** The registrations the account no longer fires, and why: a GitHub trigger whose access it found gone. */
+  issues(): Promise<Array<{ project: string; id: string; issue: string }>>
   runs(after: number): Promise<{ runs: CloudRun[]; next: number }>
   claim(input: { project: string; id: string; occurrence: string; cause: CloudRun["cause"] }): Promise<CloudClaim>
   decline(input: { project: string; id: string; occurrence: string; why: string }): Promise<void>
@@ -184,6 +193,7 @@ export class AutomationCloud {
   readonly #deps: AutomationCloudDeps
   #syncing: Promise<void> = Promise.resolve()
   #feeding: Promise<void> | undefined
+  #issuesAt = Number.NEGATIVE_INFINITY
   #retry: NodeJS.Timeout | undefined
 
   constructor(deps: AutomationCloudDeps) {
@@ -306,10 +316,12 @@ export class AutomationCloud {
     if (!api) return
     const { store, automations } = this.#deps
     this.#self = await api.deviceId()
+    let skipped = false
     for (let page = 0; page < 20; page++) {
       const after = store.cloudCursor()
       const { runs, next } = await api.runs(after)
       for (const run of runs) {
+        if (run.status === "skipped") skipped = true
         const project = store.cloudRegistrations().find((each) => each.key === run.project && each.id === run.automation)?.project
         if (!project) continue
         try {
@@ -323,7 +335,36 @@ export class AutomationCloud {
       await store.save()
       if (!runs.length || next <= after) break
     }
+    try {
+      await this.#issues(api, skipped)
+    } catch (error) {
+      hostWarn("automations", "what the cloud account stopped firing couldn't be read", { error: error instanceof Error ? error.message : String(error) })
+    }
     await this.#proposals()
+  }
+
+  /**
+   * What the account stopped firing, said on this Mac: each registration it names is this Mac's no longer, its
+   * `cloudIssue` saying why, and it's registered again (refused while its access is still gone, so the issue stays).
+   */
+  async #issues(api: AutomationCloudApi, skipped: boolean): Promise<void> {
+    const now = this.#deps.now?.() ?? Date.now()
+    if (!skipped && now - this.#issuesAt < ISSUES_EVERY_MS) return
+    this.#issuesAt = now
+    const issues = await api.issues()
+    if (!issues.length) return
+    const { store, automations } = this.#deps
+    const again = new Set<string>()
+    for (const held of store.cloudRegistrations()) {
+      const issue = issues.find((each) => each.project === held.key && each.id === held.id)?.issue
+      if (!issue) continue
+      store.setCloudRegistration(held.project, held.id, undefined)
+      await automations.setCloudRegistered(held.project, held.id, { issue })
+      hostWarn("automations", "the cloud account stopped firing an automation", { automation: held.id, why: issue })
+      again.add(held.project)
+    }
+    await store.save()
+    for (const project of again) void this.sync(project)
   }
 
   /**

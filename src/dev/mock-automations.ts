@@ -257,7 +257,7 @@ const LOCALS = {
   "check-failed-fix": local({ enabled: true }),
   "broken-links": local({ enabled: true, paused: { kind: "changed", reason: "Paused because .mako/automations.json changed after you turned it on (a pull brought a new prompt). Read it, then turn it on again.", at: NOW - 6 * HOUR } }),
   "sentry-triage": local({ enabled: true, cloudRegistered: true }),
-  "slack-questions": local({ enabled: true, cloudRegistered: false, cloudIssue: "Slack isn’t connected to the account, so #support can’t be watched. Connect it in Settings › Integrations." }),
+  "slack-questions": local({ enabled: true, cloudRegistered: false, cloudIssue: "Slack isn't connected to Mako's cloud yet" }),
   "stripe-webhook": local({ enabled: true, cloudRegistered: true }),
   "openapi-sync": local({ enabled: false }),
   "token-rotation": local({ enabled: false }),

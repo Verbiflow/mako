@@ -13,7 +13,7 @@ import { AutomationNotStartedError, Automations, type AutomationLaunch, type Aut
 import { planAutomationStart, type AutomationStartInput, type AutomationStartPorts } from "@mako/host/workspaces/automation-start"
 import type { FinPolicy } from "@mako/host/contracts/fin-tuning"
 import type { LiveSessionMode } from "@mako/host/contracts/providers-acp"
-import { AutomationDefinitionSchema, automationFingerprint } from "@mako/host/contracts/automations"
+import { AutomationDefinitionSchema, automationFingerprint, cloudTriggerWaiting, SLACK_UNCONNECTED } from "@mako/host/contracts/automations"
 
 /**
  * Automations linked to the cloud account (`AutomationCloud`), with the account faked as the gateway's ledger answers:
@@ -41,6 +41,9 @@ class FakeAccount {
   declined: Array<{ occurrence: string; why: string }> = []
   claims: string[] = []
   refuse: string | undefined
+  /** What the account says no longer fires, by registration (a GitHub trigger whose access went). */
+  issues: Array<{ project: string; id: string; issue: string }> = []
+  listed = 0
   down = false
   #seq = 0
 
@@ -83,6 +86,7 @@ class FakeAccount {
       const row = this.#row(input.id, input.occurrence)
       if (row) this.write({ ...row, status: "skipped", why: input.why })
     },
+    issues: async () => (this.listed++, this.issues),
     hook: async (input) => ({ hook: { name: input.name, id: "h".repeat(24), provider: input.provider, at: 1 }, secret: "whsec_shown_once", url: `https://cloud.test/hooks/a/acct/${"h".repeat(24)}` }),
   }
 }
@@ -313,6 +317,46 @@ await test("the runs feed: the cloud's runs become this Mac's records, read on f
   await w.cloud.feed()
   assert.equal((await w.automations.reading(folder)).automations[0]!.local.failures, 1)
   assert.equal(cloudRunRecord(folder, { ...w.account.runs[0]!, status: "device", place: "another-mac" }).status, "skipped", "a run another device holds isn't one this Mac runs")
+})
+
+await test("a GitHub trigger whose access went in the cloud: its cloudIssue says why, and it's registered again only once the account takes it", async () => {
+  const folder = await project([onRelease])
+  const w = makeWorld([folder])
+  await turnOn(w, folder, "on-release")
+  await w.cloud.sync()
+  const why = "This account's GitHub user can't read acme/app"
+  const cause = { kind: "event" as const, source: "github" as const, event: "release", id: "r9", summary: "A GitHub release event on acme/app" }
+  w.account.issues = [{ project: KEY, id: "on-release", issue: why }]
+  w.account.refuse = why
+  w.account.write({ project: KEY, automation: "on-release", occurrence: "github-release-r9", cause, status: "skipped", why: `Its GitHub trigger stopped: ${why}` })
+  await w.cloud.feed()
+  await w.cloud.sync()
+  let view = (await w.automations.reading(folder)).automations[0]!
+  assert.equal(view.local.cloudRegistered, undefined, "its GitHub trigger isn't live")
+  assert.equal(view.local.cloudIssue, why)
+  assert.equal(view.standing === "on", false)
+  // The account reads its access again on the next registration: given back, it's live again.
+  w.account.issues = []
+  w.account.refuse = undefined
+  await w.cloud.sync()
+  view = (await w.automations.reading(folder)).automations[0]!
+  assert.equal(view.local.cloudRegistered, true)
+  assert.equal(view.local.cloudIssue, undefined)
+  // Read at most every few minutes otherwise, and at once when a run of the account's is skipped.
+  const listed = w.account.listed
+  await w.cloud.feed()
+  assert.equal(w.account.listed, listed, "no skipped run, and read a moment ago")
+})
+
+await test("a Slack trigger never fires: Slack isn't connected to Mako's cloud yet, and the row says so in the account's words", async () => {
+  const folder = await project([{ id: "on-mention", name: "On mention", prompt: brief, triggers: [{ kind: "slack", event: "mention", channels: [] }] }])
+  const w = makeWorld([folder])
+  w.account.refuse = SLACK_UNCONNECTED
+  await turnOn(w, folder, "on-mention")
+  await w.cloud.sync()
+  const view = (await w.automations.reading(folder)).automations[0]!
+  assert.equal(view.local.cloudIssue, "Slack isn't connected to Mako's cloud yet")
+  assert.equal(cloudTriggerWaiting({ kind: "slack", event: "mention", channels: [] }, true), "Slack isn't connected to Mako's cloud yet.", "even registered by an older account")
 })
 
 /* ------------------------------------------------------------------ offers */

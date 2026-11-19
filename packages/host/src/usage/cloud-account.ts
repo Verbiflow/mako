@@ -185,6 +185,8 @@ export type DeviceCode = {
 }
 const DevicesSchema = z.object({ devices: z.array(CloudDeviceSchema), current: z.string() })
 /** Where on GitHub its person gives the cloud access to a repository: a GitHub page, or nothing. */
+/** What the account says of its registrations: only why one no longer fires (a GitHub trigger whose access went) is read here. */
+const AutomationIssuesSchema = z.object({ automations: z.array(z.object({ project: z.string(), id: z.string(), issue: z.string().max(1000).optional() }).loose()).max(1000) }).loose()
 const InstallSchema = z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional().catch(undefined)
 /** Read leniently: a state this build doesn't know reads as the cloud not saying. */
 const BaseStandingSchema = z.union([
@@ -848,6 +850,12 @@ export class CloudAccounts {
   async registerAutomation(automation: CloudAutomation): Promise<{ ok: true } | { conflict: string }> {
     const response = await this.#call("automations.register", "PUT", AUTOMATIONS_PATH, automation, false, [409])
     return response.status === 409 ? { conflict: await problemOf(response, "The cloud account wouldn't register it.") } : { ok: true }
+  }
+
+  /** What the account no longer fires of its registrations, and why (`GET /v1/automations`): a GitHub trigger whose access went. */
+  async automationIssues(): Promise<Array<{ project: string; id: string; issue: string }>> {
+    const listed = AutomationIssuesSchema.parse(await (await this.#call("automations.list", "GET", AUTOMATIONS_PATH)).json())
+    return listed.automations.flatMap(({ project, id, issue }) => (issue ? [{ project, id, issue }] : []))
   }
 
   /** One automation taken back; one the account doesn't hold (404) is taken back already. */

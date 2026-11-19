@@ -150,7 +150,7 @@ async function checkWindow() {
   console.log("PASS: the rail opens the list: three projects, every standing, sentences, the pending proposal on its row")
 
   // 1b. Cloud registration refused says why on its row; a Thread whose run this window never heard of asks the host.
-  assert.match(await text(`[data-automation-key$="#slack-questions"] [data-automation-note]`), /didn’t register it: Slack isn’t connected/)
+  assert.match(await text(`[data-automation-key$="#slack-questions"] [data-automation-note]`), /didn’t register it: Slack isn't connected to Mako's cloud yet/)
   assert.equal(await store(`'a7000000-0003-4000-8000-0000000000a3' in state.byConversation`), false, "the Tuesday run isn't one this window heard of")
   await evaluate(`import('/src/state/acp.ts').then(({ acp }) => { acp.open('a7000000-0003-4000-8000-0000000000a3'); return true })`)
   await until(`document.querySelector('[data-automation-run-line="nightly-ci-triage"]') !== null`, "the host's run-of answers for an older run")
@@ -346,6 +346,8 @@ async function checkWindow() {
   assert.equal(await evaluate(`document.querySelectorAll('[data-trigger-index="0"] [data-next-runs] span.tabular').length`), 3, "next three runs")
   await click("[data-add-trigger]")
   await until(`document.querySelector('[data-add-trigger-kind="github"]') !== null`, "the trigger menu")
+  assert.equal(await evaluate(`document.querySelector('[data-add-trigger-kind="slack"]').hasAttribute('data-disabled')`), true, "Slack can't be added")
+  assert.equal(await text('[data-add-trigger-kind="slack"] [data-add-trigger-unconnected]'), "Slack isn't connected to Mako's cloud yet")
   await capture("editor-add-trigger.png")
   await click('[data-add-trigger-kind="commit"]')
   await until(`document.querySelector('[data-trigger-index="1"][data-trigger-kind="commit"]') !== null`, "a commit trigger")
@@ -404,6 +406,7 @@ async function checkWindow() {
   await until(`document.querySelector('[data-webhook-secret]') !== null`, "its address and its secret, once")
   assert.match(await text("[data-webhook-url]"), /^https:\/\/hooks\.mako\.dev\/.+stripe-forward$/)
   const firstSecret = await text("[data-webhook-secret]")
+  assert.match(await text("[data-webhook-signing]"), /Mako-Timestamp.+Mako-Delivery.+Mako-Signature: v1=.+timestamp\.delivery\.body/, "how the sender signs, its delivery ID included")
   assert.match(firstSecret, /^whsec_/)
   await capture("editor-webhook-secret.png")
   await click("[data-webhook-rotate]")
