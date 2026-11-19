@@ -6,7 +6,7 @@ import { dirname, isAbsolute, join, relative, sep } from "node:path"
 import { DatabaseSync as DatabaseSyncConstructor, type DatabaseSync, type StatementSync } from "node:sqlite"
 import { z } from "zod"
 import { checkStoredChunk, Chunker, chunkHash, HASH_BYTES, Packs, type StoredChunk } from "./record-chunks.js"
-import { planRecordImport, recordChunks as versionChunks, type HeldUnit, type RecordBundle, type RecordHoldings, type RecordUnit, type RecordVersion } from "@mako/protocol/records"
+import { currentVersions, planRecordImport, recordChunks as versionChunks, versionChunks as orderedChunks, type HeldUnit, type RecordBundle, type RecordHoldings, type RecordUnit, type RecordVersion } from "@mako/protocol/records"
 import { plainRecordPath, recordChunks, recordFilePath, statRecord } from "./record-files.js"
 import type { ForkFile, ForkIds, ForkRow, RecordDatabase, RecordFork, RecordLines, RecordRoot, RecordRow, RecordTable, RecordValue, SessionRecords } from "./harness-records.js"
 import { forkIds, forkLines } from "./record-fork.js"
@@ -83,7 +83,7 @@ const RELEASED_SCHEMA = 2
 /** Every table of the store, each guarded against an older build's writes once the format is raised (`guardStoreWrites`). */
 const RECORD_TABLES = ["chunks", "units", "versions", "sessions", "session_units", "session_paths", "child_paths", "marks", "captures", "orphans", "intents", "intent_claims", "unnamed", "remote_units", "remote_sessions", "remote_session_units", "remote_pushed", "meta"] as const
 /** Additive changes this build made to the format, each a name in `meta.additions`; a build that doesn't know one ignores what it added. */
-const ADDITIONS = ["writers", "children", "intents", "remotes", "remote-sessions", "remote-pushed"]
+const ADDITIONS = ["writers", "children", "intents", "remotes", "remote-sessions", "remote-pushed", "remote-shifts"]
 /** Each session's newest capture by `<harness>\n<native id>` (`RecordStore.captureHeads`), and the newest capture of all. */
 export type CaptureHeads = { heads: Map<string, number>; through: number }
 /** One batch of `RecordStore.exportFor`: at most `limit` versions, from the unit after `cursor`. */
@@ -98,7 +98,7 @@ const EXPORT_VERSION_COLUMNS = {
 }
 const ExportVersionSchema = z.object(EXPORT_VERSION_COLUMNS)
 /** A version and its unit, as one batch of `RecordStore.exportFor` reads them together. */
-const ExportRowSchema = ExportUnitSchema.omit({ held: true }).extend(EXPORT_VERSION_COLUMNS)
+const ExportRowSchema = ExportUnitSchema.omit({ held: true }).extend({ ...EXPORT_VERSION_COLUMNS, shift: z.number() })
 
 /** Rows an export reads at once (`RecordStore.exportSteps`): a few ms of the loop, however large its batch. */
 const EXPORT_ROWS_A_READ = 500
@@ -898,6 +898,12 @@ export class RecordStore {
   private readonly db: DatabaseSync
   private readonly packs: Packs
   private readonly statements = new Map<string, StatementSync>()
+  /**
+   * What a push reads (`exportSteps`, `readChunk`), on a connection of its own: only what's committed. Through `db` a
+   * push read the versions of a capture still in its transaction, which it then rolled back, failing or as the store
+   * closed under it; the account kept versions this store numbered again with other bytes (`committedRead`).
+   */
+  private committed: { db: DatabaseSync; statements: Map<string, StatementSync> } | null = null
   private readonly turns = new Turns()
   /** Each session's capture in progress, so its next capture or a restore of it waits for it. */
   private readonly capturing = new Map<string, Promise<unknown>>()
@@ -949,7 +955,9 @@ export class RecordStore {
     mkdirSync(folder, { recursive: true })
     const { DatabaseSync } = process.getBuiltinModule("node:sqlite")
     this.db = new DatabaseSync(join(folder, "records.sqlite"), { timeout: STORE_WRITE_WAIT_MS })
-    this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL")
+    // Each commit synced, as the packs it names are: with `NORMAL` a commit waited in the page cache for the next
+    // checkpoint, and a forced restart took back versions a push had already sent (`durable`).
+    this.db.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = FULL")
     declareStoreFormat(this.db, SCHEMA_VERSION)
     try {
       this.opened = this.migrate()
@@ -1075,6 +1083,8 @@ export class RecordStore {
         }
       }
       await this.packs.close()
+      this.committed?.db.close()
+      this.committed = null
       this.db.close()
       await this.owner.release()
     } finally {
@@ -1565,6 +1575,10 @@ export class RecordStore {
     `)
     if (!z.object({ name: z.string() }).array().parse(this.db.prepare("PRAGMA table_info(chunks)").all()).some((column) => column.name === "intent"))
       this.db.exec("ALTER TABLE chunks ADD COLUMN intent INTEGER")
+    // Addition: how a remote only this store writes numbers a unit's versions past `head` (`rebased`): this store's
+    // `seq` plus `shift`. 0 but where the remote held a line of the unit this store lost and took its content anew.
+    if (!z.object({ name: z.string() }).array().parse(this.db.prepare("PRAGMA table_info(remote_session_units)").all()).some((column) => column.name === "shift"))
+      this.db.exec("ALTER TABLE remote_session_units ADD COLUMN shift INTEGER NOT NULL DEFAULT 0")
     const additions = new Set((meta("additions") ?? "").split(" ").filter(Boolean))
     if (ADDITIONS.some((name) => !additions.has(name)))
       this.db.prepare("INSERT INTO meta (key, value) VALUES ('additions', ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value").run([...new Set([...additions, ...ADDITIONS])].join(" "))
@@ -1594,6 +1608,44 @@ export class RecordStore {
     let statement = this.statements.get(sql)
     if (!statement) this.statements.set(sql, statement = this.db.prepare(sql))
     return statement
+  }
+
+  /**
+   * `sql` on a connection that sees only what's committed: for what another store will hold (`exportSteps`,
+   * `readChunk`). `db` sees the writes of the transaction under way, a capture's between two of its awaits.
+   */
+  private committedRead(sql: string): StatementSync {
+    if (this.closed) throw new Error(`The record store at ${this.folder} is closed`)
+    if (!this.committed) {
+      const { DatabaseSync } = process.getBuiltinModule("node:sqlite")
+      this.committed = { db: new DatabaseSync(join(this.folder, "records.sqlite"), { readOnly: true, timeout: STORE_WRITE_WAIT_MS }), statements: new Map() }
+    }
+    let statement = this.committed.statements.get(sql)
+    if (!statement) this.committed.statements.set(sql, statement = this.committed.db.prepare(sql))
+    return statement
+  }
+
+  /**
+   * Puts every commit so far on the disk itself, past the drive's cache, as the packs' syncs do (`Packs.sync`): a
+   * push calls it between reading what it sends and sending it, so another store never holds a version this one can
+   * lose. A forced restart of the Mac on 2026-11-18 took back three versions the sync daemon had sent seconds before;
+   * the account kept them, this store numbered the next captures in their place, and the two Sessions never synced
+   * again. Syncing the log syncs every commit in it; one a checkpoint moved out was synced there.
+   */
+  async durable(): Promise<void> {
+    let handle: Awaited<ReturnType<typeof open>>
+    try {
+      handle = await open(join(this.folder, "records.sqlite-wal"), "r")
+    } catch (error) {
+      // No log: every commit is in the database file, synced by the checkpoint that emptied it.
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") return
+      throw error
+    }
+    try {
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
   }
 
   private unitByKey(harness: string, key: string): UnitRow | undefined {
@@ -1761,7 +1813,7 @@ export class RecordStore {
    * 1.4 s for a batch of a Cursor chat's 342,965 rows; a batch of 10,000 in one read, 80 ms on a loaded Mac.
    */
   *exportSteps(remote: string, harness: string, nativeId: string, page: ExportPage = {}): Steps<{ bundle: RecordBundle; cursor: number | null } | null> {
-    const found = SessionRowSchema.optional().parse(this.prepared("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
+    const found = SessionRowSchema.optional().parse(this.committedRead("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
     if (!found?.layout) return null
     const limit = page.limit ?? Number.POSITIVE_INFINITY
     const wanted = limit + 1
@@ -1772,8 +1824,8 @@ export class RecordStore {
     while (rows.length < wanted) {
       const most = Math.min(EXPORT_ROWS_A_READ, wanted - rows.length)
       const through = z.object({ unit: z.number() }).optional()
-        .parse(this.prepared("SELECT unit FROM session_units WHERE session = ? AND unit > ? ORDER BY unit LIMIT 1 OFFSET ?").get(found.id, after.unit, EXPORT_UNITS_A_READ - 1))?.unit
-      const read = ExportRowSchema.array().parse(this.prepared(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places,
+        .parse(this.committedRead("SELECT unit FROM session_units WHERE session = ? AND unit > ? ORDER BY unit LIMIT 1 OFFSET ?").get(found.id, after.unit, EXPORT_UNITS_A_READ - 1))?.unit
+      const read = ExportRowSchema.array().parse(this.committedRead(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places, coalesce(r.shift, 0) AS shift,
           v.seq, v.kind, v.at, v.size, v.digest, v.tail, v.chunks, v.detail, v.writer, v.writer_source
         FROM session_units su JOIN units u ON u.id = su.unit
         LEFT JOIN remote_session_units r ON r.remote = ? AND r.session = su.session AND r.unit = u.id
@@ -1795,7 +1847,8 @@ export class RecordStore {
         current = { id: row.id, unit: { key: row.key, role: row.role, path: row.seen_path, places: row.places, versions: [] } }
         bundled.push(current.unit)
       }
-      current.unit.versions.push(exportedVersion(row))
+      // Numbered as the remote numbers the unit: shifted past a line of it this store lost (`rebased`).
+      current.unit.versions.push(exportedVersion({ ...row, seq: row.seq + row.shift }))
     }
     if (!more) return { bundle: { ...this.sessionHead(found.id, harness, nativeId, found.layout), units: bundled }, cursor: null }
     // A unit taken whole moves the cursor past it; one cut short is the next batch's first, taken up past what the
@@ -1806,10 +1859,10 @@ export class RecordStore {
   }
 
   private exportPast(harness: string, nativeId: string, remote: string | null, after: (unit: { key: string; held: number | null }) => number): RecordBundle | null {
-    const found = SessionRowSchema.optional().parse(this.prepared("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
+    const found = SessionRowSchema.optional().parse(this.committedRead("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
     if (!found?.layout) return null
     const units = ExportUnitSchema.array()
-      .parse(this.prepared(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places, r.head AS held FROM session_units su JOIN units u ON u.id = su.unit
+      .parse(this.committedRead(`SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places, r.head AS held FROM session_units su JOIN units u ON u.id = su.unit
         LEFT JOIN remote_session_units r ON r.remote = ? AND r.session = su.session AND r.unit = u.id WHERE su.session = ? ORDER BY u.id`).all(remote, found.id))
     const bundled = units.flatMap((unit) => {
       const past = after(unit)
@@ -1821,7 +1874,7 @@ export class RecordStore {
 
   /** A unit's versions past `after`, in order, at most `most`. */
   private versionsPast(unit: number, after: number, most: number): RecordVersion[] {
-    const rows = ExportVersionSchema.array().parse(this.prepared("SELECT seq, kind, at, size, digest, tail, chunks, detail, writer, writer_source FROM versions WHERE unit = ? AND seq > ? ORDER BY seq LIMIT ?")
+    const rows = ExportVersionSchema.array().parse(this.committedRead("SELECT seq, kind, at, size, digest, tail, chunks, detail, writer, writer_source FROM versions WHERE unit = ? AND seq > ? ORDER BY seq LIMIT ?")
       .all(unit, after, Number.isFinite(most) ? most : -1))
     return rows.map(exportedVersion)
   }
@@ -1829,7 +1882,7 @@ export class RecordStore {
   /** What a bundle of the session carries besides its units: its layout, and its marks but the stamp naming one machine's files. */
   private sessionHead(session: number, harness: string, nativeId: string, layout: string): Omit<RecordBundle, "units"> {
     const marks = z.object({ name: z.string(), fingerprint: z.string() }).array()
-      .parse(this.prepared("SELECT name, fingerprint FROM marks WHERE session = ? AND name != ?").all(session, HELD_STAMP))
+      .parse(this.committedRead("SELECT name, fingerprint FROM marks WHERE session = ? AND name != ?").all(session, HELD_STAMP))
     return { harness, nativeId, layout: SessionLayoutSchema.parse(JSON.parse(layout)), marks: Object.fromEntries(marks.map((mark) => [mark.name, mark.fingerprint])) }
   }
 
@@ -1845,12 +1898,16 @@ export class RecordStore {
       if (session === null) return
       await beginWriting(this.db, STORE_WRITE_WAIT_MS)
       try {
+        // The remote's numbers, each turned back into this store's by its unit's shift, which a reset remote keeps.
+        const shifts = new Map(z.object({ key: z.string(), shift: z.number() }).array()
+          .parse(this.prepared("SELECT u.key, r.shift FROM remote_session_units r JOIN units u ON u.id = r.unit WHERE r.remote = ? AND r.session = ? AND r.shift != 0").all(remote, session))
+          .map((row) => [row.key, row.shift]))
         if ("holdings" in held) this.prepared("DELETE FROM remote_session_units WHERE remote = ? AND session = ?").run(remote, session)
         const heads = "holdings" in held ? Object.entries(held.holdings) : held.units.map((unit): [string, number] => [unit.key, unit.versions.at(-1)?.seq ?? -1])
         // A push's batch names up to 10,000 units: the loop turns between parts of it, the write lock kept.
         for (let from = 0; from < heads.length; from += REMOTE_HEADS_A_TURN) {
           if (from > 0) await new Promise((resolve) => setImmediate(resolve))
-          for (const [key, head] of heads.slice(from, from + REMOTE_HEADS_A_TURN)) this.noteRemoteHead(remote, session, harness, key, head)
+          for (const [key, head] of heads.slice(from, from + REMOTE_HEADS_A_TURN)) this.noteRemoteHead(remote, session, harness, key, head - (shifts.get(key) ?? 0), shifts.get(key) ?? 0)
         }
         this.db.exec("COMMIT")
       } catch (error) {
@@ -1899,7 +1956,7 @@ export class RecordStore {
    */
   remoteVersionCounts(remote: string): Map<string, number> {
     const rows = z.object({ harness: z.string(), nativeId: z.string(), versions: z.number() }).array()
-      .parse(this.prepared("SELECT s.harness, s.native_id AS nativeId, sum(r.head + 1) AS versions FROM remote_session_units r JOIN sessions s ON s.id = r.session WHERE r.remote = ? GROUP BY r.session").all(remote))
+      .parse(this.prepared("SELECT s.harness, s.native_id AS nativeId, sum(r.head + 1 + r.shift) AS versions FROM remote_session_units r JOIN sessions s ON s.id = r.session WHERE r.remote = ? GROUP BY r.session").all(remote))
     return new Map(rows.map((row) => [`${row.harness}\n${row.nativeId}`, row.versions]))
   }
 
@@ -1919,10 +1976,73 @@ export class RecordStore {
     return z.object({ pulled: z.number() }).optional().parse(this.prepared("SELECT pulled FROM remote_sessions WHERE remote = ? AND session = ?").get(remote, session))?.pulled ?? 0
   }
 
-  private noteRemoteHead(remote: string, session: number, harness: string, key: string, head: number): void {
+  /** `head` in this store's numbers; `shift`, how the remote numbers what's past it (`rebased`). */
+  private noteRemoteHead(remote: string, session: number, harness: string, key: string, head: number, shift = 0): void {
     if (head < 0) return
-    this.prepared("INSERT INTO remote_session_units (remote, session, unit, head) SELECT ?, ?, id, ? FROM units WHERE harness = ? AND key = ? ON CONFLICT (remote, session, unit) DO UPDATE SET head = max(head, excluded.head)")
-      .run(remote, session, head, harness, key)
+    this.prepared("INSERT INTO remote_session_units (remote, session, unit, head, shift) SELECT ?, ?, id, ?, ? FROM units WHERE harness = ? AND key = ? ON CONFLICT (remote, session, unit) DO UPDATE SET head = max(head, excluded.head)")
+      .run(remote, session, head, shift, harness, key)
+  }
+
+  /**
+   * The unit's content now as one version for `remote`, a remote only this store writes (a device's own records in
+   * the account), which holds a line of the unit this store no longer has: versions it sent and then lost, as a
+   * forced restart takes back commits not yet on disk. Its newest whole version and the appends after it, laid end to
+   * end as one `replace` numbered past the remote's head, which the remote takes by the one rule as it takes any
+   * replace; what it held before stays there as history. `local`: this store's head the version stands for, which
+   * `rebased` notes once the remote took it. Null for a unit the store doesn't hold.
+   */
+  async rebasing(harness: string, nativeId: string, key: string, remoteHead: number): Promise<{ bundle: RecordBundle; local: number } | null> {
+    const found = SessionRowSchema.optional().parse(this.committedRead("SELECT id, layout FROM sessions WHERE harness = ? AND native_id = ?").get(harness, nativeId))
+    const unit = ExportUnitSchema.omit({ held: true }).optional()
+      .parse(this.committedRead("SELECT u.id, u.key, u.role, u.head, u.seen_path, u.places FROM session_units su JOIN units u ON u.id = su.unit WHERE su.session = ? AND u.key = ?").get(found?.id ?? -1, key))
+    if (!found?.layout || !unit || unit.head < 0) return null
+    const versions = ExportVersionSchema.array().parse(this.committedRead("SELECT seq, kind, at, size, digest, tail, chunks, detail, writer, writer_source FROM versions WHERE unit = ? ORDER BY seq").all(unit.id))
+    const head = versions.at(-1)
+    if (!head || head.seq !== unit.head) return null
+    const current = currentVersions(versions.map(exportedVersion))
+    let digest = head.kind === "replace" ? head.digest : null
+    if (head.kind === "append") {
+      // The whole content's digest, as a capture's replace carries it: read once, for a rebase only.
+      const hash = createHash("sha256")
+      for (const version of current) for (const chunk of orderedChunks(version)) hash.update(await this.chunkBytes(chunk))
+      digest = hash.digest()
+    }
+    const whole: RecordVersion = {
+      ...exportedVersion({ ...head, digest, chunks: Buffer.from(current.map((version) => version.chunks).join(""), "hex") }),
+      seq: remoteHead + 1,
+      kind: head.kind === "delete" ? "delete" : "replace",
+    }
+    return {
+      bundle: { ...this.sessionHead(found.id, harness, nativeId, found.layout), units: [{ key: unit.key, role: unit.role, path: unit.seen_path, places: unit.places, versions: [whole] }] },
+      local: unit.head,
+    }
+  }
+
+  /** `remote` took `rebasing`'s version at `remoteSeq`: it holds the unit through this store's `local`, and numbers what's past it from there. */
+  rebased(remote: string, harness: string, nativeId: string, key: string, local: number, remoteSeq: number): Promise<void> {
+    this.writable()
+    return this.serially(async () => {
+      const session = this.sessionId(harness, nativeId, false)
+      if (session === null) return
+      await this.written(() => this.prepared(`INSERT INTO remote_session_units (remote, session, unit, head, shift) SELECT ?, ?, id, ?, ? FROM units WHERE harness = ? AND key = ?
+        ON CONFLICT (remote, session, unit) DO UPDATE SET head = excluded.head, shift = excluded.shift`).run(remote, session, local, remoteSeq - local, harness, key))
+    })
+  }
+
+  /** A unit's version as a remote numbers it (`seq`), and what it holds, for saying where two lines of it part; null when this store doesn't hold it. */
+  versionFor(remote: string, harness: string, nativeId: string, key: string, seq: number): { seq: number; kind: string; size: number; chunks: string } | null {
+    const row = z.object({ seq: z.number(), kind: z.string(), size: z.number(), chunks: z.instanceof(Uint8Array) }).optional().parse(this.committedRead(`
+      SELECT v.seq, v.kind, v.size, v.chunks FROM sessions s JOIN session_units su ON su.session = s.id JOIN units u ON u.id = su.unit
+      LEFT JOIN remote_session_units r ON r.remote = ? AND r.session = s.id AND r.unit = u.id
+      JOIN versions v ON v.unit = u.id AND v.seq = ? - coalesce(r.shift, 0)
+      WHERE s.harness = ? AND s.native_id = ? AND u.key = ?`).get(remote, seq, harness, nativeId, key))
+    return row ? { seq: row.seq, kind: row.kind, size: row.size, chunks: Buffer.from(row.chunks).toString("hex") } : null
+  }
+
+  private async chunkBytes(hash: string): Promise<Buffer> {
+    const place = ChunkPlaceSchema.optional().parse(this.committedRead("SELECT pack, offset, stored, size, codec FROM chunks WHERE hash = ?").get(Buffer.from(hash, "hex")))
+    if (!place) throw new Error(`The chunk ${hash} this store's versions name isn't in it`)
+    return this.packs.read(place)
   }
 
   /** Of `hashes`, the chunks this store lacks. */
@@ -1935,7 +2055,7 @@ export class RecordStore {
   async readChunk(hash: string): Promise<StoredChunk | null> {
     const key = Buffer.from(hash, "hex")
     const placeOf = () => {
-      const place = this.prepared("SELECT pack, offset, stored, size, codec FROM chunks WHERE hash = ?").get(key)
+      const place = this.committedRead("SELECT pack, offset, stored, size, codec FROM chunks WHERE hash = ?").get(key)
       return place ? ChunkPlaceSchema.parse(place) : null
     }
     const place = placeOf()

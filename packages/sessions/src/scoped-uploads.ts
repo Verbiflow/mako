@@ -203,9 +203,12 @@ export class ScopedUploads {
     this.#now = options.now ?? Date.now
     const budget = options.budget
     this.#budget = budget
-    this.#urgent = new RecordSync(store, remote, budget ? { budget } : {})
+    // A device's own records: only this store writes them, so a unit that went on in two places there goes on from
+    // this store's content, never waiting on the person (`RecordSync`'s `soleWriter`).
+    const own = { soleWriter: true, log }
+    this.#urgent = new RecordSync(store, remote, { ...own, ...budget && { budget } })
     // Paced, one pack in flight: more would only be held in memory waiting for the pace.
-    this.#paced = options.bytesPerSecond ? new RecordSync(store, pacedRemote(remote, options.bytesPerSecond), { uploads: 1, ...budget && { budget } }) : this.#urgent
+    this.#paced = options.bytesPerSecond ? new RecordSync(store, pacedRemote(remote, options.bytesPerSecond), { ...own, uploads: 1, ...budget && { budget } }) : this.#urgent
     // A budget that sheds holds back new pushes (`#pump`); they start once it stops.
     this.#unhear = budget?.onResumed(() => this.#pump()) ?? (() => {})
   }
@@ -518,6 +521,7 @@ export function pacedRemote(remote: RecordRemote, bytesPerSecond: number, now: (
     },
     holdings: (harness, nativeId, after, trace) => remote.holdings(harness, nativeId, after, trace),
     pull: (harness, nativeId, after, trace) => remote.pull(harness, nativeId, after, trace),
+    head: (harness, nativeId, trace) => remote.head?.(harness, nativeId, trace) ?? Promise.resolve(undefined),
     sessions: () => remote.sessions(),
   }
 }
