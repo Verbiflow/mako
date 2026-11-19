@@ -4865,7 +4865,11 @@ archived before the list is read again. `scripts/test-thread-store.ts`
 
 A ready provider process is a warm cache, not active work. `LiveConversations`
 keeps as many warm bindings per host as its memory allows and hibernates either
-the oldest excess or any one idle for ten minutes. The number is `warmLimit`
+the oldest excess or any one idle for ten minutes, or for its harness's own
+window where its driver declares one (`idleWindow`): Cursor's is two minutes,
+since its idle child holds about 190 MB after a conversation and a new one
+opens the agent again in about 0.3 s, which typing hides
+(`npm run bench:cursor-idle`). The number is `warmLimit`
 (`warm-limit.ts`): an eighth of the memory left after the person's reserve and
 the Fins at work, and never more than 3 GB, divided by what a provider holds
 there (a Fin's light memory from `FinCostModel`, 0.8 GB before it has measured
@@ -5135,6 +5139,26 @@ drops every entry, among them its retry, resume and stall account
 hands each entry to the process and the child writes those to the host log
 (`run-log.ts`). `@cursor/sdk-*` is
 `asarUnpack`ed for its `cursorsandbox`, `rg` and tree-sitter binaries.
+`patch-cursor-sdk.mjs` holds six patches (checkpoint blobs, bidi reads,
+transcripts, the run log, the resume account, the store's lock wait), each
+written once against 1.4.0's ESM bytes and found in any release, in either
+build and whichever chunk holds it, by shape (`scripts/lib/anchored-patch.mjs`):
+the bundler's short names may change, the code around them may not. A
+replacement uses only names its anchor or its probes bind, and its own
+locals are `mako$` names, so it can never capture one of the bundle's: 1.4.1
+moved the retry loop's attempt counter off `y` and put the action there, and
+a port by renames alone would have compared the action with 0. A release
+whose code changed fails the install naming the patch and the anchor that
+is gone. Patching never needs the network: the first time it rewrites a file it
+keeps the file's unpatched bytes beside the package (`@cursor/sdk/.mako-pristine`,
+gzipped, with the version and each file's hash; left out of the app), and a
+later patch starts again from those; modules an older build patched, which a
+local update's `npm install` leaves in place, get them from npm's cache on the
+machine (the tarball by the integrity the install recorded, read off disk with no
+npm request), and failing both the patch says so and to
+reinstall `@cursor/sdk`. The tests (`test:cursor-child`, `test-cursor-sdk-resume.mjs`) find
+what they run the same way (`scripts/lib/cursor-sdk-sites.mjs`), so a
+release that only renames needs no edit anywhere.
 `scripts/test-cursor-sdk.ts` covers the projection, modes and wire; a live
 check is `node` against `packages/host/dist/harnesses/cursor/sdk/client.js` in a
 fixture-prefixed directory.

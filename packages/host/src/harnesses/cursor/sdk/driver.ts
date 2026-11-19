@@ -614,6 +614,10 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
     // background completed its call and died as its run finished; the local
     // executor disposes every shell it started when the run ends.
     backgroundStop: { kind: "ends-with-turn", evidence: "The local SDK disposes the shells a run started when the run ends, and a run stays running while a subagent it started works, so neither outlives its turn, and Stop ends the run." },
+    idleWindow: {
+      ms: 2 * 60_000,
+      evidence: "Measured 2026-11-19 (scripts/bench-cursor-idle.ts, SDK 1.4.0 and 1.4.1 alike): Mako's child rests at 182-201 MB after twelve turns of local reads and shell output (113 MB of results), and a new child opens the same agent to ready in 0.25-0.36 s at 142-146 MB, which typing in the composer hides (prewarm); production's working Cursor Fins hold 211 MB (fin-cost.json p75). Ten minutes kept that memory eight minutes longer to save a third of a second.",
+    },
     startPrefetch: {
       via: "The SDK's child, spawned as a session spawns it, until it answers `hello` with the SDK loaded, with the SDK's packages read alongside, and kept; once signed in, the account's models (1.3–1.5 s of a start, 2026-10-20), asked on that child and kept an hour for the start.",
       files: async () => cursorSdkPackages(),

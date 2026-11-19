@@ -29,8 +29,8 @@ type HibernationAccess = Pick<LiveAccess,
   "failedStart" | "returnFromRemovedWorktree" | "restoreRetiredWorktree" | "driverEvents" | "reconcileCut" | "restartContinued" | "reconnectQueued" | "stopMark">
 
 /**
- * Which conversations keep a provider process: a ready one stays warm for
- * `PROVIDER_IDLE_MS`, at most as many at once as the machine's memory keeps
+ * Which conversations keep a provider process: a ready one stays warm for its
+ * harness's idle window (`idleWindow`, else `PROVIDER_IDLE_MS`), at most as many at once as the machine's memory keeps
  * (`warmLimit`, never fewer than `PROVIDER_WARM_LIMIT`), then hibernates on
  * its native session and wakes on the next prompt, or as one is on its way.
  */
@@ -102,6 +102,12 @@ export class LiveHibernation {
       )
     const count = (state: ProviderResidencyEntry["state"]) =>
       entries.filter((entry) => entry.state === state).length
+    const idleMs = this.access.dependencies.providerIdleMs ?? PROVIDER_IDLE_MS
+    const idleWindows: Record<string, number> = {}
+    for (const resident of this.access.residents()) {
+      const window = this.idleMs(resident)
+      if (window !== idleMs) idleWindows[resident.snapshot.session.harness] = window
+    }
     return {
       entries,
       active: count("active"),
@@ -110,7 +116,8 @@ export class LiveHibernation {
       hibernated: count("hibernated"),
       disconnected: count("disconnected"),
       warmLimit: this.warmLimit(),
-      idleMs: this.access.dependencies.providerIdleMs ?? PROVIDER_IDLE_MS,
+      idleMs,
+      ...(Object.keys(idleWindows).length && { idleWindows }),
       memory,
     }
   }
@@ -160,6 +167,17 @@ export class LiveHibernation {
     } else if (this.canHibernate(resident)) {
       this.scheduleHibernation(resident)
     }
+  }
+
+  /**
+   * How long `resident`'s provider rests warm before it hibernates: a test's fixed window, else the one its harness
+   * declares (`ProviderLiveDriver.idleWindow`), else `PROVIDER_IDLE_MS`.
+   */
+  idleMs(resident: Resident): number {
+    const { dependencies } = this.access
+    if (dependencies.providerIdleMs !== undefined) return dependencies.providerIdleMs
+    const binding = activeBinding(resident)
+    return dependencies.driver(binding?.provider ?? "")?.idleWindow?.ms ?? PROVIDER_IDLE_MS
   }
 
   clearHibernationTimer(resident: Resident, clearSince = true): void {
@@ -233,7 +251,7 @@ export class LiveHibernation {
       return
     }
     if (resident.idleTimer) clearTimeout(resident.idleTimer)
-    const idleMs = dependencies.providerIdleMs ?? PROVIDER_IDLE_MS
+    const idleMs = this.idleMs(resident)
     resident.idleTimer = setTimeout(() => {
       resident.idleTimer = undefined
       void this.hibernate(resident, "idle-timeout")
@@ -388,7 +406,7 @@ export class LiveHibernation {
     // Closed before its idle window ended, the process would still be running on what it started with until then.
     if (resident.startedWith)
       resident.startedWith.until = resident.startedWith.bindingId === binding.id && idleSince !== undefined
-        ? idleSince + (this.access.dependencies.providerIdleMs ?? PROVIDER_IDLE_MS)
+        ? idleSince + this.idleMs(resident)
         : undefined
     this.access.noteWork(resident)
     resident.snapshot = {
