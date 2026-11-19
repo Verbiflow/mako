@@ -267,7 +267,7 @@ await test("registration: a definition changed and turned on again is registered
   assert.match((await noGit.automations.reading(bare)).automations[0]!.issues.join(" "), /no GitHub origin/)
 })
 
-await test("R2-6. registration: one on but never approved (a fingerprint kept without its definition) is never registered", async () => {
+await test("Review 2, 6: registration: one on but never approved (a fingerprint kept without its definition) is never registered", async () => {
   const folder = await project([onRelease])
   const state = join(scratch, `state-${worlds + 1}`)
   await mkdir(state, { recursive: true })
