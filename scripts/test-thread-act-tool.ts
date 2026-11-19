@@ -7,7 +7,7 @@ import type { JsonValue } from "@mako/host/contracts/json"
 import { agentAskLine, agentAskWords } from "@mako/host/contracts/agent-asks"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { AUTOMATION_TOOL, HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, type ThreadActResult } from "@mako/host/contracts/thread-tools"
-import { automationFingerprint, type AutomationDefinition, type AutomationRun } from "@mako/host/contracts/automations"
+import { AUTOMATION_DEFINITION_GUIDE, AutomationDefinitionSchema, automationFingerprint, CLOUD_TRIGGER_KINDS, LIVE_TRIGGER_KINDS, type AutomationDefinition, type AutomationRun } from "@mako/host/contracts/automations"
 import { z } from "zod"
 import type { AutomationToolApi } from "@mako/host/conversations/automation-tool"
 import { AgentAskGate, AutomationTool, HarnessTool, registerThreadTools, SettingsTool, ThreadActTool, ThreadMoveAnswerSchema } from "@mako/host/conversations"
@@ -486,6 +486,28 @@ assert.deepEqual({ ...settingsInput(["settings", "read", "--key", "k"]) }, { act
   tier = "full"
   assert.equal(hostCallReplay(AUTOMATION_TOOL.channel), AUTOMATION_TOOL.replay)
   assert.ok(AUTOMATION_TOOL.mcp.description.length < 700, "its description stays short")
+  // list says what a definition holds, so a create can be written whole: every part of one and every trigger that fires.
+  assert.equal("definitionGuide" in listed && listed.definitionGuide, AUTOMATION_DEFINITION_GUIDE)
+  for (const key of AutomationDefinitionSchema.keyof().options) assert.match(AUTOMATION_DEFINITION_GUIDE, new RegExp(`(^|[\\s{])${key}\\??[: =]`), `the guide names ${key}`)
+  for (const kind of [...LIVE_TRIGGER_KINDS, ...CLOUD_TRIGGER_KINDS]) assert.ok(AUTOMATION_DEFINITION_GUIDE.includes(`{kind: ${kind}`), `the guide names ${kind}`)
+  // The door lists a definition as an object, in a few tokens, and hands one on whole.
+  const server = new McpServer({ name: "mako", version: "1.0.0" })
+  const handed: unknown[] = []
+  registerThreadTools(server, { invoke: async (_channel, args) => (handed.push(args[1]), { outcome: "proposed" }), caller: () => agent("s-mine") })
+  const [serverSide, clientSide] = InMemoryTransport.createLinkedPair()
+  await server.connect(serverSide)
+  const client = new Client({ name: "in-thread", version: "1.0.0" })
+  await client.connect(clientSide)
+  const door = (await client.listTools()).tools.find((each) => each.name === "automation")
+  assert.equal(z.object({ type: z.string() }).loose().parse(door?.inputSchema.properties?.definition).type, "object")
+  assert.ok(!JSON.stringify(door?.inputSchema).includes("$ref"), "no recursive JSON union")
+  const definition = { id: "nightly", name: "Nightly", prompt: { objective: "Sweep", doneWhen: ["swept"] }, triggers: [{ kind: "schedule", cron: "0 3 * * *" }] }
+  await client.callTool({ name: "automation", arguments: { action: "create", definition, why: "Sweeps nightly.", clientKey: "door" } })
+  assert.deepEqual(handed, [{ action: "create", definition, why: "Sweeps nightly.", clientKey: "door" }])
+  const refused = await client.callTool({ name: "automation", arguments: { action: "create", definition: "not one", clientKey: "door2" } })
+  assert.equal(refused.isError, true, "a definition that isn't an object is refused at the door")
+  await client.close()
+  await server.close()
 }
 
 assert.deepEqual({ ...automationInput(["automation", "on", "nightly", "--key", "k"]) }, { action: "enable", clientKey: "k", id: "nightly" })

@@ -228,6 +228,20 @@ export const AutomationDefinitionSchema = z.object({
   result: AutomationResultSchema.default("report"),
 })
 export type AutomationDefinition = z.infer<typeof AutomationDefinitionSchema>
+
+/**
+ * What a definition holds, as the `automation` tool's list says it to an agent writing a create: the schema above in
+ * a line each, `?` optional, `=` its default. The host checks a proposal against the schema and says what's wrong.
+ */
+export const AUTOMATION_DEFINITION_GUIDE = [
+  "id: lowercase letters, digits, . _ -, at most 80; name: up to 120 characters; prompt: {objective, doneWhen?: [..], boundaries?: [..], output?: what its report carries}",
+  "start?: {harness?: claude|codex|cursor|grok|opencode|devin, model?, reasoning?, rule?: n, access = edits (plan|chat|ask|edits|auto|full|deny), place = here (here|cloud|device:<name>), whenAway = queue (queue|cloud|skip), workspace?: {base?, branch?, may hold {date} {time} {automation} {run}}}",
+  "thread = new (new|standing)",
+  "triggers = [{kind: manual}], up to 8: {kind: schedule, cron: five fields, timezone = UTC} | {kind: commit, branch?} | {kind: manual} | {kind: github, event: release|push|pull_request|check_failed|issue_comment|issues|workflow_run, repo: owner/name} | {kind: slack, event: message|mention|reaction, channels?} | {kind: linear, event: issue_created|issue_updated|comment, team?} | {kind: sentry, event: issue_created|issue_regressed|alert, project?} | {kind: webhook, secret: its name, coalesce?: {windowS}}; all but manual take runWhen?: one sentence an event must meet, and the cloud's (github on) filters?: {field: value or [values]}",
+  "gate?: {command: exit 0 runs, 1 skips; timeoutS = 60}",
+  "limits?: {overlap = skip (skip|queue), maxRunsPerDay?, timeoutMin = 60, tokenBudget?}",
+  "result = report (report|pull-request|act)",
+].join("\n")
 /** What a writer may leave out: every default filled on reading. */
 export type AutomationDefinitionInput = z.input<typeof AutomationDefinitionSchema>
 

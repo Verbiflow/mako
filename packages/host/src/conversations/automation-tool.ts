@@ -5,7 +5,7 @@ import type { MethodTable } from "../base/methods.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
 import { PROPOSAL_ELSEWHERE, type AgentAskWant } from "../contracts/agent-asks.js"
-import { approvedDefinitionOf, automationDiff, isApproved, triggerWords, type AutomationCause, type AutomationChange, type AutomationProjectReading, type AutomationProposal, type AutomationRun, type AutomationRunNowResult } from "../contracts/automations.js"
+import { approvedDefinitionOf, AUTOMATION_DEFINITION_GUIDE, automationDiff, isApproved, triggerWords, type AutomationCause, type AutomationChange, type AutomationProjectReading, type AutomationProposal, type AutomationRun, type AutomationRunNowResult } from "../contracts/automations.js"
 import type { JsonValue } from "../contracts/json.js"
 import { AFTER_ACT, type AutomationActInput, type AutomationActResult } from "../contracts/thread-tools.js"
 import type { AgentAskGate } from "./agent-ask-gate.js"
@@ -74,7 +74,7 @@ export class AutomationTool {
     }
     if (action === "list") {
       const reading = await automations.reading(project)
-      return { outcome: "listed", automations: listJson(reading) }
+      return { outcome: "listed", automations: listJson(reading), definitionGuide: AUTOMATION_DEFINITION_GUIDE }
     }
     if (action === "create") return this.#propose(automations, caller, own, project, "create", input)
     if (!input.id) return { refused: "no-automation", why: "Name the automation: list gives each one's id." }

@@ -125,7 +125,8 @@ export interface AutomationActInput {
 }
 
 export type AutomationActResult =
-  | { outcome: "listed"; automations: JsonValue }
+  /** `definitionGuide`: what a definition holds, for a create (`AUTOMATION_DEFINITION_GUIDE`). */
+  | { outcome: "listed"; automations: JsonValue; definitionGuide: string }
   | { outcome: "got"; automation: JsonValue }
   | { outcome: "runs"; runs: JsonValue }
   /** A create, update, delete or enable waits for the person: the agent isn't held, and hears the decision as Mako's note. */
@@ -178,6 +179,8 @@ export interface ThreadToolDefinition {
     name: string
     description: string
     fields: Readonly<Record<string, string>>
+    /** Inputs the door lists and takes as a JSON object, said in a few tokens, where the host call takes any JSON. */
+    objects?: readonly string[]
     annotations: { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean }
   }
 }
@@ -257,17 +260,14 @@ export const AUTOMATION_TOOL: ThreadToolDefinition = {
   filled: [],
   mcp: {
     name: "automation",
-    description: "The person's automations: prompts Mako starts as Threads on a schedule, on a commit or on Run now. list, get and runs read; disable and run_now act now (on full access, else after the person allows). create, update, delete and enable are proposals the person approves: you get {proposal, status: pending} at once and hear the decision later, so go on. Call it when the person asks.",
+    description: "The person's automations, prompts Mako runs as Threads on a trigger or Run now; call it when the person asks. list (with a definition guide), get, runs and proposal read. disable and run_now act on full access, else once allowed. create, update, delete and enable propose: the person decides, you hear later, so go on.",
     fields: {
-      action: "list, get, runs, create, update, delete, enable, disable, run_now, or proposal (how one stands).",
-      project: "The project folder; absent: this Thread's.",
-      id: "The automation's id, from list.",
-      definition: "create: {id, name, prompt: {objective, doneWhen, boundaries, output}, start, triggers, gate, limits, result}. update: only what changes.",
-      why: "create, update, delete, enable: one sentence the person reads.",
-      proposal: "proposal: its id.",
-      limit: "runs: at most this many.",
-      clientKey: "Your own key for this: a repeat with it is the same action.",
+      project: "Default: this Thread's.",
+      definition: "create: all of it; update: what changes.",
+      why: "Read with the proposal.",
+      clientKey: "Same key, same action.",
     },
+    objects: ["definition"],
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
 }
