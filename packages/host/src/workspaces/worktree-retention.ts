@@ -3,6 +3,7 @@ import { lstat, mkdir, readFile, readdir, realpath, rename, rm, rmdir, writeFile
 import { dirname, join, relative, sep } from "node:path"
 import { z } from "zod"
 import type { ThreadId } from "../contracts/thread-identity.js"
+import type { ReclaimItem } from "../contracts/storage.js"
 import type { ThreadWorktree, WorktreeRetentionReport, WorktreeRetentionSettings, WorktreeRetirement } from "../contracts/thread-worktrees.js"
 import { PROJECT_CHECKOUT_FILE, worktreeCheckout } from "../contracts/thread-worktrees.js"
 
@@ -34,13 +35,22 @@ interface Deps {
    * the person choosing removal. Without it no checkout is, as before.
    */
   closedFinished?(thread: ThreadId): boolean
+  /**
+   * Every Session of the Thread archived: its one repository's worktree is retired by default too, under the same guards
+   * and with the same record, so a message after it's brought back makes the worktree again.
+   */
+  archived?(thread: ThreadId): boolean
+  title?(thread: ThreadId): string | undefined
   using(path: string): Promise<string[]>
   /** A complete, bounded current-user open-file snapshot; unreadable means kept. */
   openFiles(): Promise<string[]>
   repository(worktree: ThreadWorktree, refresh: (common: string) => Promise<void>): Promise<{ head: string; blocked: string | null; remote: boolean; ignored: string[] }>
   fetch(common: string): Promise<void>
-  /** `finished`: one repository's worktree retired from under a Fin closed as finished, so what it was is kept to make it again. */
-  remove(path: string, finished: boolean): Promise<void>
+  /**
+   * `finished`: one repository's worktree retired from under a Fin closed as finished or an archived Thread, so what it
+   * was is kept to make it again. `person`: the person chose this checkout's removal in Settings › Storage.
+   */
+  remove(path: string, finished: boolean, person?: boolean): Promise<void>
   packagesRemoved(path: string): Promise<void>
   now?(): number
 }
@@ -51,6 +61,7 @@ interface Deps {
  * chosen removal, and 37 worktrees belonged to Fins that finished over a week before.
  */
 export class WorktreeRetention {
+  readonly store = "worktrees"
   readonly #deps: Deps
   #pass: Promise<WorktreeRetentionReport> | undefined
   #last: WorktreeRetentionReport | undefined
@@ -96,9 +107,78 @@ export class WorktreeRetention {
     } finally { await rm(temporary, { force: true }) }
   }
 
-  /** Whether this pass retires a checkout for its Thread being a Fin closed as finished. */
+  /** Whether this pass retires a checkout for its Thread being a Fin closed as finished, or archived. */
   #finished(settings: WorktreeRetentionSettings, thread: ThreadId): boolean {
-    return settings.finishedFins !== false && this.#deps.closedFinished?.(thread) === true
+    return settings.finishedFins !== false && (this.#deps.closedFinished?.(thread) === true || this.#deps.archived?.(thread) === true)
+  }
+
+  /**
+   * Settings › Storage's rows, judged as if the person had chosen removal, without fetching: `now` where Mako retires it
+   * by itself (a finished Fin's or an archived Thread's one worktree, clean, pushed and quiet), `approve` where only the
+   * person's choice is missing, `keep` with the guard that holds it otherwise.
+   */
+  async items(): Promise<ReclaimItem[]> {
+    const settings = await this.settings()
+    const report = await this.#preview({ ...settings, mode: "checkout" }, new Map(), true, false)
+    const rows = this.#deps.worktrees()
+    return report.checkouts.map((row) => {
+      const member = rows.find((candidate) => candidate.path === row.path) ?? rows.find((candidate) => worktreeCheckout(candidate) === row.path)
+      const verdict = this.#verdict(row)
+      return {
+        id: `worktrees:${row.path}`, store: "worktrees", path: row.path, label: this.#deps.title?.(row.thread) ?? row.branch ?? row.path.slice(row.path.lastIndexOf(sep) + 1),
+        thread: row.thread, project: member?.project.slice(member.project.lastIndexOf(sep) + 1), bytes: null,
+        ...(member?.createdAt !== undefined && { usedAt: this.#deps.finished(row.thread) ?? member.createdAt }), ...verdict,
+      }
+    })
+  }
+
+  #verdict(row: WorktreeRetirement): Pick<ReclaimItem, "class" | "reason"> {
+    const blocked = row.skip ?? row.checkoutSkip
+    if (blocked) return { class: "keep", reason: blocked }
+    const single = row.owners.length === 1 && row.owners[0]?.path === row.path
+    if (row.finished && single) return { class: "now", reason: "Clean, pushed and quiet; its Thread finished or is archived, and a message makes it again." }
+    return { class: "approve", reason: single ? "Clean, pushed and quiet; its Thread isn't archived." : "Clean, pushed and quiet; a checkout of several repositories isn't made again by itself." }
+  }
+
+  /**
+   * Removes the checkouts asked for, each inspected again with a fetch first, under the same lock as a pass. `now` takes
+   * only what still reads `now`; `approve` also what only the person's choice was missing.
+   */
+  async reclaim(items: readonly ReclaimItem[], consent: "now" | "approve"): Promise<Map<string, true | string>> {
+    const outcome = new Map<string, true | string>()
+    const lockPath = `${this.#deps.file}.lock`
+    await mkdir(dirname(lockPath), { recursive: true, mode: 0o700 })
+    const lock = await mkdir(lockPath, { mode: 0o700 }).then(() => true).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "EEXIST") return false
+      throw error
+    })
+    if (!lock) {
+      for (const item of items) outcome.set(item.id, "Another retirement owns the store, or its previous owner needs review.")
+      return outcome
+    }
+    const identity = await lstat(lockPath)
+    const fetches: FetchPass = new Map()
+    try {
+      for (const item of items) {
+        try {
+          if (this.#closed) throw new Error("The host is stopping; retirement was cancelled.")
+          const settings = { ...(await this.settings()), mode: "checkout" as const }
+          const rows = this.#deps.worktrees()
+          const members = rows.filter((row) => worktreeCheckout(row) === item.path)
+          if (!members.length) throw new Error("The checkout is no longer registered.")
+          const row = await this.#inspect(item.path, members, rows, settings, fetches, true, await this.#deps.openFiles(), true)
+          const verdict = this.#verdict(row)
+          if (verdict.class === "keep" || (verdict.class === "approve" && consent === "now")) throw new Error(verdict.reason)
+          const single = row.owners.length === 1 && row.owners[0]?.path === row.path
+          await this.#deps.remove(item.path, single, verdict.class === "approve")
+          outcome.set(item.id, true)
+        } catch (error) { outcome.set(item.id, error instanceof Error ? error.message : "Retirement could not finish; the checkout was kept.") }
+      }
+    } finally {
+      const current = await lstat(lockPath)
+      if (current.dev === identity.dev && current.ino === identity.ino) await rmdir(lockPath)
+    }
+    return outcome
   }
 
   last(): WorktreeRetentionReport | undefined { return this.#last }
@@ -145,8 +225,7 @@ export class WorktreeRetention {
     const settings = await this.settings()
     const empty: WorktreeRetentionReport = { settings, everyMs: WORKTREE_RETENTION_MS, minimumPassMs: MIN_RETIREMENT_PASS_MS, repositoryFetches: 0, at: this.#now(), checkouts: [] }
     // In preview only finished Fins' checkouts go: with none, or with that turned off, the pass reads nothing.
-    const fins = settings.finishedFins !== false && this.#deps.closedFinished !== undefined
-      && this.#deps.worktrees().some((row) => this.#deps.closedFinished?.(row.thread))
+    const fins = this.#deps.worktrees().some((row) => this.#finished(settings, row.thread))
     if ((settings.mode === "preview" && !fins) || this.#closed) return empty
     if (this.#lastStart !== undefined && this.#now() - this.#lastStart < MIN_RETIREMENT_PASS_MS) return this.#last ?? empty
     this.#lastStart = this.#now()

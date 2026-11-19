@@ -2093,7 +2093,15 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   })
   const storageRoots = [environment.userRoot, environment.dataRoot]
   const makoCollectors = [new RecordRepacks(records), new LeftoverFiles(storageRoots)]
-  const storage = new MakoStorage({ roots: storageRoots, collectors: () => [...harnesses.host.storage.list(), ...makoCollectors], emit })
+  const storage = new MakoStorage({
+    roots: storageRoots,
+    collectors: () => [...harnesses.host.storage.list(), ...makoCollectors],
+    // Each store judges its own folders; the fixture desk's workspaces have none.
+    reclaimers: () => [workspaces.scratch, workspaces.threadData, workspaces.appData, workspaces.retention, late.conversations?.snapshotBudget]
+      .filter((reclaimer) => reclaimer !== null && reclaimer !== undefined),
+    budgetFile: join(environment.userRoot, "storage-budget.json"),
+    emit,
+  })
   // The fixture desk writes no store and stands in for no one's disk.
   if (!fixtureDesk) storage.schedule(shell.jobs)
   declareStorageMethods(methods, storage)
