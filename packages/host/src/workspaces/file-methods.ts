@@ -77,6 +77,9 @@ export function declareFileMethods(methods: MethodTable, context: FileMethodsDep
   methods.handle("mako:stage-file", (name: string, base64: string) =>
     withHost((host) => host.stageFile(name, base64))
   )
+  methods.handle("mako:stage-file-part", (name: string, base64: string, into?: { path: string; offset: number }) =>
+    withHost((host) => host.stageFilePart(name, base64, into))
+  )
   methods.handle("mako:stage-file-path", (sourcePath: string) =>
     withHost((host) => host.stageFilePath(sourcePath))
   )

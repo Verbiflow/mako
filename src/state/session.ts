@@ -1,4 +1,5 @@
 import { finDefaultsStore } from "./fin-defaults"
+import { followWindowShown, type WindowShownFollower } from "@/state/window-hidden"
 import { accounts } from "@/state/accounts"
 import { toolStepped } from "@/state/tool-steps"
 import { quietly } from "@/lib/quiet-retry"
@@ -20,7 +21,7 @@ import { applyFileEvents, loadFileEvents } from "@/state/file-events"
 import { applyMcpSignIns, loadMcpSignIns } from "@/state/mcp-sign-ins"
 import { loadUnopened } from "@/state/unopened-conversations"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
-import { applyWorktreeSummaries, refreshWorktrees, refreshWorktreeSummaries } from "@/state/worktrees"
+import { applyWorktreeSummaries, applyWorktreeSummaryChanges, refreshWorktrees, refreshWorktreeSummaries, worktreeSizesWereMeasured } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
@@ -43,7 +44,7 @@ import { cloudAccountStore, heardAccountEvent } from "@/state/cloud-account"
 import { offerCloudProjects } from "@/state/cloud-projects"
 import { cloudTurnOn } from "@/state/cloud-turn-on"
 import { simulatorSetup } from "@/state/simulator-setup"
-import { applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
+import { applyLiveAhead, applyLiveBatch, hydrateLiveSummaries, hydrateLive, listLive, markLiveOwnerDisconnected, unlistLive } from "@/state/live-recovery"
 import { replayUnconfirmedPrompts, restorePendingMessages } from "@/state/acp-queue"
 import { watchPendingMessages } from "@/state/message-outbox"
 import { createHook, createStore, shallowEqual } from "@/state/store"
@@ -190,6 +191,8 @@ export function currentTurnRunning(): boolean {
  * not a render.
  */
 let connectionEpoch = 0
+/** What tells the host whether this window shows, for the boot that's attached; a new stream is told again through it. */
+let shownFollower: WindowShownFollower | undefined
 /** A built-in tab's notification identity. */
 function tabSubject(id: string, cache: TabCache) {
   const tab = tabsStore.get().tabs.find((entry) => entry.id === id)
@@ -263,6 +266,14 @@ function apply(event: HostEvent) {
   }
   if (event.type === "worktree-summaries") {
     applyWorktreeSummaries(event.summaries)
+    return
+  }
+  if (event.type === "worktree-summary-changes") {
+    applyWorktreeSummaryChanges(event)
+    return
+  }
+  if (event.type === "worktree-sizes") {
+    worktreeSizesWereMeasured()
     return
   }
   if (event.type === "worktree-ready") {
@@ -385,6 +396,7 @@ function apply(event: HostEvent) {
     // The stream attached, so the host is there. The boot brings the window up to date; on a busy host that took 18 s,
     // and it isn't an outage. One that fails says so itself.
     hostConnectionStore.set({ kind: "connected" })
+    shownFollower?.renewed()
     void actions.reconnect()
     return
   }
@@ -403,6 +415,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "live-batch") {
     applyLiveBatch(event.batch)
+    return
+  }
+  if (event.type === "live-ahead") {
+    applyLiveAhead(event.ahead)
     return
   }
   if (event.type === "live-listed") {
@@ -923,7 +939,14 @@ export const actions = {
       })
       return () => {}
     }
-    const unsubscribe = bridge.onEvent(apply)
+    const unsubscribeEvents = bridge.onEvent(apply)
+    shownFollower?.stop()
+    const following = shownFollower = followWindowShown(bridge)
+    const unsubscribe = () => {
+      unsubscribeEvents()
+      following.stop()
+      if (shownFollower === following) shownFollower = undefined
+    }
     const epoch = ++connectionEpoch
     void providers.loadAll()
     // Settings paints versions the moment it opens; the host has been reading them since it started.

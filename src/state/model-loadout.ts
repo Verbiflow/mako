@@ -6,7 +6,7 @@ import {
 import { prefsStore, setPref } from "@/state/prefs"
 import { modelByIdentity } from "@mako/sessions/settings"
 import type { HarnessProfile } from "@/lib/types"
-import { providerProfileKey, providerStore, providers } from "@/state/providers"
+import { profileUnread, providerProfileKey, providerStore, providers } from "@/state/providers"
 
 /** The five models a chord away: provider and id, in pick order. */
 export interface LoadoutEntry {
@@ -17,7 +17,7 @@ export interface LoadoutEntry {
 export const LOADOUT_LIMIT = 5
 
 export function loadoutAvailability(entry: LoadoutEntry, profile?: HarnessProfile) {
-  if (!profile || profile.pending)
+  if (!profile || profileUnread(profile))
     return { kind: "loading" as const, label: entry.model, reason: "Checking model availability…" }
   const model = modelByIdentity(profile.models, entry.model)
   const label = model?.label ?? entry.model

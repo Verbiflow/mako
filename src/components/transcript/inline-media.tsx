@@ -7,6 +7,7 @@ import type { MediaTile } from "@/components/viewer/media-tile-context"
 import { mediaBox, naturalSize, type MediaSize } from "@/components/viewer/media-tile-layout"
 import { useDevicePixelRatio } from "@/components/viewer/use-device-pixel-ratio"
 import type { FileContents } from "@/lib/types"
+import { lonePictureUrl } from "@/lib/transcript-media"
 import { cn } from "@/lib/utils"
 import { MediaUnavailable } from "./media-preview"
 
@@ -14,7 +15,8 @@ import { MediaUnavailable } from "./media-preview"
  * A picture or video drawn as itself: no card, no header, a hairline and a
  * soft corner. Its name shows on hover and its actions sit in the corner;
  * a click opens the lightbox. In a grid it's a tile of its own shape
- * drawing the host's thumbnail or poster; the original loads only in the
+ * drawing the host's thumbnail or poster, and alone it draws the rendition
+ * that fills its box (`lonePictureUrl`); the original loads only in the
  * lightbox. Neither ever draws a picture larger
  * than its own pixels, one to a device pixel: a small one sits at its size
  * in the middle of its tile or box.
@@ -42,6 +44,7 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
   const known = file?.width && file.height ? file : size ?? natural
   const pixels = naturalSize(known?.width, known?.height, ratio)
   const url = file?.previewUrl
+  const lone = file && format === "image" ? lonePictureUrl(file, ratio) : url
   if (tile?.kind === "hidden") return <div ref={hostRef} hidden data-inline-file-preview={path} />
   if (tile) {
     const picture = format === "image" ? file?.thumbnailUrl ?? url : file?.posterUrl
@@ -107,9 +110,9 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
       <div className="group/media relative max-w-full" style={box}>
         {format === "image" ? (
           <button type="button" aria-label={`Open ${name}`} onClick={onOpen} className="pressable block size-full cursor-zoom-in overflow-hidden media-surface border border-hairline bg-shell/40">
-            {url ? (
+            {lone ? (
               <img
-                src={url}
+                src={lone}
                 alt={name}
                 loading="lazy"
                 decoding="async"

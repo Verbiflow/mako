@@ -228,9 +228,9 @@ assert.equal((await summaryOf(onFork.path))?.pull?.number, 7, "a fork's pull req
 assert.equal(pullEvaluations, 1, "unchanged repository live points share one mapping evaluation")
 commit(moved.path, "after the merge")
 assert.equal((await summaryOf(moved.path))?.landing.kind, "open", "a commit after the merge isn't in it")
-assert.equal(pullEvaluations, 2, "a changed live HEAD re-evaluates the mapping once, even within the minute")
+assert.equal(pullEvaluations, 1, "a commit on a branch whose pull request is merged asks GitHub nothing new within the minute")
 assert.equal((await service.summaries()).find((summary) => summary.path === moved.path)?.pull?.number, 9, "within the minute the last answer stands")
-assert.equal(pullEvaluations, 2, "an unchanged-head repeat reuses the mapping; this counter is not network requests")
+assert.equal(pullEvaluations, 1, "an unchanged-head repeat reuses the mapping; this counter is not network requests")
 
 // Update from main: what the start point has comes in as a merge; a conflict is left for resolving.
 const upId = placed()

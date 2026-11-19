@@ -188,6 +188,7 @@ try {
       assert.equal(counted.tree.running, 0, "held work occupies no concurrent Fin slot")
       assert.equal(counted.tree.started, 1, "messaging reuses its one lifetime admission")
       assert.equal(rollup(world.agents.roster(apex.conversation)).needs, 1, "the shared UI count includes the held Fin")
+      assert.equal(world.agents.roster(apex.conversation), world.agents.roster(apex.conversation), "a roster none of whose Fins moved is the array it was, read by a lookup")
       if (harness === "claude") {
         const window = rosterWindow()
         try {

@@ -7,8 +7,8 @@ import { anyUnsure, recordRoots, recordedTurnChanges, turnChangeSummary, turnCha
 import { undoneWords } from "@/lib/turn-undone"
 import { cn } from "@/lib/utils"
 import { turnWords } from "@/state/prompt-delivery"
-import { acp, useAcp } from "@/state/acp"
-import { acpStore } from "@/state/acp-state"
+import { acp } from "@/state/acp"
+import { acpStore, requestOf, useAcpConversation } from "@/state/acp-state"
 import { reviewTurn } from "@/state/review-scope"
 import { useTranscriptSource } from "./source-context"
 import { useVisible } from "./use-visible"
@@ -64,10 +64,7 @@ function readTurn(conversation: string, requestId: string, key: string): Promise
  */
 export function TurnChanges({ requestId, streaming = false }: { requestId: string | undefined; streaming?: boolean }) {
   const { liveId } = useTranscriptSource()
-  const request = useAcp((state) => {
-    const live = liveId ? state.conversations[liveId] : undefined
-    return live?.kind === "live" && requestId ? live.requests?.find((each) => each.id === requestId) : undefined
-  })
+  const request = useAcpConversation(liveId, (live) => (live?.kind === "live" ? requestOf(live, requestId) : undefined))
   // The repository its checkpoints saved, when both sides were saved; else the one its record names: what Review opens.
   const before = request?.snapshots?.before
   const saved = before?.kind === "ready" && request?.snapshots?.after?.kind === "ready" ? before.snapshot.scope : null

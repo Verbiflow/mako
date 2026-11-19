@@ -28,9 +28,10 @@ export interface TurnReviewLedger {
   placement(conversationId: string): { thread: string; session: string } | undefined
   settled(): Promise<void>
   blob(ref: ContentRef): Uint8Array | undefined
-  turnWriters(thread: string, turn: string, file: TurnChangedFile, shown?: ShownPair): WriterRun[] | undefined
-  turnOnly(thread: string, turn: string, file: TurnChangedFile): { before: string | null; after: string | null } | undefined
-  undoPlan(thread: string, scope: TurnUndoScope, checkout: string): UndoPlan
+  // These three may answer later: the host's reads them on the journal's reader, where each file's versions are walked.
+  turnWriters(thread: string, turn: string, file: TurnChangedFile, shown?: ShownPair): WriterRun[] | undefined | Promise<WriterRun[] | undefined>
+  turnOnly(thread: string, turn: string, file: TurnChangedFile): { before: string | null; after: string | null } | undefined | Promise<{ before: string | null; after: string | null } | undefined>
+  undoPlan(thread: string, scope: TurnUndoScope, checkout: string): UndoPlan | Promise<UndoPlan>
   running(checkout: string): { thread: string; kind: "turn" | "background" } | undefined
   mako(write: MakoWrite): MakoWriting
 }
@@ -104,7 +105,7 @@ export class LiveTurnReview {
     }
     if (options.only) {
       const placed = this.placed(id)
-      const pair = placed.ledger.turnOnly(placed.thread, requestId, file)
+      const pair = await placed.ledger.turnOnly(placed.thread, requestId, file)
       if (pair) return textDiff(path, file, pair.before, pair.after)
     }
     return (await this.body(id, requestId, file, path)).diff
@@ -117,7 +118,7 @@ export class LiveTurnReview {
     const placed = this.placed(id)
     const body = await this.body(id, requestId, file, path)
     if (body.diff.binary || body.diff.preview) return null
-    const runs = placed.ledger.turnWriters(placed.thread, requestId, file, body.shown)
+    const runs = await placed.ledger.turnWriters(placed.thread, requestId, file, body.shown)
     return runs ? { path, runs, body: body.body } : null
   }
 
@@ -203,9 +204,13 @@ export class LiveTurnReview {
   async undoPreview(id: string, scope: TurnUndoScope): Promise<TurnUndoPreview> {
     const target = await this.target(id)
     await target.ledger.settled()
-    const plan = target.ledger.undoPlan(target.thread, scope, target.checkout)
+    const plan = await target.ledger.undoPlan(target.thread, scope, target.checkout)
     const refused = this.undoneAlready(id, scope) ?? target.refused
-    return { scope, checkout: target.checkout, undo: plan.undo, kept: plan.kept, left: plan.left, token: plan.token, ...(refused && { refused }) }
+    // The turn's record lists files the journal plans nothing for: its entries are past retention, so each file is left and says why.
+    const record = scope.kind === "turn" ? countedChanges(this.host.request(id, scope.requestId)?.changes) : undefined
+    const gone = record?.files.length && !plan.undo.length && !plan.kept.length && !plan.left.length
+    const left = gone ? record.files.map((file): TurnUndoPreview["left"][number] => ({ path: file.relative, reason: "content-not-kept", by: [] })) : plan.left
+    return { scope, checkout: target.checkout, undo: plan.undo, kept: plan.kept, left, token: plan.token, ...(refused && { refused }) }
   }
 
   /** Why a turn can't be undone again: it was, and its record says so. */
@@ -232,7 +237,7 @@ export class LiveTurnReview {
         await new Promise((resolve) => setTimeout(resolve, 150 * attempt))
         await ledger.settled()
       }
-      const plan = ledger.undoPlan(thread, scope, checkout)
+      const plan = await ledger.undoPlan(thread, scope, checkout)
       if (plan.token !== token) throw new MoveRefused("The files changed since this preview. Look at it again before undoing.")
       const repositories = await this.read(git, plan, ledger)
       if (!repositories) continue

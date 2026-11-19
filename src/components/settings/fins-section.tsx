@@ -28,7 +28,7 @@ import { providers, useProviders } from "@/state/providers"
 export function FinsSection() {
   useHarnessIdentity()
   useEffect(() => {
-    void providers.loadAll()
+    void providers.loadListed()
     void loadFinDefaults()
   }, [])
   const order = useHarnessOrder()
