@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.327"
+    "version": "2.1.328"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / /compact / Without reading anything, which day did notes.md name? A turn, a manual compaction, then a turn that leans on the summary.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/cbaea00f-efd0-49e3-9be3-1138ca6a6778.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/166ef421-b1f8-420e-bede-de6af1fd653b.jsonl",
       "known": []
     }
   ]

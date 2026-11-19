@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.327"
+    "version": "2.1.328"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / /compact / (resumed) / Without reading anything, which day did notes.md name? A turn, a manual compaction, the harness's process closed and the session resumed in a new one, then a turn that leans on the summary. What the harness replays while it opens is history.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/29bc2954-9175-41fc-82de-2ab435508bd2.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/e013411e-6144-45b1-b5b7-bb76d1d59595.jsonl",
       "known": []
     }
   ]
