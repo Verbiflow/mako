@@ -13,7 +13,9 @@ import { harnessLabel } from "@/components/rail/harness-meta"
 import { formatRelative } from "@/lib/format"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { agentAskCard } from "@/state/agent-asks"
+import { agentAskCard, answerAgentAsk } from "@/state/agent-asks"
+import { ProposalBlock } from "@/components/automations/automation-proposal"
+import { automations, proposalById, useAutomations } from "@/state/automations"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
 import { ASK_TOUCH, runChoice, type AskCard as AskWords } from "@/lib/ask-card"
 import { setupAskCard } from "@/state/setup"
@@ -24,6 +26,7 @@ import {
   sameItems,
   useInbox,
   useInboxView,
+  type AgentAskInboxItem,
   type ApprovalInboxItem,
   type FinInboxItem,
   type InboxAsk,
@@ -198,6 +201,9 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
       </div>
       <p className="pl-7 text-ui text-foreground">{item.question}</p>
       {item.kind === "fin" && item.ask.ask.action ? <p className="-mt-1 pl-7 text-label text-muted-foreground">{item.ask.ask.action}</p> : null}
+      {item.kind === "agent-ask" && item.ask.want.kind === "automation-proposal" ? (
+        <ProposalAsk item={item} sending={sending} setSending={setSending} />
+      ) : (
       <div className="flex min-w-0 flex-wrap items-center gap-1.5 pl-7">
         {item.kind === "fin" ? (
           <FinAnswers item={item} sending={sending} send={(answer) => settle(answerFin(item.apex.conversation, item.ask, answer))} />
@@ -213,9 +219,40 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
           Open
         </button>
       </div>
+      )}
     </div>
   )
 })
+
+/**
+ * An agent's automation proposal, as its card in the Inbox: what it changes, read from the proposal Automations holds,
+ * answered through the ask that carries it (`mako:agent-ask-answer`). Until the proposal is read, the ask's own answers.
+ */
+function ProposalAsk({ item, sending, setSending }: { item: AgentAskInboxItem; sending: boolean; setSending: (held: boolean) => void }) {
+  const want = item.ask.want.kind === "automation-proposal" ? item.ask.want : undefined
+  const proposal = useAutomations((state) => (want ? proposalById(state, want.proposal) : undefined))
+  useEffect(() => {
+    if (want && !proposal) void automations.load(true)
+  }, [want, proposal])
+  const open = (
+    <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">
+      Open
+    </button>
+  )
+  if (!proposal)
+    return (
+      <div className="flex min-w-0 flex-wrap items-center gap-1.5 pl-7">
+        <AskChoices card={agentAskCard(item.conversation, item.ask, harnessLabel(item.harness))} sending={sending} setSending={setSending} />
+        <span className="flex-1" />
+        {open}
+      </div>
+    )
+  return (
+    <div data-inbox-proposal={proposal.id} className="flex min-w-0 flex-col pl-7">
+      <ProposalBlock proposal={proposal} compact inThread actions={open} onDecide={(approve) => answerAgentAsk(item.conversation, item.ask, approve)} />
+    </div>
+  )
+}
 
 function AskMark({ item }: { item: InboxAsk }) {
   if (item.kind === "fin") return <FinMark agent={item.agent} state={childStateOf(item.agent)} read />

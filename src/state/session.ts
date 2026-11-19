@@ -86,7 +86,7 @@ import { applyUpdate, updates } from "@/state/updates"
 import { application, applicationStore } from "@/state/application"
 import { runCommand } from "@/extend/commands"
 import {
-  applyAutomationsReading,
+  applyAutomationsChanged,
   automations,
   noteAutomationRun,
 } from "@/state/automations"
@@ -619,7 +619,7 @@ function applyToActive(event: HostEvent) {
       applyUpdate(event.update)
       break
     case "automations-changed":
-      applyAutomationsReading(event.reading)
+      applyAutomationsChanged(event.reading)
       break
     case "threads":
       applyThreads(event.threads)
@@ -657,15 +657,8 @@ function applyToActive(event: HostEvent) {
       void viewer.refresh(event.path)
       break
     case "automation-run":
+      // Its toasts, a run the person started and one that didn't make it, are the store's.
       noteAutomationRun(event.run)
-      if (event.run.status === "failed-to-start") {
-        const { project, automation } = event.run
-        toast.error(`${automation} didn't start`, {
-          duration: ACTION_TOAST_MS,
-          description: event.run.why,
-          action: { label: "Run again", onClick: () => automations.run(project, automation) },
-        })
-      }
       break
     case "notice":
       notice(event)
@@ -819,7 +812,7 @@ function adoptBoot(boot: BootPayload) {
   void actions.refreshGit()
   void updates.load()
   void application.load()
-  void automations.load()
+  void automations.load(true)
   void threads.load()
   void loadGroups()
   void loadWorktrees()

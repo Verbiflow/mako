@@ -95,6 +95,7 @@ import {
   initialTerminalSessions,
   mockThreads,
 } from "./mock-runtime-fixtures"
+import { automationRefs, automationSnapshots, automationSummaries, mockAutomations, RUN_THREADS } from "./mock-automations"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
 import { openAsk } from "@mako/host/contracts/children"
 import { apexWorktrees, apexWorktreeSummaries, benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
@@ -511,6 +512,23 @@ export function installMockBridge() {
   let crowdedReads = 0
   if (crowded) boot.live.push(...crowded.own)
   /** `?app=busy`: a long Thread of four Sessions, its first waiting on three agents and twenty-two commands. */
+  const automationMock = mockAutomations(emit)
+  /** `?app=automations`: the Threads automations ran and the Thread proposing a change, live, its proposal in the Inbox. */
+  if (scene === "automations") {
+    for (const snapshot of automationSnapshots()) {
+      liveSnapshots.set(snapshot.session.id, snapshot)
+      acpSessions.set(snapshot.session.id, snapshot.session)
+    }
+    boot.live.push(...automationSummaries())
+    // The proposer's ask, as the host's control-only batch says it once the window listens.
+    setTimeout(() => {
+      const snapshot = liveSnapshots.get(RUN_THREADS.proposer.conversation)
+      if (!snapshot?.control) return
+      const next = { ...snapshot, revision: snapshot.revision + 1 }
+      liveSnapshots.set(snapshot.session.id, next)
+      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: snapshot.session.id, revision: next.revision, updates: [], control: snapshot.control })) })
+    }, 600)
+  }
   if (scene === "busy") {
     BUSY_SESSIONS.forEach((entry, index) => liveSnapshots.set(entry.conversation, busySnapshot(index)))
     boot.live.push(...busySummaries())
@@ -1195,6 +1213,7 @@ export function installMockBridge() {
       const snapshot = liveSnapshots.get(conversationId)
       const pending = snapshot?.control?.asks?.find((each) => each.id === ask)
       if (!snapshot?.control || !pending) return { outcome: "missing", ask } as const
+      if (pending.want.kind === "automation-proposal") automationMock.decideByAsk(ask, allow)
       const control = { ...snapshot.control, asks: snapshot.control.asks?.filter((each) => each.id !== ask) }
       const next = { ...snapshot, revision: snapshot.revision + 1, control }
       liveSnapshots.set(conversationId, next)
@@ -1806,7 +1825,7 @@ export function installMockBridge() {
         if (crowdedReads === 2) setTimeout(() => emit({ type: "live-listed", summaries: crowded.elsewhere }), 1_000)
         return { ready: crowdedReads > 1, threads: crowdedReads > 1 ? crowded.refs : crowded.early, activity: {} }
       }
-      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...(scene === "apex" ? [...apexRefs(), ...benchScene.refs] : []), ...fixture.threads]
+      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...(scene === "apex" ? [...apexRefs(), ...benchScene.refs] : []), ...(scene === "automations" ? automationRefs() : []), ...fixture.threads]
       if (scene === "rail" && !railRunsSent) {
         railRunsSent = true
         setTimeout(() => {
@@ -3461,15 +3480,7 @@ export function installMockBridge() {
       },
     abortThreadRun: async () => {},
     usage: async () => fixtureUsageSummary(),
-    automations: async () => ({ projects: [] }),
-    automationRuns: async () => [],
-    saveAutomation: async (project: string) => ({ project, automations: [], proposals: [], file: { exists: true } }),
-    deleteAutomation: async (project: string) => ({ project, automations: [], proposals: [], file: { exists: true } }),
-    setAutomationEnabled: async (project: string) => ({ project, automations: [], proposals: [], file: { exists: true } }),
-    runAutomation: async () => ({ refused: "The mock runs no automations." }),
-    decideAutomationProposal: async () => { throw new Error("The mock has no proposals.") },
-    draftAutomation: async () => { throw new Error("The mock has no Threads to draft from.") },
-    automationTemplates: async () => [],
+    ...automationMock.bridge,
     terminalList: async () => terminalSessions,
     terminalCreate: async (options) => {
       const now = Date.now()
