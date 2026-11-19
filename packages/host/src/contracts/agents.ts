@@ -14,12 +14,13 @@ export { CHILDREN_BINDING, WAITING_ON_LIMIT, WaitingOnSchema, type WaitingOn }
 /**
  * What every person-facing string and every agent's instructions call a
  * Thread that others work for, and a Thread that works for another: an Apex
- * and its Fins. The two together have no word of their own. Identifiers say
- * `apex`; the edge's data keeps the `lead` every build reads (`ChildRole`, a
+ * and its Fins. The two together are a Shiver, as sharks are. Identifiers say
+ * `apex` and `shiver`; the edge's data keeps the `lead` every build reads (`ChildRole`, a
  * question's `on`), and the tree's records keep `parent` and `child`.
  */
 export const APEX_WORD = "Apex"
 export const FIN_WORD = "Fin"
+export const SHIVER_WORD = "Shiver"
 
 /** "1 Fin", "3 Fins". */
 export function finsWord(count: number): string {
@@ -435,7 +436,7 @@ export const LimitNoticeSchema = z.object({
 })
 export type LimitNotice = z.infer<typeof LimitNoticeSchema>
 
-/** The exact held work and fallback place shown by a crew notice; a press cannot take newer work with it. */
+/** The exact held work and fallback place shown by a Shiver notice; a press cannot take newer work with it. */
 export const LimitNoticeChoiceSchema = z.object({
   notice: z.string().min(1).max(600),
   place: z.string().min(1).max(1200),

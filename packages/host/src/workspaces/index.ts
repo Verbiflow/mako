@@ -37,7 +37,7 @@ import { beginTrace, TraceRefresh } from "./app-probe.js"
 import { childHistory, childProcessReader, type DaemonRestarts, type ProcessReader, type WatchBackend } from "./watch-backend.js"
 import type { WatchedTrees } from "./watched-trees.js"
 export { WatchedTrees } from "./watched-trees.js"
-import type { WatchReadings } from "./watch-readings.js"
+import { WatchReadings } from "./watch-readings.js"
 import { commandEnvironment, environmentTools, registerEnvironmentTools, type EnvironmentTools } from "./environment-tools.js"
 import { spareInstaller } from "./spare-install.js"
 import { isSpareCheckout } from "./worktree-carry.js"
@@ -101,6 +101,11 @@ export { MovePlanSchema, MoveRefused, resumeMove, rewriteInPlace, type InPlaceFi
 
 /** A long quiet, not a short timer: a stopped app keeps its files and data, and restarting it for nothing costs more than it frees. */
 const THREAD_APP_IDLE_MS = 6 * 60 * 60 * 1000
+/**
+ * The checkpoints' history child stays this long without an ask: the next turn usually comes within it, and a child
+ * started for a turn's mark could take longer than the checkpoint waits for history (`CHECKPOINT_HISTORY_MS`).
+ */
+const CHECKPOINT_HISTORY_IDLE_MS = 15 * 60_000
 
 /** Worktrees, spares, checkouts, recipes, and each Thread's apps and their processes. */
 export interface Workspaces {
@@ -128,6 +133,12 @@ export interface Workspaces {
   appOwner(app: AppKey): { id: string; title: string } | undefined
   /** What changed on disk while apps ran, for their probes; FSEvents keeps that history, so macOS only. */
   fileHistory: ReturnType<typeof childHistory>
+  /**
+   * The same history, read for turns' checkpoints alone, in a child of their own that stays up between turns
+   * (`CHECKPOINT_HISTORY_IDLE_MS`): a read holds parcel's FSEvents lock in its child, and behind the journal's and the
+   * probes' reads from marks hours back a turn's mark or read waited seconds, past the checkpoint's wait for history.
+   */
+  checkpointHistory: ReturnType<typeof childHistory>
   close(): Promise<void>
 }
 
@@ -200,6 +211,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     }, recipesRoot: recipes, where: deps.where, recipes: deps.recipes })
     : null
   const fileHistory = childHistory(undefined, deps.watchReadings, deps.daemonRestarts)
+  const checkpointHistory = childHistory(undefined, new WatchReadings((message, fields) => hostLog("checkpoints", message, fields)), deps.daemonRestarts, CHECKPOINT_HISTORY_IDLE_MS)
   const whoseApp = (app: AppKey): string | undefined => {
     const thread = ThreadIdSchema.safeParse(app)
     if (thread.success) {
@@ -405,6 +417,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     whoseApp,
     appOwner,
     fileHistory,
+    checkpointHistory,
     close: async () => {
       retention?.close()
       scratch?.close()

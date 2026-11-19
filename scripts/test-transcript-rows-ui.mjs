@@ -10,7 +10,7 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * A long Apex's rows stand apart in every frame it paints, whether or not the virtualizer's resize observer hears
  * them: on the desk, in a laptop's browser and on a phone, Fin reports start turns that grow by a tool and an answer,
  * first with the observer working (nothing is corrected, nothing is logged), then with the rows taken from it, as a
- * person's Apex was seen: every row left at its size when it mounted, a report over the answer above it and the crew
+ * person's Apex was seen: every row left at its size when it mounted, a report over the answer above it and the Shiver
  * card over the last line. A row that grows with no change to the document comes right within the check's second, and
  * a reader who wheeled up keeps their rows apart too. Every correction is logged with what it found.
  *
@@ -248,15 +248,16 @@ const CROSSING = (up) => `(() => {
   const node = document.querySelector('[data-transcript-viewport]')
   const view = node.getBoundingClientRect()
   const first = [...node.querySelectorAll('[data-exchange]')].find((turn) => turn.getBoundingClientRect().bottom > view.top + 40)
-  // At the end of a narrow pane the waiting line and the crew card can fill the view, with every turn above it: only a reader up has a turn to hold.
+  // At the end of a narrow pane the waiting line and the Shiver card can fill the view, with every turn above it: only a reader up has a turn to hold.
   const anchor = ${up} ? first.dataset.exchange : null
   const start = first ? first.getBoundingClientRect().top : 0
-  const seen = window.__crossing = { frames: 0, after: 0, crossed: false, empty: [], moved: [] }
+  const seen = window.__crossing = { frames: 0, after: 0, crossed: false, empty: [], moved: [], cards: 0 }
   const read = () => {
     seen.frames += 1
     if (node.hasAttribute('data-virtualized')) { seen.crossed = true; seen.after += 1 }
-    // A wake's report folds into its turn's one line, so at the end the crew card under the turns fills most of a narrow pane: it is painted content too.
-    const turns = [...node.querySelectorAll('[data-exchange], [data-crew]')].map((turn) => turn.getBoundingClientRect())
+    // A wake's report folds into its turn's one line, so at the end the Shiver card under the turns fills most of a narrow pane: it is painted content too.
+    const turns = [...node.querySelectorAll('[data-exchange], [data-shiver]')].map((turn) => turn.getBoundingClientRect())
+    seen.cards = Math.max(seen.cards, node.querySelectorAll('[data-shiver]').length)
     const shown = turns.reduce((all, box) => all + Math.max(0, Math.min(box.bottom, view.bottom) - Math.max(box.top, view.top)), 0)
     if (shown < view.height * (anchor ? 0.5 : 0.05)) seen.empty.push({ frame: seen.frames, turns: turns.length, shown: Math.round(shown), scrollTop: Math.round(node.scrollTop) })
     if (anchor) {
@@ -447,7 +448,7 @@ async function check() {
       if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
     })
     if (open) await until(open, `${form}: its list`)
-    await until(`document.querySelectorAll(${JSON.stringify(ROW)}).length > 2 && Boolean(document.querySelector('[data-crew]'))`, `${form}: the Apex's rows`)
+    await until(`document.querySelectorAll(${JSON.stringify(ROW)}).length > 2 && Boolean(document.querySelector('[data-shiver]'))`, `${form}: the Apex's rows`)
     await evaluate(TURNS)
     await wait(600)
     await evaluate(WATCH)
@@ -642,6 +643,7 @@ async function check() {
       console.log(`${form}, reader ${reader}: crossed after ${crossing.frames} frames, ${crossing.after} frames after it, empty ${crossing.empty.length}, moved ${crossing.moved.length}${crossing.empty[0] ? ` first ${JSON.stringify(crossing.empty[0])}` : ""}${crossing.moved[0] ? ` first ${JSON.stringify(crossing.moved[0])}` : ""}`)
       if (crossing.empty.length || crossing.moved.length) await shot(`${form} crossing, reader ${reader}`)
       assert.ok(crossing.crossed, `${form}: the turns crossed into a window`)
+      assert.ok(crossing.cards > 0, `${form}, reader ${reader}: the Shiver card was read as painted content`)
       assert.deepEqual(crossing.empty.slice(0, 3), [], `${form}, reader ${reader}: turns painted in every frame across the crossing`)
       assert.deepEqual(crossing.moved.slice(0, 3), [], `${form}, reader ${reader}: what's read stays where it was across the crossing`)
     }

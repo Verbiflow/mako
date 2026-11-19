@@ -173,7 +173,7 @@ cloud execution was performed.
 | Cleanup and cost | Dismiss removes only the local failure notice; it neither starts nor cancels a cloud operation. | Actual machine cleanup and cost visibility are not proved by a local refusal and require separate runtime evidence. |
 
 The backend authority/coordinator/security workstream, move diagnostics work,
-and crew-card work are not modified by this branch. No permission is inferred
+and shiver-card work are not modified by this branch. No permission is inferred
 from a message saying that a move was accepted.
 
 ## What the comparison sources actually say
