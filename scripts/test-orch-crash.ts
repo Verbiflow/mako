@@ -78,11 +78,22 @@ function next(harness: string): string {
   return HARNESSES[(HARNESSES.findIndex((each) => each === harness) + 1) % HARNESSES.length]!
 }
 
-async function until(what: string, done: () => boolean, timeoutMs = 20_000): Promise<void> {
+/**
+ * Polls `done` every 20 ms. A timeout says what was still outstanding (`left`), and how late the polls ran: the host
+ * runs in this process, so one that holds its thread starves the polls, and then few run at all.
+ */
+async function until(what: string, done: () => boolean, timeoutMs = 20_000, left?: () => string): Promise<void> {
   const deadline = Date.now() + timeoutMs
+  let polled = Date.now()
+  let longestGap = 0
   while (!done()) {
-    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`)
+    if (Date.now() > deadline) {
+      const gap = Math.max(longestGap, Date.now() - polled)
+      throw new Error(`Timed out waiting for ${what}${left ? ` (${left()})` : ""}; longest gap between polls ${gap} ms`)
+    }
     await new Promise((resolve) => setTimeout(resolve, 20))
+    longestGap = Math.max(longestGap, Date.now() - polled)
+    polled = Date.now()
   }
 }
 
@@ -185,7 +196,8 @@ async function host(root: string, harness: string, point: Point | "none"): Promi
       return last?.status === "done" || last?.status === "failed"
     })
     // A followed run's end waits for its session to stay quiet.
-    await until("the tree to settle", () => store.undeliveredReports().length === 0 && store.queuedSpawns().length === 0 && finished(), 20_000 + END_CONFIRM_MS)
+    await until("the tree to settle", () => store.undeliveredReports().length === 0 && store.queuedSpawns().length === 0 && finished(), 20_000 + END_CONFIRM_MS, () =>
+      `${store.undeliveredReports().length} reports undelivered, ${store.queuedSpawns().length} spawns queued, ${store.edges().all.filter((edge) => edge.run ? edge.run.ended === undefined : !["done", "failed"].includes(store.reportsOf(edge.child, 0).at(-1)?.status ?? "")).length} Fins unfinished`)
     await world.settle()
     const settled: Settled = {
       edges: store.edges().all.map((edge) => ({
