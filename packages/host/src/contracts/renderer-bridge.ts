@@ -22,7 +22,7 @@ import type { SetupAct, SetupActOutcome, SetupView } from "./setup.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { ProjectAppSetup } from "./project-app.js"
-import type { WorktreeRetentionSettings, WorktreeRetentionReport, ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./thread-worktrees.js"
+import type { WorktreeRetentionSettings, WorktreeRetentionReport, ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummariesHeld, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./thread-worktrees.js"
 import type { MergeMethod } from "./git-actions.js"
 import type { PullRequestSearchRequest, PullRequestSearchResult } from "./pull-request-search.js"
 import type { ChatFolders } from "./chat-folders.js"
@@ -135,6 +135,13 @@ export interface BridgeTransport {
 const HOST_INVOKE_PREFIX =
   /^Error invoking remote method '[^']*':\s*(?:Error:\s*)?/
 
+/**
+ * A host's refusal of a call for having more arguments than it takes, as its argument schema words it (a tuple that
+ * is "too big"). Nothing else a call can be refused for reads this way: not a call the gateway keeps to this Mac's own
+ * windows, not a host that is closing.
+ */
+const TOO_MANY_ARGUMENTS = /"code":\s*"too_big"|Too big: expected array to have/
+
 export function createMakoBridge(transport: BridgeTransport) {
   /**
    * A host error reaches the UI as the host's own sentence.
@@ -163,6 +170,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       throw error
     }
   }
+
+  /** This connection's host refused `mako:worktree-summaries` for having an argument: it's from before the form that takes one. */
+  let summariesTakeNoForm = false
 
   function threadContexts(
     paths: string[],
@@ -198,6 +208,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<AppOutputChunk>("mako:thread-app-output", cwd, key, cursor),
     threadAppMarks: () => invokeTrustedHost<AppMark[]>("mako:thread-app-marks"),
     followThreadApps: (demand?: AppSamplingDemand) => invokeTrustedHost<AppSamplingReply>("mako:thread-app-demand", demand),
+    /** Tells the host whether anyone can see this window; a host before this refuses the call, and goes on sending everything. */
+    windowShown: (shown: boolean) => invokeTrustedHost<boolean>("mako:window-shown", shown),
     followConversationApp: (conversation: string, demand: RemoteAppDemand) => invokeTrustedHost<RemoteAppReply>("mako:conversation-app-demand", conversation, demand),
     conversationApp: (conversation: string, view: string) => invokeTrustedHost<RemoteAppSnapshot>("mako:conversation-app", conversation, view),
     viewHints: () => invokeTrustedHost<ViewHintsStatus | null>("mako:view-hints"),
@@ -211,7 +223,19 @@ export function createMakoBridge(transport: BridgeTransport) {
     worktreeStartPoint: (cwd: string, fetch: boolean) => invokeTrustedHost<WorktreeStartPoint | null>("mako:worktree-start-point", cwd, fetch),
     worktreeBranches: (cwd: string) => invokeTrustedHost<WorktreeBranch[]>("mako:worktree-branches", cwd),
     worktreePulls: (cwd: string) => invokeTrustedHost<WorktreePull[] | null>("mako:worktree-pulls", cwd),
-    worktreeSummaries: () => invokeTrustedHost<WorktreeSummary[]>("mako:worktree-summaries"),
+    // What the host holds, at once, with what it's still reading; `focus` when the window asks because it came to
+    // the front. A host from before that form takes no argument: it refuses the call for having one, which this
+    // connection learns once and then asks the plain way, for the list alone. Any other refusal is the answer.
+    worktreeSummaries: async (why?: "focus"): Promise<WorktreeSummary[] | WorktreeSummariesHeld> => {
+      if (summariesTakeNoForm) return invokeTrustedHost<WorktreeSummary[]>("mako:worktree-summaries")
+      try {
+        return await (why ? invokeTrustedHost<WorktreeSummariesHeld>("mako:worktree-summaries", "changes", why) : invokeTrustedHost<WorktreeSummariesHeld>("mako:worktree-summaries", "changes"))
+      } catch (error) {
+        if (!(error instanceof Error) || !TOO_MANY_ARGUMENTS.test(error.message)) throw error
+        summariesTakeNoForm = true
+        return invokeTrustedHost<WorktreeSummary[]>("mako:worktree-summaries")
+      }
+    },
     worktreeUpdate: (path: string) => invokeTrustedHost<WorktreeUpdate>("mako:worktree-update", path),
     worktreeRemoval: (path: string) => invokeTrustedHost<WorktreeRemoval>("mako:worktree-removal", path),
     skipWorktree: (conversationId: string) => invokeTrustedHost<void>("mako:worktree-skip", conversationId),
@@ -940,6 +964,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:utility-model-disconnect", provider),
     stageFile: (name: string, base64: string) =>
       invokeTrustedHost<StagedFile>("mako:stage-file", name, base64),
+    /** One piece of a file with no path, at most `STAGED_PART_BYTES` of it; `into` is what the piece before answered. */
+    stageFilePart: (name: string, base64: string, into?: { path: string; offset: number }) =>
+      invokeTrustedHost<StagedFile>("mako:stage-file-part", name, base64, into),
     stageFilePath: (sourcePath: string) =>
       invokeTrustedHost<StagedFile>("mako:stage-file-path", sourcePath),
     /** The OS path behind a dropped/picked File — the fast lane for staging. */

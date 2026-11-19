@@ -13,6 +13,9 @@ import { publishFile } from "../../base/published-files.js"
 import type { McpServer } from "@agentclientprotocol/sdk"
 import { removeRetiredMakoMcp } from "../../tools/index.js"
 import { MAKO_THREAD_SERVER } from "../../contracts/mcp-reach.js"
+import { devinPersonCodeRuns } from "./person-code.js"
+import { DEVIN_VOCABULARY, type NativeTool } from "@mako/sessions/harnesses"
+import type { ToolKind } from "@mako/sessions/tool-identity"
 
 const DevinSettings = z.record(z.string(), z.json())
 
@@ -34,7 +37,8 @@ export async function prepareDevinMcp(
   servers: readonly McpServer[],
   env: NodeJS.ProcessEnv,
   subagentsOff = false,
-  routesCalls = false
+  routesCalls = false,
+  holdsWrites = false
 ) {
   const gate = routesCalls ? devinCallGate(servers) : undefined
   const ownConfig = subagentsOff || gate !== undefined
@@ -91,7 +95,7 @@ export async function prepareDevinMcp(
     await publishFile(join(directory, "mcp_config.json"), JSON.stringify(config), { mode: 0o600 })
     if (ownConfig) {
       const settings = DevinSettings.parse(JSON.parse(await nativeFile(join(source, "devin", "config.json"))))
-      const config = { ...settings, ...subagentsOff && { subagents_enabled: false }, ...gate && { hooks: withDevinGate(settings.hooks, gate) } }
+      const config = { ...settings, ...subagentsOff && { subagents_enabled: false }, ...gate && { hooks: withDevinGate(settings.hooks, gate, holdsWrites) } }
       await publishFile(join(directory, "config.json"), JSON.stringify(config), { mode: 0o600 })
     }
     env.XDG_CONFIG_HOME = root
@@ -102,7 +106,49 @@ export async function prepareDevinMcp(
   }
 }
 
-/** Devin's shell tool, the one its hooks are registered for. */
+/**
+ * Whether a launch of Devin holds its agent's writes: it routes calls, the conversation server whose address the hook
+ * posts to is among its servers, and nothing the person set up runs beside the hook (`devinPersonCodeRuns`).
+ */
+export async function devinHoldsWrites(launch: { env: NodeJS.ProcessEnv; cwd: string; servers: readonly { name: string; process: boolean }[] }): Promise<boolean> {
+  return launch.servers.some((server) => server.name === MAKO_THREAD_SERVER && !server.process) && !await devinPersonCodeRuns(launch)
+}
+
+/**
+ * The kinds of Devin's tools that only read: a read, a search, a fetch, a command's output, a subagent's or the todo
+ * list's state, a question, leaving plan mode, a listing of MCP tools. None changes a file, runs a command or starts
+ * anything that could, so a turn's checkpoint has nothing of theirs to wait for.
+ */
+const DEVIN_READING_KINDS: ReadonlySet<ToolKind> = new Set<ToolKind>(["read", "list", "search", "find", "web-fetch", "web-search", "shell-output", "agent-wait", "todo", "plan-exit", "question", "tool-search"])
+
+/**
+ * Devin's tools that may change the workspace, by the names its hooks see: every tool of its vocabulary that isn't of
+ * a reading kind, so one added there with any other kind is held without being listed here. Today the shell (`exec`),
+ * input to and the end of a running command (`write_to_process`, `kill_shell`), the file tools (`write`, `edit`,
+ * `notebook_edit`), `write_plan`, `skill`, `run_subagent`, `mcp_call_tool` and `request_scope`.
+ */
+export const DEVIN_WRITING_TOOLS: readonly string[] = Object.entries<NativeTool>(DEVIN_VOCABULARY.tools)
+  .filter(([, tool]) => !DEVIN_READING_KINDS.has(tool.kind))
+  .flatMap(([name, tool]) => [name, ...(tool.aliases ?? [])])
+
+/**
+ * What the hook before a tool matches on a launch that holds writes: Devin's writing tools and every MCP tool, which
+ * its hooks see as `mcp__<server>__<tool>`. Its reads don't run the hook at all: registered for every tool, the
+ * hook's `curl` added 14 ms to each call (measured 2026-11-18 against 3000.10.23, 20 reads a turn: 31.0 ms a call
+ * against 17.0 ms). Proven against that build with a scripted model: a matcher is a regular expression on the tool's
+ * name, the hook fires for `write`, `edit`, `exec`, `write_to_process`, `kill_shell`, `run_subagent`, a subagent's own
+ * tools and an MCP tool, and Devin runs none of them before the hook's command exits. A tool a later Devin adds is
+ * matched only once the vocabulary names it: `scripts/test-devin-session-mcp.ts` fails on a recorded tool list
+ * (`scripts/fixtures/native-tools`) that has one this neither matches nor knows as reading.
+ */
+export const DEVIN_WRITE_MATCHER = `^(${DEVIN_WRITING_TOOLS.join("|")}|mcp__.*)$`
+
+/** Whether Devin's tool `name` is one of a reading kind, which a launch's hook never runs for. */
+export function devinToolReads(name: string): boolean {
+  return Object.entries<NativeTool>(DEVIN_VOCABULARY.tools).some(([known, tool]) => (known === name || tool.aliases?.includes(name) === true) && DEVIN_READING_KINDS.has(tool.kind))
+}
+
+/** Devin's shell tool, the one its hooks are registered for where a launch holds no writes. */
 const DEVIN_SHELL = "exec"
 
 /**
@@ -131,11 +177,14 @@ const quote = (text: string) => `'${text.replaceAll("'", "'\\''")}'`
  * (`Tool rejected: …`) with the command not run; a pre-tool note is dropped,
  * so a warn is PostToolUse's `additionalContext`, the model's next message.
  * A gate that can't be reached prints nothing, and the call goes on.
+ *
+ * `holdsWrites`: the launch holds its writes (`devinHoldsWrites`), so the hook before a tool is registered for every
+ * tool that may write (`DEVIN_WRITE_MATCHER`), and which of those calls wait is the gate's to say (`hookMayWrite`).
  */
-function withDevinGate(hooks: z.infer<typeof DevinSettings>[string] | undefined, gate: { url: string; authorization: string }) {
+function withDevinGate(hooks: z.infer<typeof DevinSettings>[string] | undefined, gate: { url: string; authorization: string }, holdsWrites: boolean) {
   const own = z.record(z.string(), z.array(z.json())).catch({}).parse(hooks ?? {})
   const hook = (event: "pre" | "post") => ({
-    matcher: `^${DEVIN_SHELL}$`,
+    matcher: holdsWrites && event === "pre" ? DEVIN_WRITE_MATCHER : `^${DEVIN_SHELL}$`,
     hooks: [{ type: "command", command: `curl -s -m 8 -X POST --data-binary @- -H ${quote(`Authorization: ${gate.authorization}`)} ${quote(`${gate.url}/${event}`)}`, timeout: 10 }],
   })
   return { ...own, PreToolUse: [...own.PreToolUse ?? [], hook("pre")], PostToolUse: [...own.PostToolUse ?? [], hook("post")] }

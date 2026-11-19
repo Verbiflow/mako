@@ -7,9 +7,9 @@ import { DIRECT_MESSAGES, RETRY_MARKERS, SETUP_NOTICES, STOP_MARKER } from "../s
 export const OPENCODE_VOCABULARY = defineVocabulary({
   harness: "opencode",
   checked: {
-    version: "2.3.0",
-    on: "2026-11-17",
-    against: "the model request of 2.3.0's native API per agent on an Anthropic and an OpenAI model (scripts/fixtures/native-tools; 2.2.3 adds experimental_image_generate where a provider has an image model, OpenAI's here, and rewords shell and execute; 2.2.6 rewords shell again; 2.2.7 changes no tool; 2.3.0 drops subagent's background, every subagent now running apart from its turn, rewords shell, subagent and execute, and sends patch and execute to an OpenAI model as freeform tools, whose one string still lands in patchText and code), opencode.db and opencode-next.db through audit:tools as of 2026-10-12, and the permission names Mako launches with",
+    version: "2.3.2",
+    on: "2026-11-18",
+    against: "the model request of 2.3.2's native API per agent on an Anthropic and an OpenAI model (scripts/fixtures/native-tools; 2.2.3 adds experimental_image_generate where a provider has an image model, OpenAI's here, and rewords shell and execute; 2.2.6 rewords shell again; 2.2.7 changes no tool; 2.3.0 drops subagent's background, every subagent now running apart from its turn, rewords shell, subagent and execute, and sends patch and execute to an OpenAI model as freeform tools, whose one string still lands in patchText and code; 2.3.2 offers experimental_image_generate to an Anthropic model too when another configured provider has an image model, unchanged, rewords read (no longer saying images and PDFs go to the model directly), and rewords shell: a foreground command still running at its timeout now moves to the background instead of ending (2.3.0's shell_timeout_background flag, now always on), which OpenCodeShells reads as background work as it reads a background command, since its shell outlives its call), opencode.db and opencode-next.db through audit:tools as of 2026-10-12, and the permission names Mako launches with",
   },
   mcp: [],
   tools: {
@@ -35,9 +35,9 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "2.3.0",
-      on: "2026-11-17",
-      against: "the 2.3.0 binary's bundled loaders through harness:self-report (every declared name, and every skill and MCP place listed), and @opencode/schema and @opencode/protocol 2.0.27 types as read on 2026-10-12 (opencode.ai/docs still describe 1.x)",
+      version: "2.3.2",
+      on: "2026-11-18",
+      against: "the 2.3.2 binary's bundled loaders through harness:self-report (every declared name, and every skill and MCP place listed), and @opencode/schema and @opencode/protocol 2.0.27 types as read on 2026-10-12 (opencode.ai/docs still describe 1.x)",
     },
     instructions: {
       files: ["AGENTS.md"],

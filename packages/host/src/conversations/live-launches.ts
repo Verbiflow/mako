@@ -13,13 +13,14 @@ import { promptFingerprint } from "./live-assets.js"
 import { LiveJournal, LiveRequestSchema } from "./live-journal.js"
 import { releaseHold } from "./live-ledger.js"
 import { snapshotFacts } from "./live-moves.js"
-import { activeBinding, launchAccount, launchCalls, launched, launchRouting, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { activeBinding, launchAccount, launchCalls, launched, launchRouting, noteStartedWith, residentOf, revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { liveStages } from "./live-stages.js"
 import { updateBinding } from "./live-sources.js"
 import { captureNativeHistory } from "./native-history.js"
 
 type LaunchAccess = Pick<LiveAccess,
   "dependencies" | "admission" | "load" | "add" | "bindingOwners" | "startingSession" | "register" | "markPurpose" | "markParent" |
-  "actor" | "retainAttachments" | "moves" | "flush" | "noteWork" | "drain" | "scheduleHibernation" | "failedStart" | "driverEvents">
+  "actor" | "retainAttachments" | "holdAttachments" | "moves" | "flush" | "noteWork" | "drain" | "scheduleHibernation" | "failedStart" | "driverEvents">
 
 /** New conversations, from their journal's first write to their provider's first native session. */
 export class LiveLaunches {
@@ -119,6 +120,9 @@ export class LiveLaunches {
       throw new Error(
         "The saved history could not be loaded; the conversation was not started"
       )
+    // Its first message's files are hashed and copied here, off the turn that builds the conversation below.
+    if (options.initialRequest?.attachments.length)
+      await this.access.holdAttachments(options.initialRequest.id, options.initialRequest.attachments)
     const id = options.conversationId
     const session = options.session === undefined ? undefined : this.access.startingSession(options.session)
     const snapshot: LiveSnapshot = {
@@ -175,7 +179,8 @@ export class LiveLaunches {
                 tuning
               ),
               attachments: this.access.retainAttachments(
-                options.initialRequest.attachments
+                options.initialRequest.attachments,
+                options.initialRequest.id
               ),
               status: "queued",
             }),
@@ -209,6 +214,7 @@ export class LiveLaunches {
         releaseHold(dependencies.memory, provider, options.resume, options.conversationId)
       throw error
     }
+    if (options.initialRequest && liveStages.heard) liveStages.publish({ stage: "admitted", conversation: id, request: options.initialRequest.id })
     this.access.add(resident)
     this.access.bindingOwners.set(id, id)
     this.access.register(snapshot, this.access.actor(actor))
@@ -268,6 +274,7 @@ export class LiveLaunches {
       .then(async () => {
         const conversationTools = await dependencies.tools?.(id, conversation)
         const threadEnvironment = await dependencies.threadEnvironment?.(conversation, options.title, cwd)
+        noteStartedWith(resident, id, cwd, options.title, threadEnvironment)
         // Preparation may finish after Close or an execution-ownership move.
         // Check and start without yielding so a stale owner never spawns.
         if (resident.generation !== generation || resident.closing || !this.access.moves.executes(resident))
@@ -278,7 +285,7 @@ export class LiveLaunches {
           tuning,
           emit: this.access.driverEvents(resident, id),
           mcpSnapshot: dependencies.mcpSnapshot
-            ? () => dependencies.mcpSnapshot!(cwd)
+            ? () => dependencies.mcpSnapshot!(cwd, driver.provider)
             : undefined,
           conversationTools,
           threadEnvironment,

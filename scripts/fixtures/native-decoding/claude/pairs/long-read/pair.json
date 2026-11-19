@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.326"
+    "version": "2.1.327"
   },
   "about": "Read log.md with your file read tool, once and without an offset or limit, then tell me the last line you were shown. Don't run commands. One read of a file longer than a harness shows at once, then the answer.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/70f335e3-1922-4952-9371-3d42b674df46.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/82f7413c-db2c-4497-a0eb-ecca0d25d1ad.jsonl",
       "known": []
     }
   ]

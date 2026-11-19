@@ -1,7 +1,8 @@
 import { PencilLineIcon } from "lucide-react"
 import { workspaceName } from "@/lib/format"
 import { projectDraftKey, useDrafts, type SessionDraft } from "@/state/drafts"
-import { activeAcp, useAcp } from "@/state/acp"
+import { activeAcp } from "@/state/acp"
+import { useRailAcp } from "@/state/acp-state"
 import { actions, useSession } from "@/state/session"
 import { useTabs } from "@/state/tabs"
 import { useThreads } from "@/state/threads"
@@ -22,7 +23,7 @@ export function DraftThreads() {
   const tabs = useTabs((state) => state.tabs)
   const activeTabId = useTabs((state) => state.activeId)
   const viewingPath = useThreads((state) => state.opening?.ref.path ?? state.viewing?.ref.path)
-  const liveKey = useAcp((state) => activeAcp(state)?.draftKey)
+  const liveKey = useRailAcp((state) => activeAcp(state)?.draftKey)
   const cwd = useSession((state) => state.meta?.cwd ?? "")
   const activeDraftKey = liveKey ?? viewingPath ?? projectDraftKey(cwd)
   const drafts = useDrafts(

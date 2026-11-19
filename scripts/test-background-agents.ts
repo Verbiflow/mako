@@ -203,10 +203,12 @@ async function startsAndWakes(): Promise<void> {
     await w.settle()
     assert.equal(childTurns, 3)
     const wakes = w.prompts.filter((prompt) => prompt.conversation === apex.conversation)
-    assert.equal(wakes.length, 1, "three reports in one burst wake an idle apex once")
-    assert.ok(wakes[0]!.text.startsWith(FROM_AGENTS))
-    assert.match(wakes[0]!.text, /3 finished:/)
-    assert.match(wakes[0]!.text, /0 working, 3 ended\./)
+    // An idle Apex hears the first report at once, and the rest of the burst as one digest after it.
+    assert.ok(wakes.length >= 1 && wakes.length <= 2, `three reports in one burst wake an idle apex at most twice, not ${wakes.length}`)
+    assert.ok(wakes.every((wake) => wake.text.startsWith(FROM_AGENTS)))
+    for (const harness of ["claude", "cursor", "grok"]) assert.equal(wakes.filter((wake) => wake.text.includes(`"review-${harness}"`)).length, 1, `review-${harness} is in exactly one wake`)
+    assert.equal(wakes.reduce((sum, wake) => sum + Number(/(\d+) finished:/.exec(wake.text)?.[1] ?? 0), 0), 3, "three finished, across them")
+    assert.match(wakes.at(-1)!.text, /0 working, 3 ended\./)
     const wake = w.live.snapshot(apex.conversation)!.requests.at(-1)!
     assert.equal(wake.actor?.kind, "agent", "a wake is an agent's request")
     const listed = await w.agents.list(apex.caller, {})
@@ -1517,9 +1519,15 @@ async function finsMoveInTheNewestSession(): Promise<void> {
  */
 async function anySessionAsks(): Promise<void> {
   for (const asker of ["newer", "older"] as const) {
-    const w = world(`asks-${asker}`, (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : "Started it."))
+    // The Apex stays at work, so the Fin's result waits for its turn's end: heard, an idle Apex's result lets the Fin's
+    // provider go (it hibernates), and a scripted ask can't come from a provider that has gone.
+    const w = world(`asks-${asker}`, async (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : turn.text.endsWith("Keep at it.") ? turn.world.hold(turn.conversation).then(() => "Kept at it.") : "Started it."))
+    let apexConversation: string | undefined
     try {
       const apex = await w.apex("codex")
+      apexConversation = apex.conversation
+      w.say(apex.conversation, "Keep at it.")
+      await waitFor(() => w.live.atWork(apex.conversation), "the Apex at work")
       const started = await w.agents.start(apex.caller, { brief: { objective: "Finish." }, harness: "claude", name: "asker", clientKey: "k-asker", cwd: w.root })
       assert.ok(!("refused" in started) && started.conversation && started.child, JSON.stringify(started))
       await waitFor(() => w.live.held(started.conversation!)?.requests[0]?.status === "completed", "the Fin's first turn ends")
@@ -1544,6 +1552,7 @@ async function anySessionAsks(): Promise<void> {
       await answered
       assert.equal(w.live.waitingOn(asking), undefined, `${asker}: the answer reached the Session that asked`)
     } finally {
+      if (apexConversation) w.release(apexConversation)
       await w.close()
     }
   }
@@ -1556,9 +1565,14 @@ async function anySessionAsks(): Promise<void> {
  * needs the person still reaches its Apex, and its answer the Session that asked.
  */
 async function aSessionNeedsYou(): Promise<void> {
-  const w = world("needs-you", (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : "Started it."))
+  // The Apex stays at work, as in `anySessionAsks`: heard by an idle Apex, the Fin's result lets its provider go.
+  const w = world("needs-you", async (turn) => (turn.text.includes("You're fin:") ? "Done: it's finished." : turn.text.endsWith("Keep at it.") ? turn.world.hold(turn.conversation).then(() => "Kept at it.") : "Started it."))
+  let apexConversation: string | undefined
   try {
     const apex = await w.apex("codex")
+    apexConversation = apex.conversation
+    w.say(apex.conversation, "Keep at it.")
+    await waitFor(() => w.live.atWork(apex.conversation), "the Apex at work")
     const started = await w.agents.start(apex.caller, { brief: { objective: "Finish." }, harness: "claude", name: "needing", clientKey: "k-needing", cwd: w.root })
     assert.ok(!("refused" in started) && started.conversation && started.child, JSON.stringify(started))
     const older = started.conversation
@@ -1591,6 +1605,7 @@ async function aSessionNeedsYou(): Promise<void> {
     await answered
     assert.equal(w.live.waitingOn(older), undefined, "the answer reached the Session that asked")
   } finally {
+    if (apexConversation) w.release(apexConversation)
     await w.close()
   }
 }

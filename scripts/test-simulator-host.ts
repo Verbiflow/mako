@@ -493,10 +493,12 @@ test("the panel watches a screen through the host's watch verb, and a failed dec
   const live = { done: false }
   const restore = { window: Object.getOwnPropertyDescriptor(globalThis, "window"), document: Object.getOwnPropertyDescriptor(globalThis, "document") }
   const poster = encodeControlVideoBatch({ live: true, packets: [encodeControlVideo({ kind: "poster", width: 1206, height: 2622, sequence: 0, capturedAt: 1, data: jpeg(1206, 2622) })] })
-  Object.defineProperty(globalThis, "document", { value: { hidden: false }, configurable: true })
+  // A page someone can see, as the watch reads it (`windowShown`): shown, and able to be heard when that changes.
+  Object.defineProperty(globalThis, "document", { value: { hidden: false, visibilityState: "visible", addEventListener: () => {} }, configurable: true })
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
+      addEventListener: () => {},
       mako: {
         simulatorsWatch: async (input: SimulatorsWatchInput): Promise<SimulatorsWatchResult> => {
           asked.push(input)

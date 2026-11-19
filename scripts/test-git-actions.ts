@@ -12,7 +12,7 @@ import { z } from "zod"
 import { gitActionPrompt, gitCommands, gitRepositoryName, PULL_REQUEST_WRITING, pullBaseFor, type GitCommandFacts } from "@mako/host/contracts/git-actions"
 import { startConversationMcp } from "@mako/host/tools/conversation-mcp"
 import { pullRequestTools, registerPullRequestTools, type ReachableRepository, type RepositoryPlace } from "@mako/host/git/pull-request-tools"
-import { mergePullRequest, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "@mako/host/git/pull-requests"
+import { mergePullRequest, openedSentence, openPullRequest, pullRequestReport, pullTemplate, rerunFailedChecks } from "@mako/host/git/pull-requests"
 import checksFixture from "./fixtures/pull-request-checks.json" with { type: "json" }
 
 const gitRunner = new Git()
@@ -70,10 +70,17 @@ else if (a === "pr" && b === "view" && /^\\d+$/.test(args[2])) {
   save()
   out("https://github.com/o/r/pull/" + number + "\\n")
 } else if (a === "pr" && b === "edit") {
-  const pull = db.pulls.find((entry) => entry.number === Number(args[2]))
-  if (flag("--title") !== undefined) pull.title = flag("--title")
-  if (flag("--body") !== undefined) pull.body = flag("--body")
+  // gh pr edit reads the pull request's classic Projects through GraphQL, which a token without read:project can't.
+  fail("error: your authentication token is missing required scopes [read:project]")
+} else if (a === "api" && b === "-X" && args[2] === "PATCH" && args[3].startsWith("repos/{owner}/{repo}/pulls/")) {
+  if (db.editRefusal) fail(db.editRefusal)
+  const fields = JSON.parse(readFileSync(flag("--input"), "utf8"))
+  const pull = db.pulls.find((entry) => entry.number === Number(args[3].split("/").at(-1)) && entry.repo === repo())
+  if (!pull) fail("gh: Not Found (HTTP 404)")
+  db.edits.push(fields)
+  Object.assign(pull, fields)
   save()
+  out(pull)
 } else if (a === "pr" && b === "merge") {
   const pull = db.pulls.find((entry) => entry.number === Number(args[2]))
   pull.state = "MERGED"
@@ -99,6 +106,10 @@ interface FakePull {
 interface GitHubState {
   calls: string[]
   pulls: FakePull[]
+  /** What each REST edit sent, as its JSON input. */
+  edits: { title?: string; body?: string }[]
+  /** Set: GitHub refuses edits with these words. */
+  editRefusal?: string
   methods: Record<string, boolean>
   merged: string[]
   runs: { databaseId: number; headSha: string; conclusion: string; workflowName: string; url: string; branch: string }[]
@@ -113,7 +124,7 @@ const setGithub = (change: (db: GitHubState) => void) => {
   change(db)
   writeFileSync(state, JSON.stringify(db))
 }
-writeFileSync(state, JSON.stringify({ calls: [], pulls: [], methods: { squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true }, merged: [], runs: [], reruns: [], logs: {}, jobLogs: {}, threads: [] }))
+writeFileSync(state, JSON.stringify({ calls: [], pulls: [], edits: [], methods: { squashMergeAllowed: true, mergeCommitAllowed: true, rebaseMergeAllowed: true }, merged: [], runs: [], reruns: [], logs: {}, jobLogs: {}, threads: [] }))
 process.env.GH_PATH = ghPath
 
 let grants: Awaited<ReturnType<typeof startConversationMcp>> | undefined
@@ -205,8 +216,32 @@ try {
   assert.deepEqual([again.opened, again.pushed, again.edited], [false, 1, false])
   assert.equal(git(origin, "rev-parse", "mako/feature"), git(project, "rev-parse", "HEAD"))
   const edited = await openPullRequest(gitRunner, project, { body: "## Why\nBecause, and c." })
-  assert.deepEqual([edited.pushed, edited.edited, edited.pull.body], [0, true, "## Why\nBecause, and c."])
-  assert.ok(!github().calls.some((call) => call.startsWith("pr edit 100 --title")), "a title not passed isn't changed")
+  assert.deepEqual([edited.pushed, edited.edited, edited.pull.body], [0, true, "## Why\nBecause, and c."], "with nothing to push, the edit still applies")
+  assert.deepEqual(github().edits.at(-1), { body: "## Why\nBecause, and c." }, "a title not passed isn't changed")
+  // Edits go over REST, the fields in a file: gh pr edit needs read:project, which the person's token may lack.
+  assert.ok(github().calls.some((call) => /^api -X PATCH repos\/\{owner\}\/\{repo\}\/pulls\/100 --input \S+$/.test(call)), "the edit is a REST PATCH")
+  assert.ok(!github().calls.some((call) => call.startsWith("pr edit")), "never gh pr edit")
+  const retitled = await openPullRequest(gitRunner, project, { title: "Add b and c", body: "## Why\nBoth." })
+  assert.deepEqual([retitled.pushed, retitled.edited, retitled.pull.title, retitled.pull.body], [0, true, "Add b and c", "## Why\nBoth."], "title and body together, nothing to push")
+
+  // A push and an edit in one call: both happen.
+  commit(project, "c2.txt", "c2", "Add c2")
+  const pushedAndEdited = await openPullRequest(gitRunner, project, { title: "Add b, c and c2", body: "## Why\nAll three." })
+  assert.deepEqual([pushedAndEdited.pushed, pushedAndEdited.edited, pushedAndEdited.pull.title, pushedAndEdited.pull.body], [1, true, "Add b, c and c2", "## Why\nAll three."])
+  assert.equal(git(origin, "rev-parse", "mako/feature"), git(project, "rev-parse", "HEAD"), "the commit was pushed")
+  assert.equal(openedSentence(pushedAndEdited), "#100 was already open; pushed 1 commit and updated its title and body: https://github.com/o/r/pull/100")
+
+  // The edit refused after the push went: the error says the push happened, so nobody takes it for nothing done.
+  setGithub((db) => { db.editRefusal = "gh: Validation Failed (HTTP 422)" })
+  commit(project, "c3.txt", "c3", "Add c3")
+  await assert.rejects(openPullRequest(gitRunner, project, { title: "Refused" }), (error: Error) => {
+    assert.equal(error.message, "Pushed 1 commit to #100, but GitHub didn't change its title or body: gh: Validation Failed (HTTP 422)")
+    return true
+  })
+  assert.equal(git(origin, "rev-parse", "mako/feature"), git(project, "rev-parse", "HEAD"), "the push stands")
+  assert.equal(github().pulls[0]!.title, "Add b, c and c2", "the refused edit changed nothing")
+  await assert.rejects(openPullRequest(gitRunner, project, { body: "Again" }), /^Error: #100 had nothing new to push, but GitHub didn't change its title or body: /)
+  setGithub((db) => { delete db.editRefusal })
 
   // Someone else pushed: refused, and nothing forced.
   const other = join(root, "other")
@@ -461,6 +496,10 @@ try {
   assert.equal(both.repositories[1].opening.blocked, "mako/multi has no commits that main doesn't. Commit the work first.")
   assert.equal(await project2.open("c", { title: "Add the endpoint", body: "## Why\nweb needs it." }), "api: Opened #102 into main: https://github.com/o/r/pull/102.", "the only repository with work is the one opened, and the reply names it")
   assert.deepEqual([pullOf("api").length, pullOf("web").length], [1, 0])
+  // From the project folder, a title or body for the one open pull request applies with nothing to push.
+  assert.equal(await project2.open("c", { title: "Add the endpoint, validated", body: "## Why\nweb needs it, checked." }), "api: #102 was already open; nothing new to push and updated its title and body: https://github.com/o/r/pull/102.")
+  assert.deepEqual([pullOf("api")[0]!.title, pullOf("api")[0]!.body], ["Add the endpoint, validated", "## Why\nweb needs it, checked."])
+  await assert.rejects(project2.open("c", {}), /^Error: None of this project's repositories has work to open a pull request for:\n- api: #102 is open; /, "with nothing to push and nothing to change, there's still nothing to do")
 
   commit(web.root, "web.txt", "web", "Call the endpoint")
   await assert.rejects(project2.open("c", {}), /^Error: A new pull request needs a title\.$/, "web is now the only one with work: api's pull request has nothing new to push")

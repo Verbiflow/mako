@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.169.0"
+    "version": "0.170.0"
   },
   "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/16/rollout-2026-11-16T15-54-02-01a1e6c8-31d5-74b3-9c9a-a7ef8908d2e9.jsonl",
+      "path": ".codex/sessions/2026/11/18/rollout-2026-11-18T15-41-52-01a1ef52-5247-7930-aca1-73a75cedd6d2.jsonl",
       "known": []
     }
   ]

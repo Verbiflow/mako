@@ -5,7 +5,8 @@ import {
   ClaudeEffectiveSettingsSchema,
 } from "./settings.js"
 import { createHash } from "node:crypto"
-import type { SessionSettings } from "@mako/sessions/settings"
+import { stat } from "node:fs/promises"
+import type { SessionModel, SessionSettings } from "@mako/sessions/settings"
 import { normalizeClaudeModels } from "@mako/sessions/model-catalog"
 import {
   availableProviderProfile,
@@ -49,12 +50,33 @@ const environmentKey = (env: NodeJS.ProcessEnv) =>
 const discoveryKey = (env: NodeJS.ProcessEnv, cwd?: string) =>
   `${environmentKey(env)}:${cwd ?? process.cwd()}`
 
+/**
+ * Whether an earlier discovery heard Claude Code on `model`: it refused it, or reported a value for one of its
+ * options. One it couldn't confirm then reads as unheard and is asked again.
+ */
+function answered(model: SessionModel): boolean {
+  return model.unavailable !== undefined
+    || model.options.some((option) => (option.id === "effort" || option.id === "fast") && !option.disabledReason && option.current !== undefined)
+}
+
+/** What Claude Code said of `from` last time, on the same model as it lists it now. */
+function carryAnswers(model: SessionModel, from: SessionModel): void {
+  if (from.unavailable !== undefined) model.unavailable = from.unavailable
+  for (const option of model.options) {
+    const before = from.options.find((candidate) => candidate.id === option.id && candidate.kind === option.kind)
+    if (!before || option.disabledReason) continue
+    if (option.kind === "select" && before.kind === "select" && before.current !== undefined) option.current = before.current
+    if (option.kind === "boolean" && before.kind === "boolean" && before.current !== undefined) option.current = before.current
+  }
+}
+
 function discover(
   processes: DiscoveryProcesses,
   env: NodeJS.ProcessEnv,
   cwd?: string,
   publish?: (catalog: Catalog) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  kept?: readonly SessionModel[]
 ) {
   // Only the executable sessions launch may name models: a newer `claude` on
   // PATH lists models the session runtime rejects.
@@ -80,6 +102,18 @@ function discover(
       // Sending can use the immutable catalog while this process reads defaults.
       publish(structuredClone(catalog))
       for (const model of catalog.models) {
+        // Each model costs a `set_model`, which Claude Code checks with the
+        // API, and a `get_settings`: thirteen models were 27 round-trips or
+        // more in one process, and the discovery timed out at 30 s fifteen
+        // times in eleven minutes. What it said of a model changes with its
+        // version and the account, so a model the last discovery heard it on
+        // under both keeps that answer; only the default model, whose
+        // settings are this folder's, and a model listed since are asked.
+        const before = model.id === catalog.defaultModel ? undefined : kept?.find((candidate) => candidate.id === model.id)
+        if (before && answered(before)) {
+          carryAnswers(model, before)
+          continue
+        }
         // Claude Code lists models its version doesn't describe and refuses
         // to switch to them; its check with the API also fails now and then,
         // which a second try usually passes.
@@ -141,6 +175,16 @@ export function createClaudeProfileLoader(processes: DiscoveryProcesses): Provid
     transport: "sdk",
     nativeModelIds: true,
     cacheKey: environmentKey,
+    // The effort and speed `get_settings` reports merge managed, user, project and local settings with the
+    // environment, which only Claude Code resolves.
+    folder: { files: [".claude/settings.json", ".claude/settings.local.json"] },
+    async runtimeStamp(env) {
+      const runtime = claudeRuntime(env)
+      if (!runtime) return undefined
+      // The binary's identity, as the installed version's reading is keyed: an update moves both.
+      const file = await stat(runtime.executable)
+      return `${runtime.executable}:${file.mtimeMs}:${file.size}`
+    },
     async loadForSend(env, cwd, context) {
       const entry = discoveries.get(discoveryKey(env, cwd))
       const catalog = await (entry && !entry.signal?.aborted ? entry.catalog : discover(processes, env, cwd, undefined, context?.signal))
@@ -160,7 +204,7 @@ export function createClaudeProfileLoader(processes: DiscoveryProcesses): Provid
         })
         // The display caller awaits full; a send may never subscribe to catalog.
         void catalog.catch(() => {})
-        const full = discover(processes, env, cwd, publish, context?.signal)
+        const full = discover(processes, env, cwd, publish, context?.signal, context?.kept)
           .catch((error: Error) => {
             rejectCatalog(error)
             throw error

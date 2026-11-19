@@ -20,6 +20,7 @@ import {
   type ReviewThread,
 } from "./github.js"
 import { GitError, type Git } from "@mako/git"
+import { checkoutStatuses } from "./checkout-status.js"
 import { authorWords, personTokenRefusal, type GitHubPerson, type PersonTokenProblem, type PullRequestAuthor } from "../contracts/github-person.js"
 import { MACHINE_GITHUB_AS } from "../contracts/machine-agent.js"
 
@@ -111,8 +112,9 @@ async function branchOf(git: Git, cwd: string): Promise<string> {
   return git.output(cwd, ["branch", "--show-current"]).catch(() => "")
 }
 
-async function uncommitted(git: Git, cwd: string): Promise<number> {
-  const status = await git.output(cwd, ["status", "--porcelain", "--untracked-files=normal"]).catch(() => "")
+/** `fresh`: what's said as a pull request is opened is read as of then; a status only shown takes the one held. */
+async function uncommitted(git: Git, cwd: string, fresh = false): Promise<number> {
+  const status = await checkoutStatuses(git).read(cwd, { fresh }).catch(() => "")
   return status ? status.split("\n").length : 0
 }
 
@@ -206,14 +208,18 @@ export async function openPullRequest(git: Git, cwd: string, draft: PullRequestD
   const acting = await actingAs(personOf, draft.as === "app", status.repo)
   const author = acting && { author: acting.author }
   const writing = <T>(work: Promise<T>) => work.catch((error: Error) => { throw personProblemOf(error, acting, status.repo) ?? error })
-  const [existing, remote, left] = await Promise.all([openPull(cwd), pushedRef(git, cwd, branch), uncommitted(git, cwd)])
+  const [existing, remote, left] = await Promise.all([openPull(cwd), pushedRef(git, cwd, branch), uncommitted(git, cwd, true)])
   if (existing) {
     const pushed = remote ? (await count(git, cwd, `${remote}..HEAD`)) ?? 0 : 0
     await push(git, cwd, branch, acting, status.repo)
     forgetGitHubReads()
     const edit = { title: draft.title?.trim() || undefined, body: draft.body === undefined ? undefined : draft.body.trim() }
     const edited = edit.title !== undefined || edit.body !== undefined
-    if (edited) await writing(editPull(cwd, existing.number, edit, acting?.env))
+    // The push already happened: a refused edit says so, so nobody pushes again thinking nothing went.
+    if (edited) await writing(editPull(cwd, existing.number, edit, acting?.env)).catch((error: Error) => {
+      const done = pushed ? `Pushed ${plural(pushed, "commit")} to #${existing.number}` : `#${existing.number} had nothing new to push`
+      throw new Error(`${done}, but GitHub didn't change its title or body: ${error.message}`, { cause: error })
+    })
     return { pull: (await pullForBranch(cwd)) ?? existing, opened: false, pushed, edited, uncommitted: left, ...author }
   }
   const title = draft.title?.trim()

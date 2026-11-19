@@ -18,8 +18,15 @@ const CLOUD_LATER_MS = 2_000
 /** When the new Thread's draft got its first text, by folder: how long the person has been writing it. */
 const composingSince = new Map<string, number>()
 
-function due(key: string, now: number): boolean {
-  if (now - (signalled.get(key) ?? Number.NEGATIVE_INFINITY) < PREWARM_EVERY_MS) return false
+/**
+ * A conversation whose process has gone (hibernated, or ended by a Stop, as Claude Code's is) is signalled again this
+ * soon after its last signal: that signal found it awake and woke nothing, so the half minute it bought would leave
+ * the next message to start the process after Send. The host says `starting` as it wakes it, which ends the asking.
+ */
+const WAKE_EVERY_MS = 1_000
+
+function due(key: string, now: number, every = PREWARM_EVERY_MS): boolean {
+  if (now - (signalled.get(key) ?? Number.NEGATIVE_INFINITY) < every) return false
   signalled.set(key, now)
   return true
 }
@@ -41,7 +48,8 @@ export function noteComposing(text: string, now = Date.now()): void {
     // Written for another harness (one of its models chosen), the message switches there: waking this one only puts
     // its start ahead of the switch, which waits for it.
     if (threadsStore.get().composerHarness !== live.session.harness) return
-    if (live.session.status === "closed" || !due(live.key, now)) return
+    const asleep = live.session.connection === "hibernated" || live.session.connection === "disconnected"
+    if (live.session.status === "closed" || !due(live.key, now, asleep ? WAKE_EVERY_MS : PREWARM_EVERY_MS)) return
     void getMako().livePrewarm(live.key).catch(() => signalled.delete(live.key))
     return
   }

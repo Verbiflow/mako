@@ -390,6 +390,20 @@ interface DraftCall {
   body: string
 }
 
+/**
+ * What a `gh pr edit` sets that `pull_request_open` changes too: its title and body, only those it passed, so a note
+ * never offers a placeholder that would be written as the title or body. Undefined when it sets neither.
+ */
+function editOf(args: readonly string[]): { [key: string]: CallValue } | undefined {
+  const value = (...flags: string[]) => {
+    const at = args.findIndex((word) => flags.includes(word))
+    return at >= 0 ? args[at + 1] : undefined
+  }
+  const title = value("--title", "-t"), body = value("--body", "-b")
+  if (title === undefined && body === undefined) return undefined
+  return { ...title !== undefined && { title }, ...body !== undefined && { body } }
+}
+
 /** The flags `gh pr create` and `gh pr edit` take, as `pull_request_open`'s arguments. */
 function draftOf(args: readonly string[]): DraftCall {
   const value = (...flags: string[]) => {
@@ -497,7 +511,10 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     if (gh.group === "pr" && gh.command === "merge")
       return { kind: "deny", family: "pull-request", rule: "gh-pr-merge", message: `Call ${n("pull_request_merge")} instead, and only when the person asked or you're on full access with merging as the next step of your work: it merges the way the Git sidebar does and cleans up after.` }
     if (gh.group === "pr" && (gh.command === "edit" || gh.command === "ready"))
-      return { kind: "warn", family: "pull-request", rule: "gh-pr-edit", message: `${exactCall(n, "pull_request_open", draftOf(gh.args))} updates this branch's pull request (title, body) too.` }
+      return { kind: "warn", family: "pull-request", rule: "gh-pr-edit", message: editOf(gh.args) && pullNumberOf(gh.args) === undefined
+        ? `${exactCall(n, "pull_request_open", editOf(gh.args)!)} updates this branch's pull request (title, body) too.`
+        // Labels, reviewers, a ready mark or another pull request: no call of Mako's does those, so none is written out to copy.
+        : `${n("pull_request_open")} updates this branch's own pull request's title and body; anything else gh pr edit or ready changes, or another pull request, stays with gh.` }
     const watches = gh.args.includes("--watch") || (gh.group === "run" && gh.command === "watch")
     if (watches) {
       const number = gh.group === "pr" ? pullNumberOf(gh.args) : undefined

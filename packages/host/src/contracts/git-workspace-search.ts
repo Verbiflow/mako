@@ -258,6 +258,12 @@ export interface FileContents {
 }
 
 /**
+ * How much of a file with no path the window stages per call (`stageFilePart`), before base64. A multiple of three
+ * bytes, so each piece's base64 ends without padding and the pieces' base64 joined is the file's.
+ */
+export const STAGED_PART_BYTES = 510 * 1024
+
+/**
  * A file the agent cannot receive inline — a PDF, a video, an archive.
  * The host materializes it to disk and hands back a path, so engine-owned read
  * and shell tools can open it. That is what makes "attach anything" honest
