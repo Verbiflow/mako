@@ -3,7 +3,8 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AgentsStartInput } from "@mako/host/contracts/agent-tools"
-import { FROM_AGENTS, RESULT_COALESCE_MS, WAKE_COALESCE_MS } from "@mako/host/conversations/agent-wakes"
+import { FROM_AGENTS, WAKE_COALESCE_MS } from "@mako/host/conversations/agent-wakes"
+import { FIN_LIMIT } from "@mako/host/contracts/fin-tuning"
 import { AgentsWorld } from "./lib/agents-world.ts"
 
 /*
@@ -16,7 +17,9 @@ import { AgentsWorld } from "./lib/agents-world.ts"
  * hearing it: its next turn starting, its running turn taking the steer, or
  * its wait answering. Each case's p95 over its budget fails the run.
  */
-const APEXES = 20
+// One Fin each, all at work at once: as many as a device runs at once (`FIN_LIMIT`). At 20 the last four starts
+// were refused for the device's budget, which came after this bench was written.
+const APEXES = FIN_LIMIT
 const SLACK_MS = 500
 
 type Case = {
@@ -25,15 +28,20 @@ type Case = {
   start: Omit<AgentsStartInput, "brief" | "cwd" | "clientKey">
   /** The Apex's turn stays running until the sample is taken. */
   busy?: true
+  /** The Fin reports that it is blocked, which its Apex can act on at once, in place of done. */
+  asks?: true
   heard: "turn" | "steer" | "answer"
   budgetMs: number
 }
 
 const CASES: Case[] = [
-  { name: "background, idle Apex", apex: "codex", start: { harness: "codex" }, heard: "turn", budgetMs: WAKE_COALESCE_MS + SLACK_MS },
+  // An idle Apex hears a lone report at once, never after the burst's two seconds; so does one waiting on a result
+  // that came after its wait answered.
+  { name: "background, idle Apex", apex: "codex", start: { harness: "codex" }, heard: "turn", budgetMs: SLACK_MS },
   { name: "wait, answered in the call", apex: "codex", start: { harness: "codex", mode: "wait" }, heard: "answer", budgetMs: 250 },
-  { name: "wait, result after the window", apex: "codex", start: { harness: "codex", mode: "wait", timeoutMs: 100 }, heard: "turn", budgetMs: RESULT_COALESCE_MS + SLACK_MS },
-  { name: "background, busy apex, steered", apex: "claude", start: { harness: "codex" }, busy: true, heard: "steer", budgetMs: WAKE_COALESCE_MS + SLACK_MS },
+  { name: "wait, result after the window", apex: "codex", start: { harness: "codex", mode: "wait", timeoutMs: 100 }, heard: "turn", budgetMs: SLACK_MS },
+  // Only what a working Apex can answer is steered into its turn (`FOCUS_MS`): a Fin that is blocked, not one that is done.
+  { name: "background, busy apex, a blocked Fin steered", apex: "claude", start: { harness: "codex" }, busy: true, asks: true, heard: "steer", budgetMs: WAKE_COALESCE_MS + SLACK_MS },
   { name: "background, busy apex, from its turn's end", apex: "cursor", start: { harness: "codex" }, busy: true, heard: "turn", budgetMs: WAKE_COALESCE_MS + SLACK_MS },
 ]
 
@@ -69,7 +77,7 @@ async function run(bench: Case, root: string): Promise<number[]> {
       childOf.set(apex, turn.conversation)
       await turn.world.hold(turn.conversation)
       reportedAt.set(turn.conversation, Date.now())
-      const told = await turn.world.agents.report(turn.caller, { status: "done", summary: "There are 12 files.", clientKey: "r" })
+      const told = await turn.world.agents.report(turn.caller, bench.asks ? { status: "blocked", summary: "The count needs a folder I can't read.", clientKey: "r" } : { status: "done", summary: "There are 12 files.", clientKey: "r" })
       assert.ok(!("refused" in told), JSON.stringify(told))
       return "Reported."
     },

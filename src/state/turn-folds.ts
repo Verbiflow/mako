@@ -7,9 +7,10 @@ const HELD_OPEN = 400
  * The settled turns a person opened, by transcript and exchange. A turn
  * leaves the screen and comes back (windowing, a released body, another
  * tab) remounted; it comes back the way it was left. Kept for the window's
- * life: a reopened app shows answers folded again.
+ * life: a reopened app shows answers folded again. `read` holds the folds opened at least once: a line stands out
+ * for a failure behind it only until then.
  */
-export const turnFoldsStore = createStore<{ open: ReadonlySet<string> }>({ open: new Set() })
+export const turnFoldsStore = createStore<{ open: ReadonlySet<string>; read: ReadonlySet<string> }>({ open: new Set(), read: new Set() })
 export const useTurnFolds = createHook(turnFoldsStore)
 
 export function turnFoldKey(source: string | undefined, exchange: string, part: number): string {
@@ -26,6 +27,12 @@ export function setTurnFoldOpen(key: string, open: boolean): void {
       if (next.size <= HELD_OPEN) break
       next.delete(oldest)
     }
-    return { open: next }
+    if (!open || state.read.has(key)) return { open: next }
+    const read = new Set(state.read).add(key)
+    for (const oldest of read) {
+      if (read.size <= HELD_OPEN) break
+      read.delete(oldest)
+    }
+    return { open: next, read }
   })
 }

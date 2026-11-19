@@ -8,7 +8,7 @@ import { listedSummaries } from "../src/web-client/desk-listing"
 import { canonicalThreadRefs, readsThreadRefs, selectAcpPresence, selectSessionOwners } from "../src/state/acp-presence"
 import { acpStore } from "../src/state/acp-state"
 import { hydrateLiveSummaries, listLive } from "../src/state/live-recovery"
-import { groupThreadFolders, orderThreadFolders, workedFolderRanks } from "../src/lib/thread-folders"
+import { groupThreadFolders, heldFolderRanks, keptFolderRanks, orderThreadFolders, savedFolderRanks, settledFolderRanks, workedFolderRanks } from "../src/lib/thread-folders"
 import type { ThreadRef } from "../src/lib/types"
 
 /**
@@ -122,4 +122,40 @@ test("a Mac's window and the web put the account's projects in the same order, b
   assert.deepEqual(macWindow(true), desk, "whatever the window heard first")
   const byActivity = [...account].sort((left, right) => right.activityAt.localeCompare(left.activityAt)).map((row) => row.folder)
   assert.notDeepEqual([...new Set(byActivity)], expected, "and that isn't the order the agents' activity would give")
+})
+
+test("a folder never ranks below where it last settled, whatever lands first", () => {
+  const settled = { "/a": "2026-11-10T00:00:00.000Z", "/b": "2026-11-12T00:00:00.000Z", "/c": "2026-11-11T00:00:00.000Z" }
+  // A boot that has only this Mac's conversations knows older times for /b and /c than the account did.
+  const early = { "/a": "2026-11-10T00:00:00.000Z", "/b": "2026-11-01T00:00:00.000Z" }
+  assert.deepEqual(settledFolderRanks(early, settled), settled, "what landed so far ranks at the kept times")
+  // New work moves a folder; nothing moves one back.
+  const fresh = { ...early, "/a": "2026-11-17T00:00:00.000Z" }
+  assert.equal(settledFolderRanks(fresh, settled)["/a"], "2026-11-17T00:00:00.000Z")
+  assert.equal(settledFolderRanks(early, {}), early, "nothing kept: what landed, the same object")
+})
+
+test("the kept ranks only grow, and keep the newest folders", () => {
+  const held = { "/a": "2026-11-10T00:00:00.000Z", "/b": "2026-11-12T00:00:00.000Z" }
+  assert.equal(keptFolderRanks(held, { "/a": "2026-11-01T00:00:00.000Z" }, 10), held, "an older time changes nothing")
+  const next = keptFolderRanks(held, { "/a": "2026-11-13T00:00:00.000Z", "/c": "2026-11-11T00:00:00.000Z" }, 2)
+  assert.deepEqual(next, { "/a": "2026-11-13T00:00:00.000Z", "/b": "2026-11-12T00:00:00.000Z" }, "past the limit the oldest goes")
+})
+
+test("what a window saves follows the work down as well as up, and keeps what hasn't landed", () => {
+  const saved = { "/a": "2026-11-10T00:00:00.000Z", "/b": "2026-11-12T00:00:00.000Z", "/laptop": "2026-11-16T00:00:00.000Z" }
+  assert.equal(savedFolderRanks(saved, { "/a": "2026-11-10T00:00:00.000Z" }, 10), saved, "nothing changed: the same object")
+  // /b's newest Thread was archived: its folder is saved at its next newest. /laptop's rows haven't been listed yet.
+  const next = savedFolderRanks(saved, { "/a": "2026-11-17T00:00:00.000Z", "/b": "2026-11-02T00:00:00.000Z" }, 10)
+  assert.deepEqual(next, { "/a": "2026-11-17T00:00:00.000Z", "/b": "2026-11-02T00:00:00.000Z", "/laptop": "2026-11-16T00:00:00.000Z" })
+  // So the next window starts /b lower, while this one's kept ranks never lowered it.
+  const order = (ranks: Record<string, string>) => Object.keys(ranks).sort((left, right) => ranks[right]!.localeCompare(ranks[left]!))
+  assert.deepEqual(order(settledFolderRanks({ "/a": "2026-11-17T00:00:00.000Z", "/b": "2026-11-02T00:00:00.000Z" }, next)), ["/a", "/laptop", "/b"])
+  assert.deepEqual(Object.keys(savedFolderRanks(saved, { "/c": "2026-11-18T00:00:00.000Z" }, 2)), ["/c", "/laptop"], "past the limit the oldest goes")
+})
+
+test("a folder added while the pointer holds the rail takes its own place", () => {
+  const held = { "/a": "2026-11-10T00:00:00.000Z" }
+  const ranks = { "/a": "2026-11-17T00:00:00.000Z", "/new": "2026-11-17T00:00:00.000Z" }
+  assert.deepEqual(heldFolderRanks(held, ranks), { "/a": "2026-11-10T00:00:00.000Z", "/new": "2026-11-17T00:00:00.000Z" })
 })

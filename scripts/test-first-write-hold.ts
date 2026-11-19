@@ -21,11 +21,11 @@ import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import { CallBounds } from "@mako/host/harnesses/call-bounds"
 import { claudeCallHooks } from "@mako/host/harnesses/claude/call-hooks"
 import { WriteHolds } from "@mako/host/harnesses/write-holds"
-import { launchRunsServers, settingsRunCode } from "@mako/host/harnesses/claude/person-code"
+import { claudeSubmitRunsServer, settingsRunCode } from "@mako/host/harnesses/claude/person-code"
 import { ClaudeSettingsReader } from "@mako/host/harnesses/claude/approval-settings"
 import type { ResolvedSettings } from "@anthropic-ai/claude-agent-sdk"
 import type { LiveSessionState } from "@mako/host/contracts/providers-acp"
-import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
+import type { AdmittedLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
@@ -58,7 +58,9 @@ let attended = true
 const states = new Map<string, LiveSessionState>()
 const sent: string[] = []
 const steered: string[] = []
-const driver: ProviderLiveDriver = {
+/** Each read ahead of a prompt's admission, with how many messages had been sent when it was asked for. */
+const admittedAhead: { id: string; sent: number }[] = []
+const driver: AdmittedLiveDriver = {
   ...noCapabilities,
   steering: { kind: "supported", lands: "interrupt", landing: "native", via: "Injected driver fixture", steer: async (_id, input) => {
     steered.push(input.text)
@@ -73,7 +75,8 @@ const driver: ProviderLiveDriver = {
   planning: { via: "setting", option: "plan", proposal: "Injected driver fixture", feedback: { kind: "next-message", reason: "Injected driver fixture" } },
   backgroundStop: { kind: "ends-with-turn", evidence: "Injected driver fixture" },
   turnRecovery: { kind: "manual", reason: "Injected driver fixture" },
-  firstWrite: { via: "Injected driver fixture: its agent asks `WriteHolds` before writing" },
+  // With Claude's own reading of which messages reach a server's code before any tool.
+  firstWrite: { via: "Injected driver fixture: its agent asks `WriteHolds` before writing", submitRuns: claudeSubmitRunsServer },
   provider: "test",
   available: () => true,
   async start(directory, options) {
@@ -106,6 +109,8 @@ const driver: ProviderLiveDriver = {
   cancel: async () => {},
   setMode: async () => {},
   close: () => {},
+  // As admission's: what a prompt's admission reads is read ahead of it, while its checkpoint is taken.
+  admitAhead: (id: string) => { admittedAhead.push({ id, sent: sent.length }) },
 }
 const dependencies = {
   root: join(root, "conversations"),
@@ -342,6 +347,79 @@ try {
     console.log("PASS: while a command that takes input with no hook runs, a turn holds nothing and its message waits")
   }
 
+  // On a launch that holds its writes (a stdio MCP server configured or not), a message goes at once unless taking it
+  // runs a server's code with no tool call between: a server's prompt as a command, or a mention of its resource.
+  // Those wait for the checkpoint as a message of an unheld launch does. Each case's name says what it holds.
+  {
+    const cases: { name: string; text: string; waits: boolean }[] = [
+      { name: "a plain message sends at once", text: "edit the answer again", waits: false },
+      { name: "a server's prompt command waits for the checkpoint", text: "/mcp__theirs__review the diff", waits: true },
+      { name: "a command of the person's own waits too, since it may run a shell line as it expands", text: "/ship now", waits: true },
+      { name: "a mention of a server's resource waits for the checkpoint", text: "summarise @theirs:file:///notes.md for me", waits: true },
+      { name: "an @ with a space before its colon is no mention to Claude Code and sends at once", text: "meet @ noon: bring the notes", waits: false },
+      { name: "any word with @ then a colon waits, a Git remote included, since Mako can't tell a server's name from another word", text: "clone git@example.com:owner/repo", waits: true },
+    ]
+    for (const each of cases) {
+      assert.equal(claudeSubmitRunsServer(each.text), each.waits, each.name)
+      await owner.stop()
+      owner = new LiveConversations(dependencies)
+      const id = randomUUID(), request = randomUUID()
+      await owner.start("test", cwd, { conversationId: id })
+      await until(() => owner.snapshot(id)?.session.status === "ready")
+      const capture = holdCapture(), deadline = holdDeadline()
+      try {
+        const sentBefore = sent.length
+        owner.submit(id, request, each.text)
+        await until(() => capture.reading() && deadline.armed())
+        assert.ok(holds.attends(bindingOf(id)), "the launch holds its writes")
+        if (each.waits) {
+          await new Promise((resolve) => setTimeout(resolve, 100))
+          assert.equal(sent.length, sentBefore, each.name)
+        } else await until(() => sent.length === sentBefore + 1)
+        assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before, undefined, "the checkpoint doesn't hold the workspace yet")
+        capture.release()
+        await until(() => sent.length === sentBefore + 1 && owner.snapshot(id)?.requests[0].snapshots?.before !== undefined)
+        assert.equal(sent.at(-1), each.text)
+        assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before.kind, "ready", `${each.name}: its checkpoint is the turn's before`)
+        finish(id, "done")
+        await until(() => owner.snapshot(id)?.requests[0].snapshots?.after !== undefined)
+      } finally {
+        deadline.restore()
+        capture.release()
+        capture.restore()
+      }
+    }
+    // A steer is submitted as a message is: one that mentions a resource waits while its turn's writes still do.
+    await owner.stop()
+    owner = new LiveConversations(dependencies)
+    const id = randomUUID(), request = randomUUID()
+    await owner.start("test", cwd, { conversationId: id })
+    await until(() => owner.snapshot(id)?.session.status === "ready")
+    const capture = holdCapture(), deadline = holdDeadline()
+    try {
+      owner.submit(id, request, "start on it")
+      await until(() => capture.reading() && owner.snapshot(id)?.requests[0].nativeRun !== undefined)
+      const steer = randomUUID(), words = "and read @theirs:file:///notes.md"
+      const steeredBefore = steered.length
+      owner.submit(id, steer, words)
+      const receipt = owner.act(id, { kind: "steer-queued", id: randomUUID(), requestId: request, queuedRequestId: steer, text: words, attachments: [] })
+      assert.equal(await settlesWithin(receipt, 100), false, "a steer that mentions a resource waits for the checkpoint")
+      assert.equal(steered.length, steeredBefore)
+      capture.release()
+      assert.equal((await receipt).state.kind, "accepted")
+      assert.equal(steered.at(-1), words)
+      await until(() => owner.snapshot(id)?.requests[0].snapshots?.before !== undefined)
+      assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before.kind, "ready")
+      finish(id, "done")
+      await until(() => owner.snapshot(id)?.requests[0].snapshots?.after !== undefined)
+    } finally {
+      deadline.restore()
+      capture.release()
+      capture.restore()
+    }
+    console.log("PASS: on a holding launch a plain message goes at once; a server's prompt command, a resource mention and a steer with one wait for the checkpoint")
+  }
+
   // A launch whose writes aren't held (the person's own hooks run beside the harness's): the message waits as ever.
   {
     await owner.stop()
@@ -358,6 +436,7 @@ try {
       await new Promise((resolve) => setTimeout(resolve, 50))
       assert.equal(sent.length, sentBefore, "an unheld launch's message waits for its checkpoint")
       assert.equal(holds.attends(bindingOf(id)), false, "and holds no write")
+      assert.deepEqual(admittedAhead.at(-1), { id: bindingOf(id), sent: sentBefore }, "its admission's reads began while it waited, not after")
       capture.release()
       await until(() => sent.length === sentBefore + 1 && owner.snapshot(id)?.requests[0].snapshots?.before !== undefined)
       assert.equal(owner.snapshot(id)?.requests[0].snapshots?.before.kind, "ready")
@@ -389,8 +468,6 @@ try {
     ]
     for (const [why, settings] of cases) assert.equal(settingsRunCode(resolved(settings)), true, why)
     assert.equal(settingsRunCode(resolved({ model: "opus" }, ["profile"])), true, "a machine policy source that didn't load may hold anything")
-    assert.equal(launchRunsServers({ mcpServers: { mako: { type: "http", url: "http://127.0.0.1:1/mako" } } }), false, "Mako's own servers start no process")
-    assert.equal(launchRunsServers({ mcpServers: { theirs: { command: "node", args: ["server.js"] } } }), true, "a stdio server of the person's does")
     // A check that can't be answered (here, a worker that can't load) says the person's code runs: the launch holds nothing.
     const broken = new ClaudeSettingsReader(new URL("file:///nonexistent/mako-settings-worker.js"))
     try {
@@ -424,6 +501,21 @@ try {
     assert.equal(await settlesWithin(cancelled, 50), true, "a cancelled tool lets go at once")
     gate.resolve()
     assert.equal(await settlesWithin(Promise.all([edit, bash, mcp]), 1_000), true, "they go once the checkpoint holds the workspace")
+    // A call Mako's routing only warns of still runs, so it waits like any other; one it denies never runs, and is
+    // answered at once. A warned call once went ahead of the hold: a `git switch -c`, or a server's tool Mako has its own for.
+    const routedGate = Promise.withResolvers<void>()
+    const routed = claudeCallHooks(new CallBounds("claude-binding"), { calls: () => ({ folder: cwd, worktree: cwd }), teams: false, conversation: "claude-binding" }, () => routedGate.promise)
+    const routedCall = (command: string) => routed.pre(preToolUse("Bash", { command }), undefined, { signal: new AbortController().signal })
+    const warned = routedCall("git switch -c another")
+    assert.equal(await settlesWithin(warned, 50), false, "a call routing warns of waits for the checkpoint")
+    /** What PreToolUse answered for the call, of what these cases read. */
+    const answer = (output: Awaited<ReturnType<typeof routedCall>>) => {
+      const specific = "hookSpecificOutput" in output ? output.hookSpecificOutput : undefined
+      return specific?.hookEventName === "PreToolUse" ? { decision: specific.permissionDecision, context: specific.additionalContext } : {}
+    }
+    assert.equal(answer(await routedCall("git worktree add ../elsewhere")).decision, "deny", "a denied call is answered at once: it never runs")
+    routedGate.resolve()
+    assert.ok(answer(await warned).context, "and is warned once it may go")
     const unheld = claudeCallHooks(new CallBounds("claude-binding"), undefined, () => new WriteHolds().beforeWrite("claude-binding"))
     assert.equal(await settlesWithin(unheld.pre(preToolUse("Write", { file_path: file }), undefined, { signal: new AbortController().signal }), 50), true, "a binding with no hold writes at once")
     console.log("PASS: Claude's PreToolUse hook holds tools that may write, never reads")

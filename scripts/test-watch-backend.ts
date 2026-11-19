@@ -156,6 +156,50 @@ process.on("message",request=>{
   }
 }
 
+/**
+ * A turn's checkpoint waits on a mark for half a second, so a mark never waits on the look at fseventsd: on a busy Mac
+ * that look's `ps` took seconds and every send captured afresh. A restart the look finds only after the mark is dated
+ * when it was found, so a read from that mark still reports its roots lost.
+ */
+async function markBesideDaemonLook(): Promise<void> {
+  if (process.platform === "win32") return
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  assert.ok(platform)
+  const asMac = <T>(operation: () => T): T => {
+    Object.defineProperty(process, "platform", { ...platform, value: "darwin" })
+    try { return operation() } finally { Object.defineProperty(process, "platform", platform) }
+  }
+  const folder = caseFolder("mark-beside-look"), script = join(folder, "reader.mjs")
+  writeFileSync(script, `process.on("message",request=>{
+  if(request.t==="mark") process.send({t:"marked",id:request.id,mark:{id:"1",at:String(BigInt(Date.now())*1000000n)}});
+  if(request.t==="since") process.send({t:"history",id:request.id,paths:[],lost:[],ignored:[]});
+});\n`)
+  const restarts: number[] = []
+  let look: (() => void) | undefined
+  const daemon = {
+    restartedSince: async (ms: number) => {
+      // The first look hangs as a `ps` on a loaded Mac does, then finds that fseventsd started over.
+      if (!look) await new Promise<void>((resolve) => { look = resolve })
+      return restarts.some((at) => at > ms)
+    },
+  }
+  const scope = new HostStopping()
+  try {
+    await scope.run(async () => {
+      const history = childHistory(script, new WatchReadings(), daemon)
+      const mark = await Promise.race([asMac(() => history.mark()), wait(5_000).then(() => assert.fail("the mark waited on the look at fseventsd"))])
+      assert.ok(look, "the look at fseventsd still went")
+      await wait(5)
+      restarts.push(Date.now())
+      look()
+      assert.deepEqual((await asMac(() => history.since(mark, [folder]))).lost, [folder], "a restart found after the mark reads lost")
+      history.recover?.()
+    })
+  } finally {
+    await scope.stop()
+  }
+}
+
 /** One child for every watch, ignores applied there, a crash restarts it, unsubscribe is final, a missing root is refused, a dying child is given up. */
 async function sharedChildAndCrash(): Promise<void> {
   const home = caseFolder("crash")
@@ -394,7 +438,7 @@ async function deadRootBeside(): Promise<void> {
 
 // Each case on its own folders and children, so CI can run them on separate shards (`CASES`, scripts/lib/cases.ts).
 try {
-  await runCases([historyReaderTermination, sharedChildAndCrash, lateCanary, silentCanary, degradedFseventsd, deadRootBeside])
+  await runCases([historyReaderTermination, markBesideDaemonLook, sharedChildAndCrash, lateCanary, silentCanary, degradedFseventsd, deadRootBeside])
   // Only something else holding this process open lets an unref'd timer fire.
   setTimeout(() => {
     console.error("the watcher child still holds the process open with no watch left")

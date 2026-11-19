@@ -2,7 +2,7 @@ import { finsWord } from "@mako/host/contracts/agents"
 import { childGroup, childStateOf, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { threadAsking, threadRollup } from "@/state/fin-rollup"
-import { threadChildren, useAcp, type AcpState } from "@/state/acp-state"
+import { threadChildren, useRailAcp, type AcpState } from "@/state/acp-state"
 
 /**
  * One letter per Fin, in `orderedChildren`' order: `n` needs the person, `w` working, `l` working while it asks its
@@ -37,7 +37,7 @@ export function apexPips(state: AcpState, thread: string | undefined): Pips {
 
 /** Whether a Thread leads Fins: what turns its row into two lines. True or false until its first Fin starts or its last goes. */
 export function useIsApex(thread: string | undefined): boolean {
-  return useAcp((state) => threadRollup(state, thread).total > 0)
+  return useRailAcp((state) => threadRollup(state, thread).total > 0)
 }
 
 function sameEntries(left: readonly NativeAgent[], right: readonly NativeAgent[]): boolean {
@@ -46,7 +46,7 @@ function sameEntries(left: readonly NativeAgent[], right: readonly NativeAgent[]
 
 /** The Fins of an Apex that wait on the person, oldest first: a Fin moving among the others repaints nothing here. */
 export function useNeedsYouFins(thread: string | undefined): readonly NativeAgent[] {
-  return useAcp((state) => threadAsking(state, thread), sameEntries)
+  return useRailAcp((state) => threadAsking(state, thread), sameEntries)
 }
 
 /** The pips counted as `rollup` counts their Fins: one asking its Apex is working. */

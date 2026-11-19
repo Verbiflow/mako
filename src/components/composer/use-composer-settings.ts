@@ -3,7 +3,7 @@ import { usePrefs } from "@/state/prefs"
 import { acpForThread, activeAcp, useAcp } from "@/state/acp"
 import { useThreads } from "@/state/thread-store"
 import { useSession } from "@/state/session"
-import { providerProfileKey, providers, useProviders, watchProviderProfile } from "@/state/providers"
+import { providerProfileKey, providers, useProviders } from "@/state/providers"
 import {
   composerModelLabel,
   observedSessionSettings,
@@ -86,7 +86,11 @@ export function useComposerSettings(provider?: string) {
     (state) => state.contextErrors[providerProfileKey(harness, target.cwd)]
   )
 
-  useEffect(() => watchProviderProfile(harness, target.cwd), [harness, target.cwd])
+  // One read of what the host holds for this harness and folder. The host says what changes after it; the picker
+  // opening is what asks the harness again.
+  useEffect(() => {
+    void providers.load(harness, false, target.cwd).catch(() => {})
+  }, [harness, target.cwd])
 
   const { resolved, model, options } = resolveComposerSettingsInput({
     target,

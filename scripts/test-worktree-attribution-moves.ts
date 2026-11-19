@@ -11,7 +11,8 @@ import { Git } from "@mako/git"
 import type { ActivityMark, ReportedEffect } from "@mako/protocol"
 import { FakeClock, FakeEventSource } from "@mako/protocol/attribution-conformance"
 import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
-import { partition, shares, type JournalView, type Partition, type CheckoutShares } from "@mako/host/attribution/queries"
+import { JournalReader } from "@mako/host/attribution/journal-reader"
+import { partition, shares, storedView, type JournalView, type Partition, type CheckoutShares } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { changeUsage } from "@mako/host/attribution/index"
 import { ThreadStore } from "@mako/host/threads/store"
@@ -331,6 +332,23 @@ test("what only T1's command or background work was running for comes on a best 
   assert.deepEqual(relative(view.thread.files), ["bg/state.ts", "gen/out.ts", "shared.ts"], "and they're T1's, which a move takes")
   assert.deepEqual(relative(view.uncertain.files), ["docs/notes.md"], "the person's save waits for Bring them")
 
+  // What a move reads off the host's thread, on the journal's reader: the same division from what the journal committed.
+  const reader = new JournalReader(f.tracker.store.path)
+  try {
+    const stored = storedView(f.tracker.store)
+    // The journal as committed lists a share's files in its own order, which the host's thread read them in too.
+    const committed = shares(stored, f.repo, "T1")
+    assert.deepEqual(relative(committed.thread.files), relative(view.thread.files))
+    assert.deepEqual(await reader.shares(f.repo, "T1"), committed)
+    for (const options of [undefined, { bring: false }, { bring: true }]) {
+      // All but how long each took to read.
+      assert.deepEqual({ ...(await reader.partition(f.repo, "T1", options)), ms: 0 }, { ...partition(stored, f.repo, "T1", options), ms: 0 }, `a partition with ${JSON.stringify(options)}`)
+    }
+    assert.ok(partition(stored, f.repo, "T1", { bring: true }).files.length > partition(stored, f.repo, "T1").files.length, "bringing takes more, so the option reached the reader")
+  } finally {
+    await reader.close()
+  }
+
   const { worktrees } = service(f)
   const id = randomUUID()
   const made = await worktrees.prepare(id, f.repo, "Move T1", { kind: "head" })
@@ -385,6 +403,13 @@ test("what only T1's command or background work was running for comes on a best 
   assert.equal(usage.total.threads, 1)
   assert.deepEqual(usage.projects.map((project) => project.path), [f.repo])
   assert.ok(usage.certainty.window >= 2 && usage.certainty.exact >= 1, JSON.stringify(usage.certainty))
+  const usageReader = new JournalReader(f.tracker.store.path)
+  try {
+    assert.deepEqual(await usageReader.changeUsage(0), usage, "read on the journal's reader, the same")
+    assert.deepEqual(await usageReader.changeUsage(f.clock.now() + 1), changeUsage(f.tracker.store, f.clock.now() + 1), "and of a window nothing is in")
+  } finally {
+    await usageReader.close()
+  }
   await f.tracker.close()
 })
 

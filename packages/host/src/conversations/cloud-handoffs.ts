@@ -420,31 +420,123 @@ function doingItself(snapshot: WorkingSnapshot, running: boolean): boolean {
   return Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some((agent) => isBusyNativeAgent(agent) && !agent.child)
 }
 
+/** One conversation's work as the working Threads count it: its Thread, and whether its agent works at all and by itself. */
+interface ConversationWork extends WorkingThread {
+  running: boolean
+  /** A turn running, an approval or a question waiting, or work left running in the background. */
+  working: boolean
+  /** What its agent does itself (`doingItself`). */
+  own: boolean
+}
+
 /**
- * This Mac's Threads whose agents are working now: a turn running, an approval or a question waiting, or work the turn
- * left running in the background. One conversation each, a running one first, the one a handoff asks from.
+ * What one conversation adds to the working Threads, read from what memory holds of it: undefined for one in the
+ * cloud, one only on disk (at rest: memory keeps whatever works, and none is loaded for this check), or one whose
+ * Session isn't placed here.
  */
-export function workingThreads(sources: WorkingSources): WorkingThread[] {
+function conversationWork(sources: Omit<WorkingSources, "ownWork">, id: string): ConversationWork | undefined {
   const { threads } = sources
-  if (!threads) return []
-  const byThread = new Map<string, WorkingThread & { running: boolean }>()
-  for (const summary of sources.live.listed()) {
-    const id = summary.session.id
-    if (sources.cloud(id)) continue
-    // A work check reads resident metadata only: snapshot() would flush its pending transcript batch to SQLite.
-    // One only on disk is at rest (memory keeps whatever works), and is never loaded for this check.
-    const snapshot = sources.live.held(id)
-    if (!snapshot) continue
-    const placed = threads.journalPlacement(id)
-    if (!placed || threads.execution(placed.session)?.state !== "here") continue
-    const running = snapshot.session.status === "running" || snapshot.requests.some((request) => request.status === "dispatching")
-    const working = sources.ownWork ? doingItself(snapshot, running) : running || snapshot.permissions.length > 0 || Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)
-    if (!working) continue
-    const known = byThread.get(placed.thread)
-    if (known && (known.running || !running)) continue
-    byThread.set(placed.thread, { conversationId: id, thread: placed.thread, harness: snapshot.session.harness, running, ...snapshot.session.title && { title: snapshot.session.title } })
+  if (!threads || sources.cloud(id)) return undefined
+  // A work check reads resident metadata only: snapshot() would flush its pending transcript batch to SQLite.
+  const snapshot = sources.live.held(id)
+  if (!snapshot) return undefined
+  const placed = threads.journalPlacement(id)
+  if (!placed || threads.execution(placed.session)?.state !== "here") return undefined
+  const running = snapshot.session.status === "running" || snapshot.requests.some((request) => request.status === "dispatching")
+  const working = running || snapshot.permissions.length > 0 || Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)
+  return { conversationId: id, thread: placed.thread, harness: snapshot.session.harness, running, working, own: doingItself(snapshot, running), ...snapshot.session.title && { title: snapshot.session.title } }
+}
+
+/** One conversation for each Thread of `works`, a running one first: the one a handoff asks from. */
+function oneEach(works: Iterable<ConversationWork>, ownWork: boolean): WorkingThread[] {
+  const byThread = new Map<string, ConversationWork>()
+  for (const work of works) {
+    if (!(ownWork ? work.own : work.working)) continue
+    const known = byThread.get(work.thread)
+    if (known && (known.running || !work.running)) continue
+    byThread.set(work.thread, work)
   }
   return [...byThread.values()].map(({ conversationId, thread, harness, title }) => ({ conversationId, thread, harness, ...title !== undefined && { title } }))
+}
+
+/**
+ * This Mac's Threads whose agents are working now: a turn running, an approval or a question waiting, or work the turn
+ * left running in the background. One conversation each, a running one first, the one a handoff asks from. It reads
+ * every listed conversation, so nothing that runs as conversations change calls it: that reads `WorkingSet`.
+ */
+export function workingThreads(sources: WorkingSources): WorkingThread[] {
+  if (!sources.threads) return []
+  const works: ConversationWork[] = []
+  for (const summary of sources.live.listed()) {
+    const work = conversationWork(sources, summary.session.id)
+    if (work) works.push(work)
+  }
+  return oneEach(works, sources.ownWork ?? false)
+}
+
+/**
+ * The working Threads, kept as conversations change rather than counted from every conversation at each asking: a
+ * conversation enters when a batch of it shows it working (`observe`, which each flush calls with its own
+ * conversation) and leaves when a batch or an asking finds it doesn't. Each asking reads again only the conversations
+ * in the set, so what no batch says of one of them (it closed, went to the cloud, its Session left this Mac) is seen
+ * then. Counted from all of them at every flush, 370 conversations with 30 at work took a third of the host's thread.
+ * `recount` reads every conversation, for a start and for a slow job's check of what no batch said of one outside it.
+ */
+export class WorkingSet {
+  readonly #sources: Omit<WorkingSources, "ownWork">
+  readonly #works = new Map<string, ConversationWork>()
+  /** The set's conversations by Thread: a Thread is counted by one of them. */
+  readonly #byThread = new Map<string, Set<string>>()
+
+  constructor(sources: Omit<WorkingSources, "ownWork">) {
+    this.#sources = sources
+  }
+
+  /** `id` changed: it joins the set while it works and leaves it once it doesn't. */
+  observe(id: string): void {
+    this.#read(id)
+  }
+
+  /** Whether `id` is the conversation its working Thread is counted by, as it stands now; that Thread's line if so. */
+  of(id: string): WorkingThread | undefined {
+    const work = this.#read(id)
+    if (!work) return undefined
+    // Its Thread's other conversations in the set, read again, decide which one stands for the Thread.
+    const beside = [...this.#byThread.get(work.thread) ?? []].flatMap((each) => each === id ? [work] : this.#read(each) ?? [])
+    return oneEach(beside, false).find((each) => each.conversationId === id)
+  }
+
+  /** The working Threads now, each conversation of the set read again. */
+  threads(ownWork = false): WorkingThread[] {
+    for (const id of [...this.#works.keys()]) this.#read(id)
+    return oneEach(this.#works.values(), ownWork)
+  }
+
+  /** Every listed conversation read again: the set as `workingThreads` would count it. */
+  recount(): void {
+    for (const id of [...this.#works.keys()]) this.#drop(id)
+    for (const summary of this.#sources.live.listed()) this.#read(summary.session.id)
+  }
+
+  #read(id: string): ConversationWork | undefined {
+    const work = conversationWork(this.#sources, id)
+    this.#drop(id)
+    if (!work?.working) return undefined
+    this.#works.set(id, work)
+    const beside = this.#byThread.get(work.thread) ?? new Set()
+    beside.add(id)
+    this.#byThread.set(work.thread, beside)
+    return work
+  }
+
+  #drop(id: string): void {
+    const known = this.#works.get(id)
+    if (!known) return
+    this.#works.delete(id)
+    const beside = this.#byThread.get(known.thread)
+    beside?.delete(id)
+    if (beside?.size === 0) this.#byThread.delete(known.thread)
+  }
 }
 
 /** Whether a handoff's Thread left here: started in the cloud, or released with the rest carried by this host. */

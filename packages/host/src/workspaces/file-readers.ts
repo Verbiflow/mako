@@ -2,7 +2,7 @@ import { stat } from "node:fs/promises"
 import type { AgentHost } from "./agent-host.js"
 import { fileIdentity, verifyFilePreview } from "./file-previews.js"
 import { fileResponse, localFile } from "./file-response.js"
-import type { MediaRenditions } from "./media-renditions.js"
+import { renditionKind, type MediaRenditions } from "./media-renditions.js"
 import type { OwnedFiles } from "./owned-files.js"
 import { workspacePreviewPath } from "./preview-path.js"
 
@@ -17,7 +17,7 @@ import { workspacePreviewPath } from "./preview-path.js"
  */
 
 /**
- * A signed file, or a smaller picture of it (`?rendition=poster|thumbnail`), or one another host signed that this one
+ * A signed file, or a smaller picture of it (`?rendition=poster|thumbnail|inline`), or one another host signed that this one
  * serves for it (`owned`); anything else is not found.
  */
 export async function readSignedFile(request: Request, renditions: MediaRenditions, owned?: OwnedFiles): Promise<Response> {
@@ -27,8 +27,8 @@ export async function readSignedFile(request: Request, renditions: MediaRenditio
   if (grant.kind === "invalid") return new Response("Not found", { status: 404 })
   if (grant.kind === "owned") return owned ? owned.serve(grant, request) : new Response("Not found", { status: 404 })
   // A thumbnail that can't be made is the file itself.
-  const kind = new URL(request.url).searchParams.get("rendition")
-  if (grant.entry && (kind === "poster" || kind === "thumbnail")) {
+  const kind = renditionKind(new URL(request.url).searchParams.get("rendition"))
+  if (grant.entry && kind) {
     const info = await stat(grant.path)
     const made = await renditions.rendition(grant.path, fileIdentity(info), kind)
     if (made) return fileResponse(await localFile(made, request.signal), made, request, { cacheable: true })

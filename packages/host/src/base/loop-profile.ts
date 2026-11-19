@@ -27,14 +27,36 @@ export interface LoopSlice {
   ms: number
   /** The host's functions on the slice's stacks, with the milliseconds each was on them, most first. */
   frames: { frame: string; ms: number }[]
+  /**
+   * What ran with none of the host's functions on its stack, by the innermost frame, most first: garbage collection
+   * (`(gc)`), V8's own work (`(program)`), a native call (`name (native)`), Node's (`name node:module`) or a
+   * dependency's (`name package`). Slices the person's host held for 7 s at a time named no frame at all.
+   */
+  outside: { frame: string; ms: number }[]
 }
 
 /** `function package/file:line` for a frame of Mako's own packages; undefined for a dependency's, Node's or V8's. */
-function ownFrame(frame: CpuProfile["nodes"][number]["callFrame"]): string | undefined {
-  // In a checkout under `packages/`; in the installed app, under `node_modules/@mako/`, which is the host's own too.
+export function ownFrame(frame: CpuProfile["nodes"][number]["callFrame"]): string | undefined {
+  // The installed app runs the host bundled into `dist-electron/<program>/` (`bundle-main.mjs`), which holds Mako's
+  // packages alone, every other package staying external: each frame there is Mako's, named by its chunk. Unmatched,
+  // every slice of the installed host's profile named nothing ("7288 ms:"), on a day its loop was held 97% of a launch.
+  const bundled = /\/dist-electron\/([^/]+)\/([^/]+\.js)$/.exec(frame.url)
+  if (bundled) return `${frame.functionName || "(anonymous)"} ${bundled[1]}/${bundled[2]}:${frame.lineNumber + 1}`
+  // In a checkout under `packages/`; under `node_modules/@mako/`, which is the host's own too.
   const own = /\/(?:packages|node_modules\/@mako)\/([^/]+)\/(?:(?:dist|src)\/)?(.+)$/.exec(frame.url)
   if (!own || /\/node_modules\/(?!@mako\/)/.test(frame.url.slice(own.index))) return undefined
   return `${frame.functionName || "(anonymous)"} ${own[1]}/${own[2]}:${frame.lineNumber + 1}`
+}
+
+/** The innermost frame of a stack with none of the host's on it, as `LoopSlice.outside` names it. */
+function outsideFrame(frame: CpuProfile["nodes"][number]["callFrame"]): string {
+  const name = frame.functionName || "(anonymous)"
+  if (name === "(garbage collector)") return "(gc)"
+  if (name === "(program)" || name === "(root)") return name
+  if (!frame.url) return `${name} (native)`
+  if (frame.url.startsWith("node:")) return `${name} ${frame.url}`
+  const dependency = /\/node_modules\/((?:@[^/]+\/)?[^/]+)\/(?!.*\/node_modules\/)/.exec(frame.url)
+  return `${name} ${dependency?.[1] ?? frame.url.split("/").slice(-2).join("/")}`
 }
 
 /** Every slice of at least `minMs`, in order, each with its `frames` busiest frames. */
@@ -59,10 +81,12 @@ export function loopSlices(profile: CpuProfile, minMs: number, frames = 8): Loop
   const deltas = profile.timeDeltas ?? []
   const found: LoopSlice[] = []
   let time = 0
-  let open: { at: number; ms: number; frames: Map<string, number> } | undefined
+  let open: { at: number; ms: number; frames: Map<string, number>; outside: Map<string, number> } | undefined
+  const busiest = (counted: Map<string, number>, top: number) =>
+    [...counted].sort((a, b) => b[1] - a[1]).slice(0, top).map(([frame, ms]) => ({ frame, ms: Math.round(ms) }))
   const close = () => {
     if (open && open.ms >= minMs)
-      found.push({ at: Math.round(open.at), ms: Math.round(open.ms), frames: [...open.frames].sort((a, b) => b[1] - a[1]).slice(0, frames).map(([frame, ms]) => ({ frame, ms: Math.round(ms) })) })
+      found.push({ at: Math.round(open.at), ms: Math.round(open.ms), frames: busiest(open.frames, frames), outside: busiest(open.outside, 4) })
     open = undefined
   }
   for (let index = 0; index < samples.length; index += 1) {
@@ -72,9 +96,14 @@ export function loopSlices(profile: CpuProfile, minMs: number, frames = 8): Loop
     if (node.callFrame.functionName === "(idle)") {
       close()
     } else {
-      open ??= { at: time, ms: 0, frames: new Map() }
+      open ??= { at: time, ms: 0, frames: new Map(), outside: new Map() }
       open.ms += ms
-      for (const frame of stackOf(node.id)) open.frames.set(frame, (open.frames.get(frame) ?? 0) + ms)
+      const own = stackOf(node.id)
+      for (const frame of own) open.frames.set(frame, (open.frames.get(frame) ?? 0) + ms)
+      if (!own.length) {
+        const outside = outsideFrame(node.callFrame)
+        open.outside.set(outside, (open.outside.get(outside) ?? 0) + ms)
+      }
     }
     time += ms
   }
@@ -93,8 +122,32 @@ export function heldBy(slices: readonly LoopSlice[], top = 25): { frame: string;
   return [...total].sort((a, b) => b[1].ms - a[1].ms).slice(0, top).map(([frame, { ms, slices }]) => ({ frame, ms, slices }))
 }
 
-/** Samples a millisecond apart: fine enough to name a 100 ms slice, light enough for a window of seconds. */
-const SAMPLE_US = 1_000
+/**
+ * Samples four milliseconds apart: 25 to name a 100 ms slice, and a window's profile small enough to hand over. V8
+ * writes the profile out on the thread it profiled; at a millisecond apart a 10 s window's took 300 to 500 ms of the
+ * loop it was there to explain.
+ */
+const SAMPLE_US = 4_000
+
+/** How late a short timer may run for the loop to count as turning freely, how often it's looked at, and how long at most. */
+const QUIET_LATE_MS = 10
+const QUIET_EVERY_MS = 100
+const QUIET_WAIT_MS = 30_000
+
+/** Resolves once two looks in a row found the loop turning freely, or after `QUIET_WAIT_MS` whatever it does. */
+function quiet(): Promise<void> {
+  return new Promise((resolve) => {
+    const until = performance.now() + QUIET_WAIT_MS
+    let free = 0
+    const look = (due: number) => {
+      const now = performance.now()
+      free = now - due < QUIET_LATE_MS ? free + 1 : 0
+      if (free >= 2 || now >= until) return resolve()
+      setTimeout(look, QUIET_EVERY_MS, now + QUIET_EVERY_MS).unref()
+    }
+    setTimeout(look, QUIET_EVERY_MS, performance.now() + QUIET_EVERY_MS).unref()
+  })
+}
 
 /**
  * A window of the host's own profile once its loop has been held, in this
@@ -132,6 +185,12 @@ export class HeldLoopProfiler {
     const session = new Session()
     this.session = session
     try {
+      // Starting is the cost: V8 lists every function it has compiled before the first sample, 136 ms of this thread
+      // with a small program loaded and several times that in a host (measured with the window forced; stopping and
+      // reading the profile were 7 ms). So it starts once the loop has turned freely for a moment, not in the middle
+      // of what held it, and only for a hold long enough that the start is the smaller of the two (`longMs`).
+      await quiet()
+      if (this.session !== session) return
       session.connect()
       await session.post("Profiler.enable")
       await session.post("Profiler.setSamplingInterval", { interval: SAMPLE_US })
