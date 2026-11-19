@@ -62,7 +62,7 @@ export interface SyncFailureWords {
 const FAILURE_WORDS = {
   refused: { what: "The account turned down part of it", next: "Mako sends it again on its own, less often each time. If it keeps happening, copy the details." },
   unreachable: { what: "Mako can't reach the account", next: "It sends it again on its own once the account answers." },
-  conflict: { what: "It went on in two places", next: "The account keeps the version it has; this Mac's goes once the Session changes here." },
+  conflict: { what: "It went on in two places", next: "Mako sends this Mac's copy in its place on its own. Nothing on this Mac is lost." },
   unread: { what: "Mako couldn't read it on this Mac", next: "It reads it again at the Session's next change." },
   failed: { what: "It couldn't be sent", next: "Mako sends it again on its own." },
 } satisfies Record<SyncFailureKind, SyncFailureWords>

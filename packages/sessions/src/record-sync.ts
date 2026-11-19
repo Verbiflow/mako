@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto"
 import { GatewayHttpError, type GatewayCallTrace } from "@mako/protocol/gateway-http"
 import { CHUNK_HEADER_BYTES, RECORD_ASK_HASHES, RECORD_PACK_BYTES, RECORD_PUSH_WITH_BYTES, RecordConflictError, recordChunks, type PackedChunk, type RecordBundle, type RecordHoldings, type RecordPushAnswer, type RecordRemote, type RecordUnit } from "@mako/protocol/records"
 import { z } from "zod"
@@ -14,8 +15,9 @@ export type { RecordRemote } from "@mako/protocol/records"
  * written, and what's there comes down past the last pull. Both ways go by the protocol's one rule, so records that
  * went on in two places are refused on whichever side finds it, never stitched, and the refusal is said.
  *
- * A push sends only what the remote isn't known to hold (`RecordStore.exportFor`), its chunks first (only those the
- * remote lacks, in packs), then the versions; a pull asks only past its cursor (`pulledThrough`) and fetches only the
+ * A push sends only what the remote isn't known to hold (`RecordStore.exportFor`), and only what this store committed
+ * and put on disk (`RecordStore.durable`): a version the remote holds is one this store keeps. Its chunks go first
+ * (only those the remote lacks, in packs), then the versions; a pull asks only past its cursor (`pulledThrough`) and fetches only the
  * chunks this store lacks. A push the remote refuses for a gap means what was known of it is wrong (it was reset, or
  * another store pushed for it): its own holdings replace what's known, and the push goes again, once.
  */
@@ -173,6 +175,8 @@ export class RecordSync {
   /** Chunks the remote refused alone, by hash: tried alone first at each push, in case it takes them now. */
   readonly #refused = new Map<string, { size: number; refusal: GatewayHttpError }>()
   readonly #budget: UploadBudget
+  readonly #soleWriter: boolean
+  readonly #log: ((level: "info" | "warn", message: string, fields: Record<string, string | number>) => void) | undefined
 
   /**
    * `describesStore`: whether a unit of a harness's records describes its store rather than any session (a database's
@@ -181,9 +185,25 @@ export class RecordSync {
    * `budget`: the bytes the process's uploads hold at once, shared with its other syncs (`UploadBudget`); one of its
    * own by default.
    */
-  constructor(store: RecordStore, remote: RecordRemote, options: { describesStore?: (harness: string, key: string) => boolean; uploads?: number; budget?: UploadBudget } = {}) {
+  constructor(
+    store: RecordStore,
+    remote: RecordRemote,
+    options: {
+      describesStore?: (harness: string, key: string) => boolean
+      uploads?: number
+      budget?: UploadBudget
+      /**
+       * Only this store writes the remote (a device's own records in the account), so a unit there that went on in
+       * two places is a line of it this store lost after sending: its content now goes in its place (`#rebase`).
+       */
+      soleWriter?: boolean
+      log?: (level: "info" | "warn", message: string, fields: Record<string, string | number>) => void
+    } = {}
+  ) {
     this.#store = store
     this.#remote = remote
+    this.#soleWriter = options.soleWriter ?? false
+    this.#log = options.log
     this.#describesStore = options.describesStore
     this.#uploads = options.uploads ?? UPLOADS
     this.#budget = options.budget ?? new UploadBudget()
@@ -204,6 +224,9 @@ export class RecordSync {
     const report: SyncReport = { versions: 0, held: 0, chunks: 0, bytes: 0, requests: 0, ms: 0 }
     // Units held back by a chunk the remote refused: their versions from that chunk's on wait, the rest go.
     const heldBack = new Set<string>()
+    // Units taken anew once this push (`#rebase`): one refused again is said, never tried in a loop.
+    const rebased = new Set<string>()
+    let restart = false
     let cursor: number | undefined
     for (;;) {
       // A batch at a time, so a long session is never held whole: the remote's mirror moves with each part pushed.
@@ -211,6 +234,8 @@ export class RecordSync {
       if (cursor !== undefined) batch.cursor = cursor
       const page = await inSlices(this.#store.exportSteps(this.#remote.id, harness, nativeId, batch))
       if (!page?.bundle.units.length) break
+      // What the batch read is on this disk before the remote holds it: a restart never takes back a version sent.
+      await this.#store.durable()
       let moved = false
       for (const whole of splitBundle(page.bundle)) {
         const part = withoutUnits(whole, heldBack)
@@ -223,12 +248,25 @@ export class RecordSync {
             const again = await this.#push(harness, nativeId, false)
             return sumReports(report, again, started)
           }
-          throw new RecordSyncConflictError(harness, nativeId, answer.key, answer.seq, answer.message)
+          const sides = await this.#sides(harness, nativeId, answer.key, answer.seq)
+          if (answer.conflict === "diverged" && this.#soleWriter && !rebased.has(answer.key)) {
+            rebased.add(answer.key)
+            await this.#rebase(harness, nativeId, answer.key, answer.head, sides, report, heldBack)
+            // From the first batch again: the unit now goes on past the version that took its content.
+            cursor = undefined
+            restart = true
+            break
+          }
+          throw new RecordSyncConflictError(harness, nativeId, answer.key, answer.seq, `${answer.message} (${sides})`)
         }
         moved = true
         report.versions += answer.versions
         report.held += answer.held
         await this.#store.remoteHolds(this.#remote.id, harness, nativeId, sent)
+      }
+      if (restart) {
+        restart = false
+        continue
       }
       // A batch whose every version waits on a refused chunk, and whose cursor stands, would come back the same.
       if (page.cursor === null || (!moved && page.cursor === (cursor ?? 0))) break
@@ -240,6 +278,38 @@ export class RecordSync {
       if (first) throw new RecordChunksRefusedError(harness, nativeId, refused.map(({ hash, size }) => ({ hash, size })), first.refusal)
     }
     return { ...report, ms: performance.now() - started }
+  }
+
+  /**
+   * Where two lines of a unit part, for the log: each side's version at `seq` (the remote's numbers), by kind, size
+   * and a digest of its chunk list. Equal sizes with other digests are the same bytes cut apart another way; other
+   * sizes, other bytes. The remote's side is read from its head, when it answers one that reaches back to `seq`.
+   */
+  async #sides(harness: string, nativeId: string, key: string, seq: number): Promise<string> {
+    const said = (side: { kind: string; size: number; chunks: string } | null | undefined) =>
+      side ? `${side.kind} ${side.size} bytes, chunks ${createHash("sha256").update(side.chunks).digest("hex").slice(0, 12)}` : "unknown"
+    const here = this.#store.versionFor(this.#remote.id, harness, nativeId, key, seq)
+    const head = await this.#remote.head?.(harness, nativeId).catch(() => undefined)
+    const there = head?.units.find((unit) => unit.key === key)?.versions.find((version) => version.seq === seq)
+    return `version ${seq} here: ${said(here)}; in the remote: ${said(there)}`
+  }
+
+  /**
+   * A unit the remote holds a line of that this store lost (only this store writes the remote, so it sent those
+   * versions and then lost them, as a forced restart takes back commits not on disk): its content now goes as one
+   * `replace` past the remote's head (`RecordStore.rebasing`), and what's captured after goes on from it. Nothing of
+   * this store's is lost; the remote's line stays there as history.
+   */
+  async #rebase(harness: string, nativeId: string, key: string, remoteHead: number, sides: string, report: SyncReport, heldBack: Set<string>): Promise<void> {
+    const taking = await this.#store.rebasing(harness, nativeId, key, remoteHead)
+    if (!taking) throw new RecordSyncConflictError(harness, nativeId, key, remoteHead, `The records of ${key} went on in two places, and this store no longer holds the unit (${sides})`)
+    await this.#store.durable()
+    const { answer, sent } = await this.#pushPart(taking.bundle, report, heldBack)
+    if (!answer || !sent) throw new RecordSyncConflictError(harness, nativeId, key, remoteHead + 1, `The records of ${key} went on in two places, and their content now waits on a chunk the remote refused (${sides})`)
+    if (!answer.ok) throw new RecordSyncConflictError(harness, nativeId, key, answer.seq, `${answer.message}; taking its content anew was refused too (${sides})`)
+    await this.#store.rebased(this.#remote.id, harness, nativeId, key, taking.local, remoteHead + 1)
+    report.versions += answer.versions
+    this.#log?.("info", "a unit that went on in two places goes on from this store's content", { harness, nativeId, key, remoteHead, local: taking.local, sides })
   }
 
   /**
