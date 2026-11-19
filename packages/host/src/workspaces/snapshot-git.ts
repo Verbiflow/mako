@@ -98,12 +98,15 @@ export async function snapshotGit(
   args: string[],
   index?: string,
   input?: string,
-  objects?: SnapshotObjects
+  objects?: SnapshotObjects,
+  /** A turn waits on this read (`RunOptions.urgent`). */
+  urgent = false
 ): Promise<string> {
   const result = await git.run({
     cwd,
     args: ["-c", "core.fsmonitor=false", ...args],
     read: true,
+    urgent,
     env: environment(index, objects),
     input,
     maxBytes: SNAPSHOT_OUTPUT_BYTES,
@@ -173,7 +176,8 @@ export async function privateSnapshotObjects(
   git: Git,
   cwd: string,
   directory: string,
-  facts: Pick<CheckoutFacts, "format" | "objects">
+  facts: Pick<CheckoutFacts, "format" | "objects">,
+  urgent = false
 ): Promise<SnapshotObjects> {
   await snapshotGit(git,cwd, [
     "init",
@@ -182,7 +186,7 @@ export async function privateSnapshotObjects(
     "--template=",
     `--object-format=${facts.format}`,
     join(directory, "git"),
-  ])
+  ], undefined, undefined, undefined, urgent)
   return { write: join(directory, "git", "objects"), read: [facts.objects] }
 }
 /**

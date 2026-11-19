@@ -19,7 +19,7 @@ import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useStartedWorktree } from "@/state/worktrees"
 import { BackgroundWorkLine } from "./background-work-line"
 import { TurnWaitLineView } from "./turn-wait-line"
-import { CrewCard } from "./crew-card"
+import { ShiverCard } from "./shiver-card"
 import { ActivityPill, WaitingLine } from "./waiting-line"
 import { useEffect, useMemo, useState } from "react"
 import { ConversationTimeline } from "@/components/transcript/conversation-timeline"
@@ -66,7 +66,7 @@ const NO_RECOVERIES = { onTurns: new Map<string, LiveRequest>(), apart: EMPTY_QU
 
 /**
  * `asks`: whether the panel draws the agent's approval and question under the transcript. The phone pins them in its
- * own dock above its composer instead (`web-client/dock.tsx`), and says so with `false`. `compact`: the phone's crew
+ * own dock above its composer instead (`web-client/dock.tsx`), and says so with `false`. `compact`: the phone's Shiver
  * card in reach of a thumb, where the panel has one.
  */
 export function AcpPanel({ asks = true, compact = false }: { asks?: boolean; compact?: boolean } = {}) {
@@ -297,7 +297,7 @@ function Blocks({ starting = false, continued = false, compact = false }: { star
           {/* The Fins stand through every turn and transition; only the background line waits for the turn's end. */}
           {/* What an Apex waits on, by name, once its turn has ended; the card under it is every Fin as it stands. */}
           {running ? null : <WaitingLine />}
-          <CrewCard compact={compact} fallback={running ? null : <BackgroundWorkLine />} />
+          <ShiverCard compact={compact} fallback={running ? null : <BackgroundWorkLine />} />
           {/* The wait its agent armed for when its turn ends: said once the turn has. */}
           {running ? null : <TurnWaitLineView />}
         </>

@@ -24,7 +24,9 @@ const WORDS: readonly { tool: string; args: ToolArguments; answer?: string; labe
   { tool: "agents_link", args: { session: "6b1e", harness: "claude" }, label: "Link a Claude run", running: "Linking a Claude run", done: "Linked a Claude run" },
   { tool: "agents_list", args: {}, answer: '{"children":[{"name":"a"},{"name":"b"},{"name":"c"}]}', label: "Read Fins", running: "Reading Fins", done: "Read 3 Fins" },
   { tool: "agents_list", args: { scope: "tree" }, answer: '{"children":[{"name":"a"}]}', label: "Read Fins", running: "Reading Fins", done: "Read 1 Fin" },
-  { tool: "agents_list", args: { scope: "crew" }, label: "Read the crew", running: "Reading the crew", done: "Read the crew" },
+  { tool: "agents_list", args: { scope: "shiver" }, label: "Read the Shiver", running: "Reading the Shiver", done: "Read the Shiver" },
+  // A transcript kept from a build before the Shiver names the scope crew.
+  { tool: "agents_list", args: { scope: "crew" }, label: "Read the Shiver", running: "Reading the Shiver", done: "Read the Shiver" },
   { tool: "agents_list", args: { scope: "apexes" }, label: "Read other Apexes", running: "Reading other Apexes", done: "Read other Apexes" },
   { tool: "agents_read", args: { child: "fin:own-words" }, label: "Read fin:own-words's report", running: "Reading fin:own-words's report", done: "Read fin:own-words's report" },
   { tool: "agents_read", args: { child: "own-words", view: "transcript" }, label: "Read fin:own-words's transcript", running: "Reading fin:own-words's transcript", done: "Read fin:own-words's transcript" },

@@ -62,7 +62,7 @@ const APEX_NEWEST = "Reading the digest."
 
 /**
  * From the next tap, every frame: when the newest turn's last words are on screen with the transcript at its end
- * (`newestMs`; `atEnd` false: on screen, as an Apex's newest turn sits above its crew card), then for 1.5 s how far
+ * (`newestMs`; `atEnd` false: on screen, as an Apex's newest turn sits above its Shiver card), then for 1.5 s how far
  * any turn on screen moved from where it was first painted (`moved`). And each frame once the Thread's screen is up,
  * until then: whether its body showed neither a turn nor the loader (`empty`).
  */

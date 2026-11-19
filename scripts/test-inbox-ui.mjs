@@ -224,9 +224,9 @@ async function checkWindow() {
   // Every Fin's question (a Thread's approval answers with its harness's own options) offers words of the person's own beside its options, or as its only answer: no ask is a dead end.
   const deskTyped = await evaluate(`[...document.querySelectorAll('[data-inbox-section="needs"] [data-inbox-item][data-inbox-kind="fin"]')].filter((node) => !node.querySelector('[data-inbox-answer="allow"]')).map((node) => Boolean(node.querySelector('[data-fin-typed]')))`)
   assert.ok(deskTyped.length > 0 && deskTyped.every(Boolean), `every question in the Inbox takes typed words: ${JSON.stringify(deskTyped)}`)
-  const crewTyped = await evaluate(`[...document.querySelectorAll('[data-crew-row][data-child-group="needs"]')].filter((node) => node.dataset.finAsk && node.dataset.finAsk !== 'approval').map((node) => Boolean(node.querySelector('[data-fin-typed]')))`)
-  assert.ok(crewTyped.every(Boolean), `every question in the crew card takes typed words: ${JSON.stringify(crewTyped)}`)
-  console.log(`PASS: typed answers in the Inbox (${deskTyped.length}) and the crew card (${crewTyped.length})`)
+  const shiverTyped = await evaluate(`[...document.querySelectorAll('[data-shiver-row][data-child-group="needs"]')].filter((node) => node.dataset.finAsk && node.dataset.finAsk !== 'approval').map((node) => Boolean(node.querySelector('[data-fin-typed]')))`)
+  assert.ok(shiverTyped.every(Boolean), `every question in the Shiver card takes typed words: ${JSON.stringify(shiverTyped)}`)
+  console.log(`PASS: typed answers in the Inbox (${deskTyped.length}) and the Shiver card (${shiverTyped.length})`)
   await chord("Escape", 27, 0)
   await until(`document.querySelector('[data-inbox]') === null`, "Escape puts it away")
   console.log("PASS: Cmd+Shift+U opens the Inbox")
