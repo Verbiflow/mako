@@ -79,27 +79,22 @@ async function registrySessionsRoot(
     throw error
   }
   if (files.length > 1_000) throw new Error("Claude activity inventory exceeds the read limit")
-  const sessions: ProviderActivitySession[] = []
-  for (const file of files) {
-    signal.throwIfAborted()
-    if (!file.endsWith(".json")) continue
-    const text = await registryEntry(join(root, file), signal)
-    // Claude Code removes its record as it exits: one gone since the listing is a process that ended.
-    if (text === undefined) continue
-    const agent = ClaudeAgentSchema.parse(JSON.parse(text))
+  // Read first, then ask about every pid in one turn: the start times asked together are one process listing
+  // (`HostProbes.startedAt`). Asked one record at a time, each cost a listing of its own, and a wake's check ran out
+  // of time on a busy Mac with a dozen sessions open.
+  const texts = await Promise.all(
+    files.filter((file) => file.endsWith(".json")).map((file) => registryEntry(join(root, file), signal))
+  )
+  signal.throwIfAborted()
+  // Claude Code removes its record as it exits: one gone since the listing is a process that ended.
+  const agents = texts.flatMap((text) => (text === undefined ? [] : [ClaudeAgentSchema.parse(JSON.parse(text))]))
+  const owners = agents.map((agent) => {
     if (!agent.pid || !agent.sessionId)
       throw new Error("Claude activity record has no ownership identity")
-    if (
-      agent.pid &&
-      agent.sessionId &&
-      (await processIdentityMatches({
-        pid: agent.pid,
-        startedAt: agent.startedAt,
-        signal,
-      }))
-    )
-      sessions.push(activity(agent))
-  }
+    return { agent, pid: agent.pid }
+  })
+  const live = await Promise.all(owners.map(({ agent, pid }) => processIdentityMatches({ pid, startedAt: agent.startedAt, signal })))
+  const sessions = owners.flatMap(({ agent }, index) => (live[index] ? [activity(agent)] : []))
   return sessions
 }
 

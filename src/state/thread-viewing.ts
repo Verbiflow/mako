@@ -622,8 +622,10 @@ export const threadViewingActions = {
     // A Mako conversation that owns this thread takes over when the host
     // names it. Sending resolves again, so this lookup never decides where
     // a reply goes.
-    const adopted = mode === "conversation" ? adoptOwner(ref, generation) : null
-    const activated = mode === "conversation" && acp.activateThread(ref)
+    // One this window already holds is opened as it holds it, and its own read brings it current (`activate`): its
+    // owner, asked as well, answered with the whole conversation a second time, parsed and projected under the open.
+    const activated = mode === "conversation" && acp.openThread(ref)
+    const adopted = mode === "conversation" && !activated ? adoptOwner(ref, generation) : null
     if (!activated) acp.deactivate()
     const liveHarness = activated
       ? (activeAcp(acpStore.get())?.harness ?? ref.harness)

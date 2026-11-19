@@ -257,7 +257,8 @@ export function guideText(section?: GuideSection | "all"): string {
     const index = GUIDE_SECTIONS.findIndex(({ name }) => name === section)
     return ENVIRONMENT_GUIDE.slice(starts[index], starts[index + 1] ?? ENVIRONMENT_GUIDE.length).trimEnd()
   }
-  const index = GUIDE_SECTIONS.map(({ name, heading, about }) => `- ${name}: ${heading.replace(/^#+ /, "")}. ${about[0]!.toUpperCase()}${about.slice(1)}.`)
+  // `about` as written: it may open with a tool's name (app_start), which a capital would misname.
+  const index = GUIDE_SECTIONS.map(({ name, heading, about }) => `- ${name}: ${heading.replace(/^#+ /, "")} (${about})`)
   return [
     ENVIRONMENT_GUIDE.slice(0, starts[0]).trimEnd(),
     "## Sections",

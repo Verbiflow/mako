@@ -1,5 +1,6 @@
 import type { Attribution, Certainty, ContentRef, FootprintEntry } from "@mako/protocol"
 import { atOnce, inSlices, StepsStopped, type Steps } from "@mako/sessions/slices"
+import type { ChangeUsage, ThreadChangeSummary } from "../contracts/thread-changes.js"
 import { TURN_CHANGES_VERSION, type TurnChangedFile, type TurnChangeLines, type TurnChanges, type TurnChangeShare } from "../contracts/turn-changes.js"
 import { decodeText } from "./content.js"
 import { wholeChange, type FileState, type JournalStore, type StatRow, type StoredEntry, type StoredRoot } from "./journal-store.js"
@@ -30,13 +31,29 @@ export interface JournalView {
   author(seq: number): Attribution | null
 }
 
-/** A read-only view of a journal no tracker is running. */
+/**
+ * A read-only view of a journal no tracker is running. Its uncommitted files are read when a root is first asked
+ * for, once, and kept by root: most readers want only the store, and the host makes a view after every commit of the
+ * journal's writer, so reading the table for each, then filtering it once per root, was every root against every file
+ * on the host's thread.
+ */
 export function storedView(store: JournalStore): JournalView {
-  const files = store.files()
+  let files: Map<string, Map<string, FileState>> | undefined
+  const filesOf = (root: string): ReadonlyMap<string, FileState> => {
+    if (!files) {
+      files = new Map()
+      for (const file of store.files()) {
+        const held = files.get(file.root) ?? new Map<string, FileState>()
+        held.set(file.path, file)
+        files.set(file.root, held)
+      }
+    }
+    return files.get(root) ?? new Map()
+  }
   const authors = new Map<number, Attribution | null>()
   return {
     store,
-    roots: () => store.roots().filter((root) => root.active).map((root) => ({ root, files: new Map(files.filter((file) => file.root === root.id).map((file) => [file.path, file])) })),
+    roots: () => store.roots().filter((root) => root.active).map((root) => ({ root, files: filesOf(root.id) })),
     author: (seq) => {
       if (!authors.has(seq)) authors.set(seq, store.author(seq) ?? null)
       return authors.get(seq) ?? null
@@ -565,6 +582,98 @@ export function changes(view: JournalView, thread: string): ThreadChanges {
   return result
 }
 
+/** Paths outside its checkouts a Thread touched, each once: those its calls named, and those that only changed while it ran. */
+export const outsideCounts = (found: Pick<ThreadChanges, "outside">): ThreadChangeSummary["outside"] => ({
+  named: new Set(found.outside.filter((entry) => entry.evidence === "strong").map((entry) => entry.path)).size,
+  maybe: new Set(found.outside.filter((entry) => entry.evidence === "weak").map((entry) => entry.path)).size,
+})
+
+/**
+ * "Changes made" by a Thread: the sum of its turns' summaries, the same
+ * records each turn's line under its answer draws. Its own lines only, each
+ * file once at what its turns did to it in all; files that might be its
+ * are counted apart. Commands and paths outside its checkouts come from
+ * its calls, as before.
+ */
+export function threadTotals(turns: readonly TurnChanges[], found: Pick<ThreadChanges, "commands" | "outside">): ThreadChangeSummary {
+  return sumTurns(turns, found.commands.length, outsideCounts(found))
+}
+
+/**
+ * `threadTotals` from the journal, reading only what it sums: the turns' summaries, and the commands and outside paths
+ * as SQLite counts them. Through `changes` it read every entry and call the Thread ever made, then kept two numbers.
+ * A Thread's summaries and calls are still as many as its history is long, so the host asks on the reader.
+ */
+export function threadSummary(store: JournalStore, thread: string): ThreadChangeSummary {
+  const keptSince = store.prunedBefore(thread)
+  return { ...sumTurns(store.turnChangesOf(thread), store.commandsOf(thread), store.outsideCounts(thread)), ...(keptSince !== undefined && { keptSince }) }
+}
+
+function sumTurns(turns: readonly TurnChanges[], commands: number, outside: ThreadChangeSummary["outside"]): ThreadChangeSummary {
+  const files = new Map<string, { first: TurnChangedFile["kind"]; last: TurnChangedFile["kind"] }>()
+  const maybe = new Set<string>()
+  const lines = { added: 0, removed: 0 }
+  let unlisted = 0
+  for (const turn of turns) {
+    lines.added += turn.own.added
+    lines.removed += turn.own.removed
+    unlisted += turn.more
+    for (const file of turn.files) {
+      if (file.own === undefined) {
+        maybe.add(file.path)
+        continue
+      }
+      const seen = files.get(file.from ?? file.path)
+      if (seen && file.from) files.delete(file.from)
+      files.set(file.path, { first: seen?.first ?? file.kind, last: file.kind })
+    }
+  }
+  const kinds = { created: 0, changed: 0, deleted: 0, renamed: 0 }
+  for (const { first, last } of files.values()) {
+    if (first === "create" && last === "delete") continue
+    if (first === "create") kinds.created++
+    else if (last === "delete") kinds.deleted++
+    else if (first === "rename" || last === "rename") kinds.renamed++
+    else kinds.changed++
+  }
+  kinds.changed += unlisted
+  for (const path of files.keys()) maybe.delete(path)
+  return { files: kinds, lines, commands, outside, maybe: maybe.size }
+}
+
+/** The journal kept this long: its retention, and the window "changes made" covers. */
+export const RETENTION_DAYS = 14
+
+/** Every Thread's changes made since `since`, by project, with how surely each was known and how moves went. */
+export function changeUsage(store: JournalStore, since: number): ChangeUsage {
+  const paths = new Map(store.roots().map((root) => [root.id, root.path]))
+  const { roots, threads } = store.changesSince(since)
+  const projects = roots
+    .flatMap(({ root, ...totals }) => {
+      const path = paths.get(root)
+      return path ? [{ path, ...totals }] : []
+    })
+    .sort((a, b) => b.added + b.removed - (a.added + a.removed) || b.files - a.files)
+  const sum = (key: "files" | "added" | "removed") => projects.reduce((total, project) => total + project[key], 0)
+  const mix = store.certaintyMix(since)
+  const moves = store.moveTotals(since)
+  const move = moves.get("move")
+  return {
+    days: RETENTION_DAYS,
+    total: { files: sum("files"), added: sum("added"), removed: sum("removed"), threads },
+    projects,
+    certainty: { exact: mix.get("exact") ?? 0, named: mix.get("named") ?? 0, window: mix.get("window") ?? 0, ambiguous: mix.get("ambiguous") ?? 0, person: mix.get("person") ?? 0, mako: mix.get("mako") ?? 0 },
+    moves: {
+      moves: move?.count ?? 0,
+      came: move?.files ?? 0,
+      guessed: move?.guessed ?? 0,
+      putBack: moves.get("put-back")?.files ?? 0,
+      offered: move?.offered ?? 0,
+      brought: moves.get("bring")?.files ?? 0,
+    },
+  }
+}
+
 export interface Restorable {
   root: string
   path: string
@@ -653,8 +762,11 @@ export function turnChanges(view: JournalView, thread: string, turn: string, sta
  * `countingTurn` a slice at a time; undefined when the journal closed under
  * it (its host stopping, or another host taking it over): not counted, and
  * nothing went wrong. Its turn is counted when the journal next opens.
+ * Undefined too for a turn the journal no longer keeps (`JournalStore.turnKept`).
  */
 export async function countTurnInSlices(view: JournalView, thread: string, turn: string, state: TurnChanges["state"]): Promise<TurnChanges | undefined> {
+  // A turn whose record retention dropped isn't counted again as having changed nothing: its request keeps the count it has.
+  if (!view.store.turnKept(thread, turn)) return undefined
   try {
     return await inSlices(countingTurn(view, thread, turn, state), undefined, () => view.store.closed)
   } catch (error) {

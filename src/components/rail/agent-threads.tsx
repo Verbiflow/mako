@@ -1,5 +1,6 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
-import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
+import { everyWhileShown } from "@/lib/window-shown"
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { RailAnnouncer } from "@/components/rail/thread-status"
 import type { RailAsk } from "@/lib/rail-announcement"
 import {
@@ -11,12 +12,15 @@ import { LiveAgentRow } from "@/components/rail/active-threads"
 import { AppMarkIcon } from "@/components/rail/app-mark"
 import { threadAppDriver } from "@/state/thread-app"
 import type { AcpPresence } from "@/state/acp-presence"
-import { ThreadRow } from "@/components/rail/thread-row"
+import type { ThreadRef } from "@/lib/types"
+import { ROW_SURFACE, ThreadRow } from "@/components/rail/thread-row"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import { formatRelative } from "@/lib/format"
 import {
   groupThreadFolders,
+  heldFolderRanks,
   orderThreadFolders,
+  settledFolderRanks,
   showsInRecent,
   stableThreadRanks,
   threadBelongsToWorkspace,
@@ -30,9 +34,10 @@ import {
 } from "@/lib/thread-folders"
 import { useRowFlip } from "@/components/rail/use-row-flip"
 import { EMPTY_FOLD, foldThreads, foldedThreadState, presenceStatusOf, unreadReview, type FoldRow, type ThreadFold } from "@/lib/thread-fold"
+import { railSearchStore, setRailSearching, useRailSearch } from "@/state/rail-search"
 import { useThreadGroups } from "@/state/thread-groups"
 import { RailTip } from "@/components/rail/rail-tip"
-import { railRanksStore } from "@/state/rail-ranks"
+import { keepFolderRanks, railRanksStore, releaseRevealedFolder, saveFolderRanks, useRailRanks } from "@/state/rail-ranks"
 import {
   threadStatus,
   threadStatusPriority,
@@ -40,11 +45,12 @@ import {
   useThreads,
   type ThreadStatus,
 } from "@/state/threads"
-import { actions, useCanChooseFolder } from "@/state/session"
+import { actions, useCanChooseFolder, useSession } from "@/state/session"
+import { useTabs } from "@/state/tabs"
 import { IfCanChooseFolder, IfCanReveal } from "@/components/ui/machine-gate"
 import { checkoutSentence, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
 import { CheckoutLabel } from "@/components/rail/checkout-label"
-import { useAcp } from "@/state/acp"
+import { useRailAcp } from "@/state/acp-state"
 import {
   canonicalThreadRefs,
   readsThreadRefs,
@@ -55,7 +61,7 @@ import {
 } from "@/state/acp-presence"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { useWindowRoutes, windowRoutesStore } from "@/state/window-routes"
-import { prefsStore, setPref, setProjectHidden, togglePinnedProject, usePrefs } from "@/state/prefs"
+import { prefsStore, setPref, setProjectHidden, toggleGroupCollapsed, togglePinnedProject, usePrefs } from "@/state/prefs"
 import { openAppSetup } from "@/state/app-setup"
 import { desktop } from "@/state/desktop"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
@@ -96,6 +102,7 @@ import {
   ListFilterIcon,
   MessagesSquareIcon,
   MoreHorizontalIcon,
+  PencilLineIcon,
   PinIcon,
   PinOffIcon,
   PlusIcon,
@@ -140,13 +147,60 @@ function byLatestMove(left: AcpPresence, right: AcpPresence): number {
   return (right.movedAt ?? right.createdAt) - (left.movedAt ?? left.createdAt)
 }
 const INITIAL_TIME = Date.now()
+const NO_FOLDERS: ThreadFolder[] = []
+const NO_REFS: ThreadRef[] = []
+const NO_LIVE: AcpPresence[] = []
+const NO_RANKS: FolderRanks = {}
+/** How long what the rail ranks on stays still, once the catalog is ready, before it's saved for the next window. */
+const SAVE_QUIET_MS = 2_000
+/** How long a folder takes to fold away (`duration-200` on its rows' grid), and a little past it. */
+const FOLD_MS = 250
+
+/**
+ * What's typed in the search box, as the list takes it: at a transition's priority, so a keystroke is drawn in the
+ * box at once (`RailHeader` reads the store itself) and the list filters when the typing lets it.
+ */
+function useSought(): string {
+  const [sought, setSought] = useState(() => railSearchStore.get().query)
+  useEffect(() => railSearchStore.subscribe(() => {
+    const { query } = railSearchStore.get()
+    startTransition(() => setSought(query))
+  }), [])
+  return sought
+}
+
+/**
+ * Whether what folds away under a header is drawn: while it's open, and for the length of its fold after it closes.
+ * `fold` is called by whatever is about to open or close it. A closed folder's rows aren't in the page: with "More
+ * folders" open they were several hundred rows, each with its subscriptions, drawn into no height.
+ */
+function useFoldAway(closed: boolean) {
+  const [folding, setFolding] = useState(false)
+  const timer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(timer.current), [])
+  const fold = useCallback(() => {
+    window.clearTimeout(timer.current)
+    setFolding(true)
+    timer.current = window.setTimeout(() => setFolding(false), FOLD_MS)
+  }, [])
+  return { drawn: !closed || folding, folding, fold }
+}
+
+function toggleFolder(folder: ThreadFolder): void {
+  toggleGroupCollapsed(`ws:${folder.key}`)
+}
+
+function newThreadIn(cwd: string): void {
+  const { routes } = windowRoutesStore.get()
+  if (routes) routes.newThreadIn(cwd)
+  else void actions.newConversationIn(cwd)
+}
 
 function useLiveTime(): number {
   const [now, setNow] = useState(INITIAL_TIME)
 
   useEffect(() => {
-    const timer = window.setInterval(() => setNow(Date.now()), LIVE_TIME_MS)
-    return () => window.clearInterval(timer)
+    return everyWhileShown(LIVE_TIME_MS, () => setNow(Date.now()))
   }, [])
 
   return now
@@ -157,18 +211,17 @@ export function AgentThreads() {
   const canChooseFolder = useCanChooseFolder()
   const rail = useRef<HTMLDivElement>(null)
   const topFade = useRef<HTMLSpanElement>(null)
-  const [query, setQuery] = useState("")
   const [jumpHints, setJumpHints] = useState(false)
-  const [searching, setSearching] = useState(false)
   const [showAllPinned, setShowAllPinned] = useState(false)
   const [showAllFolders, setShowAllFolders] = useState(false)
   // Extra pages unfolded per folder — More reveals a handful at a time,
   // not the whole archive in one avalanche.
   const [pages, setPages] = useState<Record<string, number>>({})
   useEffect(() => threadAppDriver()?.watchMarks?.(), [])
-  const deferred = useDeferredValue(query)
+  const deferred = useSought()
+  const searchActive = Boolean(deferred.trim())
   const nativeRefs = useThreads((state) => state.threads)
-  const liveAgents = useAcp(selectAcpPresence, sameAcpPresence)
+  const liveAgents = useRailAcp(selectAcpPresence, sameAcpPresence)
   const loaded = useThreads((state) => state.loaded)
   const working = useThreads((state) => state.working)
   const attention = useThreads((state) => state.attention)
@@ -176,7 +229,7 @@ export function AgentThreads() {
   const externalActivity = useThreads((state) => state.externalActivity)
   const filter = usePrefs((prefs) => prefs.agentHarnessFilter)
   const pinned = usePrefs((prefs) => prefs.pinnedThreads)
-  const owners = useAcp(selectSessionOwners, sameSessionOwners)
+  const owners = useRailAcp(selectSessionOwners, sameSessionOwners)
   const all = useMemo(
     () => canonicalThreadRefs(nativeRefs, owners, pinned),
     [nativeRefs, owners, pinned]
@@ -188,19 +241,16 @@ export function AgentThreads() {
   const scope = usePrefs((prefs) => prefs.railScope)
   const sortBy = usePrefs((prefs) => prefs.railSortBy)
   const grouping = usePrefs((prefs) => prefs.railGrouping)
+  // Projects, each with its rows; a search, Recent and Archived are one list instead, and group nothing.
+  const byProject = !searchActive && grouping === "project"
   const scroller = useRef<HTMLDivElement>(null)
   useKeepWorktreeSummaries()
   // The order caught when the pointer entered the rail; held until it leaves,
   // so nothing can change place under a click.
-  const [hold, setHold] = useState<{ ranks: RailRanks; folderRanks: FolderRanks } | null>(null)
+  // The folders' order is caught only where folders show: one caught under a search holds the rows alone.
+  const [hold, setHold] = useState<{ ranks: RailRanks; folderRanks: FolderRanks | null } | null>(null)
   const { cwd } = useWorkspaceFocus()
   const now = useLiveTime()
-
-  useEffect(() => {
-    const search = () => setSearching(true)
-    window.addEventListener("mako:search-threads", search)
-    return () => window.removeEventListener("mako:search-threads", search)
-  }, [])
 
   useEffect(() => {
     const rows = () =>
@@ -352,49 +402,114 @@ export function AgentThreads() {
   )
   const shownRanks = hold?.ranks ?? ranks
 
+  // Everything from here to `recent` is for one of the two views, and is worked out only while that view shows.
   const held = useMemo(() => {
+    if (!byProject) return NO_REFS
     const set = new Set(pinned)
     const list = shownRefs.filter((ref) => set.has(ref.path))
     list.sort((a, b) => pinned.indexOf(a.path) - pinned.indexOf(b.path))
     return list
-  }, [shownRefs, pinned])
+  }, [byProject, shownRefs, pinned])
 
   const folderMap = useWorktrees((state) => state.folderMap)
   const grouped = useMemo(
     () =>
-      groupThreadFolders({
-        refs: shownRefs,
-        live: countedLive,
-        currentCwd: cwd,
-        pinnedThreads: pinned,
-        pinnedFolders: pinnedProjects,
-        priorities,
-        activity: threadActivity,
-        ranks: shownRanks,
-        sortBy,
-        folderMap,
-      }),
-    [cwd, shownRefs, countedLive, pinned, pinnedProjects, priorities, shownRanks, sortBy, threadActivity, folderMap]
+      byProject
+        ? groupThreadFolders({
+            refs: shownRefs,
+            live: countedLive,
+            currentCwd: cwd,
+            pinnedThreads: pinned,
+            pinnedFolders: pinnedProjects,
+            priorities,
+            activity: threadActivity,
+            ranks: shownRanks,
+            sortBy,
+            folderMap,
+          })
+        : NO_FOLDERS,
+    [byProject, cwd, shownRefs, countedLive, pinned, pinnedProjects, priorities, shownRanks, sortBy, threadActivity, folderMap]
   )
   // A folder sits by when you last worked there, on any device: every Session counts, a Thread's folded ones too, so
   // agent output never moves one and every device puts them in the same order.
-  const folderRanks = useMemo(
-    () => workedFolderRanks({ refs: matched, live: unboundLiveAgents, owners, folderMap }),
-    [matched, unboundLiveAgents, owners, folderMap]
+  const workedRanks = useMemo(
+    () => (byProject ? workedFolderRanks({ refs: matched, live: unboundLiveAgents, owners, folderMap }) : NO_RANKS),
+    [byProject, matched, unboundLiveAgents, owners, folderMap]
   )
+  // A Thread the person just started, or a folder they just added, lands where they're looking: its folder open,
+  // scrolled into view, ranked as worked on now, and its unsent Thread drawn there, lit, until it's sent or they look
+  // elsewhere. Only its first message moves the folder for good: a Thread never sent leaves the order as it was.
+  const reveal = useRailRanks((state) => state.reveal)
+  const activeTab = useTabs((state) => state.activeId)
+  const viewingThread = useThreads((state) => Boolean(state.opening ?? state.viewing))
+  const liveOpen = useRailAcp((state) => state.activeKey !== null)
+  const unsent = useSession((state) => state.messages.length === 0)
+  const unsentIn = reveal && reveal.tab === activeTab && !viewingThread && !liveOpen && unsent ? reveal.key : null
+  const lift = unsentIn && reveal ? reveal.at : undefined
+  // What has landed so far, never below where each folder stood earlier in this window or where the last one saved it:
+  // the catalog's scan and another device's Sessions arrive after the first paint, and each used to reorder the whole
+  // list (`railRanksStore`).
+  const keptRanks = useRailRanks((state) => state.folders)
+  const folderRanks = useMemo(() => {
+    if (!byProject) return NO_RANKS
+    const settled = settledFolderRanks(workedRanks, keptRanks)
+    return unsentIn && lift !== undefined ? settledFolderRanks(settled, { [unsentIn]: new Date(lift).toISOString() }) : settled
+  }, [byProject, workedRanks, keptRanks, unsentIn, lift])
   useEffect(() => {
     if (loaded) railRanksStore.set({ ranks })
   }, [loaded, ranks])
+  // Only the unfiltered list says where a folder settled: a search or a harness filter ranks on part of it.
+  const unfiltered = !deferred.trim() && filter.length === 0 && scope === "all" && grouping === "project"
+  useEffect(() => {
+    if (!loaded || !unfiltered) return
+    keepFolderRanks(workedRanks)
+    // Saved once what it ranks on has been still a moment past the catalog's ready: another device's Sessions come in
+    // just after, and a save before them would start the next window lower than it ends.
+    const save = setTimeout(() => saveFolderRanks(workedRanks), SAVE_QUIET_MS)
+    return () => clearTimeout(save)
+  }, [loaded, unfiltered, workedRanks])
   const folders = useMemo(
-    () => orderThreadFolders(grouped, hold?.folderRanks ?? folderRanks, sortBy),
+    () => orderThreadFolders(grouped, hold?.folderRanks ? heldFolderRanks(hold.folderRanks, folderRanks) : folderRanks, sortBy),
     [grouped, hold, folderRanks, sortBy]
   )
-  const recent = useMemo(() => [
+  // Open for this reveal only (`reveal.open`); the person's stored choice for the folder is left as it was.
+  const revealedOpen = reveal?.open ? reveal.key : null
+  const revealedFolder = reveal ? folders.find((entry) => entry.key === reveal.key) : undefined
+  // A folder just added has no row until its first Session's folder is known, so this waits for it to be drawn.
+  const revealedShown = Boolean(revealedFolder)
+  useEffect(() => {
+    if (!reveal || !revealedShown) return
+    const frame = requestAnimationFrame(() => {
+      const head = rail.current?.querySelector(`[data-flip-key="folder:${CSS.escape(reveal.key)}"]`)
+      ;(head?.closest("section") ?? head)?.scrollIntoView({ block: "nearest" })
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [reveal, revealedShown])
+  // Each folder's conversations, the one that moved last first; the ones in no folder ("") as they're listed.
+  const liveByFolder = useMemo(() => {
+    const byFolder = new Map<string, AcpPresence[]>()
+    if (!byProject) return byFolder
+    for (const presence of shownLive) {
+      const key = threadFolderKey(presence, folderMap)
+      const present = byFolder.get(key)
+      if (present) present.push(presence)
+      else byFolder.set(key, [presence])
+    }
+    for (const [key, present] of byFolder) if (key) present.sort(byLatestMove)
+    return byFolder
+  }, [byProject, shownLive, folderMap])
+  const recent = useMemo(() => byProject ? [] : [
     ...shownRefs.filter((ref) => showsInRecent(ref, threadActivity[ref.path])).map((ref) => ({ kind: "native" as const, key: ref.path, at: shownRanks[ref.path]?.at ?? ref.updatedAt ?? "", ref })),
     ...shownLive.map((presence) => ({ kind: "live" as const, key: presence.key, at: new Date(presence.movedAt ?? presence.createdAt).toISOString(), presence })),
-  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 80), [shownRefs, shownRanks, threadActivity, shownLive])
-  const searchActive = Boolean(deferred.trim())
-  useRowFlip(scroller, `${grouping}:${searchActive}`)
+  ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 80), [byProject, shownRefs, shownRanks, threadActivity, shownLive])
+  const showPages = useCallback((key: string, next: number) => setPages((prev) => ({ ...prev, [key]: next })), [])
+  const hiddenFold = useFoldAway(!showHidden)
+  // The rows' order can change only when one of these does; the glide reads the page again then, and at no other draw.
+  const rowOrder = useMemo(
+    () => ({ folders, held, recent, liveByFolder, pages, collapsed, hiddenProjects, showAllPinned, showAllFolders, showHidden }),
+    [folders, held, recent, liveByFolder, pages, collapsed, hiddenProjects, showAllPinned, showAllFolders, showHidden]
+  )
+  useRowFlip(scroller, `${grouping}:${searchActive}`, rowOrder)
   const inboxOpen = useInboxView((state) => state.open)
   const quietPinned = held
   const shownPinned = showAllPinned
@@ -422,31 +537,13 @@ export function AgentThreads() {
       folder={folder}
       now={now}
       fold={fold}
-      liveAgents={shownLive.filter((presence) => (threadFolderKey(presence, folderMap) || "~") === folder.key).sort(byLatestMove)}
+      liveAgents={liveByFolder.get(folder.cwd === null ? "" : folder.key) ?? NO_LIVE}
       collapsed={collapsed.includes(`ws:${folder.key}`)}
+      unsent={unsentIn === folder.key}
+      revealed={revealedOpen === folder.key}
       hidden={hidden}
-      onToggle={() => {
-        const key = `ws:${folder.key}`
-        setPref(
-          "collapsedGroups",
-          collapsed.includes(key)
-            ? collapsed.filter((entry) => entry !== key)
-            : [...collapsed, key]
-        )
-      }}
-      onNew={() => {
-        if (!folder.cwd) return
-        const { routes } = windowRoutesStore.get()
-        if (routes) routes.newThreadIn(folder.cwd)
-        else void actions.newConversationIn(folder.cwd)
-      }}
-      onPin={() => {
-        if (folder.cwd) togglePinnedProject(folder.cwd)
-      }}
       pages={pages[folder.key] ?? 0}
-      onPages={(next) =>
-        setPages((prev) => ({ ...prev, [folder.key]: next }))
-      }
+      onPages={showPages}
     />
   )
   const shownCheckouts = shownFolders.flatMap((folder) => (folder.cwd ? [folder.cwd] : [])).join("\n")
@@ -461,7 +558,7 @@ export function AgentThreads() {
       if (index < 9) row.dataset.jumpIndex = String(index + 1)
       else delete row.dataset.jumpIndex
     })
-  }, [folders, held, jumpHints, shownRefs, shownLive, pages, showAllPinned, showAllFolders])
+  }, [folders, held, jumpHints, shownRefs, shownLive, pages, showAllPinned, showAllFolders, collapsed, showHidden])
 
   return (
     <div
@@ -490,17 +587,7 @@ export function AgentThreads() {
     >
       <RailAnnouncer asks={asks} />
       <RailTop />
-      <RailHeader
-        searching={searching}
-        query={query}
-        onQuery={setQuery}
-        onToggleSearch={(next) => {
-          setSearching(next)
-          if (!next) setQuery("")
-        }}
-        counts={counts}
-        filter={filter}
-      />
+      <RailHeader counts={counts} filter={filter} />
       <div className="scroll-fade-scope flex min-h-0 flex-1 flex-col">
         <span
           ref={topFade}
@@ -515,7 +602,7 @@ export function AgentThreads() {
               event.currentTarget.scrollTop > 0.5
             )
           }
-          onPointerEnter={() => setHold((current) => current ?? { ranks, folderRanks })}
+          onPointerEnter={() => setHold((current) => current ?? { ranks, folderRanks: byProject ? folderRanks : null })}
           onPointerLeave={() => setHold(null)}
           className="scroll-fade-scroller min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3"
         >
@@ -550,14 +637,14 @@ export function AgentThreads() {
                 ]}
               />
             )
-          ) : searchActive || grouping !== "project" ? (
+          ) : !byProject ? (
             <div className="pt-1">
               {grouping !== "archived" ? <DraftThreads /> : null}
               {recent.map((row) => row.kind === "native"
                 ? <ThreadRow key={row.key} threadRef={row.ref} folded={fold.byLead.get(row.key)} showFolder />
-                : <LiveAgentRow key={row.key} presence={row.presence} folded={fold.byLead.get(row.key)} />)}
+                : <LiveAgentRow key={row.key} presence={row.presence} folded={fold.byLead.get(row.key)} now={now} />)}
               {shownRefs.length + shownLive.length > recent.length ? (
-                <button type="button" onClick={() => setSearching(true)} className="pressable h-7 w-full px-2 text-left text-label text-faint hover:text-foreground">Search older threads</button>
+                <button type="button" onClick={() => setRailSearching(true)} className="pressable h-7 w-full px-2 text-left text-label text-faint hover:text-foreground">Search older threads</button>
               ) : null}
             </div>
           ) : (
@@ -603,7 +690,10 @@ export function AgentThreads() {
                     type="button"
                     aria-expanded={showHidden}
                     data-rail-hidden-projects
-                    onClick={() => setShowHidden((current) => !current)}
+                    onClick={() => {
+                      hiddenFold.fold()
+                      setShowHidden((current) => !current)
+                    }}
                     className="group/hidden mb-1 flex h-7 w-full items-center gap-1.5 px-1.5 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
                   >
                     <ChevronRightIcon className={cn("size-3.5 transition-transform duration-200 ease-out", showHidden && "rotate-90")} />
@@ -611,34 +701,13 @@ export function AgentThreads() {
                     <span className="tabular text-faint/60">{hiddenList.length}</span>
                   </button>
                   <div className={cn("grid transition-[grid-template-rows] duration-200 ease-out", showHidden ? "grid-rows-[1fr]" : "grid-rows-[0fr]")}>
-                    <div className="min-h-0 overflow-hidden" inert={!showHidden}>
-                      {hiddenList.map((folder) => folderSection(folder, true))}
+                    <div className="min-h-0 overflow-hidden" inert={!showHidden} data-folding={hiddenFold.folding || undefined}>
+                      {hiddenFold.drawn ? hiddenList.map((folder) => folderSection(folder, true)) : null}
                     </div>
                   </div>
                 </>
               ) : null}
-              {sessions ? (
-                <FolderSection
-                  folder={sessions}
-                  now={now}
-                  fold={fold}
-                  liveAgents={shownLive.filter((presence) => !threadFolderKey(presence, folderMap))}
-                  collapsed={collapsed.includes(`ws:${sessions.key}`)}
-                  onToggle={() => {
-                    const key = `ws:${sessions.key}`
-                    setPref(
-                      "collapsedGroups",
-                      collapsed.includes(key)
-                        ? collapsed.filter((entry) => entry !== key)
-                        : [...collapsed, key]
-                    )
-                  }}
-                  pages={pages[sessions.key] ?? 0}
-                  onPages={(next) =>
-                    setPages((prev) => ({ ...prev, [sessions.key]: next }))
-                  }
-                />
-              ) : null}
+              {sessions ? folderSection(sessions) : null}
             </>
           )}
         </div>
@@ -658,20 +727,23 @@ export function AgentThreads() {
  * line becomes the input — space is spent on what is being done.
  */
 function RailHeader({
-  searching,
-  query,
-  onQuery,
-  onToggleSearch,
   counts,
   filter,
 }: {
-  searching: boolean
-  query: string
-  onQuery: (value: string) => void
-  onToggleSearch: (next: boolean) => void
   counts: Map<string, number>
   filter: string[]
 }) {
+  const searching = useRailSearch((state) => state.searching)
+  const query = useRailSearch((state) => state.query)
+  useEffect(() => {
+    const search = () => setRailSearching(true)
+    window.addEventListener("mako:search-threads", search)
+    return () => {
+      window.removeEventListener("mako:search-threads", search)
+      // A search ends with the rail that showed it, as it did while the rail kept it itself.
+      setRailSearching(false)
+    }
+  }, [])
   const input = useRef<HTMLInputElement | null>(null)
   const grouping = usePrefs((prefs) => prefs.railGrouping)
 
@@ -683,11 +755,11 @@ function RailHeader({
           ref={input}
           autoFocus
           value={query}
-          onChange={(event) => onQuery(event.target.value)}
+          onChange={(event) => railSearchStore.set({ query: event.target.value })}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.stopPropagation()
-              onToggleSearch(false)
+              setRailSearching(false)
             }
           }}
           placeholder="Search every thread"
@@ -697,7 +769,7 @@ function RailHeader({
         <button
           type="button"
           aria-label="Close search"
-          onClick={() => onToggleSearch(false)}
+          onClick={() => setRailSearching(false)}
           className="pressable p-1 text-faint hover:text-foreground"
         >
           <XIcon className="size-3" />
@@ -973,40 +1045,89 @@ function hideProject(folder: ThreadFolder & { cwd: string }, hidden: boolean) {
   })
 }
 
-function FolderSection({
-  folder,
-  now,
-  fold,
-  liveAgents,
-  collapsed,
-  hidden = false,
-  onToggle,
-  onNew,
-  onPin,
-  pages,
-  onPages,
-}: {
+/** A cold folder starts closed, a warm one open (`COLD_MS`). */
+function folderStartsClosed(folder: ThreadFolder, now: number): boolean {
+  return !folder.current && !folder.priority && folder.latest !== "" && now - Date.parse(folder.latest) > COLD_MS
+}
+
+interface FolderSectionProps {
   folder: ThreadFolder
   now: number
   fold: ThreadFold
   liveAgents: AcpPresence[]
   collapsed: boolean
+  /** The Thread the person just started here and hasn't sent yet: drawn first, lit (`revealFolder`). */
+  unsent?: boolean
+  /** Open for the reveal of a Thread just started or a folder just added, whatever the stored choice, until folded. */
+  revealed?: boolean
   /** Shown from the Hidden row: dimmed, and its menu offers Show. */
   hidden?: boolean
-  onToggle: () => void
-  onNew?: () => void
-  onPin?: () => void
   pages: number
-  onPages: (next: number) => void
-}) {
+  /** Shows `next` pages of the folder with this key; the same function at every draw. */
+  onPages: (key: string, next: number) => void
+}
+
+/**
+ * Whether a folder would draw as it did. The list is grouped again on every change to any row, which makes each
+ * folder a new object with new arrays; most of them hold the rows, the counts and the Sessions they held.
+ */
+function sameFolderSection(before: FolderSectionProps, after: FolderSectionProps): boolean {
+  const was = before.folder
+  const is = after.folder
+  return (
+    before.now === after.now &&
+    before.collapsed === after.collapsed &&
+    before.unsent === after.unsent &&
+    before.revealed === after.revealed &&
+    before.hidden === after.hidden &&
+    before.pages === after.pages &&
+    before.onPages === after.onPages &&
+    was.key === is.key &&
+    was.name === is.name &&
+    was.cwd === is.cwd &&
+    was.current === is.current &&
+    was.pinned === is.pinned &&
+    was.latest === is.latest &&
+    was.priority === is.priority &&
+    was.running === is.running &&
+    was.needsInput === is.needsInput &&
+    was.failed === is.failed &&
+    was.unread === is.unread &&
+    was.active === is.active &&
+    was.refs.length === is.refs.length &&
+    was.refs.every((ref, index) => ref === is.refs[index] && before.fold.byLead.get(ref.path) === after.fold.byLead.get(ref.path)) &&
+    before.liveAgents.length === after.liveAgents.length &&
+    before.liveAgents.every((presence, index) => presence === after.liveAgents[index] && before.fold.byLead.get(presence.key) === after.fold.byLead.get(presence.key))
+  )
+}
+
+const FolderSection = memo(function FolderSection({
+  folder,
+  now,
+  fold,
+  liveAgents,
+  collapsed,
+  unsent = false,
+  revealed = false,
+  hidden = false,
+  pages,
+  onPages,
+}: FolderSectionProps) {
   // A cold folder starts closed, a warm one open; the stored flag means
   // "the user flipped this one from its default", so both kinds remember.
-  const cold =
-    !folder.current &&
-    !folder.priority &&
-    folder.latest !== "" &&
-    now - Date.parse(folder.latest) > COLD_MS
-  const closed = collapsed ? !cold : cold
+  const cold = folderStartsClosed(folder, now)
+  const chosenClosed = collapsed ? !cold : cold
+  // A reveal opens it for this view alone; folding it hands it back to the stored choice, closed.
+  const closed = revealed ? false : chosenClosed
+  const rows = useFoldAway(closed)
+  const onToggle = () => {
+    rows.fold()
+    if (revealed) releaseRevealedFolder(folder.key)
+    if (!revealed || !chosenClosed) toggleFolder(folder)
+  }
+  const cwd = folder.cwd
+  const onNew = cwd === null ? undefined : () => newThreadIn(cwd)
+  const onPin = cwd === null ? undefined : () => togglePinnedProject(cwd)
   const head = useCheckoutHead(folder.cwd ?? undefined)
   const contentId = `folder-${folder.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`
 
@@ -1140,15 +1261,23 @@ function FolderSection({
           closed ? "grid-rows-[0fr]" : "grid-rows-[1fr]"
         )}
       >
-        <div className="min-h-0 overflow-hidden">
-          {shownLive.map((presence) => <LiveAgentRow key={presence.key} presence={presence} folded={fold.byLead.get(presence.key)} indent />)}
+        {/* `data-folding`: its rows are back with the fold, and come in with it, not each on its own (`useRowFlip`). */}
+        <div className="min-h-0 overflow-hidden" data-folding={rows.folding || undefined}>
+          {rows.drawn ? <>
+          {unsent ? (
+            <div data-active data-unsent-thread className={cn(ROW_SURFACE, "pl-2")} aria-current="page">
+              <PencilLineIcon className="size-3 shrink-0 text-faint" />
+              <span className="min-w-0 flex-1 truncate text-ui text-foreground/85">New thread</span>
+            </div>
+          ) : null}
+          {shownLive.map((presence) => <LiveAgentRow key={presence.key} presence={presence} folded={fold.byLead.get(presence.key)} indent now={now} />)}
           {visible.map((ref) => (
             <ThreadRow key={ref.path} threadRef={ref} folded={fold.byLead.get(ref.path)} indent />
           ))}
           {more > 0 ? (
             <button
               type="button"
-              onClick={() => onPages(pages + 1)}
+              onClick={() => onPages(folder.key, pages + 1)}
               className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
               More
@@ -1159,14 +1288,15 @@ function FolderSection({
           ) : pages > 0 ? (
             <button
               type="button"
-              onClick={() => onPages(0)}
+              onClick={() => onPages(folder.key, 0)}
               className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
               Less
             </button>
           ) : null}
+          </> : null}
         </div>
       </div>
     </section>
   )
-}
+}, sameFolderSection)

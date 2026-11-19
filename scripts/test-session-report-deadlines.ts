@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { mock } from "node:test"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
-import type { ReportedSession, SessionsReport } from "@mako/protocol/thread-listing"
-import { SessionPublisher, SWEEP_MS, type SessionLink } from "@mako/host/conversations/session-report"
+import { ListedFinSchema, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
+import { FINS_COALESCE_MS, REPORT_COST_TIMES, REPORT_FREE_MS, SessionPublisher, SWEEP_MS, type ConversationShown, type SessionLink } from "@mako/host/conversations/session-report"
 import { Foreground } from "@mako/host/base/foreground"
 
 /** Actual publisher, controlled time and in-memory links; no installed host, account or network. */
@@ -16,7 +16,9 @@ const tick = (ms: number) => {
   for (let i = 0; i < ms; i += 100) mock.timers.tick(Math.min(100, ms - i))
 }
 const publishers: SessionPublisher[] = []
-function fixture(size = 1, foreground?: Foreground) {
+/** What a fixture's publisher is given besides its rows: a clock its reads move, and what a list shows. */
+type Extra = { now?: () => number; reading?: () => void; shown?: () => ConversationShown | undefined }
+function fixture(size = 1, foreground?: Foreground, extra: Extra = {}) {
   let rows: ReportedSession[] | undefined = Array.from({ length: size }, (_, i) => row(i))
   let calls = 0, reads = 0, partial = 0
   let fault: "refuse" | "send" | "read" | undefined
@@ -30,8 +32,10 @@ function fixture(size = 1, foreground?: Foreground) {
   const publisher = new SessionPublisher({
     foreground,
     rows: () => { reads++; if (fault === "read") throw new Error("fixture rows failed"); return rows },
-    rowsOf: (keys) => { partial++; return rows?.filter((each) => keys.has(each.conversation)) },
+    rowsOf: (keys) => { partial++; extra.reading?.(); return rows?.filter((each) => keys.has(each.conversation)) },
     reportNow: () => { calls++; publisher.report(serving) },
+    ...extra.now && { now: extra.now },
+    ...extra.shown && { shown: extra.shown },
   })
   publishers.push(publisher)
   return { publisher, current, sent, setRows: (next: typeof rows) => { rows = next }, setFault: (next: typeof fault) => { fault = next }, serve: (next: typeof serving) => { serving = next; publisher.report(next) }, stats: () => ({ calls, reads, partial }) }
@@ -123,8 +127,75 @@ try {
   tick(SWEEP_MS)
   held.publisher.close(); releaseAgain(); await Promise.resolve()
   assert.equal(held.stats().calls, 2, "a pending foreground waiter cannot touch stores after close")
+
+  // A report's cost is what its reads move the clock by: the timers stay the mocked ones, and the clock runs ahead of them.
+  let ahead = 0, took = 0
+  const clock = () => Date.now() + ahead
+  const costly = fixture(1, undefined, { now: clock, reading: () => { ahead += took } })
+  costly.publisher.linked(costly.current); tick(0)
+  const move = () => { costly.publisher.conversationMoved("c-0"); tick(0) }
+  took = 400
+  move()
+  assert.equal(costly.stats().partial, 1, "a change a list shows goes at once on a host at rest")
+  move()
+  // The clock already stands 400 ms past the report's start: the rest ends that much sooner by the timers.
+  tick((REPORT_COST_TIMES - 1) * took - 100)
+  assert.equal(costly.stats().partial, 1, "the next report, an urgent one too, waits out five times what the last one took")
+  tick(100)
+  assert.equal(costly.stats().partial, 2, "and goes as that rest ends, with no new event")
+  tick((REPORT_COST_TIMES - 1) * took)
+  took = 40
+  move()
+  assert.equal(costly.stats().partial, 3)
+  move()
+  tick(100)
+  assert.equal(costly.stats().partial, 3, "a report a tenth the cost earns a tenth the rest")
+  tick(100)
+  assert.equal(costly.stats().partial, 4, "so the spacing follows the measured cost, not a fixed count a second")
+  tick((REPORT_COST_TIMES - 1) * took)
+  took = REPORT_FREE_MS - 1
+  move()
+  move()
+  assert.equal(costly.stats().partial, 6, "a quick report earns no rest: a quiet host's changes go on the next turn as before")
+  // A change no list shows, come during a rest, isn't stranded either: it goes on the rest's own deadline.
+  tick(1_000)
+  took = 400
+  move()
+  took = 0
+  costly.publisher.own(batch())
+  tick((REPORT_COST_TIMES - 1) * 400 - 100)
+  assert.equal(costly.stats().partial, 7, "a batch during a rest waits it out")
+  tick(100)
+  assert.equal(costly.stats().partial, 8, "and its row is worked out as the rest ends, though nothing else happened")
+  costly.publisher.close()
+
+  // An Apex's Fins are written out to compare only when the list of them is another one.
+  let wrote = 0
+  const fin = ListedFinSchema.parse({ thread: "00000000-0000-4000-8000-0000000000f1", name: "worker", harness: "fixture", state: { kind: "idle" }, startedAt: "2026-11-01T00:00:00.000Z" })
+  const finsNamed = (name: string) => {
+    const fins = [{ ...fin, name }]
+    return Object.assign(fins, { toJSON: () => { wrote++; return [...fins] } })
+  }
+  let fins = finsNamed("worker")
+  const apex = fixture(1, undefined, { shown: () => ({ state: "working", fins }) })
+  apex.publisher.linked(apex.current); tick(0)
+  apex.publisher.own(batch())
+  assert.equal(wrote, 1, "its first batch writes its Fins out once")
+  for (let batches = 0; batches < 50; batches++) apex.publisher.own(batch())
+  assert.equal(wrote, 1, "a batch with the same list of Fins writes nothing out")
+  fins = finsNamed("worker")
+  apex.publisher.own(batch()); apex.publisher.own(batch())
+  assert.equal(wrote, 2, "another list is written out once to compare, and saying the same it's the one held from then")
+  tick(2_000)
+  const before = apex.stats().calls
+  fins = finsNamed("renamed")
+  apex.publisher.own(batch())
+  tick(FINS_COALESCE_MS); tick(0)
+  assert.deepEqual([wrote, apex.stats().calls], [3, before + 1], "a Fin that did change is still reported, within the coalescing wait")
+  apex.publisher.close()
+
   console.log(JSON.stringify({ candidate, proof: "actual publisher with controlled clock and in-memory link, not measured host CPU/latency" }))
-  console.log("session report deadlines: initial/unready, idle reconcile, paced/urgent/streaming changes, refusal/throw recovery, disconnect/reconnect and close pass")
+  console.log("session report deadlines: initial/unready, idle reconcile, paced/urgent/streaming changes, refusal/throw recovery, disconnect/reconnect, close, cost pacing and unchanged Fins pass")
 } finally {
   for (const publisher of publishers) publisher.close()
   mock.timers.reset()

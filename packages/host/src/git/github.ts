@@ -1,11 +1,12 @@
 import { hostCommand } from "../base/host-command.js"
 import { hostFetch, hostStopping, type HostStopping } from "../base/host-stopping.js"
-import { mkdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { GitHubReads, GitHubRateLimitError, GitHubRepositoryLookupError, githubRateLimit } from "./github-reads.js"
 import { hostLog } from "../base/host-log.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
-import { resolveExecutable } from "../base/executable.js"
+import { findExecutable } from "../base/executable.js"
 import { MACHINE_GITHUB_ENV } from "../contracts/machine-agent.js"
 import type { PullRequest, GitHubStatus, CheckSummary, ReviewSummary } from "../contracts/git-workspace-search.js"
 import type { PullRequestListing } from "../contracts/pull-request-search.js"
@@ -43,7 +44,7 @@ const RepositoryResponse = z.object({
 })
 const CommandFailure = z.object({ stderr: z.string() })
 async function githubExecutable(): Promise<string> {
-  const executable = resolveExecutable(process.env.GH_PATH ?? "gh")
+  const executable = await findExecutable(process.env.GH_PATH ?? "gh")
   if (!executable) throw new Error("GitHub CLI was not found")
   return executable
 }
@@ -183,6 +184,27 @@ async function machineUser(): Promise<GitHubUser | undefined> {
   }
 }
 
+/** How long a `gh` that ran answers for: every status asked started one just to hear its version. */
+const INSTALLED_FOR_MS = 10 * 60_000
+// Per host, as its readings are: the executable that ran, and when.
+const installed = new WeakMap<HostStopping, Map<string, number>>()
+
+/** Whether `gh` runs here. One that ran is taken as there for `INSTALLED_FOR_MS`; one that didn't is tried on every ask, so installing it shows at once. */
+async function githubInstalled(cwd: string): Promise<boolean> {
+  const host = hostStopping()
+  let ran = host && installed.get(host)
+  if (host && !ran) installed.set(host, ran = new Map())
+  try {
+    const executable = await githubExecutable()
+    if (ran && Date.now() - (ran.get(executable) ?? -Infinity) < INSTALLED_FOR_MS) return true
+    await run(executable, ["--version"], { cwd, timeout: TIMEOUT })
+    ran?.set(executable, Date.now())
+    return true
+  } catch {
+    return false
+  }
+}
+
 /**
  * Whether GitHub is usable here, and if not, exactly why.
  *
@@ -190,14 +212,7 @@ async function machineUser(): Promise<GitHubUser | undefined> {
  * retains the host's deadline instead of becoming a missing login or remote.
  */
 export async function githubStatus(cwd: string): Promise<GitHubStatus> {
-  try {
-    await run(await githubExecutable(), ["--version"], {
-      cwd,
-      timeout: TIMEOUT,
-    })
-  } catch {
-    return { installed: false, authenticated: false }
-  }
+  if (!(await githubInstalled(cwd))) return { installed: false, authenticated: false }
 
   let who: GitHubUser | null | undefined
   try {
@@ -447,7 +462,8 @@ function toCheck(raw: RawCheck): CheckSummary {
   ) {
     return { name, state: "running", url }
   }
-  if (verdict === "SUCCESS" || verdict === "NEUTRAL" || verdict === "SKIPPED") {
+  if (verdict === "SKIPPED") return { name, state: "passed", skipped: true, url }
+  if (verdict === "SUCCESS" || verdict === "NEUTRAL") {
     return { name, state: "passed", url }
   }
   if (verdict === "FAILURE" || verdict === "ERROR" || verdict === "TIMED_OUT") {
@@ -517,6 +533,19 @@ export async function pullForBranch(cwd: string): Promise<PullRequest | null> {
     parseRawPull
   )
   return raw ? toPull(raw) : null
+}
+
+/**
+ * A pull request of the folder's repository by its number, whatever branch it's on, with its head commit; null when
+ * the repository has none of that number. Read only.
+ */
+export async function pullByNumber(cwd: string, number: number): Promise<(PullRequest & { headCommit?: string }) | null> {
+  const raw = await ghJson(cwd, ["pr", "view", String(number), "--json", `${PULL_FIELDS},headRefOid`], (value) => {
+    const pull = parseRawPull(value)
+    return pull && { pull, head: isJsonObject(value) ? stringValue(value.headRefOid) : undefined }
+  })
+  if (!raw) return null
+  return { ...toPull(raw.pull), ...(raw.head && { headCommit: raw.head }) }
 }
 
 export async function listPulls(
@@ -767,7 +796,15 @@ export async function listPullHeads(cwd: string): Promise<WorktreePull[] | null>
   )
 }
 
-/** Recent pull requests in any state, newest first, with the head commit and one word for their checks. Null when `gh` can't answer here. */
+/** Checks that ended, by pull request and head commit, at most this many: what a pull request says of them once it's merged or closed. */
+const SETTLED_CHECKS = 512
+// Per host, as its readings are.
+const settledChecks = new WeakMap<HostStopping, Map<string, "passed" | "failed">>()
+
+/**
+ * Recent pull requests in any state, newest first, with the head commit and one word for their checks. Null when `gh`
+ * can't answer here. Checks are read only for an open pull request whose head a worktree has out (`liveHeads`).
+ */
 export async function listBranchPulls(cwd: string, liveHeads: readonly string[] = [], liveBranches: ReadonlyMap<string, string> = new Map()): Promise<WorktreeBranchPull[] | null> {
   const listed = await ghJson(
     cwd,
@@ -807,9 +844,15 @@ export async function listBranchPulls(cwd: string, liveHeads: readonly string[] 
   )
   if (!listed) return null
   const live = new Set(liveHeads)
+  const host = hostStopping()
+  let settled = host && settledChecks.get(host)
+  if (host && !settled) settledChecks.set(host, settled = new Map())
   return Promise.all(listed.map(async pull => {
     const expected = liveBranches.get(pull.branch)
     const staleBranch = expected && expected !== pull.head && (pull.state === "open" || pull.state === "draft")
+    // A merged or closed pull request's checks are over: a worktree kept after its merge had them asked for every
+    // minute. It keeps the word they ended on, when that was read while it was open.
+    if (pull.state === "merged" || pull.state === "closed") return { ...pull, checks: settled?.get(`${pull.url}\0${pull.head}`) ?? pull.checks }
     if (!live.has(pull.head) && !staleBranch) return pull
     const reading = await ghJson(cwd, ["pr", "view", String(pull.number), "--json", "number,title,url,headRefName,headRefOid,state,isDraft,statusCheckRollup"], value => {
       if (!isJsonObject(value)) return null
@@ -820,7 +863,13 @@ export async function listBranchPulls(cwd: string, liveHeads: readonly string[] 
     }, expected ?? pull.head)
     if (!reading || reading.number !== pull.number || reading.branch !== pull.branch || reading.head !== (expected ?? pull.head)) return { ...pull, checks: null }
     const checks = reading.checks
-    return { ...pull, head: reading.head, state: reading.state === "MERGED" ? "merged" as const : reading.state === "CLOSED" ? "closed" as const : reading.draft ? "draft" as const : "open" as const, checks: checks.length === 0 ? null : checks.some(check => check.state === "failed" || check.state === "cancelled") ? "failed" as const : checks.some(check => check.state === "running") ? "running" as const : "passed" as const }
+    const word = checks.length === 0 ? null : checks.some(check => check.state === "failed" || check.state === "cancelled") ? "failed" as const : checks.some(check => check.state === "running") ? "running" as const : "passed" as const
+    if (settled && (word === "passed" || word === "failed")) {
+      settled.delete(`${pull.url}\0${reading.head}`)
+      settled.set(`${pull.url}\0${reading.head}`, word)
+      while (settled.size > SETTLED_CHECKS) settled.delete(settled.keys().next().value!)
+    }
+    return { ...pull, head: reading.head, state: reading.state === "MERGED" ? "merged" as const : reading.state === "CLOSED" ? "closed" as const : reading.draft ? "draft" as const : "open" as const, checks: word }
   }))
 }
 
@@ -898,11 +947,21 @@ export async function createPull(cwd: string, options: CreatePullOptions, env?: 
   await gh(cwd, args, env).catch((cause) => { throw ghFailure(cause) })
 }
 
+/**
+ * Change an open pull request's title or body over REST. Not `gh pr edit`: it reads the pull request's classic
+ * Projects through GraphQL first, so it fails for any token without `read:project`, which a REST PATCH never needs.
+ * The fields go as a JSON file (`--input`), so a long body never rides on the command line.
+ */
 export async function editPull(cwd: string, number: number, edit: { title?: string; body?: string }, env?: Readonly<Record<string, string>>): Promise<void> {
-  const args = ["pr", "edit", String(number)]
-  if (edit.title !== undefined) args.push("--title", edit.title)
-  if (edit.body !== undefined) args.push("--body", edit.body)
-  await gh(cwd, args, env).catch((cause) => { throw ghFailure(cause) })
+  const fields = { ...edit.title !== undefined && { title: edit.title }, ...edit.body !== undefined && { body: edit.body } }
+  const folder = await mkdtemp(join(tmpdir(), "mako-pull-edit-"))
+  try {
+    const input = join(folder, "fields.json")
+    await writeFile(input, JSON.stringify(fields))
+    await gh(cwd, ["api", "-X", "PATCH", `repos/{owner}/{repo}/pulls/${number}`, "--input", input], env).catch((cause) => { throw ghFailure(cause) })
+  } finally {
+    await rm(folder, { recursive: true, force: true })
+  }
 }
 
 export async function mergePull(cwd: string, number: number, method: MergeMethod, env?: Readonly<Record<string, string>>): Promise<void> {
@@ -949,7 +1008,17 @@ export async function failedRuns(cwd: string, branch: string, commit: string): P
 
 /** What a failed run's failed steps printed, as `job  step  line`; the last `lines` only. */
 export async function failedRunLog(cwd: string, id: number, lines: number): Promise<string> {
-  const log = await gh(cwd, ["run", "view", String(id), "--log-failed"]).catch((cause) => { throw ghFailure(cause) })
+  return logTail(await gh(cwd, ["run", "view", String(id), "--log-failed"]).catch((cause) => { throw ghFailure(cause) }), lines)
+}
+
+/** What one job printed, as `job  step  line`: its failed steps, or all of it when none failed; the last `lines` only. */
+export async function jobLog(cwd: string, job: number, lines: number): Promise<string> {
+  const read = (which: "--log-failed" | "--log") => gh(cwd, ["run", "view", "--job", String(job), which]).catch((cause) => { throw ghFailure(cause) })
+  const failed = await read("--log-failed")
+  return logTail(failed.trim() ? failed : await read("--log"), lines)
+}
+
+function logTail(log: string, lines: number): string {
   // Each line is "job\tstep\ttimestamp text"; the timestamp says nothing a reader needs.
   const rows = log.split("\n").filter(Boolean).map((line) => line.replace(/\t\uFEFF?\d{4}-\d\d-\d\dT[\d:.]+Z /, "\t"))
   return rows.slice(-lines).join("\n")

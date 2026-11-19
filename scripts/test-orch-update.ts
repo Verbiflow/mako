@@ -67,32 +67,36 @@ async function childrenMidTurn(): Promise<void> {
       assert.equal(new Set(requests.map((request) => request.id)).size, requests.length, "no request twice")
       assert.ok(requests.at(-1)!.continues?.auto, "the second is Mako's continuation")
     }
+    // An idle Apex hears the first report at once and the other two as one digest after it.
     const woken = digests(world, apex.conversation)
-    assert.equal(woken.length, 1, "the three reports wake the Apex once")
-    assert.match(woken[0]!.text, /3 finished:/)
+    assert.ok(woken.length >= 1 && woken.length <= 2, `the three reports wake the Apex at most twice, not ${woken.length}`)
+    assert.equal(woken.reduce((sum, wake) => sum + Number(/(\d+) finished:/.exec(wake.text)?.[1] ?? 0), 0), 3, "three finished, across them")
+    assert.equal(world.store.undeliveredReports().length, 0, "every report was heard")
   } finally {
     await world.close()
   }
 }
 
-/** Reports in, the Apex not yet woken: the new host wakes it once with all of them. */
+/** Reports in, the Apex not yet woken by all of them: the new host wakes it once with those still waiting. */
 async function reportsUnheard(): Promise<void> {
   const { world, apex } = await tree("unheard", (turn) => (turn.text.includes("You're fin:") ? `Done: ${turn.harness} reviewed its part.` : "ok"))
   try {
-    // Each report is in the Apex's queue, in the one digest still gathering its burst, when the update comes.
-    const gathered = () => world.live.snapshot(apex.conversation)?.requests.find((request) => request.digest && request.status === "held")?.digest?.notices.length ?? 0
-    await until("the reports", () => gathered() === CHILDREN.length)
-    assert.equal(digests(world, apex.conversation).length, 0, "still coalescing when the update comes")
+    // An idle Apex hears the first report at once; the rest wait in the Apex's queue, in the digest gathering after it,
+    // when the update comes.
+    const carried = () => (world.live.snapshot(apex.conversation)?.requests ?? []).filter((request) => request.digest && request.status !== "canceled")
+    const gathering = () => carried().find((request) => request.status === "held" || request.status === "queued")
+    await until("the reports", () => carried().reduce((sum, request) => sum + request.digest!.notices.length, 0) === CHILDREN.length && gathering() !== undefined)
+    const sent = digests(world, apex.conversation).length
+    assert.ok(sent <= 1, "only the first went before the update")
     assert.equal(world.store.undeliveredReports().length, 0, "heard once they're in the Apex's queue")
     await world.restart()
     await world.settle()
     const woken = digests(world, apex.conversation)
-    assert.equal(woken.length, 1, "one wake, from the new host")
+    assert.equal(woken.length - sent, 1, "one wake, from the new host")
     // The words name each report once; the same report rides after them as data, for the person's card of it.
-    const { text: words, reports } = readFinReports(woken[0]!.text)
     for (const harness of CHILDREN) {
-      assert.equal(words.split(`"review-${harness}"`).length - 1, 1, `${harness}'s report once`)
-      assert.equal(reports.filter((card) => card.name === `review-${harness}`).length, 1, `${harness}'s report once as data`)
+      assert.equal(woken.reduce((sum, wake) => sum + readFinReports(wake.text).text.split(`"review-${harness}"`).length - 1, 0), 1, `${harness}'s report once`)
+      assert.equal(woken.reduce((sum, wake) => sum + readFinReports(wake.text).reports.filter((card) => card.name === `review-${harness}`).length, 0), 1, `${harness}'s report once as data`)
     }
     assert.equal(world.store.undeliveredReports().length, 0)
   } finally {
@@ -113,7 +117,14 @@ async function leadMidWake(): Promise<void> {
     host = 2
     await world.restart()
     await world.settle()
-    assert.equal(digests(world, apex.conversation).length, 1, "the wake the Apex took isn't sent again")
+    // The first report woke the Apex at once; what came while it took it waited for that turn's end, and goes from the
+    // new host. No report is in two of them: the wake the Apex took isn't sent again.
+    const woken = digests(world, apex.conversation)
+    assert.ok(woken.length >= 1 && woken.length <= 2, `at most the first wake and the rest's: ${woken.length}`)
+    // Counted in every prompt the Apex took: what waited for a cut turn's end may ride its continuation.
+    const cards = promptsOf(world, apex.conversation).flatMap((prompt) => readFinReports(prompt.text).reports.map((card) => card.report))
+    assert.equal(new Set(cards).size, cards.length, "the wake the Apex took isn't sent again")
+    assert.equal(cards.length, CHILDREN.length, "every report reached it")
     assert.equal(world.store.undeliveredReports().length, 0)
   } finally {
     await world.close()
@@ -180,14 +191,18 @@ async function sixLeads(): Promise<void> {
     await spawn(1)
     await world.settle()
     const woken = () => apexes.map((apex) => digests(world, apex.conversation).length + world.steers.filter((steer) => steer.conversation === apex.conversation).length)
-    assert.deepEqual(woken(), [1, 1, 1, 1, 1, 1], "the first burst wakes each apex once")
+    // An idle Apex hears a burst's first report at once and the rest as one digest after it: at most two wakes a burst.
+    const first = woken()
+    assert.ok(first.every((count) => count >= 1 && count <= 2), `the first burst wakes each apex at most twice: ${first.join(", ")}`)
     burst = 2
     await spawn(2)
     await until("the second burst's turns", () => world.agents.diagnostics().running === apexes.length * 3)
     host = 2
     await world.restart()
     await world.settle()
-    assert.deepEqual(woken(), [2, 2, 2, 2, 2, 2], "and the second, cut by the update, once more each")
+    const second = woken().map((count, index) => count - first[index]!)
+    assert.ok(second.every((count) => count >= 1 && count <= 2), `and the second, cut by the update, at most twice more each: ${second.join(", ")}`)
+    assert.equal(world.store.undeliveredReports().length, 0, "every report was heard")
     const children = world.store.edges().all
     assert.equal(children.length, apexes.length * 6)
     assert.ok(children.every((edge) => world.store.reportsOf(edge.child, 0).length === 1), "every child ended once, with one report")

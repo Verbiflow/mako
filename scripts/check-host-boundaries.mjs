@@ -13,12 +13,16 @@ import ts from "typescript"
  *     Domains reach each other one way: no domain reaches back, through
  *     others or directly, to one that reaches it.
  *   - Files directly in `src/` compose the host and may import any entry;
- *     nothing in the package imports them.
+ *     nothing in the package imports them. A domain may have a second
+ *     entry for them alone, `<name>/load.ts`: its modules in parts, for a
+ *     host that loads them a part a turn of its loop. No domain imports
+ *     another's `load.ts`.
  *
  * Every import counts, type-only ones included, and the package reaches its
  * own files by relative path, never by its own name.
  */
-const source = resolve("packages/host/src")
+// The source folder is the host's unless a test names another (`test-host-boundaries.ts`).
+const source = resolve(process.argv[2] ?? "packages/host/src")
 const area = (file) => {
   const path = relative(source, file).split(sep)
   return path.length === 1 ? "composition" : path[0]
@@ -53,8 +57,8 @@ for (const file of files) {
       continue
     }
     if (from === "composition") {
-      if (to in shared || relative(source, target) === join(to, "index.ts")) continue
-      failures.push(`${shown} imports ${relative(".", target)}. The host reaches a domain through its entry, ${to}/index.ts.`)
+      if (to in shared || relative(source, target) === join(to, "index.ts") || relative(source, target) === join(to, "load.ts")) continue
+      failures.push(`${shown} imports ${relative(".", target)}. The host reaches a domain through its entry, ${to}/index.ts, or its parts as ${to}/load.ts lists them.`)
       continue
     }
     const allowed = shared[from] ?? ["base", "contracts"]

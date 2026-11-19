@@ -43,6 +43,11 @@ export interface Prefs {
   surfaceHeights: SurfaceWidthMap
   /** What the right rail's toggle reopens. Tab ids don't survive a relaunch. */
   lastCompanion: string | null
+  /**
+   * The right rail's surface the person chose while an Apex was on screen, by its Thread: an Apex opens on its
+   * Overview until they pick another there, and that Thread keeps the pick.
+   */
+  apexCompanions: PreferenceStringMap
   /** `provider/id` keys, most recent first. */
   favoriteModels: string[]
   recentModels: string[]
@@ -151,6 +156,7 @@ const defaults: Prefs = {
   surfaceWidths: {},
   surfaceHeights: {},
   lastCompanion: "changes",
+  apexCompanions: {},
   favoriteModels: [],
   recentModels: [],
   modelLoadout: [],
@@ -367,6 +373,7 @@ function parsePrefs(value: JsonValue): Prefs | null {
     surfaceWidths: readSurfaceWidths(value),
     surfaceHeights: readNumberRecord(value.surfaceHeights),
     lastCompanion: readLastCompanion(value),
+    apexCompanions: readStringRecord(value.apexCompanions),
     favoriteModels: readStringList(
       value.favoriteModels,
       defaults.favoriteModels

@@ -122,7 +122,8 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
   }, [])
   const pull = usePullToRefresh(scroller, content, () => client.list.refresh())
   const away = useAwayWhileScrolling(scroller, !wide)
-  useRowFlip(scroller, showArchived ? "archived" : "threads")
+  // Any draw of this list may have moved a row, so each one is a new order to read.
+  useRowFlip(scroller, showArchived ? "archived" : "threads", {})
   const named = computerCount(list) > 1
   return (
     <div data-list={wide ? "rail" : "screen"} className={cn("web-list relative flex min-h-0 flex-1 flex-col", wide ? "bg-shell" : "bg-surface")}>

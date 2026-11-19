@@ -140,6 +140,7 @@ export const OPENCODE_QUIET_CONTENT = new Set<string>([
   "session.tool.input.delta",
   "session.tool.input.ended",
   "session.step.streamed",
+  "session.step.first-token",
   "session.step.failed",
   "session.status",
   "session.idle",

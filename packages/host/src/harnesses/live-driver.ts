@@ -1,3 +1,4 @@
+import type { HostWarmup } from "./host-warmup.js"
 import type { MakoProcesses } from "../threads/index.js"
 import type { StartPrefetch } from "./start-prefetch.js"
 import type { ApprovalSubmission } from "../contracts/approval-response.js"
@@ -461,6 +462,13 @@ export interface ProviderLiveDriver extends ProviderCapability {
      * waits for the checkpoint instead.
      */
     openCommands?: string
+    /**
+     * Whether submitting `text` runs the person's code with no tool call between, which nothing could hold: a
+     * message that does waits for the checkpoint itself (`heldSubmission`), as a message of a launch that holds no
+     * writes does. Told from the text as it is sent, in the harness's own syntax; where that can't be told surely,
+     * true.
+     */
+    submitRuns?(text: string): boolean
   }
   /** Native principal evidence, separately from configured account selection. */
   nativeIdentity: NativeIdentityCapability
@@ -532,6 +540,11 @@ export interface ProviderLiveDriver extends ProviderCapability {
    * declares it (`test-harness-definitions.ts`); a fixture driver may leave it out.
    */
   startPrefetch?: StartPrefetch
+  /**
+   * What its first launch loads into the host itself, which the host loads once it's ready and idle, for a harness the
+   * person has used here (`host-warmup.ts`): packages and readers only, never the harness's process.
+   */
+  hostWarmup?: HostWarmup
   available(appPath: string): boolean
   start(cwd: string, options: AdmittedStartOptions): Promise<LiveSessionState>
   /**
@@ -569,6 +582,12 @@ export type AdmittedLiveDriver = Omit<ProviderLiveDriver, "start"> & {
   start(cwd: string, options: ProviderStartOptions): Promise<LiveSessionState>
   /** The harness's declared oldest version, which a reopened session's runtime change is judged by. */
   runtimeOldest?(): string | undefined
+  /**
+   * Reads what a prompt's admission reads (the launch account's selection and credential revision, who it is signed
+   * in as), ahead of the prompt and deciding nothing: a message that waits for its checkpoint has them read
+   * meanwhile, and its own admission, still made as it is sent, finds them held or under way. Never throws.
+   */
+  admitAhead?(id: string): void
 }
 
 export interface ProviderSteerInput {
@@ -593,6 +612,8 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   const prefetch = driver.startPrefetch
   if (prefetch && !prefetch.via.trim())
     throw new Error(`${driver.provider}: explain its start prefetch`)
+  if (driver.hostWarmup && !driver.hostWarmup.via.trim())
+    throw new Error(`${driver.provider}: explain what its host warm-up loads`)
   LaunchEnvironmentCapabilitySchema.parse(driver.launchEnvironment)
   NativeIdentityCapabilitySchema.parse(driver.nativeIdentity)
   NativeExclusionCapabilitySchema.parse(driver.nativeExclusion)

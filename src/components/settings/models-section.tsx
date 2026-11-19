@@ -27,7 +27,7 @@ const DRAG_TYPE = "application/x-mako-loadout"
  */
 export function ModelsSection() {
   useEffect(() => {
-    void providers.loadAll()
+    void providers.loadListed()
   }, [])
   return (
     <>

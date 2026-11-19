@@ -2,13 +2,14 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, realpathSync, statSync, utimesSync, writeFileSync } from "node:fs"
 import { delimiter, join } from "node:path"
 import { performance } from "node:perf_hooks"
 import { Git } from "@mako/git"
 import { ThreadStore } from "@mako/host/threads/store"
 import { RecipeSchema } from "@mako/host/workspaces/thread-recipe"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
+import { moveablePlace } from "@mako/host/workspaces/tools"
 import type { Prepared } from "@mako/host/workspaces/thread-processes"
 import type { CheckoutSetup } from "@mako/host/workspaces/worktree-carry"
 import { testScratch } from "./lib/test-scratch.mjs"
@@ -116,6 +117,33 @@ try {
   assert.ok(meanwhileMs < 1_500 && meanwhileMs < startEnded - 500, `a branch made during the start's checkout waited ${Math.round(meanwhileMs)} ms; the start took ${Math.round(startEnded)} ms`)
   await worktrees.abandon(slowId)
   console.log(JSON.stringify({ slowStartMs: Math.round(startEnded), branchDuringItMs: Math.round(meanwhileMs) }))
+
+  // A status Mako reads for a review, a removal check, the worktrees' inventory or a move's request takes no optional
+  // lock, and a review's count of lines doesn't refresh the index. One that did took `index.lock` for a moment and
+  // rewrote the index to keep its refreshed stat cache, which the watcher heard as a change and answered with another
+  // pass of summaries and a full status of the panel.
+  const readId = randomUUID()
+  const read = await worktrees.prepare(readId, solo!, "Read only")
+  threads.registerJournal({ conversationId: readId, createdAt: Date.now(), bindings: [], harness: "codex" }, { kind: "service", name: "migration" })
+  await worktrees.list()
+  for (const checkout of [read.path, solo!]) {
+    // A tracked file whose stat no longer matches the index, its contents the same: what a status refreshes.
+    utimesSync(join(checkout, "web", "generated", "part-0.ts"), 1_000_000, 1_000_000)
+    const index = join(git(checkout, "rev-parse", "--absolute-git-dir"), "index")
+    const before = { bytes: readFileSync(index), mtimeMs: statSync(index).mtimeMs }
+    if (checkout === read.path) {
+      assert.equal((await worktrees.review(checkout)).files.length, 0)
+      assert.equal((await worktrees.removal(checkout)).held, null)
+      assert.ok((await worktrees.inventory()).worktrees.some((worktree) => worktree.path === checkout && worktree.changes === 0))
+    } else assert.equal((await moveablePlace(traced, worktrees, randomUUID(), checkout)).refused, undefined)
+    assert.deepEqual(readFileSync(index), before.bytes, `Mako's status reads left ${checkout}'s index as it was`)
+    assert.equal(statSync(index).mtimeMs, before.mtimeMs)
+    // The same status with its optional lock is what rewrote it.
+    await traced.output(checkout, ["status", "--porcelain", "--untracked-files=normal"])
+    assert.notDeepEqual(readFileSync(index), before.bytes, "a status that isn't a read rewrites the index")
+  }
+  await worktrees.abandon(readId)
+  console.log("worktree writes: a status read for a review, a removal, the inventory or a move leaves the index untouched")
 
   // Written outside the turn, a worktree still runs the repository's post-checkout hook as `worktree add` would, through
   // `core.hooksPath` as husky sets it: projects install hooks or generate code there. On a Git older than 2.36, which
