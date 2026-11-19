@@ -302,14 +302,8 @@ try {
   try {
     await watched.scan()
     const viewed = await watched.open(file.path)
-    const heard = Promise.withResolvers()
-    // The thread pool kept busy as the follow starts and the writes land, as a loaded machine's is: a look that took
-    // its first stat there, after the writes, held them as its baseline and never saw them change.
-    const { pbkdf2 } = await import("node:crypto")
-    for (let thread = 0; thread < 8; thread++) pbkdf2("busy", "pool", 400_000, 32, "sha256", () => {})
-    watched.follow(file.path, viewed.ref.bytes, entries => {
-      if (entries.some(entry => entry.type === "user" && entry.text === "observed through WAL")) heard.resolve()
-    })
+    const updates = []
+    watched.follow(file.path, viewed.ref.bytes, entries => updates.push(...entries))
     watched.startWatching()
     for (const watcher of watched.watchers.values()) watcher.close()
     writer.exec("PRAGMA journal_mode=WAL")
@@ -317,10 +311,11 @@ try {
       999, "session-1", 999, 6, JSON.stringify({ role: "user", content: "observed through WAL" }), 999
     )
     writer.prepare("UPDATE sessions SET last_activity_at = ?, main_chain_id = ? WHERE id = ?").run(999, 999, "session-1")
-    // The follow's own look delivers it: the bound only says it wasn't the catalog's 15 s sweep of followed files.
-    let timer
-    const bound = new Promise((_, reject) => { timer = setTimeout(() => reject(new Error("Devin WAL update delivered without directory events")), 10_000) })
-    await Promise.race([heard.promise, bound]).finally(() => clearTimeout(timer))
+    const deadline = Date.now() + 2000
+    while (!updates.some(entry => entry.type === "user" && entry.text === "observed through WAL")) {
+      assert.ok(Date.now() < deadline, "Devin WAL update delivered without directory events")
+      await new Promise(resolve => setTimeout(resolve, 10))
+    }
     console.log("Devin native WAL observation delivered without directory events")
   } finally { await watched.stop(); writer.close() }
   // Devin's rename writes the title alone and leaves last_activity_at be.

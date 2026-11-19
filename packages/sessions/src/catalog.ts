@@ -20,7 +20,7 @@
 import type { InstalledReading } from "./record-writers.js"
 import { UNREAD_INDEX_FILE, UnreadIndex } from "./unread-index.js"
 import { observedInstall } from "./record-observed.js"
-import { existsSync, realpathSync, statSync, watch, watchFile, unwatchFile, type FSWatcher, type Stats } from "node:fs"
+import { existsSync, realpathSync, watch, watchFile, unwatchFile, type FSWatcher, type Stats } from "node:fs"
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, join, sep } from "node:path"
@@ -129,20 +129,6 @@ const PREVIEW_WINDOWS = [2, 8, 24].map((mb) => mb * 1024 * 1024)
 
 const WATCH_DEBOUNCE_MS = 24
 const POLL_FILES_MS = 1000
-/** How often a followed session's files are looked at, besides directory events (`observeFollow`). */
-const OBSERVE_MS = 500
-const MISSING = "-"
-/** A file as a look sees it: which file, its size and time; one gone, or never there, is `MISSING`. */
-function stampOf(info: Stats): string {
-  return info.nlink === 0 ? MISSING : `${info.ino}:${info.size}:${info.mtimeMs}`
-}
-function fileStamp(file: string): string {
-  try {
-    return stampOf(statSync(file))
-  } catch {
-    return MISSING
-  }
-}
 /**
  * A refresh waits for writes to settle, but never longer than this many
  * settle windows after the first write of a burst. An agent streaming into
@@ -344,13 +330,10 @@ export class SessionCatalog {
   private discovering: Promise<void> | null = null
   private watching = false
   private stopped = false
-  /**
-   * The files followed sessions are kept in, each with the stamp it had when last seen (`fileStamp`): taken at once
-   * when its first follow starts, so a write that lands before the first look is a change, never the baseline.
-   */
-  private observations = new Map<string, { targets: Set<string>; seen: string }>()
-  private observeTimer: NodeJS.Timeout | null = null
-  private observing = false
+  private observations = new Map<string, {
+    targets: Set<string>
+    changed: (current: Stats, previous: Stats) => void
+  }>()
   private pending = new Map<string, { since: number; timer: NodeJS.Timeout }>()
   private listeners = new Set<(event: CatalogEvent) => void>()
   private follows = new Map<string, FollowState>()
@@ -1555,32 +1538,6 @@ export class SessionCatalog {
     }
   }
 
-  /**
-   * Each followed file looked at every `OBSERVE_MS`, one look at a time, against the stamp it was last seen with; a
-   * change notices each session kept there. Runs only while something is followed.
-   */
-  private observeLater(): void {
-    if (this.observeTimer || this.stopped || this.observations.size === 0) return
-    this.observeTimer = setInterval(() => {
-      if (this.stopped || this.observations.size === 0) {
-        if (this.observeTimer) clearInterval(this.observeTimer)
-        this.observeTimer = null
-        return
-      }
-      if (this.observing) return
-      this.observing = true
-      void (async () => {
-        for (const [file, observation] of [...this.observations]) {
-          const now = await stat(file).then(stampOf, () => MISSING)
-          if (this.stopped || this.observations.get(file) !== observation || now === observation.seen) continue
-          observation.seen = now
-          for (const target of observation.targets) this.noticed(file, target)
-        }
-      })().finally(() => { this.observing = false })
-    }, OBSERVE_MS)
-    this.observeTimer.unref?.()
-  }
-
   /** Directory notifications can silently stop arriving. Reconcile only
    * followed physical sources, once per distinct file, without parsing
    * unchanged stores or registering more recursive directory watchers. */
@@ -1592,20 +1549,26 @@ export class SessionCatalog {
     for (const file of files) {
       let observation = this.observations.get(file)
       if (!observation) {
-        // Synchronous: `fs.watchFile` took its first stat on the thread pool, later, and a write that landed first was
-        // in that stat, so never a change; a Devin message written as its session was opened waited for the 15 s sweep.
-        observation = { targets: new Set(), seen: fileStamp(file) }
+        const targets = new Set<string>()
+        const changed = (current: Stats, previous: Stats) => {
+          if (this.stopped || (current.nlink === 0 && previous.nlink === 0)) return
+          for (const target of targets) this.noticed(file, target)
+        }
+        observation = { targets, changed }
         this.observations.set(file, observation)
+        watchFile(file, { persistent: false, interval: 500 }, changed)
       }
       observation.targets.add(path)
     }
-    this.observeLater()
     follow.unobserve = () => {
       for (const file of files) {
         const observation = this.observations.get(file)
         if (!observation) continue
         observation.targets.delete(path)
-        if (observation.targets.size === 0) this.observations.delete(file)
+        if (observation.targets.size === 0) {
+          unwatchFile(file, observation.changed)
+          this.observations.delete(file)
+        }
       }
       follow.unobserve = undefined
     }
@@ -2000,11 +1963,6 @@ export class SessionCatalog {
       clearInterval(this.activeTimer)
       this.activeTimer = null
     }
-    if (this.observeTimer) {
-      clearInterval(this.observeTimer)
-      this.observeTimer = null
-    }
-    this.observations.clear()
     for (const held of this.pending.values()) clearTimeout(held.timer)
     this.pending.clear()
     await Promise.allSettled([
