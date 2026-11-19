@@ -20,6 +20,7 @@ import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { closeCutOffCalls, recordCutOffCalls } from "./interrupted-turn.js"
 import { clearAutoContinue } from "./live-auto-continue.js"
 import { JournalReaders } from "./journal-readers.js"
+import { cutLast } from "../contracts/turn-continuation.js"
 import { JournalWriter } from "./journal-writer.js"
 import { ColdJournal, LiveJournal, journalIds, storedRequest, turnIndexWhole } from "./live-journal.js"
 import { backfillMemory } from "./live-ledger.js"
@@ -166,6 +167,11 @@ export class LiveRecords {
   private readonly recovered = new Map<string, LiveSummary>()
   /** Conversations the host before this one left with a message waiting, paused or running, as `open` found them. */
   private readonly unsettled = new Set<string>()
+  /**
+   * Conversations on disk whose last request that ran was cut short (`cutLast`): what a starting host watches a Fin
+   * for (`Agents.watchCut`), from each journal's summary and kept as each is let go, so starting reads none in for it.
+   */
+  private readonly cutAtRest = new Set<string>()
   /** Conversations `sweep` let go this host life; `load` puts each back as it was. */
   private readonly unloaded = new Map<string, Unloaded>()
   /** Residents `unload` let go, so a continuation still holding one cannot write through it. */
@@ -227,8 +233,9 @@ export class LiveRecords {
         {
           const { found } = read
           if (found) {
-            const { ancestry, threadSession, unsettled, ...summary } = found
+            const { ancestry, threadSession, unsettled, cut, ...summary } = found
             if (unsettled) this.unsettled.add(id)
+            if (cut) this.cutAtRest.add(id)
             if (ancestry) this.forks.set(id, { parentId: ancestry.parentId, point: ancestry.point, createdAt: summary.createdAt, ...ancestry.firstRequest && { firstRequest: ancestry.firstRequest } })
             dependencies.memory?.rememberBindings(id, summary.nativeBindings, summary.createdAt)
             backfillMemory(dependencies.memory, dependencies.root, id, summary.session)
@@ -356,6 +363,18 @@ export class LiveRecords {
   /** Whether the host before this one left a message of `id` waiting, paused or running (`open`). */
   leftUnsettled(id: string): boolean {
     return this.unsettled.has(id)
+  }
+
+  /** Whether `id` holds work for a sign-in (`hasSignInHold`): from memory when it's there, else from its journal's summary. */
+  leftSignInHold(id: string): boolean {
+    const resident = this.residents.get(id)
+    return resident ? this.summaryOf(resident).hasSignInHold === true : this.recovered.get(id)?.hasSignInHold === true
+  }
+
+  /** Whether `id`'s last request that ran was cut short (`cutLast`): from memory when it's there, else from its journal's summary. */
+  turnCut(id: string): boolean {
+    const resident = this.residents.get(id)
+    return resident ? cutLast(resident.snapshot.requests) : this.cutAtRest.has(id)
   }
 
   unsettledIds(): readonly string[] {
@@ -820,6 +839,8 @@ export class LiveRecords {
     const { snapshot } = resident
     const id = snapshot.session.id
     this.recovered.set(id, this.summaryOf(resident))
+    if (cutLast(snapshot.requests)) this.cutAtRest.add(id)
+    else this.cutAtRest.delete(id)
     this.unloaded.set(id, {
       generation: resident.generation,
       commands: snapshot.session.commands,

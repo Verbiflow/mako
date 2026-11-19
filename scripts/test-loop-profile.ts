@@ -28,4 +28,13 @@ assert.deepEqual(framesAt("file:///work/mako/packages/host/node_modules/zod/inde
 assert.deepEqual(framesAt("file:///Applications/Mako.app/Contents/Resources/app.asar/node_modules/@mako/host/node_modules/zod/index.js"), [], "nor one inside an installed package")
 assert.deepEqual(framesAt("node:internal/timers"), [], "nor Node's")
 
-console.log("loop profile: names the host's own functions in a checkout and in the installed app, and no one else's")
+// What held the loop with none of the host's functions on its stack is named by its innermost frame.
+const outsideOf = (nodes: CpuProfile["nodes"], samples: number[]) =>
+  loopSlices({ nodes, startTime: 0, samples, timeDeltas: samples.map(() => 10_000) }, 1).flatMap((slice) => slice.outside.map(({ frame: name }) => name))
+assert.deepEqual(outsideOf([frame(1, "(root)", "", [2]), frame(2, "(garbage collector)", "")], [2, 2, 2]), ["(gc)"], "garbage collection")
+assert.deepEqual(outsideOf([frame(1, "(root)", "", [2]), frame(2, "statSync", "")], [2, 2, 2]), ["statSync (native)"], "a native call")
+assert.deepEqual(outsideOf([frame(1, "(root)", "", [2]), frame(2, "onStreamRead", "node:internal/stream_base_commons")], [2, 2]), ["onStreamRead node:internal/stream_base_commons"], "Node's")
+assert.deepEqual(outsideOf([frame(1, "(root)", "", [2]), frame(2, "emit", "file:///A/app.asar/node_modules/@scope/watch/lib/index.js")], [2, 2]), ["emit @scope/watch"], "a dependency's, by its package")
+assert.deepEqual(outsideOf([frame(1, "(root)", "", [2]), frame(2, "hold", "file:///work/mako/packages/host/dist/a.js", [3]), frame(3, "all", "")], [3, 3]), [], "a native call under the host's own is the host's, named by its caller")
+
+console.log("loop profile: names the host's own functions in a checkout and in the installed app, and no one else's; what held it outside them, by its innermost frame")
