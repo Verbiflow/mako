@@ -299,6 +299,8 @@ const replays = [
   "mako:automations-decide",
   /** A settled forwarded proposal answers as it was settled. */
   "mako:automations-forward-settle",
+  /** `LiveConversations.start` under the run's conversation id: a second start returns the session. */
+  "mako:automations-cloud-start",
   /** A spawn, a link, a report, a message and an answer are settled by the caller's key; stopping a stopped child stops nothing. */
   "mako:agents-start",
   "mako:agents-move",

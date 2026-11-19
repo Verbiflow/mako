@@ -582,6 +582,7 @@ export interface AutomationDraft {
  * | `run-of` | `(conversation: string)` | `AutomationRunOf \| null`: the run a Thread is, however old |
  * | `forwarded` | `()` | `AutomationProposal[]`: on a cloud machine's host, its agents' proposals the person's Mac takes |
  * | `forward-settle` | `(proposal: string, outcome: ForwardedOutcome)` | `AutomationProposal`: how one went on the Mac |
+ * | `cloud-start` | `(launch: JsonValue)`, a `CloudRunStart` | `{ harness, modeId }`: on a cloud Thread's host, a cloud run started as one on the Mac |
  * | `hook` | `(name: string, provider?: "webhook" \| "linear" \| "sentry", rotate?: boolean, secret?: string)` | `AutomationHook`: made, or its secret rotated |
  *
  * and `mako:automations-act`, the agent's `automation` tool (`contracts/thread-tools.ts`).
@@ -600,6 +601,7 @@ export const AUTOMATION_CALLS = {
   hook: "mako:automations-hook",
   forwarded: "mako:automations-forwarded",
   forwardSettle: "mako:automations-forward-settle",
+  cloudStart: "mako:automations-cloud-start",
   act: "mako:automations-act",
 } as const
 
