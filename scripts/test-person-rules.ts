@@ -77,14 +77,13 @@ const last = (world: AgentsWorld, conversation: string) => note(promptsOf(world,
  * from the prompt that carried the person's `said`: a digest of the Fin's reports can reach the Apex after it, and
  * carries no note.
  */
-function apexNote(world: AgentsWorld, conversation: string, guidance: boolean, said: string, added = false): string {
+function apexNote(world: AgentsWorld, conversation: string, guidance: boolean, said: string): string {
   const prompt = promptsOf(world, conversation).findLast((text) => text.includes(said))
   assert.ok(prompt, `the Apex was sent "${said}"`)
   const text = note(prompt)
   assert.ok(text, `"${said}" went with Mako's note`)
   const lines = text.split("\n")
-  // `added`: the guidance is a line its transcript doesn't hold yet beside the note it does, so it goes as a change.
-  const standing = guidance ? [...added ? [CHANGED_LINE] : [], "For messages from the person:", ...FRONT_DOOR_GUIDANCE] : []
+  const standing = guidance ? ["For messages from the person:", ...FRONT_DOOR_GUIDANCE] : []
   assert.deepEqual(lines.slice(0, -1), [...standing, "You're this Thread's Apex: the person writes to you, and you decide who handles it. Your Fins now:"])
   for (const line of FRONT_DOOR_GUIDANCE) assert.equal(text.split(line).length - 1, Number(guidance), "each exact routing paragraph appears only when due")
   assert.match(lines.at(-1)!, /^- fin:android · Claude · done [^\n]* · asked: Fix the Android build\.$/, "the current Fin stays in the note")
@@ -154,18 +153,16 @@ async function finRules(): Promise<void> {
     assert.equal(last(world, fin), undefined, "and only once")
     await world.restart()
     await tell(world, apex, "Fourth.")
-    assert.equal(last(world, fin), undefined, "a new process resuming the same session doesn't hear the rules its transcript already holds")
+    assert.equal(last(world, fin), `${FIN_HEAD}\nWrite a test for every fix.`, "a new process hears the rules it last accepted, not its brief's")
     policy = { rules: [] }
     await tell(world, apex, "Fifth.")
     assert.equal(last(world, fin), `${CHANGED_LINE}\n${FIN_NONE}`, "cleared: told they no longer apply")
     await world.restart()
     await tell(world, apex, "Sixth.")
-    assert.equal(last(world, fin), undefined, "and after a restart on the same session, not again: its transcript holds that they no longer apply")
+    assert.equal(last(world, fin), FIN_NONE, "and after a restart, still told, never silence that leaves the brief's rules standing")
     world.say(apex.conversation, "Anything new?")
     await world.settle(undefined, undefined, "ignore")
-    // Exact guidance and roster, with no Fin-rule or rule-removal line. Its session heard only service turns' notes
-    // before, across restarts too, so the guidance is a line added to what its transcript holds.
-    apexNote(world, apex.conversation, true, "Anything new?", true)
+    apexNote(world, apex.conversation, true, "Anything new?") // Exact guidance and roster, with no Fin-rule or rule-removal line.
   } finally {
     await world.close()
   }

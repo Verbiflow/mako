@@ -1,8 +1,7 @@
 // How often Mako's note goes, through LiveConversations with an injected
-// driver: its standing lines whole on a transcript's first prompt, then only
-// what changed, nothing when nothing did, also in a new process resuming the
-// same native session; whole again after a compaction or a rewind, in a new
-// native session, another binding or folder; notices once each.
+// driver: its standing lines whole on a process's first prompt, then only
+// what changed, nothing when nothing did, whole again after a compaction, a
+// rewind, a failed send or a new process; notices once each.
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -10,7 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { makoNote } from "@mako/host/conversations/mako-note"
-import { CHANGED_LINE, heardBy, noteHeard, REPLACED_LINE, standingLines } from "@mako/host/conversations/control-cadence"
+import { CHANGED_LINE, REPLACED_LINE, standingLines } from "@mako/host/conversations/control-cadence"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { CONTEXT_COMPACTED } from "@mako/host/contracts/native-activity"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
@@ -47,12 +46,11 @@ function cadenceHost(options: { idleMs?: number; beforeInstructions?(): Promise<
   const sent: string[] = []
   const standing: Standing = { control: CONTROL, environment: ENVIRONMENT, media: MEDIA }
   const notices: string[] = []
-  const native = { id }
   let starts = 0
   let refuse = false
   let owner: LiveConversations
   const state = (status: LiveSessionState["status"], connection: LiveSessionState["connection"] = "connected"): LiveSessionState => ({
-    id, nativeId: native.id, nativePath: join(root, "native-session", native.id), harness: "test-provider", cwd: root, status, connection, modes: [], currentMode: null, configOptions: [],
+    id, nativeId: id, nativePath: join(root, "native-session"), harness: "test-provider", cwd: root, status, connection, modes: [], currentMode: null, configOptions: [],
   })
   const driver: ProviderLiveDriver = {
     ...noCapabilities,
@@ -110,7 +108,6 @@ function cadenceHost(options: { idleMs?: number; beforeInstructions?(): Promise<
     owner,
     standing,
     notices,
-    native,
     sent: () => [...sent],
     starts: () => starts,
     hibernated: () => owner.snapshot(id)?.session.connection === "hibernated",
@@ -139,26 +136,13 @@ function cadenceHost(options: { idleMs?: number; beforeInstructions?(): Promise<
 function theRule() {
   const at = { bindingId: "binding", generation: 1 }
   const first = standingLines(undefined, at, { control: CONTROL, environment: ENVIRONMENT, absent: undefined })
-  assert.deepEqual(first.lines, [CONTROL, ENVIRONMENT], "a transcript that holds nothing hears every line that applies")
+  assert.deepEqual(first.lines, [CONTROL, ENVIRONMENT], "a process that heard nothing hears every line that applies")
   assert.deepEqual(standingLines(first.said, at, { control: CONTROL, environment: ENVIRONMENT }).lines, [], "nothing changed, nothing said")
   assert.deepEqual(standingLines(first.said, at, { control: CONTROL, environment: "Moved." }).lines, [CHANGED_LINE, "Moved."], "a changed line goes alone")
   assert.deepEqual(standingLines(first.said, at, { control: CONTROL, environment: ENVIRONMENT, media: MEDIA }).lines, [CHANGED_LINE, MEDIA], "a new line goes alone")
   assert.deepEqual(standingLines(first.said, at, { control: CONTROL }).lines, [REPLACED_LINE, CONTROL], "a line gone sends the rest whole, replacing what was said")
-
-  // Which record a prompt reads (`heardBy`): the process's own, else the journal's for the same native session.
-  const target = { ...at, nativeId: "native-1", cwd: "/work" }
-  const kept = noteHeard(first.said, "native-1", "/work")
-  assert.equal(heardBy(first.said, undefined, target), first.said, "the same start of the same binding reads its own record")
-  const resumed = heardBy(undefined, kept, { ...target, generation: 2 })
-  assert.deepEqual(resumed?.lines, first.said.lines, "a new process in the same native session reads what the transcript holds")
-  assert.deepEqual(standingLines(resumed, { ...at, generation: 2 }, { control: CONTROL, environment: ENVIRONMENT }).lines, [], "and hears nothing again")
-  assert.deepEqual(heardBy(first.said, kept, { ...target, generation: 2 })?.lines, first.said.lines, "an older process's record yields to the journal's")
-  assert.equal(heardBy(undefined, kept, { ...target, generation: 2, nativeId: "native-2" }), undefined, "a new native session holds nothing")
-  assert.equal(heardBy(undefined, kept, { ...target, generation: 2, nativeId: undefined }), undefined, "a session not yet named holds nothing")
-  assert.equal(heardBy({ ...first.said, nativeId: "native-1" }, undefined, { ...target, nativeId: "native-2" }), undefined, "a new native session in the same process holds nothing")
-  assert.equal(heardBy(undefined, kept, { ...target, bindingId: "other" }), undefined, "another binding (a harness switch) holds nothing")
-  assert.equal(heardBy(undefined, kept, { ...target, generation: 2, cwd: "/moved" }), undefined, "a moved folder hears it whole")
-  assert.ok(!JSON.stringify(kept).includes(CONTROL), "the journal keeps fingerprints, never the lines")
+  assert.deepEqual(standingLines(first.said, { ...at, generation: 2 }, { control: CONTROL, environment: ENVIRONMENT }).lines, [CONTROL, ENVIRONMENT], "a new start of the process hears it whole")
+  assert.deepEqual(standingLines(first.said, { ...at, bindingId: "other" }, { control: CONTROL, environment: ENVIRONMENT }).lines, [CONTROL, ENVIRONMENT], "another binding hears it whole")
 }
 
 async function throughTheConversation() {
@@ -191,11 +175,7 @@ async function throughTheConversation() {
     assert.equal(await host.send("After a rewind"), noted(now, "After a rewind"), "a rewound history may have dropped the note")
 
     await host.refused("Refused")
-    assert.equal(await host.send("After a refusal"), "After a refusal", "a refused send changes nothing the transcript holds")
-
-    host.observe({ type: "live-update", id: host.id, update: { kind: "event", label: CONTEXT_COMPACTED } })
-    await host.refused("Refused after compacting")
-    assert.equal(await host.send("Retried"), noted(now, "Retried"), "a note a refused send carried goes again, whole")
+    assert.equal(await host.send("After a refusal"), noted(now, "After a refusal"), "a send that failed may not have reached the harness")
 
     host.standing.media = undefined
     assert.equal(await host.send("Without media"), noted([REPLACED_LINE, CONTROL, host.standing.environment!], "Without media"), "a line that stops applying sends the rest whole")
@@ -207,36 +187,13 @@ async function throughTheConversation() {
 async function afterARelaunch() {
   const host = cadenceHost({ idleMs: 15 })
   const full = [CONTROL, ENVIRONMENT, MEDIA]
-  const relaunch = async (text: string) => {
-    await waitFor(host.hibernated, "the idle provider never hibernated")
-    const starts = host.starts()
-    const sent = await host.send(text)
-    assert.equal(host.starts(), starts + 1, "the harness was started again")
-    return sent
-  }
   try {
     await host.start()
     assert.equal(await host.send("First"), noted(full, "First"))
-    assert.equal(await relaunch("Resumed"), "Resumed", "a new process resuming the same native session hears nothing again")
-    assert.equal(await relaunch("Again"), "Again", "nor on the next")
-
-    host.notices.push("Moved to its own worktree.")
-    assert.equal(await relaunch("With a notice"), noted(["Moved to its own worktree."], "With a notice"), "a new notice still arrives in a new process")
-
-    host.standing.environment = "This Thread's own values: ports 21160-21169."
-    assert.equal(await relaunch("Changed"), noted([CHANGED_LINE, host.standing.environment], "Changed"), "a line that changed goes as a delta in a new process")
-    const now = [CONTROL, host.standing.environment, MEDIA]
-
-    host.observe({ type: "live-update", id: host.id, update: { kind: "event", label: CONTEXT_COMPACTED } })
-    assert.equal(await relaunch("After compacting"), noted(now, "After compacting"), "a compaction before the new process sends it whole")
-
-    // The harness started a new native session under the binding (a /clear, a session it couldn't resume).
-    host.native.id = randomUUID()
-    host.observe({ type: "live-session", session: { ...host.owner.snapshot(host.id)!.session, nativeId: host.native.id } })
-    host.observe({ type: "live-session", session: { ...host.owner.snapshot(host.id)!.session, status: "ready" } })
-    assert.equal(await host.send("New session"), noted(now, "New session"), "a new native session hears it whole, in the same process too")
-    assert.equal(await relaunch("Resumed again"), "Resumed again", "and once heard there, a new process resuming it hears nothing again")
-    assert.equal(await host.send("Then"), "Then")
+    await waitFor(host.hibernated, "the idle provider never hibernated")
+    const starts = host.starts()
+    assert.equal(await host.send("Resumed"), noted(full, "Resumed"), "a session resumed in a new process hears the whole note")
+    assert.equal(host.starts(), starts + 1, "the harness was started again")
   } finally {
     await host.cleanup()
   }
@@ -272,4 +229,4 @@ theRule()
 await throughTheConversation()
 await afterARelaunch()
 await awaitedNotice()
-console.log("control cadence: the note goes whole once per native session, then only what changed, across new processes too; whole again after a compaction, a rewind, a refused send that carried it, a new native session, another binding or folder; notices once each")
+console.log("control cadence: the note goes whole once per process, then only what changed; whole again after a compaction, a rewind, a failed send or a relaunch; notices once each")

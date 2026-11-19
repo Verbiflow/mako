@@ -22,7 +22,7 @@ import { holdForSignIn } from "../contracts/sign-in-hold.js"
 import { checkoutAccount, pendingInterruption, TurnSteps } from "./interrupted-turn.js"
 import { checkoutSince } from "../base/checkout-since.js"
 import { cutAccount } from "./cut-account.js"
-import { heardBy, standingLines } from "./control-cadence.js"
+import { standingLines } from "./control-cadence.js"
 import type { LiveActions } from "./live-actions.js"
 import type { LiveCheckpoints } from "./live-checkpoints.js"
 import { contextPrompt } from "./live-context.js"
@@ -624,23 +624,17 @@ export class LiveDispatch {
         const instructions = asWritten || !dependencies.controlInstructions ? undefined : await dependencies.controlInstructions(active, resident.snapshot.session.id, { role: apex ? "apex" : "thread" })
         const rules = asWritten ? {} : (dependencies.agents?.()?.ruleLines(resident.snapshot.session.id) ?? {})
         const person = !request.actor || request.actor.kind === "person"
-        // What the transcript this prompt goes into holds of Mako's note (`heardBy`): this process's own record, else the
-        // journal's for the same native session. One that holds none (new, compacted, rewound) hears every Fin described
-        // again, not named as unchanged.
-        const binding = this.access.control(resident).bindings.find((item) => item.id === active)
-        const nativeId = binding?.nativeId ?? resident.snapshot.session.nativeId
-        const heard = heardBy(resident.controlSaid, this.access.control(resident).noteHeard, {
-          bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0, nativeId, cwd,
-        })
-        const heardNote = heard !== undefined
+        // Whether this binding's process heard Mako's note before (`standingLines`): one new, compacted or after a failed
+        // send hears every Fin described again, not named as unchanged.
+        const heardNote = resident.controlSaid?.bindingId === active && resident.controlSaid.generation === (resident.bindingGenerations.get(active) ?? 0)
         // A compaction or rewind since the note last went: the roster rides this prompt, whatever it is, once.
         const forgot = !asWritten && this.access.control(resident).rosterForgotten === true
         rosterWent = forgot
         // Service-only turns need no routing paragraph. Once heard, keep its key through service turns, without repeating it.
-        const guidance = apex && (person || heard?.lines.has("front-door-guidance"))
+        const guidance = apex && (person || resident.controlSaid?.lines.has("front-door-guidance"))
           ? `For messages from the person:\n${FRONT_DOOR_GUIDANCE.join("\n")}` : undefined
         const standing = instructions || Object.keys(rules).length || guidance
-          ? standingLines(heard, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0, ...nativeId !== undefined && { nativeId } }, { ...instructions?.standing, ...rules, "front-door-guidance": guidance })
+          ? standingLines(resident.controlSaid, { bindingId: active, generation: resident.bindingGenerations.get(active) ?? 0 }, { ...instructions?.standing, ...rules, "front-door-guidance": guidance })
           : undefined
         if (standing) {
           resident.controlSaid = standing.said
@@ -671,8 +665,7 @@ export class LiveDispatch {
         return stagedCall(resident.snapshot.session.id, "driver.prompt", () => driver.prompt(active, text, request.attachments, request.tuning, dispatch))
       })
       .catch(async (error) => {
-        // The harness may not have heard the note: the next prompt carries what the transcript is known to lack (the
-        // journal's `noteHeard`, written only once a model answered), the roster this one carried too.
+        // The harness may not have heard the note: the next prompt carries it whole, the roster it carried too.
         resident.controlSaid = undefined
         if (rosterWent && generation === resident.generation) resident.snapshot = { ...resident.snapshot, control: { ...this.access.control(resident), rosterForgotten: true } }
         report({ kind: "uncertain", reason: errorMessage({ error }) })

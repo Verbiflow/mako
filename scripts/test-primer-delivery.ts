@@ -1,11 +1,8 @@
 // Mako's primer on a harness without a slot of its own reaches the model in
 // Mako's note, through LiveConversations with an injected driver and the
-// host's own note (`makoNote`). After anything that may have dropped it from
-// the transcript (a compaction, a rewind, a refused send that carried it,
-// another binding), the next accepted prompt carries it again; a new process
-// resuming the same native session, or a refused send that carried nothing
-// new, doesn't repeat it. Codex's primer, its turn's application context,
-// follows the same rule, read from the thread's rollout.
+// host's own note (`makoNote`). After anything that may have kept the model
+// from it (a send that failed, a compaction, a rewind, a new process for the
+// binding, another binding), the next accepted prompt carries it again.
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -18,7 +15,7 @@ import { z } from "zod"
 import { processRunner } from "@mako/git/process-runner"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { makoNote } from "@mako/host/conversations/mako-note"
-import { heardBy, standingLines } from "@mako/host/conversations/control-cadence"
+import { standingLines } from "@mako/host/conversations/control-cadence"
 import { MAKO_SERVER_INSTRUCTIONS, primerBlocks } from "@mako/host/contracts/primer"
 import { withoutInstructions } from "@mako/host/contracts/mcp-reach"
 import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
@@ -139,11 +136,8 @@ function primerHost(options: { idleMs?: number; harness?: string } = {}) {
 
 type Host = ReturnType<typeof primerHost>
 
-/**
- * One way the model can miss the primer: after `lose`, the next accepted prompt carries it. `kept`: what happened
- * leaves it in the transcript, so the next prompt doesn't repeat it.
- */
-async function primerAfter(lose: (host: Host) => Promise<void>, options: { idleMs?: number; harness?: string; kept?: boolean } = {}) {
+/** One way the model can miss the primer: after `lose`, the next accepted prompt carries it. */
+async function primerAfter(lose: (host: Host) => Promise<void>, options: { idleMs?: number; harness?: string } = {}) {
   const host = primerHost(options)
   try {
     await host.start()
@@ -151,8 +145,7 @@ async function primerAfter(lose: (host: Host) => Promise<void>, options: { idleM
     assert.ok(BLOCKS.some(block => block.includes(FILE_LINK)), "the common primer includes clickable absolute file guidance")
     assert.equal(carriesAny(await host.send("Second")), false, "a prompt after it doesn't repeat it")
     await lose(host)
-    if (options.kept) assert.equal(carriesAny(await host.send("Next")), false, "the transcript still holds it, so the next prompt doesn't repeat it")
-    else assert.ok(carries(await host.send("Next")), "the next accepted prompt carries the primer again")
+    assert.ok(carries(await host.send("Next")), "the next accepted prompt carries the primer again")
   } finally {
     await host.cleanup()
   }
@@ -162,11 +155,7 @@ const running = (host: Host, status: "running" | "ready") =>
   host.observe({ type: "live-session", session: { ...host.owner.snapshot(host.id)!.session, status } })
 
 const cases: Array<[string, () => Promise<void>]> = [
-  ["a send that failed", () => primerAfter((host) => host.refused("Refused"), { kept: true })],
-  ["a send that failed carrying it", () => primerAfter(async (host) => {
-    host.observe({ type: "live-update", id: host.id, update: { kind: "event", label: CONTEXT_COMPACTED } })
-    await host.refused("Refused")
-  })],
+  ["a send that failed", () => primerAfter((host) => host.refused("Refused"))],
   ["a compaction", () => primerAfter(async (host) => host.observe({ type: "live-update", id: host.id, update: { kind: "event", label: CONTEXT_COMPACTED } }))],
   ["a compaction the harness starts", () => primerAfter(async (host) => {
     running(host, "running")
@@ -178,7 +167,7 @@ const cases: Array<[string, () => Promise<void>]> = [
     const starts = host.starts()
     await waitFor(host.hibernated, "the idle provider never hibernated")
     await waitFor(() => host.starts() === starts, "the provider started again before the next message")
-  }, { idleMs: 15, kept: true })],
+  }, { idleMs: 15 })],
 ]
 
 // The real common note/queue path, with each note-backed harness's identity.
@@ -189,7 +178,7 @@ for (const harness of ["cursor", "grok", "devin"]) {
   }, { harness })])
   cases.push([`${harness} resume`, () => primerAfter(async host => {
     await waitFor(host.hibernated, `${harness} never hibernated`)
-  }, { harness, idleMs: 15, kept: true })])
+  }, { harness, idleMs: 15 })])
 }
 
 cases.push(["native instruction slots", async () => {
@@ -236,42 +225,25 @@ cases.push(["native instruction slots", async () => {
     const open = async (resume?: string) => codex.start(root, admitted("codex", {
       conversationId: id, resume, conversationTools: tools,
       emit: event => { if (event.type === "live-session") states.push(event.session) },
-    }, { env: { CODEX_EXECUTABLE: process.execPath, PATH: process.env.PATH, PRIMER_CALLS: log, PRIMER_ROLLOUT: join(root, "rollout.jsonl") } }))
+    }, { env: { CODEX_EXECUTABLE: process.execPath, PATH: process.env.PATH, PRIMER_CALLS: log } }))
     const send = async (text: string) => {
       await codex.prompt(id, text, [], undefined, { operationId: randomUUID(), attemptId: randomUUID(), report: () => {} })
       await waitFor(() => states.at(-1)?.status === "ready", "the fixture turn never ended")
     }
-    // [what it sends, whether that turn carries the primer]
-    const expected: Array<[string, boolean]> = []
-    const turn = async (text: string, primer: boolean) => { await send(text); expected.push([text, primer]) }
     await open()
-    await turn("first", true)
-    await turn("second", false)
+    await send("first")
     await codex.compact(id, randomUUID())
     await waitFor(() => states.at(-1)?.status === "ready", "the fixture compaction never ended")
-    await turn("after compaction", true)
-    await turn("then", false)
+    await send("after compaction")
     await codex.close(id)
     await open("fixture-thread")
-    await turn("after resume", false)
-    await turn("resumed again", false)
-    await codex.close(id)
-    await open("fixture-thread")
-    await codex.compact(id, randomUUID())
-    await waitFor(() => states.at(-1)?.status === "ready", "the fixture compaction never ended")
-    await turn("compacted after a resume", true)
-    await codex.close(id)
-    await open()
-    await turn("a new thread", true)
+    await send("after resume")
     const frames = (await readFile(log, "utf8")).trim().split("\n").map(line => z.object({ method: z.string(), params: z.unknown().optional() }).parse(JSON.parse(line)))
     const turns = frames.filter(frame => frame.method === "turn/start")
-    assert.equal(turns.length, expected.length)
-    for (const [index, frame] of turns.entries()) {
-      const [text, primer] = expected[index]!
-      const params = z.object({ additionalContext: z.object({ mako: z.object({ kind: z.literal("application"), value: z.string() }) }).optional(), input: z.array(z.object({ text: z.string() })) }).parse(frame.params)
-      assert.equal(params.input.map(item => item.text).join(""), text)
-      if (primer) assert.equal(params.additionalContext?.mako.value, `${instructions}\n\n${MAKO_SERVER_INSTRUCTIONS}`, `Codex "${text}" carries the primer, with the server's instructions, as the turn's developer application context`)
-      else assert.equal(params.additionalContext, undefined, `Codex "${text}": the transcript holds the primer, so the turn leaves it out`)
+    assert.equal(turns.length, 3)
+    for (const frame of turns) {
+      const params = z.object({ additionalContext: z.object({ mako: z.object({ kind: z.literal("application"), value: z.string() }) }), input: z.array(z.object({ text: z.string() })) }).parse(frame.params)
+      assert.equal(params.additionalContext.mako.value, `${instructions}\n\n${MAKO_SERVER_INSTRUCTIONS}`, "Codex uses the real turn's developer application context, with the server's instructions, also after compaction/resume")
       assert.equal(params.input.some(item => item.text.includes(FILE_LINK)), false, "the primer never replaces the person's words")
     }
     assert.ok(frames.some(frame => frame.method === "thread/resume"))
@@ -296,13 +268,11 @@ cases.push(["native instruction slots", async () => {
 cases.push(["another binding", async () => {
   const note = makoNote({ cloudMachine: false, launchedWith: () => undefined, controlLine: () => undefined, ownSlot: () => false, notices: () => [] })
   const standing = (await note("binding-a", "conversation", { role: "thread" })).standing
-  const a = { bindingId: "binding-a", generation: 1, nativeId: "native-a", cwd: "/work" }
-  const heard = standingLines(heardBy(undefined, undefined, a), a, standing)
+  const heard = standingLines(undefined, { bindingId: "binding-a", generation: 1 }, standing)
   assert.ok(carries(heard.lines.join("\n")), "the first binding hears the primer")
-  assert.equal(standingLines(heardBy(heard.said, undefined, a), a, standing).lines.length, 0, "and not again")
+  assert.equal(standingLines(heard.said, { bindingId: "binding-a", generation: 1 }, standing).lines.length, 0, "and not again")
   const replaced = (await note("binding-b", "conversation", { role: "thread" })).standing
-  const b = { bindingId: "binding-b", generation: 1, nativeId: "native-b", cwd: "/work" }
-  assert.ok(carries(standingLines(heardBy(heard.said, undefined, b), b, replaced).lines.join("\n")), "the binding that replaces it hears it whole")
+  assert.ok(carries(standingLines(heard.said, { bindingId: "binding-b", generation: 1 }, replaced).lines.join("\n")), "the binding that replaces it hears it whole")
 }])
 
 const failed: string[] = []
@@ -316,4 +286,4 @@ for (const [name, run] of cases) {
   }
 }
 assert.deepEqual(failed, [], `the primer was lost after ${failed.join(", ")}`)
-console.log("primer delivery: the next accepted prompt carries the primer after a compaction, a rewind, a refused send that carried it or another binding, and not after a new process on the same native session; Codex's follows its rollout")
+console.log("primer delivery: the next accepted prompt carries the primer after a failed send, a compaction, a rewind, a new process or another binding")

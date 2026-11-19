@@ -15,7 +15,6 @@ import { ProviderStartupWatch } from "./provider-startup.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
 import { CodexAgents } from "./codex/agents.js"
 import { CodexRolloutTail } from "./codex/rollout-tail.js"
-import { CodexPrimer, PRIMER_KEY, rolloutHoldsPrimer } from "./codex/primer-cadence.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig, codexWireSettings } from "./codex/settings.js"
@@ -116,10 +115,8 @@ type Live = {
   tuning?: Tuning
   /** Mako's own servers, opened with the token in `MAKO_CONVERSATIONS_TOKEN`. */
   makoServers: Array<{ name: string; url: string }>
-  /** Mako's instructions for the model, from the layer, handed to a turn as Codex's application context. */
+  /** Mako's instructions for the model, from the layer, handed to every turn as Codex's application context. */
   instructions?: string
-  /** When those go: only on a turn whose transcript lacks them (`CodexPrimer`), read once the thread opens. */
-  primer?: CodexPrimer
   mcpSnapshot: McpRegistrySnapshot
   /** The Thread as native routing reads it (`ProviderStartOptions.nativeRouting`), read when the thread opens. */
   nativeRouting?: () => RoutedThread
@@ -307,18 +304,12 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         updateState: (patch) => updateState(live, patch),
         emitUpdate: (update) => emitUpdate(live, update),
         activity: (activity) => engine.activity(live, activity),
-        compacted: (compaction, markerId) => {
-          live.primer?.forgot()
-          engine.compacted(live, compaction, markerId)
-        },
+        compacted: (compaction, markerId) => engine.compacted(live, compaction, markerId),
         event: (marker, markerId) => engine.event(live, marker, markerId),
         unhandled: (kind, reason, raw) =>
           raw === undefined ? engine.unhandled(live, kind) : engine.unknown(live, kind, reason ?? "unknown", raw),
         usage: (windows) => options.observeUsage((previous) => mergeWindows(previous, windows, Date.now())),
-        rewound: (run) => {
-          live.primer?.forgot()
-          emit({ type: "live-rewound", id: live.id, run })
-        },
+        rewound: (run) => emit({ type: "live-rewound", id: live.id, run }),
         goal: (goal) => emit({ type: "live-goal", id: live.id, goal }),
         observeAgentTurn: (nativeId) => live.agents.refresh(nativeId),
         observeBackground: (items) => {
@@ -353,10 +344,6 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       const response = await openThread(live, watch, trace, options.resume, options.fork)
       clearStartupWatch(live)
       live.threadId = response.thread.id
-      // Whether the thread's transcript already holds Mako's instructions, as a resume's or a fork's may: read before
-      // its first turn, so a new process doesn't hand them to the model again.
-      if (live.instructions)
-        live.primer = new CodexPrimer(live.instructions, response.thread.path ? await rolloutHoldsPrimer(response.thread.path, live.instructions) : false)
       live.rollout = response.thread.path ? new CodexRolloutTail(response.thread.path) : undefined
       live.rollout?.follow(() => {
         // Read off the thread, then drawn: the watcher's word waits on no message.
@@ -422,26 +409,16 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         if (text.length > MAX_PROMPT_CHARS)
           throw new Error("The prompt is too large for the Codex app-server adapter")
       },
-      start: async (live, threadId) => {
-        // Codex hands an application entry to the model as developer context; never the person's words. It goes only
-        // when the thread's transcript lacks it (`CodexPrimer`), not once per process.
-        const primer = live.primer
-        const withPrimer = primer?.forTurn() ?? false
-        try {
-          return await rpcRequest(live, "turn/start", {
-            threadId,
-            input: codexInput(text, attachments),
-            cwd: live.cwd,
-            ...codexWireSettings(tuning),
-            ...codexCollaborationMode(tuning, live.state.settings?.model),
-            ...codexTurnAccess(live.access),
-            ...withPrimer && primer && { additionalContext: { [PRIMER_KEY]: { kind: "application" as const, value: primer.value } } },
-          })
-        } catch (error) {
-          primer?.failed(withPrimer)
-          throw error
-        }
-      },
+      start: (live, threadId) => rpcRequest(live, "turn/start", {
+        threadId,
+        input: codexInput(text, attachments),
+        cwd: live.cwd,
+        ...codexWireSettings(tuning),
+        ...codexCollaborationMode(tuning, live.state.settings?.model),
+        ...codexTurnAccess(live.access),
+        // Codex hands an application entry to the model as developer context, again only when it changes; never the person's words.
+        ...live.instructions && { additionalContext: { mako: { kind: "application" as const, value: live.instructions } } },
+      }),
     })
   }
 
@@ -641,8 +618,6 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     })
     if (result.turnId !== input.expectedRunId)
       throw new Error("Codex acknowledged steering for a different turn")
-    // A steer carries no context, which empties what Codex compares the next turn's against.
-    live.primer?.steered()
     live.stream?.steered(input.text, input.shown)
     return { kind: "accepted" }
   }

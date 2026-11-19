@@ -247,8 +247,6 @@ export type CodexFrame =
   | { records: { rollout: string; from: number; to: number } }
 
 export interface ProtocolContext {
-  /** When Mako's instructions go with a turn (`CodexPrimer`): a compaction may drop them from the transcript. */
-  primer?: { forgot(): void }
   /** Side conversations' threads, whose messages never reach the decoder. */
   sides?: import("./codex/side-questions.js").CodexSideQuestions
   /** Stopped native turns retained until transport disposal: late commands still belong to Stop. */

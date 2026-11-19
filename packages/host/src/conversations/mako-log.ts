@@ -69,8 +69,6 @@ const CONTROL_FIELDS = [
   ["activeBindingId", "activeBinding"],
   ["ancestry", "ancestry"],
   ["session", "session"],
-  ["rosterForgotten", "rosterForgotten"],
-  ["noteHeard", "noteHeard"],
   ["lists", "control"],
 ] as const
 const CONTROL_FIELD_EVENTS = new Set<string>(CONTROL_FIELDS.map(([, kind]) => kind))

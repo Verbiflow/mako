@@ -497,9 +497,9 @@ async function routingGuidanceCadence(): Promise<void> {
     refuse = true
     world.say(apex.conversation, "Refused fixture message.")
     await world.settle(30, 20_000, "ignore")
-    assert.ok(!(await send("After failed delivery.")).includes(FRONT_DOOR_GUIDANCE[0]), "a refused send changes nothing the transcript holds: the guidance it heard before stands")
+    assert.ok((await send("After failed delivery.")).includes(FRONT_DOOR_GUIDANCE[0]), "an uncertain send resets guidance just like other standing rules")
     await world.restart()
-    assert.ok(!(await send("After host reconstruction.")).includes(FRONT_DOOR_GUIDANCE[0]), "a restarted host resuming the same session doesn't repeat what its transcript holds")
+    assert.ok((await send("After host reconstruction.")).includes(FRONT_DOOR_GUIDANCE[0]))
     assert.ok(!(await send("After reconstruction settles.")).includes(FRONT_DOOR_GUIDANCE[0]))
     const full = world.agents.frontDoor(apex.conversation, {})
     const facts = world.agents.frontDoor(apex.conversation, {}, false)
