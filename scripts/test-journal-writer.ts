@@ -78,6 +78,7 @@ function reopened(root: string, id: string): LiveSnapshot["blocks"] {
 if (process.argv[2] === "stream") {
   // The host that is killed: it streams without end, and says each count it knows written.
   const writer = new JournalWriter()
+  assert.ok(await writer.started())
   const turn = streaming(process.argv[3]!, writer)
   // Its turn index is whole from the start, so every block it streams writes its line with it.
   assert.ok(buildTurnIndex(turn.journal["connection"], coldScan(turn.journal["connection"])))
@@ -98,6 +99,7 @@ try {
   // journal's rows waits for the write it follows.
   {
     const writer = new JournalWriter()
+    assert.ok(await writer.started())
     const mine = streaming(join(root, "own"), undefined), theirs = streaming(join(root, "writer"), writer)
     let handed = 0
     const streamed = theirs.journal["streamed"].bind(theirs.journal)
@@ -130,6 +132,7 @@ try {
   // count as it stands after the answer held the host's thread `SETTLE_MS` (30 s) with everything written.
   {
     const writer = new JournalWriter()
+    assert.ok(await writer.started())
     const turn = streaming(join(root, "answered-between"), writer)
     turn.flush()
     turn.journal["settleWrites"]()
@@ -164,9 +167,37 @@ try {
     await writer.stop()
   }
 
+  // A writer whose thread is still starting: nothing waits for it on the host's thread, whose wait nobody bounds and
+  // which can't hear the thread start, fail or exit while it waits. Its journal writes its own rows meanwhile, and
+  // hands its streamed flushes to the writer once the writer says it runs.
+  {
+    const writer = new JournalWriter(new URL("./lib/journal-writer-slow-worker.ts", import.meta.url))
+    const turn = streaming(join(root, "starting"), writer)
+    let held = 0
+    const timed = (step: () => void) => {
+      const began = performance.now()
+      step()
+      held = Math.max(held, performance.now() - began)
+    }
+    for (let flush = 0; flush < 20; flush += 1) timed(() => turn.flush())
+    timed(() => turn.end())
+    assert.ok(held < 1_000, `a commit held the host's thread ${Math.round(held)} ms for a writer still starting`)
+    assert.equal(turn.journal["writes"], undefined, "a journal writes its own rows while its writer starts")
+    assert.deepEqual(turn.journal.read()?.blocks, turn.snapshot().blocks)
+    assert.ok(await writer.started(), "the writer starts")
+    const rest = turn.snapshot()
+    turn.journal.commit({ ...rest, revision: rest.revision + 1 }, rest)
+    assert.ok(turn.journal["writes"], "once it runs, the journal's next streamed flush goes to it")
+    assert.equal(turn.journal.summary()?.revision, rest.revision + 1)
+    await turn.journal.close()
+    assert.deepEqual(reopened(join(root, "starting"), turn.id), turn.snapshot().blocks)
+    await writer.stop()
+  }
+
   // Closed with writes still waiting, and the writer stopped right after: a new host reads every flush.
   {
     const writer = new JournalWriter()
+    assert.ok(await writer.started())
     const turn = streaming(join(root, "closed"), writer)
     for (let flush = 0; flush < 200; flush += 1) turn.flush()
     const closing = turn.journal.close()
@@ -178,6 +209,7 @@ try {
   // The writer stopped under a journal still streaming: the journal writes its own from there, with nothing lost.
   {
     const writer = new JournalWriter()
+    assert.ok(await writer.started())
     const turn = streaming(join(root, "stopped"), writer)
     for (let flush = 0; flush < 50; flush += 1) turn.flush()
     await writer.stop()
@@ -192,6 +224,7 @@ try {
   // streams after writes its own rows, and its close waits for nothing of the writer's.
   {
     const writer = new JournalWriter()
+    assert.ok(await writer.started())
     const turns = [0, 1, 2].map((at) => streaming(join(root, `closed-${at}`), writer))
     for (let flush = 0; flush < 60; flush += 1) for (const turn of turns) turn.flush()
     await writer.closeAll()
@@ -217,6 +250,7 @@ try {
   // first streamed flush, let go at rest without waiting on the thread, and opened again at the next turn.
   {
     const writer = new JournalWriter()
+    assert.ok(await writer.started())
     const turn = streaming(join(root, "lazy"), writer)
     assert.equal(turn.journal["writes"], undefined, "given the writer, a journal opens nothing on it until it streams")
     for (let flush = 0; flush < 30; flush += 1) turn.flush()
@@ -241,6 +275,7 @@ try {
   // goes on writing its own. One the journal can't make good either is a commit that failed, as it always was.
   {
     const writer = new JournalWriter()
+    assert.ok(await writer.started())
     const turn = streaming(join(root, "failed"), writer)
     for (let flush = 0; flush < 10; flush += 1) turn.flush()
     turn.journal["settleWrites"]()
@@ -297,6 +332,7 @@ try {
   {
     const folder = join(root, "indexed")
     const writer = new JournalWriter(), readers = new JournalReaders()
+    assert.ok(await writer.started())
     const first = streaming(folder, writer)
     for (let flush = 0; flush < 60; flush += 1) first.flush()
     first.end()
