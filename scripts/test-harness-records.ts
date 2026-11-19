@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process"
-import { mkdtemp, readdir, readFile, realpath, rm } from "node:fs/promises"
+import { mkdtemp, readdir, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { promisify } from "node:util"
@@ -39,7 +39,30 @@ const run = promisify(execFile)
 const failures: string[] = []
 const notes: string[] = []
 const checked: string[] = []
-const builds = new Map(process.argv.slice(2).map((arg) => {
+const argv = process.argv.slice(2)
+const reportAt = argv.indexOf("--report")
+/** `--report <file>`: each new kind as JSON, with its table and the build's words around it, for the daily bump's report. */
+const reportTo = reportAt < 0 ? undefined : argv.splice(reportAt, 2)[1]
+const unplaced: { where: string; table: string; file?: string; line?: number; kinds: { name: string; context?: string }[] }[] = []
+const SOURCES = join(import.meta.dirname, "..", "packages", "sessions", "src", "harnesses")
+
+/** Where `table` is declared among the sessions package's harness files. */
+async function declaredAt(table: string): Promise<{ file: string; line: number } | undefined> {
+  for (const name of (await readdir(SOURCES)).filter((file) => file.endsWith(".ts"))) {
+    const lines = (await readFile(join(SOURCES, name), "utf8")).split("\n")
+    const line = lines.findIndex((text) => new RegExp(`^export const ${table}\\b`).test(text))
+    if (line >= 0) return { file: `packages/sessions/src/harnesses/${name}`, line: line + 1 }
+  }
+  return undefined
+}
+
+/** The build's own words around the first place it names `name`, printable characters only. */
+function contextOf(text: string | undefined, name: string): string | undefined {
+  const at = text?.indexOf(`"${name}"`) ?? -1
+  if (!text || at < 0) return undefined
+  return text.slice(Math.max(0, at - 160), at + name.length + 160).replace(/[^\x20-\x7e]+/g, " ").trim()
+}
+const builds = new Map(argv.map((arg) => {
   const [harness, path] = arg.split("=")
   if (!harness || !path || !["claude", "codex", "opencode"].includes(harness)) throw new Error(`${arg}: expected claude=, codex= or opencode= and a binary`)
   return [harness, path]
@@ -54,12 +77,13 @@ function matches(text: string, pattern: RegExp): Set<string> {
 }
 
 /** Every kind the build names is in the table, or written nowhere a session keeps. */
-function compare(where: string, built: ReadonlySet<string>, declared: Iterable<string>, unsaved: Readonly<Record<string, string>> = {}): void {
+function compare(where: string, built: ReadonlySet<string>, declared: Iterable<string>, unsaved: Readonly<Record<string, string>> = {}, table?: { name: string; text?: string }): void {
   if (!built.size) return void failures.push(`${where}: none found in the build, so the extraction no longer matches it`)
   const known = new Set(declared)
   const added = [...built].filter((name) => !known.has(name) && !Object.hasOwn(unsaved, name)).sort()
   const gone = [...known].filter((name) => !built.has(name)).sort()
-  if (added.length) failures.push(`${where}: the build names ${added.join(", ")}, which the table doesn't place`)
+  if (added.length) failures.push(`${where}: the build names ${added.join(", ")}, which the table ${table ? `(${table.name}) ` : ""}doesn't place`)
+  if (added.length && table) unplaced.push({ where, table: table.name, kinds: added.map((name) => ({ name, ...contextOf(table.text, name) && { context: contextOf(table.text, name) } })) })
   if (gone.length) notes.push(`${where}: this build doesn't name ${gone.join(", ")}, which another build's sessions may hold`)
 }
 
@@ -81,15 +105,15 @@ async function claude(): Promise<void> {
   const binary = builds.get("claude") ?? claudeSdkBinary()
   const text = await build(binary)
   const loader = /\{user:"transcript",assistant:"transcript"[^}]*\}/.exec(text)?.[0] ?? ""
-  compare("claude records", new Set([...loader.matchAll(/(?:"([a-z-]+)"|\b([a-z]+)):"/g)].map((match) => match[1] ?? match[2]!)), CLAUDE_RECORD_TYPES)
-  compare("claude system subtypes", matches(text, /type:"system",subtype:"([a-z_]+)"/g), CLAUDE_SYSTEM_SUBTYPES)
+  compare("claude records", new Set([...loader.matchAll(/(?:"([a-z-]+)"|\b([a-z]+)):"/g)].map((match) => match[1] ?? match[2]!)), CLAUDE_RECORD_TYPES, {}, { name: "CLAUDE_RECORD_TYPES", text })
+  compare("claude system subtypes", matches(text, /type:"system",subtype:"([a-z_]+)"/g), CLAUDE_SYSTEM_SUBTYPES, {}, { name: "CLAUDE_SYSTEM_SUBTYPES", text })
   const attachments = matches(text, /attachment\.type[!=]==?"([a-z_]+)"/g)
   for (const [, list] of text.matchAll(/\[((?:"[a-z_]+",(?:\.\.\.\[\],)?)+"[a-z_]+")\]/g)) {
     const names = [...list!.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]!)
     if (names.some((name) => name === "skill_listing" || name === "queued_command" || name === "remote_session_change"))
       for (const name of names) attachments.add(name)
   }
-  compare("claude attachments", attachments, CLAUDE_ATTACHMENT_TYPES, CLAUDE_KEEP_ALIVE_WORK)
+  compare("claude attachments", attachments, CLAUDE_ATTACHMENT_TYPES, CLAUDE_KEEP_ALIVE_WORK, { name: "CLAUDE_ATTACHMENT_TYPES", text })
   checked.push(`Claude Code ${await version(binary)}`)
 }
 
@@ -112,7 +136,7 @@ async function codex(): Promise<void> {
     }) })
     const schema = Schema.parse(JSON.parse(await readFile(join(out, "codex_app_server_protocol.v2.schemas.json"), "utf8")))
     const items = new Set(schema.definitions.ResponseItem.oneOf.flatMap((option) => option.properties.type.enum))
-    compare("codex response items", items, Object.keys(CODEX_RESPONSE_ITEMS), CODEX_UNSAVED)
+    compare("codex response items", items, Object.keys(CODEX_RESPONSE_ITEMS), CODEX_UNSAVED, { name: "CODEX_RESPONSE_ITEMS" })
     const retired = Object.keys(CODEX_RETIRED_RESPONSE_ITEMS).filter((name) => items.has(name))
     if (retired.length) failures.push(`codex response items: ${retired.join(", ")} ${retired.length === 1 ? "is" : "are"} listed as retired but the schema still defines ${retired.length === 1 ? "it" : "them"}`)
   } finally {
@@ -153,9 +177,9 @@ async function opencode(): Promise<void> {
   const current = annotatedTypes(text, /identifier:"Session\.Message\.([A-Za-z.]+)"/g)
   const content = new Set([...current].filter(([name]) => name.startsWith("Assistant.")).map(([, type]) => type))
   const messages = new Set([...current].filter(([name]) => !name.startsWith("Assistant.")).map(([, type]) => type))
-  compare("opencode messages", messages, Object.keys(OPENCODE_MESSAGES))
-  compare("opencode assistant content", content, OPENCODE_ASSISTANT_CONTENT)
-  compare("opencode legacy parts", new Set(annotatedTypes(text, /identifier:"SessionV1\.(\w+Part)"/g).values()), Object.keys(OPENCODE_LEGACY_PARTS))
+  compare("opencode messages", messages, Object.keys(OPENCODE_MESSAGES), {}, { name: "OPENCODE_MESSAGES", text })
+  compare("opencode assistant content", content, OPENCODE_ASSISTANT_CONTENT, {}, { name: "OPENCODE_ASSISTANT_CONTENT", text })
+  compare("opencode legacy parts", new Set(annotatedTypes(text, /identifier:"SessionV1\.(\w+Part)"/g).values()), Object.keys(OPENCODE_LEGACY_PARTS), {}, { name: "OPENCODE_LEGACY_PARTS", text })
   checked.push(`OpenCode ${await version(executable)}`)
 }
 
@@ -199,7 +223,7 @@ async function cursor(): Promise<void> {
     for (const match of text.matchAll(/case"redacted-reasoning":/g))
       for (const part of switchCases(text, match.index)) if (part) parts.add(part)
   }
-  compare("cursor message parts", parts, new Set(Object.values(CURSOR_MESSAGE_PARTS).flat()))
+  compare("cursor message parts", parts, new Set(Object.values(CURSOR_MESSAGE_PARTS).flat()), {}, { name: "CURSOR_MESSAGE_PARTS" })
   checked.push(`Cursor SDK ${sdk}`)
 }
 
@@ -208,6 +232,10 @@ await codex()
 await opencode()
 if (!builds.size) await cursor()
 
+if (reportTo) {
+  for (const entry of unplaced) Object.assign(entry, await declaredAt(entry.table))
+  await writeFile(reportTo, `${JSON.stringify(unplaced, null, 2)}\n`)
+}
 for (const note of notes) console.log(`note: ${note}`)
 if (failures.length) {
   console.error(`\n${failures.map((failure) => `✗ ${failure}`).join("\n")}\n`)

@@ -13,6 +13,11 @@ import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 import { RuntimeUpdates } from "@mako/host/harnesses/runtime-updates"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { unpublished } from "./lib/pinned-builds.ts"
+import {
+  emptyReasons, missingConcepts, moveHow, movePin, moveVocabulary, newTools, pairJudgements, renderJudgements, staleRecords, unexplainedFailures, unplacedRecords, type Judgement,
+} from "./lib/bump-records.ts"
+import { PairFinding } from "./lib/native-kinds.ts"
+import { currentPairVersions } from "./native-decoding.ts"
 
 /**
  * The daily harness bump. Each harness declares its versions on its updates
@@ -39,7 +44,25 @@ import { unpublished } from "./lib/pinned-builds.ts"
  *   npx tsx scripts/bump-harness-versions.ts devin --keep    pin tested's archives (`HarnessVersions.kept`) while
  *                                                            the vendor's feed still names it
  *
- * `--summary <file>` writes what each step did, for the pull request's body.
+ * `--write` finishes the bump: it moves every record a version check holds to
+ * `tested` once its own recording of the new build backs it (the vocabulary's
+ * tools and concepts, the declaration's `how`, the bundled package's pins and
+ * lockfile, a kept build's archives), regenerates what is generated from them
+ * (`docs/adding-a-harness.md`, `docs/harness-concepts.md`, the descriptors),
+ * and runs the checks a pull request runs on them. What the new build does
+ * that Mako has no place for (a tool, a native kind, a record kind, a
+ * difference no kept pair explains, a patch that no longer applies) it can't
+ * place itself: each is said in the summary with where it goes and, where the
+ * bump can tell, how.
+ *
+ * `--summary <file>` writes what each step did, for the pull request's body;
+ * `--outcome <file>` writes `{ harness, version, state, judgements }`, where
+ * `state` is `finished` (every check passed: the pull request is green),
+ * `judgement` (the release does something a person must place) or `broken`
+ * (a step failed with nothing to place: a vendor's feed or install, say).
+ * `--own-model` records a harness whose pairs run on its own model too, with
+ * the key from the environment only (`CURSOR_API_KEY`, a CI secret) and at
+ * most `--budget-tokens <n>` tokens (default 1,500,000: re-recording Cursor's 18 pairs took 1.23M, cache reads included).
  * Pushing, committing and opening the pull request are the workflow's
  * (`.github/workflows/harness-versions.yml`), never this script's.
  */
@@ -55,6 +78,9 @@ const { values: options, positionals } = parseArgs({
     install: { type: "boolean", default: false },
     keep: { type: "boolean", default: false },
     summary: { type: "string" },
+    outcome: { type: "string" },
+    "own-model": { type: "boolean", default: false },
+    "budget-tokens": { type: "string", default: "1500000" },
   },
 })
 
@@ -204,6 +230,8 @@ function run(name: string, command: string, args: string[], steps: Step[], env: 
   const result = spawnSync(command, args, { cwd: REPO, env, stdio: ["ignore", "inherit", "pipe"], encoding: "utf8", maxBuffer: 64 * 1024 * 1024 })
   process.stderr.write(result.stderr ?? "")
   const ok = result.status === 0
+  if (!ok && result.error) steps.push({ name, ok, detail: result.error.message })
+  if (!ok && result.error) return ok
   const step: Step = { name, ok }
   if (!ok) step.detail = failureOf(result.stderr ?? "") || `exited with ${result.status ?? result.signal}`
   else {
@@ -252,6 +280,8 @@ function moveDeclaration(reading: Reading, tested: string, today: string): void 
   if (reading.versions.bundled?.released !== undefined && reading.released)
     replace(/(bundled: \{[^}]*released: )"[^"]+"/, `$1"${reading.released}"`, "bundled release date")
   writeFileSync(reading.file, text)
+  // What `how` says the records were checked on moves with them; the records themselves move once recorded (`moveVocabulary`).
+  moveHow(reading.file, reading.versions.tested, tested, reading.versions.bundled && reading.newest ? { from: reading.versions.bundled.version, to: reading.newest } : undefined)
 }
 
 const PackageJson = z.object({ version: z.string(), claudeCodeVersion: z.string().optional(), scripts: z.record(z.string(), z.string()).optional() })
@@ -293,13 +323,34 @@ function resolvedVersion(folder: string, name: string): string | undefined {
   return undefined
 }
 
-/** Moves a bundled package in every package that pins it, and checks they all load the one build. */
-function moveBundled(name: string, version: string, steps: Step[]): void {
+const RootScripts = z.object({ scripts: z.record(z.string(), z.string()).optional() })
+
+/**
+ * Moves a bundled package in every package that pins it, and checks they all load the one build. Each pin is moved
+ * in its file's text and npm installs from there: `npm install <name>@<version>` rewrote each package.json whole.
+ * A patch the root's `postinstall` applies to that package (`scripts/patch-cursor-sdk.mjs` for `@cursor/sdk`) then
+ * runs alone with `--check`: it either applies to the new build or reports which anchor it lost, and that report goes
+ * into the pull request word for word, since only a person can port a patch to changed code.
+ */
+function moveBundled(name: string, version: string, steps: Step[], judgements: Judgement[]): void {
   const pins = exactPins(name)
-  const workspaces = pins.filter((folder) => folder !== ".").flatMap((folder) => ["--workspace", folder])
-  // With no workspace named npm installs at the root; with any, only where told.
-  const root = workspaces.length && pins.includes(".") ? ["--include-workspace-root"] : []
-  run(`npm install ${name}@${version}`, "npm", ["install", "--save-exact", `${name}@${version}`, ...workspaces, ...root], steps)
+  for (const folder of pins) movePin(join(REPO, folder, "package.json"), name, version)
+  run(`npm install (${name} ${version})`, "npm", ["install", "--no-audit", "--no-fund"], steps)
+  const stem = name.replace(/^@/, "").split("/")[0]!
+  const postinstall = RootScripts.parse(JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"))).scripts?.postinstall ?? ""
+  for (const script of [...postinstall.matchAll(/node (scripts\/patch-[\w.-]+\.mjs)/g)].map((match) => match[1]!).filter((file) => file.includes(stem))) {
+    console.log(`\n$ node ${script} --check`)
+    const result = spawnSync("node", [script, "--check"], { cwd: REPO, encoding: "utf8", maxBuffer: 16 * 1024 * 1024 })
+    const said = `${result.stdout ?? ""}${result.stderr ?? ""}`.trim()
+    process.stdout.write(`${said}\n`)
+    const ok = result.status === 0
+    steps.push({ name: `${script} applies to ${name} ${version}`, ok, ...!ok && { detail: said.split("\n").filter(Boolean).at(-1)?.slice(0, 600) ?? `exited with ${result.status}` } })
+    if (!ok) judgements.push({
+      what: `\`${script}\` doesn't apply to ${name} ${version}; its report:\n\n\`\`\`\n${said.slice(0, 6000)}\n\`\`\`\n`,
+      where: script,
+      proposal: `port the patch named above to ${version}'s code, or delete it if ${version} no longer needs it; until then every job that installs fails at postinstall`,
+    })
+  }
   const step: Step = { name: `every package loads ${name} ${version}`, ok: pins.every((folder) => resolvedVersion(folder, name) === version) }
   if (!step.ok) step.detail = pins.map((folder) => `${folder === "." ? "the root" : folder} loads ${resolvedVersion(folder, name) ?? "nothing"}`).join(", ")
   steps.push(step)
@@ -331,30 +382,91 @@ async function installTested(provider: string, steps: Step[]): Promise<void> {
   }
 }
 
-function driftTools(provider: string, steps: Step[]): void {
+/** Records the new build: its protocol types, its tools, its self-report and its session flows. */
+function record(provider: string, steps: Step[], pairsReport: string): void {
   const scripts = PackageJson.parse(JSON.parse(readFileSync(join(REPO, "package.json"), "utf8"))).scripts ?? {}
   // A harness whose protocol types are generated from its CLI regenerates them.
   if (scripts[`generate:${provider}-inputs`]) run(`generate:${provider}-inputs`, "npm", ["run", `generate:${provider}-inputs`], steps)
   run("harness:native-tools", "npm", ["run", "harness:native-tools", "--", provider], steps)
-  // docs/adding-a-harness.md names each harness's tested version, generated from the declarations.
-  run("harness:checklist", "npm", ["run", "harness:checklist"], steps)
   run("harness:self-report", "npm", ["run", "harness:self-report", "--", provider], steps)
-  // docs/harness-concepts.md names each harness's self-report and recorded tools, generated from them.
-  run("harness:concepts", "npm", ["run", "harness:concepts"], steps)
-  run("session flows against the scripted model", "npm", ["run", "harness:decode-pairs", "--", provider, "--write", "--sealed"], steps)
+  // A harness whose pairs run on its own model is recorded only when asked, with the key from the environment alone
+  // and its spend bounded; otherwise it's skipped, saying so.
+  const ownModel = options["own-model"] ? ["--env-key-only", "--budget-tokens", options["budget-tokens"]] : ["--sealed"]
+  run(options["own-model"] ? "session flows (the scripted model, or the harness's own within its budget)" : "session flows against the scripted model", "npm",
+    ["run", "harness:decode-pairs", "--", provider, "--write", ...ownModel, "--report", pairsReport], steps)
 }
 
-function checks(steps: Step[]): void {
+/** What is generated from the declarations and records, written again from them. */
+function regenerate(steps: Step[]): void {
+  // The checks read @mako/sessions from its build, as the host does: built before the records moved, it names the old versions.
+  run("@mako/sessions built with the moved records", "npm", ["run", "-s", "build", "--workspace", "@mako/sessions"], steps)
+  // docs/adding-a-harness.md names each harness's tested version, generated from the declarations.
+  run("harness:checklist", "npm", ["run", "harness:checklist"], steps)
+  // docs/harness-concepts.md names each harness's self-report and recorded tools, generated from them.
+  run("harness:concepts", "npm", ["run", "harness:concepts"], steps)
+  run("harness:descriptors", "npm", ["run", "harness:descriptors"], steps)
+}
+
+/** The checks a pull request runs on what the bump changes. */
+function checks(steps: Step[], recordsReport: string): void {
   run("version records agree with tested", "npx", ["tsx", "scripts/test-harness-definitions.ts"], steps)
+  run("vocabulary declares every recorded tool", "npx", ["tsx", "scripts/test-native-tools.ts"], steps)
+  run("concepts match the installed build", "npx", ["tsx", "scripts/test-harness-concepts.ts"], steps)
+  run("record tables place every kind the build saves", "npx", ["tsx", "--tsconfig", "tsconfig.app.json", "scripts/test-harness-records.ts", "--report", recordsReport], steps)
   run("decoders and pairs", "npm", ["run", "test:decoders"], steps)
 }
 
-function summary(reading: Reading, steps: Step[]): string {
+/**
+ * What the new build does that Mako has no place for, from every recording and check of this run, and every record
+ * still naming the old build with why. Pairs on the harness's own model that weren't recorded say what records them.
+ */
+async function judge(provider: string, tested: string, pairsReport: string, recordsReport: string, steps: readonly Step[]): Promise<Judgement[]> {
+  const findings = existsSync(pairsReport)
+    ? readFileSync(pairsReport, "utf8").split("\n").filter(Boolean).map((line) => PairFinding.parse(JSON.parse(line)))
+    : []
+  const unexplained = new Set(findings.flatMap((finding) => finding.kind === "unexplained" ? [`scripts/fixtures/native-decoding/${finding.harness}/pairs/${finding.scenario}/pair.json`] : []))
+  const judgements = [
+    ...newTools(provider),
+    ...missingConcepts(provider, tested),
+    ...unplacedRecords(recordsReport),
+    ...pairJudgements(findings),
+    // A pair left with an empty reason that no finding above already names: a run before this one's.
+    ...emptyReasons(provider).filter((judgement) => !unexplained.has(judgement.where)),
+    ...staleRecords(provider, tested),
+  ]
+  const pairs = await currentPairVersions(provider)
+  if (pairs.some((version) => version !== tested)) {
+    const skipped = steps.find((step) => step.name.startsWith("session flows"))?.skipped
+    judgements.push({
+      what: `${provider}'s session flows weren't recorded on ${tested}: its pairs name ${pairs.join(" and ")}${skipped ? ` (${skipped})` : ""}`,
+      where: `scripts/fixtures/native-decoding/${provider}/pairs`,
+      proposal: skipped?.includes("own model")
+        ? "set the repository secret the harness's model takes (CURSOR_API_KEY) and run the workflow again: the bump then records them on its own model within OWN_MODEL_BUDGET_TOKENS"
+        : `record them where the recorder can run: \`npm run harness:decode-pairs -- ${provider} --write\``,
+    })
+  }
+  return judgements
+}
+
+type State = "finished" | "judgement" | "broken"
+
+function summary(reading: Reading, steps: Step[], judgements: readonly Judgement[], state: State): string {
+  const said = {
+    finished: "Finished by the bot: every record names the new build, the generated files are written again from them, and every check passed. Nothing in this release needs a person; it can merge.",
+    judgement: "The bot finished everything it could; what's left is below, each with where it goes.",
+    broken: "A step failed with nothing to place: see the failed rows below.",
+  }[state]
+  const own = options["own-model"]
+    ? "Session flows ran against a scripted model, and a harness whose flows need its own model ran on it with the key from the repository's secret, within the run's budget."
+    : "The drift tools and session flows ran against a scripted model, so no account or usage was involved."
   const lines = [
     `Moves ${reading.provider}'s tested version from ${reading.versions.tested} to the vendor's newest release, ${reading.newest} (${feedName(reading.versions.feed)}).`,
     ...reading.withdrawn ? ["", `${reading.versions.tested} is no longer published (${reading.withdrawn}), so every install of it fails until this lands.`] : [],
     "",
-    "Opened by the daily harness bump (`scripts/bump-harness-versions.ts`). The drift tools and session flows ran against a scripted model, so no account or usage was involved. A green bump can merge; a red one stays out of Mako's Update until what broke is fixed, and people who update outside Mako already run it, because a newer version always runs.",
+    `**${said}**`,
+    "",
+    ...judgements.length ? [renderJudgements(judgements), ""] : [],
+    `Opened by the daily harness bump (\`scripts/bump-harness-versions.ts\`). ${own} A red bump stays out of Mako's Update until it's placed or fixed, and people who update outside Mako already run it, because a newer version always runs.`,
     "",
     "| Step | Result |",
     "| --- | --- |",
@@ -387,10 +499,11 @@ if (options.keep) {
       console.log("Nothing to bump.")
       process.exit(0)
     }
+    const judgements: Judgement[] = []
     let tested = reading.newest
     if (reading.versions.bundled) {
       // A bundled runtime moves with Mako's lockfile; its tested version is the build the package ships.
-      moveBundled(reading.versions.bundled.package, reading.newest, steps)
+      moveBundled(reading.versions.bundled.package, reading.newest, steps, judgements)
       const shipped = PackageJson.parse(JSON.parse(readFileSync(join(REPO, "node_modules", reading.versions.bundled.package, "package.json"), "utf8")))
       tested = shipped.claudeCodeVersion ?? shipped.version
     }
@@ -398,12 +511,36 @@ if (options.keep) {
     steps.push({ name: `declaration moved to ${tested}`, ok: true })
     await keepBuilds(provider, reading.versions, tested, steps)
     // The package Mako speaks it with is published with each release, and moves with it.
-    if (reading.versions.client) moveBundled(reading.versions.client.package, tested, steps)
+    if (reading.versions.client) moveBundled(reading.versions.client.package, tested, steps, judgements)
     // The declaration this process loaded is the old one: install through a fresh process that reads the new one.
     run(`install ${provider} ${tested}`, "npx", ["tsx", "scripts/bump-harness-versions.ts", provider, "--install"], steps)
-    driftTools(provider, steps)
-    checks(steps)
-    if (options.summary) writeFileSync(options.summary, summary({ ...reading, newest: reading.newest }, steps))
+    const scratch = await mkdtemp(join(tmpdir(), "mako-bump-report-"))
+    try {
+      const pairsReport = join(scratch, "pairs.jsonl")
+      const recordsReport = join(scratch, "records.json")
+      record(provider, steps, pairsReport)
+      // The vocabulary's records move only as far as this run's recordings of the new build back them.
+      const previous = reading.versions.tested
+      const bundled = reading.versions.bundled ? { from: reading.versions.bundled.version, to: reading.newest } : undefined
+      const moved = moveVocabulary(provider, previous, tested, today, bundled)
+      steps.push({ name: `vocabulary records moved to ${tested}`, ok: moved.tools && moved.concepts, ...!(moved.tools && moved.concepts) && { detail: `${moved.tools ? "" : "tools not moved: no native-tools recording of it; "}${moved.concepts ? "" : "concepts not moved: no self-report of it"}` } })
+      regenerate(steps)
+      checks(steps, recordsReport)
+      judgements.push(...await judge(provider, tested, pairsReport, recordsReport, steps))
+      // A failed check nothing above traces to a cause is still said, in its own words.
+      judgements.push(...unexplainedFailures(steps, judgements))
+    } finally {
+      await rm(scratch, { recursive: true, force: true })
+    }
+    const state: State = steps.every((step) => step.ok) && !judgements.length ? "finished" : judgements.length ? "judgement" : "broken"
+    if (options.summary) writeFileSync(options.summary, summary({ ...reading, newest: reading.newest }, steps, judgements, state))
+    // The pins it moved, for `assemble-harness-bumps.ts` to move again on the day's one tree rather than merge package.json.
+    const pins = [
+      ...reading.versions.bundled ? [{ package: reading.versions.bundled.package, version: reading.newest }] : [],
+      ...reading.versions.client ? [{ package: reading.versions.client.package, version: tested }] : [],
+    ]
+    if (options.outcome) writeFileSync(options.outcome, `${JSON.stringify({ harness: provider, version: reading.newest, tested, state, pins, judgements }, null, 2)}\n`)
+    if (judgements.length) console.error(`\n${renderJudgements(judgements)}\n`)
   } else {
     await installTested(provider, steps)
     if (options.verify) run("session flows against the scripted model", "npm", ["run", "harness:decode-pairs", "--", provider, "--sealed"], steps)

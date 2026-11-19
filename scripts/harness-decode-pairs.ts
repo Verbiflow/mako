@@ -56,6 +56,7 @@ import { scriptedModel, type ScriptedRequest } from "./scripted-model.ts"
 import { scriptedWindsurf } from "./scripted-windsurf.ts"
 import { planFile, SCENARIOS, script, STOP_AFTER_MS, type Call, type Control, type Need, type Scenario, type Script, type ToolVocabulary, type Turn } from "./decode-scenarios.ts"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
+import { listedUnknown, nearestPlacement, recordingSpend, spentTotal, unknownKinds, type PairFinding } from "./lib/native-kinds.ts"
 
 const nativeStores = new NativeStores(false)
 const devinAcpSource = createDevinAcpSource(nativeStores)
@@ -1094,8 +1095,9 @@ async function cursorChild(): Promise<string> {
 
 /** The key Mako's resolver would hand a child (`CursorSdkAuth`), minus the one Mako keeps encrypted, which needs Electron. */
 async function cursorKey(): Promise<string> {
-  const key = process.env.CURSOR_API_KEY || await readCursorCliApiKey()
-  if (!key) throw new Error("Cursor isn't signed in; set CURSOR_API_KEY or run `cursor-agent login`")
+  // Unattended (the daily bump's own-model run) the key is the environment's, a CI secret, and never this machine's sign-in.
+  const key = process.env.CURSOR_API_KEY || (envKeyOnly ? undefined : await readCursorCliApiKey())
+  if (!key) throw new Error(envKeyOnly ? "CURSOR_API_KEY isn't set, and --env-key-only reads no other key" : "Cursor isn't signed in; set CURSOR_API_KEY or run `cursor-agent login`")
   return key
 }
 
@@ -1635,6 +1637,22 @@ function reasons(known: Known | undefined): Map<string, string> {
 }
 
 /**
+ * The reason any kept pair of the harness gives each difference, by its side and line, with the pair that gives it:
+ * a difference new to one scenario is often one another scenario already explains (a store that keeps no retry note).
+ */
+async function reasonsElsewhere(harness: string): Promise<Map<string, { reason: string; from: string }>> {
+  const root = join(FIXTURE_ROOT, harness, PAIRS_FOLDER)
+  const given = new Map<string, { reason: string; from: string }>()
+  for (const name of await readdir(root).catch(() => [])) {
+    const pair = await readFile(join(root, name, "pair.json"), "utf8").then((text) => PairSchema.parse(JSON.parse(text)), () => undefined)
+    for (const known of [...pair?.stores.map((store) => store.known) ?? [], pair?.replay?.known ?? []])
+      for (const difference of known)
+        if (difference.reason && !given.has(`${difference.side}${difference.line}`)) given.set(`${difference.side}${difference.line}`, { reason: difference.reason, from: name })
+  }
+  return given
+}
+
+/**
  * The differences the kept pair doesn't explain: each the pair lists with no
  * reason or doesn't list at all. A known one (a store that keeps no retry note,
  * say) is the harness as it is, not news, so only these fail the run.
@@ -1907,12 +1925,24 @@ const args = process.argv.slice(2)
 const write = args.includes("--write")
 // The daily bump runs these unattended: a harness whose pairs need its own model would spend usage.
 const sealed = args.includes("--sealed")
+// The daily bump's own-model run: a key only from the environment (a CI secret), never this machine's sign-in.
+const envKeyOnly = args.includes("--env-key-only")
 const option = (name: string): string | undefined => {
   const at = args.indexOf(name)
   if (at < 0) return undefined
   const value = args[at + 1]
   if (!value || value.startsWith("--")) throw new Error(`${name} needs a value`)
   return value
+}
+/** Where each finding goes, a JSON line each, for the bump's report (`bump-harness-versions.ts`). */
+const reportTo = option("--report")
+/** The most tokens a run on a harness's own model may spend; it stops before the scenario that would pass it. */
+const budgetOption = option("--budget-tokens")
+const budget = budgetOption === undefined ? undefined : Number(budgetOption)
+if (budget !== undefined && !(budget > 0)) throw new Error("--budget-tokens takes a positive number of tokens")
+const findings: PairFinding[] = []
+const recordFinding = (finding: PairFinding) => {
+  findings.push(finding)
 }
 const captured = option("--capture")
 if (captured) {
@@ -1924,7 +1954,11 @@ const nativeArg = nativeAt >= 0 ? args[nativeAt + 1] : undefined
 if (nativeAt >= 0 && !nativeArg) throw new Error("--native needs the build to run")
 // Each harness runs from its sandbox's project, where a relative path names nothing.
 const native = nativeArg && resolve(nativeArg)
-const named = args.filter((arg, index) => arg !== "--write" && arg !== "--sealed" && (nativeAt < 0 || (index !== nativeAt && index !== nativeAt + 1)))
+const valued = new Set(["--native", "--report", "--budget-tokens"].flatMap((name) => {
+  const at = args.indexOf(name)
+  return at < 0 ? [] : [at, at + 1]
+}))
+const named = args.filter((arg, index) => !["--write", "--sealed", "--env-key-only"].includes(arg) && !valued.has(index))
 const harnesses = named.filter((arg) => RECORDERS.has(arg))
 const scenarios = named.filter((arg) => !RECORDERS.has(arg))
 if (native && harnesses.length !== 1) throw new Error("--native runs one harness's build; name that harness")
@@ -1939,6 +1973,7 @@ for (const harness of harnesses.length ? harnesses : [...RECORDERS.keys()]) {
     console.log(`${harness}: skipped; its pairs run on its own model, which spends usage (${recorder.model.why})`)
     continue
   }
+  let spentHere = 0
   const unavailable = recorder.unavailable?.()
   if (unavailable) {
     // On stderr too, where the daily bump reads it for its pull request: a harness skipped whole recorded nothing.
@@ -1951,6 +1986,15 @@ for (const harness of harnesses.length ? harnesses : [...RECORDERS.keys()]) {
       console.log(`${harness} ${scenario.name}: skipped; ${skipped}`)
       continue
     }
+    if (budget !== undefined && recorder.model.kind === "own" && spentHere >= budget) {
+      const planned = SCENARIOS.filter((candidate) => (!scenarios.length || scenarios.includes(candidate.name)) && !unrecordable(recorder, candidate))
+        .map((candidate) => candidate.name)
+      const left = planned.slice(planned.indexOf(scenario.name))
+      console.error(`✗ ${harness}: its own model spent ${spentHere} tokens, the run's budget of ${budget}; not recorded: ${left.join(", ")}`)
+      recordFinding({ kind: "budget", harness, spent: spentHere, budget, left })
+      unexplained++
+      break
+    }
     await sandboxed(SANDBOX, harness, async (sandbox) => {
       for (const [file, text] of Object.entries(scenario.files)) {
         await mkdir(dirname(join(sandbox.project, file)), { recursive: true })
@@ -1960,6 +2004,25 @@ for (const harness of harnesses.length ? harnesses : [...RECORDERS.keys()]) {
       if (native && !recorder.takesBuild) throw new Error(`${harness} records only with its installed build`)
       const pair = await recorder.record(sandbox, scenario, native)
       await credentialFree(pair, await recorder.secrets?.() ?? [])
+      if (recorder.model.kind === "own") {
+        const spent = recordingSpend(pair.recording)
+        spentHere += spentTotal(spent)
+        console.log(`${harness} ${scenario.name}: its own model spent ${spentTotal(spent)} tokens (input ${spent.input}, output ${spent.output}, cache read ${spent.cacheRead}, cache write ${spent.cacheWrite})`)
+        recordFinding({ kind: "spend", harness, scenario: scenario.name, spent })
+      }
+      // A kind the decoder doesn't know draws nothing, so no difference would say so: every one fails, new in this
+      // release or kept from one before (the kept pair's), unless it's listed with why (`LISTED_UNKNOWN`).
+      const keptCapture = join(pairFolder(harness, scenario, native ? pair.version : undefined), "capture.jsonl")
+      const before = existsSync(keptCapture) ? new Set(unknownKinds(harness, await readRecording(keptCapture)).map((kind) => kind.type)) : new Set<string>()
+      for (const kind of unknownKinds(harness, pair.recording)) {
+        if (listedUnknown(harness, kind.type)) continue
+        const placement = nearestPlacement(harness, kind.type)
+        const near = placement ? `; the nearest kind it knows is ${placement.known}, in ${placement.table ?? "the code"} at ${placement.file}:${placement.line}` : ""
+        const since = before.has(kind.type) ? ", and the kept pair held it too: a kind an earlier release brought that was never placed" : ""
+        console.error(`✗ ${harness} ${scenario.name}: ${harness} ${pair.version} sends ${kind.type} (${kind.count}×), which its decoder doesn't know (${kind.reason})${since}${near}`)
+        recordFinding({ kind: "unknown-kind", harness, scenario: scenario.name, type: kind.type, reason: kind.reason, count: kind.count, ...placement && { placement } })
+        unexplained++
+      }
       const live = liveDrawing(harness, pair.recording)
       console.log(`${harness} ${pair.version} ${scenario.name}: ${pair.recording.messages.length} wire messages; live draws ${live.length} lines`)
       for (const line of live) console.log(`  live   ${line.slice(0, 180)}`)
@@ -1979,13 +2042,22 @@ for (const harness of harnesses.length ? harnesses : [...RECORDERS.keys()]) {
         found.replay = differences(drawing(replayed.live), drawing(replayed.replay))
         report("the replay", found.replay)
       }
-      const news = unexplainedIn(found, await keptPair(harness, scenario, native ? pair.version : undefined), rootedAt(rootReplacements(sandbox)))
+      const scrub = rootedAt(rootReplacements(sandbox))
+      const news = unexplainedIn(found, await keptPair(harness, scenario, native ? pair.version : undefined), scrub)
       unexplained += news.length
-      for (const difference of news) console.log(`  not explained by the kept pair: ${difference.side} ${difference.line}`)
+      const elsewhere = await reasonsElsewhere(harness)
+      for (const difference of news) {
+        console.log(`  not explained by the kept pair: ${difference.side} ${difference.line}`)
+        const line = scrub(difference.line)
+        const reader = found.stores.find((store) => store.differences.includes(difference))?.reader ?? "replay"
+        const proposal = elsewhere.get(`${difference.side}${line}`)
+        recordFinding({ kind: "unexplained", harness, scenario: scenario.name, reader, side: difference.side, line, ...proposal && { proposal } })
+      }
       if (write) console.log(`  kept ${relative(process.cwd(), await keep(harness, recorder, scenario, sandbox, pair, found, native))}`)
     })
   }
 }
 const stray = await strayStores(SANDBOX)
 if (stray.length) throw new Error(`A harness wrote outside its sandbox: ${stray.join(", ")}`)
+if (reportTo) await writeFile(reportTo, findings.map((finding) => `${JSON.stringify(finding)}\n`).join(""), { flag: "a" })
 process.exitCode = unexplained ? 1 : 0

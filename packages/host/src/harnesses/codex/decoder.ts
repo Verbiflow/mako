@@ -132,6 +132,8 @@ export const CODEX_SILENT_NOTIFICATIONS: ReadonlySet<string> = new Set([
   "windows/worldWritableWarning",
   "windowsSandbox/setupCompleted",
   "turn/moderationMetadata",
+  // Where Codex's own app marks the thread read (its first unread turn); Mako keeps its own unread mark. 0.159 on.
+  "thread/readState/changed",
   // The patch's records carry each edit; this is the turn's aggregate diff.
   "turn/diff/updated",
   // The patch the model wrote is its call's record, which lands before Codex applies it.

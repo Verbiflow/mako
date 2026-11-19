@@ -64,6 +64,18 @@ type CompactionMark = "idle" | "awaiting-summary" | "marked"
  * driver decides which turn a line belongs to and when a turn starts and
  * ends; this owns what the lines say.
  */
+/**
+ * The SDK's run deltas the child passes on as `unhandled` that have nothing for Mako, each with why: known here so a
+ * new one still reads as unknown. SDK 1.4.0 (`vendor/cursor-sdk-shared/delta-types.d.ts`).
+ */
+export const CURSOR_SILENT_DELTAS: ReadonlyMap<string, string> = new Map([
+  // How many tool calls the model's step asked for, before any runs; each call arrives whole as its own step.
+  ["tool-requests-listed", "a count of the calls each of which arrives on the message stream"],
+  // One model call's tokens; the turn's own `usage` message is their total, and how full the context is comes from
+  // each checkpoint (`context`), so a call's share would count the turn's spend twice.
+  ["model-call-completed", "one model call's tokens, which the turn's usage already totals"],
+])
+
 export class CursorDecoder {
   private projection: CursorSdkProjection | null = null
   private compaction: CompactionMark = "idle"
@@ -237,7 +249,8 @@ export class CursorDecoder {
         break
       }
       case "unhandled":
-        decoded.push({ kind: "unknown", type: delta.kind, reason: "unknown", raw: { type: "unhandled", kind: delta.kind } })
+        if (!CURSOR_SILENT_DELTAS.has(delta.kind))
+          decoded.push({ kind: "unknown", type: delta.kind, reason: "unknown", raw: { type: "unhandled", kind: delta.kind } })
         break
     }
     return decoded

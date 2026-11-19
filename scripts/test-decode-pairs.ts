@@ -1,7 +1,8 @@
 import { readdir } from "node:fs/promises"
 import { join } from "node:path"
 import { comparePair, PAIRS_FOLDER, type Compared, type Known, type Uncited } from "./decode-compare.ts"
-import { FIXTURE_ROOT } from "./native-decoding.ts"
+import { FIXTURE_ROOT, readRecording } from "./native-decoding.ts"
+import { listedUnknown, unknownKinds } from "./lib/native-kinds.ts"
 import { pairChildProblems } from "./pair-children.ts"
 
 /**
@@ -56,6 +57,9 @@ for (const harness of await readdir(FIXTURE_ROOT)) {
       cited += replay.cited.agreed
       found.push(...problems(replay, pair.replay?.known ?? []).map((problem) => `replay ${problem}`))
     } else if (pair.replay) found.push(resumed ? "lists replay differences, but its resume replays nothing" : "lists replay differences, but its capture never resumes")
+    // A kind the live decoder reports unknown draws nothing, so no difference names it: each must be placed, or listed with why.
+    for (const kind of unknownKinds(pair.harness, await readRecording(join(root, name, "capture.jsonl"))))
+      if (!listedUnknown(pair.harness, kind.type)) found.push(`live decoder reports ${kind.type} ${kind.reason} (${kind.count}×): place it in ${pair.harness}'s decoder, or list it in LISTED_UNKNOWN (scripts/lib/native-kinds.ts) with why`)
     const childProblems = await pairChildProblems(join(root, name), pair)
     children += pair.stores.reduce((count, store) => count + (store.children?.length ?? 0), 0)
     found.push(...childProblems)

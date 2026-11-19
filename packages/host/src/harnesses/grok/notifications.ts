@@ -24,6 +24,9 @@ type Retrying = Extract<NativeActivityObservation, { kind: "retrying" }>
 const SESSION_METHODS = new Set([
   "_x.ai/session_notification", "_x.ai/session/update", "session/update",
   "_x.ai/scheduled_task_created", "_x.ai/scheduled_task_fired", "_x.ai/scheduled_task_deleted", "_x.ai/monitor_event",
+  // A command Grok moved to the background, on a method of its own (1.0.88): `task_backgrounded`, which the roster
+  // reads from `background_tasks` (`GROK_UPDATES`).
+  "_x.ai/task_backgrounded",
 ])
 
 /** Workspace indexing and search progress, which Grok documents as its other notifications. */

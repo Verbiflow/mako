@@ -30,10 +30,11 @@ const text = z.string().nullish()
 /** Undefined where a notification names no session, rather than a failed `safeParse`, which builds an `Error`. */
 const Session = z.object({ sessionId: z.string() }).optional().catch(undefined)
 const Compaction = z.object({ sessionId: z.string(), status: z.string(), summary: text })
+// Devin 3000.x says `attempt: 0, maxAttempts: 0` for a stream it retries at once, with no count to give.
 const ConnectionRetry = z.object({
   sessionId: z.string(),
-  attempt: z.number().int().positive().nullish(),
-  maxAttempts: z.number().int().positive().nullish(),
+  attempt: z.number().int().nonnegative().nullish(),
+  maxAttempts: z.number().int().nonnegative().nullish(),
   isStreamRetry: z.boolean().nullish(),
 })
 const AgentStopped = z.object({ sessionId: z.string(), cause: z.string(), errorMessage: text })

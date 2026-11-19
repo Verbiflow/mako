@@ -4,34 +4,72 @@ name: Harness versions
 # flows passed on (`tested`, in packages/host/src/harnesses/<harness>/versions.ts),
 # which Mako's installs and Update go to. This reads every vendor's newest
 # release and, for each one newer than tested or each tested build its vendor
-# has withdrawn (its installer or npm no longer has it), opens a pull request that
-# moves tested and reruns the drift tools: protocol types, native tools,
-# self-report and the session flows, all against a scripted model, so a bump
-# spends no usage and its diff shows what the release changed. Its checks
-# say whether Mako still works on it; a red one stays out of Mako's Update.
+# has withdrawn (its installer or npm no longer has it), finishes the move:
+# every record a version check holds to tested, recorded again from the new
+# build, the files generated from them written again, and the checks run
+# (`scripts/bump-harness-versions.ts --write`). All against a scripted model,
+# so a bump spends no usage, except a harness whose flows only its own model
+# drives (Cursor), which runs on it when the repository holds its key, within
+# OWN_MODEL_BUDGET_TOKENS.
+#
+# The day's releases are put together, so they never conflict with each other
+# (`scripts/assemble-harness-bumps.ts`):
+# - every bump the bot finished goes on `harness-versions/<day>`, one green
+#   pull request for all of them;
+# - each bump that needs a person (a new tool, native kind or record kind, a
+#   difference no kept pair explains, a patch that no longer applies) gets its
+#   own pull request stacked on that one, its body saying what's new, where it
+#   goes and what the bot proposes, so no check is red without a reason given.
+# When main moves, each open bump branch takes it in, its generated files and
+# lockfile written again rather than merged (the `refresh` job).
 #
 # Locally, `npx tsx scripts/bump-harness-versions.ts --dry-run` prints what
-# this would bump and changes nothing.
+# this would bump and changes nothing. The whole workflow dry, from any branch:
+#
+#   gh workflow run harness-versions.yml --ref <branch> -f dry_run=true
+#
+# runs every due bump in full (releases that already have a pull request
+# included) and puts them together, checks and all, but pushes nothing, opens
+# or comments on no pull request and skips the macOS leg: each pull request it
+# would open, title, base and body, is in the run's summary.
 
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Run every bump and put them together, but push nothing and open no pull request; what it would open goes to the run's summary.
+        type: boolean
+        default: false
   schedule:
     - cron: "17 6 * * *"
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: harness-versions
+  # A dry run waits for no daily run, and none waits for it.
+  group: harness-versions${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '-dry-run' || '' }}
   cancel-in-progress: false
+
+env:
+  # "true" only for a dispatch that asked for it; a schedule or a push has no inputs.
+  DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run }}
+  # The most tokens one bump may spend on a harness's own model: Cursor's 18 current pairs took 1.23M (0.49M of it cache reads).
+  OWN_MODEL_BUDGET_TOKENS: "1500000"
+  # What every bump writes and two of one day would conflict on: written again from the merged inputs, never merged.
+  GENERATED: docs/adding-a-harness.md docs/harness-concepts.md src/dev/harness-descriptors.ts src/dev/harness-faces.ts package-lock.json
 
 jobs:
   find:
+    if: github.event_name != 'push'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     outputs:
       due: ${{ steps.read.outputs.due }}
       stuck: ${{ steps.read.outputs.stuck }}
+      day: ${{ steps.read.outputs.day }}
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
@@ -48,11 +86,26 @@ jobs:
       - run: npm run build:control-runtime
       - name: Read every vendor's newest release
         id: read
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           npx tsx scripts/bump-harness-versions.ts --dry-run
           npx tsx scripts/bump-harness-versions.ts --json > "$RUNNER_TEMP/readings.json"
-          due=$(node -e 'const rows = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(JSON.stringify(rows.filter((row) => row.bump).map((row) => ({ harness: row.provider, version: row.newest }))))' < "$RUNNER_TEMP/readings.json")
+          # A release that already has its pull request, alone or in a day's, is not due again: each bump's summary
+          # opens with the move it makes. A dry run bumps it all the same, to show what the bot would do with it.
+          : > "$RUNNER_TEMP/opened.txt"
+          if [ "$DRY_RUN" != true ]; then
+            gh pr list --state all --search "head:harness-versions/" --limit 200 --json body --jq '.[].body' > "$RUNNER_TEMP/opened.txt" || true
+          fi
+          due=$(node -e '
+            const fs = require("fs")
+            const rows = JSON.parse(fs.readFileSync(process.argv[1], "utf8"))
+            const opened = fs.readFileSync(process.argv[2], "utf8")
+            const said = (row) => `Moves ${row.provider}\x27s tested version from ${row.tested} to the vendor\x27s newest release, ${row.newest} `
+            process.stdout.write(JSON.stringify(rows.filter((row) => row.bump && !opened.includes(said(row))).map((row) => ({ harness: row.provider, version: row.newest }))))
+          ' "$RUNNER_TEMP/readings.json" "$RUNNER_TEMP/opened.txt")
           echo "due=$due" >> "$GITHUB_OUTPUT"
+          echo "day=$(date -u +%F)" >> "$GITHUB_OUTPUT"
           # A pinned tested build its vendor withdrew is due for a bump like a newer release; one with nothing newer to
           # move to fails the run below, since every install of it fails and no pull request will say so.
           stuck=$(node -e 'const rows = JSON.parse(require("fs").readFileSync(0, "utf8")); process.stdout.write(JSON.stringify(rows.filter((row) => row.withdrawn && !row.bump).map((row) => `${row.provider} ${row.tested}: ${row.withdrawn}`)))' < "$RUNNER_TEMP/readings.json")
@@ -74,86 +127,168 @@ jobs:
   bump:
     needs: find
     if: needs.find.outputs.due != '[]'
-    # A fresh runner, so each harness installs through Mako's own install plan
-    # at the version the bump declares, as a new machine would.
+    # A fresh runner, so each harness installs through Mako's own install plan at the version the bump declares, as a
+    # new machine would. It holds no token that can push: its change goes to `assemble` as an artifact.
     runs-on: ubuntu-24.04
-    timeout-minutes: 60
-    # Reading only: the bot's own token pushes and opens the pull request.
-    permissions:
-      contents: read
-      pull-requests: read
+    timeout-minutes: 75
     strategy:
       fail-fast: false
       matrix:
         include: ${{ fromJSON(needs.find.outputs.due) }}
-    env:
-      BRANCH: harness-versions/${{ matrix.harness }}-${{ matrix.version }}
     steps:
-      # The pull request is the bot's (Mako by Verbiflow): one the workflow's own token opened would run no checks,
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
+      - run: npm run build:control-runtime
+      # Without it each Codex pair recorded its sandbox failing every shell call, not Codex at work. `checks.yml`'s
+      # codex-sandbox job runs the same setup with Codex at tested on every pull request.
+      - name: Let Codex's sandbox run as on a Linux workstation
+        if: matrix.harness == 'codex'
+        uses: ./.github/actions/codex-sandbox
+      - name: Finish the move
+        id: bump
+        # A failing step is the pull request's news, not the job's end: the outcome says which kind.
+        continue-on-error: true
+        env:
+          # Read only by a harness whose flows run on its own model, and only from here (`--env-key-only`); absent,
+          # the bump says which secret would record them.
+          CURSOR_API_KEY: ${{ secrets.CURSOR_API_KEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/bump"
+          own=()
+          if [ -n "$CURSOR_API_KEY" ]; then own=(--own-model --budget-tokens "$OWN_MODEL_BUDGET_TOKENS"); fi
+          npx tsx scripts/bump-harness-versions.ts "${{ matrix.harness }}" --write "${own[@]}" \
+            --summary "$RUNNER_TEMP/bump/summary.md" --outcome "$RUNNER_TEMP/bump/outcome.json"
+      - name: Keep the change for the day's branch
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/bump"
+          # Everything the run wrote, kept builds' archives (vendor/harness-builds) and new fixtures included: what the
+          # run pins is what the pull request commits.
+          git add -A
+          git diff --cached --binary HEAD > "$RUNNER_TEMP/bump/change.patch"
+          if [ ! -f "$RUNNER_TEMP/bump/outcome.json" ]; then
+            printf '{"harness":"%s","version":"%s","tested":"%s","state":"broken","pins":[],"judgements":[]}\n' "${{ matrix.harness }}" "${{ matrix.version }}" "${{ matrix.version }}" > "$RUNNER_TEMP/bump/outcome.json"
+            printf 'Moves %s to %s.\n\nThe bump stopped before it could say what it did: [its run](%s).\n' "${{ matrix.harness }}" "${{ matrix.version }}" "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" > "$RUNNER_TEMP/bump/summary.md"
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: bump-${{ matrix.harness }}
+          path: ${{ runner.temp }}/bump
+          retention-days: 7
+
+  assemble:
+    needs: [find, bump]
+    if: always() && needs.find.outputs.due != '[]'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    outputs:
+      branches: ${{ steps.open.outputs.branches }}
+    steps:
+      # The pull requests are the bot's (Mako by Verbiflow): one the workflow's own token opened would run no checks,
       # and its checks are the news. People open theirs as themselves; only automations use the bot.
       - name: Act as the bot
         id: bot
+        if: env.DRY_RUN != 'true'
         uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
         with:
           app-id: ${{ secrets.MAKO_BOT_APP_ID }}
           private-key: ${{ secrets.MAKO_BOT_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
+      # A dry run holds no token that can push: the workflow's own, read only, and not kept in the checkout.
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
-          token: ${{ steps.bot.outputs.token }}
+          token: ${{ steps.bot.outputs.token || github.token }}
+          persist-credentials: ${{ env.DRY_RUN != 'true' }}
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
         with:
           node-version: 24
           package-manager-cache: false
-      - name: Skip a release that already has its pull request
-        id: open
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          if [ -n "$(gh pr list --head "$BRANCH" --state all --json number --jq '.[0].number')" ]; then
-            echo "exists=true" >> "$GITHUB_OUTPUT"
-          fi
       - uses: ./.github/actions/install-dependencies
-        if: steps.open.outputs.exists != 'true'
         with:
           electron: "false"
       - run: npm run build:control-runtime
-        if: steps.open.outputs.exists != 'true'
-      # Without it each Codex pair recorded its sandbox failing every shell call, not Codex at work. `checks.yml`'s
-      # codex-sandbox job runs the same setup with Codex at tested on every pull request.
-      - name: Let Codex's sandbox run as on a Linux workstation
-        if: steps.open.outputs.exists != 'true' && matrix.harness == 'codex'
-        uses: ./.github/actions/codex-sandbox
-      - name: Move tested and rerun the drift tools
-        id: bump
-        if: steps.open.outputs.exists != 'true'
-        # A failing step is the pull request's news, not the job's end.
-        continue-on-error: true
-        run: npx tsx scripts/bump-harness-versions.ts "${{ matrix.harness }}" --write --summary "$RUNNER_TEMP/summary.md"
-      - name: Open the pull request
-        if: steps.open.outputs.exists != 'true'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: bump-*
+          path: ${{ runner.temp }}/bumps
+      - name: Put the finished bumps on one branch, and each that needs a person on its own above it
+        id: open
         env:
           GH_TOKEN: ${{ steps.bot.outputs.token }}
-          OUTCOME: ${{ steps.bump.outcome }}
           BOT: ${{ steps.bot.outputs.app-slug }}
+          DAY: ${{ needs.find.outputs.day }}
+          BUMPS: ${{ runner.temp }}/bumps
         run: |
-          git config user.name "$BOT[bot]"
-          git config user.email "$(gh api "/users/$BOT%5Bbot%5D" --jq .id)+$BOT[bot]@users.noreply.github.com"
-          git switch -c "$BRANCH"
-          git add -A packages scripts docs/adding-a-harness.md docs/harness-concepts.md package.json package-lock.json
-          git commit -m "Move ${{ matrix.harness }} to ${{ matrix.version }}"
-          # The branch is this job's alone. One left by a run that couldn't open its
-          # pull request (none exists, or the step above would have skipped) is replaced.
-          git push --force origin "$BRANCH"
-          title="Move ${{ matrix.harness }} to ${{ matrix.version }}"
-          if [ "$OUTCOME" != "success" ]; then title="$title (drift found)"; fi
-          gh pr create --head "$BRANCH" --title "$title" --body-file "$RUNNER_TEMP/summary.md"
+          if [ "$DRY_RUN" = true ]; then
+            git config user.name "dry run"
+            git config user.email "dry-run@users.noreply.github.com"
+            echo "# Dry run: what the bot would open" >> "$GITHUB_STEP_SUMMARY"
+          else
+            git config user.name "$BOT[bot]"
+            git config user.email "$(gh api "/users/$BOT%5Bbot%5D" --jq .id)+$BOT[bot]@users.noreply.github.com"
+          fi
+          # Pushes and opens it, or in a dry run says what it would: `open <branch> <base> <title> <body file>`.
+          open() {
+            if [ "$DRY_RUN" = true ]; then
+              { echo; echo "## $3"; echo; echo "\`$1\` into \`$2\`, $(git diff --shortstat "$2" HEAD 2>/dev/null || git show --shortstat --format= HEAD)"; echo; echo "<details><summary>Body</summary>"; echo; cat "$4"; echo; echo "</details>"; } >> "$GITHUB_STEP_SUMMARY"
+              return
+            fi
+            git push --force origin "$1"
+            gh pr create --head "$1" --base "$2" --title "$3" --body-file "$4" || gh pr edit "$1" --title "$3" --body-file "$4"
+          }
+          field() { node -p "require(process.argv[1]).$2" "$1/outcome.json"; }
+          finished=(); others=()
+          for bump in "$BUMPS"/bump-*; do
+            if [ "$(field "$bump" state)" = finished ]; then finished+=("$bump"); else others+=("$bump"); fi
+          done
+          branches='{}'
+          mark() { branches=$(node -p 'const m = JSON.parse(process.argv[1]); m[process.argv[2]] = process.argv[3]; JSON.stringify(m)' "$branches" "$1" "$2"); }
+          base=main
+          if [ ${#finished[@]} -gt 0 ]; then
+            branch="harness-versions/$DAY"
+            git switch -C "$branch"
+            ok=true
+            npx tsx scripts/assemble-harness-bumps.ts "${finished[@]}" --summary "$RUNNER_TEMP/finished.md" || ok=false
+            names=$(for b in "${finished[@]}"; do echo "$(field "$b" harness) to $(field "$b" version)"; done | paste -sd, - | sed 's/,/, /g')
+            git add -A
+            git commit -m "Move $names"
+            title="Move $names"
+            if [ "$ok" != true ]; then title="$title (fails together)"; fi
+            open "$branch" main "$title" "$RUNNER_TEMP/finished.md"
+            for b in "${finished[@]}"; do mark "$(field "$b" harness)" "$branch"; done
+            base="$branch"
+          fi
+          for bump in "${others[@]}"; do
+            harness=$(field "$bump" harness); version=$(field "$bump" version)
+            branch="harness-versions/$harness-$version"
+            git switch --discard-changes -C "$branch" "$base"
+            npx tsx scripts/assemble-harness-bumps.ts "$bump" --summary "$RUNNER_TEMP/$harness.md" || true
+            git add -A
+            git commit -m "Move $harness to $version"
+            if [ "$(field "$bump" state)" = judgement ]; then suffix="needs a person"; else suffix="broken"; fi
+            # Stacked on the day's finished bumps, so its generated files and lockfile start from theirs; when that
+            # pull request merges and its branch goes, GitHub moves this one onto main.
+            open "$branch" "$base" "Move $harness to $version ($suffix)" "$RUNNER_TEMP/$harness.md"
+            mark "$harness" "$branch"
+          done
+          echo "branches=$branches" >> "$GITHUB_OUTPUT"
 
   macos:
-    needs: [find, bump]
-    if: needs.find.outputs.due != '[]'
-    # The same release's session flows on macOS, reported on its pull request.
+    needs: [find, assemble]
+    # A dry run pushed no branch for it to check out.
+    if: always() && needs.find.outputs.due != '[]' && needs.assemble.result == 'success' && !(github.event_name == 'workflow_dispatch' && inputs.dry_run)
+    # The same release's session flows on macOS, reported on its pull request. It checks and records nothing: every
+    # pair is recorded on the bump's Linux runner, so a pull request never mixes two machines' strings.
     runs-on: macos-15
     timeout-minutes: 45
     permissions:
@@ -164,14 +299,14 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.find.outputs.due) }}
     env:
-      BRANCH: harness-versions/${{ matrix.harness }}-${{ matrix.version }}
+      BRANCH: ${{ fromJSON(needs.assemble.outputs.branches)[matrix.harness] }}
     steps:
       - name: Skip a pull request macOS already reported on
         id: reported
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          if [ "$(gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json comments --jq '[.comments[].body | startswith("Session flows on macOS")] | any' 2>/dev/null)" = true ]; then
+          if [ -z "$BRANCH" ] || [ "$(gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json comments --jq "[.comments[].body | startswith(\"Session flows on macOS, ${{ matrix.harness }}\")] | any" 2>/dev/null)" = true ]; then
             echo "done=true" >> "$GITHUB_OUTPUT"
           fi
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
@@ -213,6 +348,64 @@ jobs:
           if [ "$INSTALL" != "success" ]; then outcome="not run: npm ci failed on this branch"
           elif [ "$BUILD" != "success" ]; then outcome="not run: the build failed on this branch"
           else outcome="$OUTCOME"; fi
-          # No summary when the flows didn't run: the step runs under `bash -e`, so its absence mustn't end it.
-          { echo "Session flows on macOS: $outcome"; echo; cat "$RUNNER_TEMP/macos.md" 2>/dev/null || true; echo; echo "[The run]($RUN)"; } > "$RUNNER_TEMP/comment.md"
+          { echo "Session flows on macOS, ${{ matrix.harness }}: $outcome"; echo; cat "$RUNNER_TEMP/macos.md" 2>/dev/null || true; echo; echo "[The run]($RUN)"; } > "$RUNNER_TEMP/comment.md"
           gh pr comment "$BRANCH" --body-file "$RUNNER_TEMP/comment.md"
+
+  refresh:
+    # Main moved: each open bump branch based on main takes it in. What two bumps both write (the generated files and
+    # the lockfile) is written again from the merged declarations and pins, never merged; any other conflict is said
+    # on the pull request, file by file. A stacked branch waits until GitHub moves it onto main.
+    if: github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Act as the bot
+        id: bot
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ secrets.MAKO_BOT_APP_ID }}
+          private-key: ${{ secrets.MAKO_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          token: ${{ steps.bot.outputs.token }}
+          fetch-depth: 0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
+      - run: npm run build:control-runtime
+      - name: Take main into each open bump branch
+        env:
+          GH_TOKEN: ${{ steps.bot.outputs.token }}
+          BOT: ${{ steps.bot.outputs.app-slug }}
+        run: |
+          git config user.name "$BOT[bot]"
+          git config user.email "$(gh api "/users/$BOT%5Bbot%5D" --jq .id)+$BOT[bot]@users.noreply.github.com"
+          for branch in $(gh pr list --state open --search "head:harness-versions/" --json headRefName,baseRefName --jq '.[] | select(.baseRefName == "main") | .headRefName'); do
+            git switch --discard-changes -C "$branch" "origin/$branch"
+            if git merge-base --is-ancestor origin/main HEAD; then continue; fi
+            if ! git merge --no-edit origin/main; then
+              others=$(git diff --name-only --diff-filter=U | grep -vxF -f <(tr ' ' '\n' <<< "$GENERATED") || true)
+              if [ -n "$others" ]; then
+                git merge --abort
+                printf 'Main moved, and this branch conflicts with it outside the generated files, so the bot left it as it was:\n\n%s\n' "$(sed 's/^/- `/; s/$/`/' <<< "$others")" > "$RUNNER_TEMP/conflict.md"
+                gh pr comment "$branch" --body-file "$RUNNER_TEMP/conflict.md"
+                continue
+              fi
+              for file in $GENERATED; do git checkout --theirs -- "$file" 2>/dev/null || true; done
+            fi
+            npm install --no-audit --no-fund
+            npm run -s build --workspace @mako/sessions
+            npm run harness:checklist
+            npm run harness:concepts
+            npm run harness:descriptors
+            git add -A
+            if [ -f .git/MERGE_HEAD ]; then git commit --no-edit
+            elif ! git diff --cached --quiet; then git commit -m "Write the generated files again over main"; fi
+            git push origin "$branch"
+          done
