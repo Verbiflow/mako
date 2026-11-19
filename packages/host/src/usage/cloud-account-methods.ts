@@ -516,6 +516,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
       deviceId: () => cloud.deviceId(),
       register: (automation) => cloud.registerAutomation(automation),
       unregister: (project, id) => cloud.unregisterAutomation(project, id),
+      issues: () => cloud.automationIssues(),
       runs: (after) => cloud.automationRuns(after),
       claim: (input) => cloud.claimAutomationRun(input),
       decline: (input) => cloud.declineAutomationRun(input),

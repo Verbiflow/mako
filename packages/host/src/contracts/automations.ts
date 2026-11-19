@@ -711,5 +711,10 @@ export function triggerWords(trigger: AutomationTrigger): string {
 
 /** Why a cloud trigger doesn't fire yet, for its row; undefined once it does. */
 export function cloudTriggerWaiting(trigger: AutomationTrigger, cloudRegistered: boolean | undefined): string | undefined {
+  // Never registered: the account refuses a Slack trigger, in these words, until Mako's cloud has a Slack app.
+  if (trigger.kind === "slack") return `${SLACK_UNCONNECTED}.`
   return triggerFiresInCloud(trigger) && cloudRegistered !== true ? `Its ${trigger.kind} trigger waits for the cloud account to register it.` : undefined
 }
+
+/** Why a Slack trigger never fires: Mako's cloud has no Slack app yet, and the account refuses to register one, saying this. */
+export const SLACK_UNCONNECTED = "Slack isn't connected to Mako's cloud yet"

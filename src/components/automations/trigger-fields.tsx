@@ -3,7 +3,7 @@ import { CheckIcon, CloudIcon, CopyIcon, LinkIcon, PlusIcon, RotateCwIcon, XIcon
 import { automations } from "@/state/automations"
 import { confirmAction } from "@/state/confirm"
 import { TRIGGER_ICONS } from "@/components/automations/trigger-icons"
-import type { AutomationHook, AutomationTrigger, AutomationTriggerKind } from "@mako/host/contracts/automations"
+import { SLACK_UNCONNECTED, type AutomationHook, type AutomationTrigger, type AutomationTriggerKind } from "@mako/host/contracts/automations"
 import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
 import {
   cronOf,
@@ -116,10 +116,15 @@ export function TriggerList({
             <MenuLabel>Fired by your cloud account</MenuLabel>
             {ADD_LATER.map(([kind, label]) => {
               const Icon = TRIGGER_ICONS[kind]
+              // Slack can't be added: Mako's cloud has no Slack app to hear it yet.
+              const unconnected = kind === "slack"
               return (
-                <MenuItem key={kind} data-add-trigger-kind={kind} onSelect={() => add(kind)}>
+                <MenuItem key={kind} data-add-trigger-kind={kind} disabled={unconnected} onSelect={() => add(kind)}>
                   <Icon className="size-3.5" />
-                  <span className="flex-1">{label}</span>
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    {label}
+                    {unconnected ? <span data-add-trigger-unconnected className="text-label text-faint">{SLACK_UNCONNECTED}</span> : null}
+                  </span>
                   <CloudIcon aria-label="Delivered by the cloud" className="size-3 text-faint" />
                 </MenuItem>
               )
@@ -442,7 +447,7 @@ function WebhookAddress({ name }: { name: string }) {
   const [busy, setBusy] = useState(false)
   const [copied, setCopied] = useState<string | undefined>()
   const ask = async (rotate: boolean) => {
-    if (rotate && !(await confirmAction({ title: "Rotate this webhook's secret?", body: "The old secret stops working at once; the sender needs the new one.", confirm: "Rotate secret", tone: "negative" }))) return
+    if (rotate && !(await confirmAction({ title: "Rotate this webhook's secret?", body: "The old secret keeps working for 24 hours, then stops; give the sender the new one before then.", confirm: "Rotate secret" }))) return
     setBusy(true)
     const answer = await automations.hook(name, "webhook", rotate)
     setBusy(false)
@@ -481,6 +486,9 @@ function WebhookAddress({ name }: { name: string }) {
           </button>
         </div>
       ) : null}
+      <p data-webhook-signing className="text-faint">
+        The sender signs each delivery: <code className="font-mono text-muted-foreground">Mako-Timestamp</code> (Unix seconds), <code className="font-mono text-muted-foreground">Mako-Delivery</code> (its own ID, one per delivery), and <code className="font-mono text-muted-foreground">Mako-Signature: v1=</code> the hex HMAC-SHA256, under the secret, of <code className="font-mono text-muted-foreground">timestamp.delivery.body</code>.
+      </p>
       <div className="flex items-center gap-2">
         <span className="min-w-0 flex-1 text-faint">{hook.secret ? "Shown this once: give it to the sender now. Your cloud account keeps it sealed." : "Its secret was shown when it was made. Rotate for a new one; the old one stops working."}</span>
         <button type="button" data-webhook-rotate disabled={busy} onClick={() => void ask(true)} className="pressable flex h-6 shrink-0 items-center gap-1 px-1.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground disabled:opacity-50">
