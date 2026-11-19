@@ -10,14 +10,19 @@ import { heavy } from "../base/heavy-packages.js"
 import { MAKO_SERVER_INSTRUCTIONS } from "../contracts/primer.js"
 import { INSTRUCTIONS_PARAM } from "../contracts/mcp-reach.js"
 import { hostLog } from "../base/host-log.js"
+import { compactToolLists } from "./compact-schema.js"
 
 /** Whose agents call: it throws unless `bindingId` is the conversation's binding that is running now. */
 export interface AgentOwner {
   authorizeAgent(conversationId: string, bindingId: string): void
 }
 
-/** Adds tools to the `mako` server; `conversationId` throws once the agent's grant no longer holds. */
-export type MakoTools = (server: McpServer, conversationId: () => string) => void
+/**
+ * Adds tools to the `mako` server; `conversationId` throws once the agent's grant no longer holds. `conversation` is the
+ * grant's conversation, read without authorizing (a server built as its agent launches has no turn yet), to shape what
+ * the server lists and never to act on; a warmed server has none.
+ */
+export type MakoTools = (server: McpServer, conversationId: () => string, conversation: string | undefined) => void
 
 /** A running agent's grant to Mako's servers, both opened with `token`; `makoUrl` when the host serves `mako`. */
 export interface ToolGrant {
@@ -128,6 +133,11 @@ export async function startConversationMcp(
     hostLog("agent-tools", "retired a task grant", { conversation: scope.conversationId, binding: scope.bindingId, reason })
   }
   const serveMako = makoTools.length > 0
+  /** The `mako` server's tools for a grant's conversation, each schema listed compact (`compactToolLists`). */
+  const registerMako = (mako: McpServer, conversationId: () => string, conversation: string | undefined) => {
+    compactToolLists(mako)
+    for (const register of makoTools) register(mako, conversationId, conversation)
+  }
   const server = createServer((request, response) => {
     void (async () => {
       const token = request.headers.authorization?.replace(/^Bearer /, "")
@@ -192,7 +202,7 @@ export async function startConversationMcp(
             }
           })
         : new McpServer({ name: "mako", version: "1.0.0" }, makoServerOptions(request.url))
-      if (route === "mako") for (const register of makoTools) register(mcp, authorized)
+      if (route === "mako") registerMako(mcp, authorized, scope.conversationId)
       response.once("close", () => {
         if (controlRequestId !== undefined) scope.controlRequests.delete(controlRequestId)
         if (!response.writableFinished) disconnected.abort()
@@ -238,7 +248,7 @@ export async function startConversationMcp(
           const { McpServer } = await heavy.mcpServer.load("an agent's in-process mako server")
           const mako = new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
           const authorized = scopeAuthorizer(owner, scope)
-          for (const register of makoTools) register(mako, authorized)
+          registerMako(mako, authorized, scope.conversationId)
           return mako
         }
       }
@@ -264,7 +274,7 @@ export async function startConversationMcp(
       const servers = [createControlMcpServer(async () => unused())]
       if (serveMako) {
         const mako = new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
-        for (const register of makoTools) register(mako, unused)
+        registerMako(mako, unused, undefined)
         servers.push(mako)
       }
       await Promise.all(servers.map((each) => each.close()))

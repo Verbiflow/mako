@@ -10,7 +10,7 @@ import { branchSince, checkoutSince } from "../base/checkout-since.js"
 import { cutAccount } from "./cut-account.js"
 import { personWaiting } from "./session-report.js"
 import { agentMessageOrder } from "./agent-message-order.js"
-import type { WaitSubscription } from "../contracts/agent-tools.js"
+import type { AgentToolRole, WaitSubscription } from "../contracts/agent-tools.js"
 import type { Waiting } from "../contracts/notifications.js"
 import { finMovedText, finResumedText, worktreeRemadeText, worktreeRemadeWords } from "../contracts/resume-account.js"
 import type { WorktreeRestored } from "../contracts/thread-worktrees.js"
@@ -1388,6 +1388,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.roster(conversation).length) return true
     const thread = this.store()?.journalPlacement(conversation)?.thread
     return thread !== undefined && this.store()?.edges().of(thread)?.role === APEX_ROLE
+  }
+
+  /**
+   * What the conversation's Thread is in its tree, for the `agents_*` tools its `mako` server lists (`ROLE_HIDES`): a
+   * Fin by its edge, an Apex by `isApex`. Undefined without the Thread store, which lists every tool.
+   */
+  toolRole(conversation: string): AgentToolRole | undefined {
+    if (!this.store()) return undefined
+    const fin = this.childOfConversation(conversation) !== undefined
+    const apex = this.isApex(conversation)
+    return fin ? (apex ? "fin-apex" : "fin") : apex ? "apex" : "thread"
   }
 
   /**
