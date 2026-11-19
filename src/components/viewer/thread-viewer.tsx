@@ -25,7 +25,7 @@ import { createExchangeBuilder } from "./exchange-builder"
 import { ShieldQuestionIcon } from "lucide-react"
 import { Shimmer } from "@/components/ui/shimmer"
 import { ConversationSkeleton } from "./conversation-skeleton"
-import { CrewCard } from "./crew-card"
+import { ShiverCard } from "./shiver-card"
 import { releasedExchanges } from "@/state/transcript-residency"
 
 /**
@@ -263,7 +263,7 @@ function Conversation({ thread, held }: { thread: ViewedThread; held: boolean })
           </div>
         ) : null}
         {/* An Apex's saved transcript, or one its session is starting from, keeps its Fins on screen. */}
-        {thread.ref.threadId ? <CrewCard thread={thread.ref.threadId} /> : null}
+        {thread.ref.threadId ? <ShiverCard thread={thread.ref.threadId} /> : null}
         </>
       }
     />

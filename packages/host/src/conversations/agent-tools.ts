@@ -85,13 +85,36 @@ export function agentToolSchema(tool: AgentToolDefinition): z.ZodType {
   if (!(input instanceof z.ZodObject)) throw new Error(`${tool.channel}'s input isn't an object`)
   const generated = z.toJSONSchema(input, { io: "input" })
   const asked = (field: string) => !tool.filled.some((filled) => filled === field)
+  const advertisedValues = new Map<string, string[]>()
   const properties = Object.entries(generated.properties ?? {}).flatMap(([field, schema]): [string, z.core.JSONSchema._JSONSchema][] => {
     if (!asked(field)) return []
     const description = tool.mcp.fields[field]
-    return [[field, description && schema !== true && schema !== false ? { ...schema, description } : schema]]
+    const aliases = tool.aliases?.[field]
+    const values = aliases ? literalsOf(schema).filter((value) => !(value in aliases)) : undefined
+    if (values) advertisedValues.set(field, values)
+    const advertised: z.core.JSONSchema._JSONSchema = values ? { type: "string", enum: values } : schema
+    return [[field, description && advertised !== true && advertised !== false ? { ...advertised, description } : advertised]]
   })
-  return z.fromJSONSchema({ ...generated, properties: Object.fromEntries(properties), required: generated.required?.filter(asked) })
+  const schema = z.fromJSONSchema({ ...generated, properties: Object.fromEntries(properties), required: generated.required?.filter(asked) })
+  if (!advertisedValues.size) return schema
+  if (!(schema instanceof z.ZodObject)) throw new Error(`${tool.channel}'s MCP schema isn't an object`)
+  // An aliased field is advertised as its own values alone and still takes its aliases (`AgentToolDefinition.aliases`).
+  return schema.extend(Object.fromEntries([...advertisedValues].map(([field, values]) => {
+    const accepted = new Set([...values, ...Object.keys(tool.aliases?.[field] ?? {})])
+    const description = tool.mcp.fields[field]
+    const taken = z.string().refine((value) => accepted.has(value)).meta({ enum: values, ...(description && { description }) })
+    return [field, generated.required?.includes(field) ? taken : taken.optional()]
+  })))
 }
+
+/** The string literals a generated union names (`{ anyOf: [{ const: "shiver" }, …] }`). */
+function literalsOf(schema: z.core.JSONSchema._JSONSchema): string[] {
+  const union = UnionSchema.safeParse(schema)
+  return union.success ? union.data.anyOf.flatMap((option) => option.const === undefined ? [] : [option.const]) : []
+}
+
+const UnionSchema = z.looseObject({ anyOf: z.array(z.looseObject({ const: z.string().optional() })) })
+
 
 /** An operation's answer as a door relays it: the JSON the host sent, a refusal named by `refused`. */
 export const AgentAnswerSchema = z.looseObject({ refused: z.string().optional() })

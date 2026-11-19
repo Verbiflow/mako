@@ -1,5 +1,5 @@
 import { FIN_WORD } from "../contracts/agents.js"
-import { LIST_BUDGET_CHARS, LIST_ENDED_FOR_MS, type AgentStrip, type AgentsListFolded, type CrewMate } from "../contracts/agent-tools.js"
+import { LIST_BUDGET_CHARS, LIST_ENDED_FOR_MS, type AgentStrip, type AgentsListFolded, type ShiverMate } from "../contracts/agent-tools.js"
 
 /** What the answer holds besides its rows: the tree's counts and the fold's note. */
 const ENVELOPE_CHARS = 1024
@@ -95,12 +95,12 @@ function foldedNote(folded: { idle: number; ended: number }): AgentsListFolded |
 }
 
 /**
- * A Fin's crew as `scope: crew` lists it: the other Fins that ended or sat idle over `LIST_ENDED_FOR_MS` ago with nothing
+ * A Fin's Shiver as `scope: shiver` lists it: the other Fins that ended or sat idle over `LIST_ENDED_FOR_MS` ago with nothing
  * open (no decision, no wait) are counted, not listed. One whose age the host doesn't hold stays listed.
  */
-export function foldCrew(crew: readonly CrewMate[], now: number): { crew: CrewMate[]; folded?: AgentsListFolded } {
+export function foldShiver(shiver: readonly ShiverMate[], now: number): { shiver: ShiverMate[]; folded?: AgentsListFolded } {
   const folded = { idle: 0, ended: 0 }
-  const listed = crew.filter((mate) => {
+  const listed = shiver.filter((mate) => {
     const { state } = mate
     const rank = state.kind === "ended" && !state.decision && !state.waitingOn?.length ? "ended" : state.kind === "idle" && !state.waitingOn?.length ? "idle" : undefined
     const moved = movedAt(mate, now)
@@ -109,5 +109,5 @@ export function foldCrew(crew: readonly CrewMate[], now: number): { crew: CrewMa
     return false
   })
   const note = foldedNote(folded)
-  return note ? { crew: listed, folded: note } : { crew: listed }
+  return note ? { shiver: listed, folded: note } : { shiver: listed }
 }
