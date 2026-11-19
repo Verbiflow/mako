@@ -57,6 +57,8 @@ export type AgentAskAnswer = z.infer<typeof AgentAskAnswerSchema>
 
 /** An ask's two answers as an approval's options, on the path a Fin's asks take to its Apex and the person. */
 export const AGENT_ASK_ALLOW = "allow"
+/** Why an allow for an agent's automation proposal is refused wherever it's sent through its ask. */
+export const PROPOSAL_ELSEWHERE = "A proposal is approved where its change is shown: its card in Automations or the Inbox. Its ask only declines."
 export const AGENT_ASK_KEEP = "keep"
 
 /** What a row says while the ask waits, in a line. */

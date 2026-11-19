@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { isDeepStrictEqual } from "node:util"
 import type { MethodTable } from "../base/methods.js"
 import { hostLog } from "../base/host-log.js"
-import type { AgentAsk, AgentAskAnswer, AgentAskWant } from "../contracts/agent-asks.js"
+import { PROPOSAL_ELSEWHERE, type AgentAsk, type AgentAskAnswer, type AgentAskWant } from "../contracts/agent-asks.js"
 import type { LiveAsks } from "./live-asks.js"
 
 type Run<Kind extends AgentAskWant["kind"]> = (conversationId: string, want: Extract<AgentAskWant, { kind: Kind }>, askId: string) => void | Promise<void>
@@ -50,6 +50,8 @@ export class AgentAskGate {
     }
     const ask = this.#asks.open(conversationId).find((ask) => ask.id === id)
     if (!ask) return { outcome: "missing", ask: id }
+    // Approved only where its change is shown (`Automations.decide`, from its card): through its ask, it only declines.
+    if (allow && ask.want.kind === "automation-proposal") throw new Error(PROPOSAL_ELSEWHERE)
     hostLog("agent-asks", allow ? "the person allowed what an agent asked" : "the person refused what an agent asked", { conversation: conversationId, want: ask.want.kind })
     if (!allow) {
       const settled = this.#asks.settle(conversationId, id)

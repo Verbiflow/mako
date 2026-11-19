@@ -826,6 +826,18 @@ export class Automations {
   async #tickProject(project: string, now: number): Promise<void> {
     const file = await this.#file(project)
     const store = this.#deps.store
+    // An id that left a file read whole (removed outside Mako) keeps nothing of what it was: off, unapproved. A file
+    // that couldn't be read leaves every one as it is.
+    if (file.exists && !file.error) {
+      const present = new Set(file.definitions.map((definition) => definition.id))
+      for (const id of store.ids(project)) {
+        const local = store.local(project, id)
+        if (present.has(id) || (!local.enabled && local.approved === undefined)) continue
+        store.setLocal(project, id, { enabled: false, failures: 0 })
+        this.#dropQueued(project, id, "It left the project's file.")
+        hostLog("automations", "an automation left its file; what this Mac kept of it is cleared", { automation: id })
+      }
+    }
     for (const definition of file.definitions) {
       const local = this.#local(project, definition)
       if (!local.enabled || local.paused) continue
@@ -1118,8 +1130,13 @@ export class Automations {
       const at = definitions.findIndex((each) => each.id === automation)
       return at < 0 ? [...definitions, after] : definitions.map((each) => (each.id === automation ? after : each))
     })
-    // A create or update the person approved is the definition they approved, on or off: its card showed all of it, or
-    // its change from what they'd approved. One that's on stays on with it.
+    // A create or update the person approved is the definition they approved: its card showed all of it, or its change
+    // from what they'd approved. A create starts afresh and off, as its card says, whatever an id it reuses left here;
+    // an update that's on stays on with it.
+    if (proposal.change === "create") {
+      this.#deps.store.setLocal(project, automation, approve({ enabled: false, failures: 0 }, after))
+      return
+    }
     const local = this.#deps.store.local(project, automation)
     this.#deps.store.setLocal(project, automation, { ...approve(local, after), ...(local.enabled && { nextRunAt: this.#nextRun(after, this.#now()) }) })
   }

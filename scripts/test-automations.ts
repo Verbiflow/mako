@@ -168,7 +168,7 @@ function makeWorld(state: string, open: string[], clock = { now: utc("2026-11-19
     ...(legacyLaunches && { legacyLaunches }),
   })
   const tool = new AutomationTool({ conversationOf: (session) => session, tier: () => "auto", folderOf: () => open[0], automations: () => automations, gate })
-  gate.runs = { automation: (id, want, ask) => tool.allowed(id, want, ask), "automation-proposal": async (_id, want) => tool.proposalAllowed(want) }
+  gate.runs = { automation: (id, want, ask) => tool.allowed(id, want, ask), "automation-proposal": async () => tool.proposalAllowed() }
   gate.declined = async (_id, want) => {
     if (want.kind === "automation-proposal") await tool.proposalDeclined(want)
   }
@@ -512,7 +512,10 @@ await test("a proposal: agent proposes, pending, the person approves, applied of
   assert.equal(personOnlyAsk(ask.want), true, "only the person answers it")
   assert.equal(agentAskWords(ask.want, "Claude").title, "Claude wants to add the automation Weekly")
   assert.equal((await world.automations.reading(folder)).proposals[0]?.status, "pending")
-  await world.gate.answer("conv-agent", ask.id, true)
+  // Its ask never approves (the card it's drawn as can't show the change); the person approves where it's shown.
+  await assert.rejects(world.gate.answer("conv-agent", ask.id, true), /approved where its change is shown/)
+  assert.equal((await world.automations.reading(folder)).automations.length, 1, "the refused allow applied nothing")
+  await world.automations.decide(proposed.proposal, true)
   const after = await world.automations.reading(folder)
   assert.deepEqual(after.automations.map((each) => each.definition.id), ["existing", "weekly"])
   assert.equal(after.automations[1]!.local.enabled, false, "a created automation stays off")
@@ -876,6 +879,45 @@ await test("R2-6. an offer of one never approved is declined, never run", async 
   assert.equal(ran, undefined)
   assert.equal(world.starts.length, 0)
   assert.match(declined[0] ?? "", /isn't one the person approved/)
+})
+
+await test("R3-2. a create starts off and afresh whatever its reused id left here; an id that leaves its file keeps nothing", async () => {
+  const kept = { id: "x", name: "X", prompt: brief, triggers: [{ kind: "schedule" as const, cron: "0 * * * *" }] }
+  const other = { id: "y", name: "Y", prompt: brief, triggers: [{ kind: "manual" as const }] }
+  const folder = await project([kept, other])
+  const world = makeWorld(join(scratch, "r3-2-state"), [folder])
+  await turnOn(world, folder, "x")
+  await turnOn(world, folder, "y")
+  // Removed outside Mako, on, and before any tick: an agent proposes it again, and the person approves the card.
+  await rewrite(folder, [other])
+  const created = await world.automations.propose({ conversation: "conv-x" }, { project: folder, change: "create", definition: { ...kept, prompt: { objective: "Push to main." } }, clientKey: "c" })
+  assert.ok("id" in created)
+  await world.automations.decide(created.id, true)
+  const x = await viewOf(world, folder, "x")
+  assert.equal(x.local.enabled, false, "off, as its card said")
+  assert.ok(isApproved(x.local, x.fingerprint), "approved as created")
+  // An id that leaves its file on a tick keeps nothing of what it was.
+  await rewrite(folder, [{ ...kept, prompt: { objective: "Push to main." } }])
+  world.clock.now += HOUR
+  await world.automations.tick(world.clock.now)
+  const runs = world.starts.length
+  await rewrite(folder, [{ ...kept, prompt: { objective: "Push to main." } }, other])
+  const y = await viewOf(world, folder, "y")
+  assert.equal(y.local.enabled, false)
+  assert.equal(y.local.approvedDefinition, undefined, "back in the file, it's unapproved and off")
+  assert.equal(world.starts.length, runs)
+})
+
+await test("R3-3. an agent's run_now follows the one rule: a fingerprint kept without its definition is no approval", async () => {
+  const plain = { id: "r", name: "R", prompt: brief, triggers: [{ kind: "manual" as const }] }
+  const folder = await project([plain])
+  const state = join(scratch, "r3-3-state")
+  await mkdir(state, { recursive: true })
+  await writeFile(join(state, "state.json"), JSON.stringify({ version: 1, proposals: [], projects: { [folder]: { automations: { r: { local: { enabled: true, failures: 0, approved: automationFingerprint(AutomationDefinitionSchema.parse(plain)) }, runs: [] } } } } }))
+  const world = makeWorld(state, [folder])
+  const asked = await world.tool.act({ kind: "agent", session: "conv-r" }, { action: "run_now", id: "r", clientKey: "k" })
+  assert.ok("refused" in asked && /never approved/.test(asked.why), "refused before any ask")
+  assert.equal(world.asks.get("conv-r")?.length ?? 0, 0)
 })
 
 await test("9. a schedule every hour or more often runs in the hour the clocks repeat; a daily one still runs once", () => {

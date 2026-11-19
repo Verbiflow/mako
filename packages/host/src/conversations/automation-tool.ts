@@ -4,8 +4,8 @@ import { machineCall, NOT_THE_PERSON } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
 import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
-import type { AgentAskWant } from "../contracts/agent-asks.js"
-import { automationDiff, triggerWords, type AutomationCause, type AutomationChange, type AutomationProjectReading, type AutomationProposal, type AutomationRun, type AutomationRunNowResult } from "../contracts/automations.js"
+import { PROPOSAL_ELSEWHERE, type AgentAskWant } from "../contracts/agent-asks.js"
+import { approvedDefinitionOf, automationDiff, isApproved, triggerWords, type AutomationCause, type AutomationChange, type AutomationProjectReading, type AutomationProposal, type AutomationRun, type AutomationRunNowResult } from "../contracts/automations.js"
 import type { JsonValue } from "../contracts/json.js"
 import { AFTER_ACT, type AutomationActInput, type AutomationActResult } from "../contracts/thread-tools.js"
 import type { AgentAskGate } from "./agent-ask-gate.js"
@@ -88,8 +88,8 @@ export class AutomationTool {
     const change = action === "disable" ? "off" : "run"
     // Only the definition the person approved runs: an agent never asks to run one its file changed since, or one never
     // approved, since its card couldn't say what would run.
-    if (change === "run" && own && view.local.approved !== view.fingerprint)
-      return { refused: "invalid", why: `${view.definition.name} runs only as the person approved it, and its definition ${view.local.approved === undefined ? "was never approved" : "changed since they did"}. Propose the change (update or enable) for them to review, or ask them to approve it in Automations.` }
+    if (change === "run" && own && !isApproved(view.local, view.fingerprint))
+      return { refused: "invalid", why: `${view.definition.name} runs only as the person approved it, and its definition ${approvedDefinitionOf(view.local) === undefined ? "was never approved" : "changed since they did"}. Propose the change (update or enable) for them to review, or ask them to approve it in Automations.` }
     if (own && this.#deps.tier(own) !== "full") {
       const ask = this.#deps.gate.ask(own, { kind: "automation", action: change, id: input.id, cwd: project })
       return { outcome: "asked", ask: ask.id, next: AFTER_ACT.asked }
@@ -135,11 +135,12 @@ export class AutomationTool {
     if ("refused" in answer) throw new Error(answer.why)
   }
 
-  /** The person allowed an agent's proposal from its card: applied, unless it went stale. */
-  async proposalAllowed(want: Extract<AgentAskWant, { kind: "automation-proposal" }>): Promise<void> {
-    const automations = this.#deps.automations()
-    if (!automations) throw new Error("This host has no automations.")
-    await automations.decide(want.proposal, true, "ask")
+  /**
+   * An allow for an agent's proposal through its ask: refused, whatever sent it (a card, an Apex's row, a phone). A
+   * proposal is approved only where its change is shown, by `Automations.decide`.
+   */
+  async proposalAllowed(): Promise<void> {
+    throw new Error(PROPOSAL_ELSEWHERE)
   }
 
   /** The person declined it from its card. */
