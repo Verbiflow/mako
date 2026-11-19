@@ -56,7 +56,7 @@ import {
   type SnapshotObjects,
 } from "./snapshot-git.js"
 import { copyGitIndex } from "./index-copy.js"
-import type { FileHistory } from "./watch-backend.js"
+import type { FileHistory, HistoryRead } from "./watch-backend.js"
 import type { HistoryMark } from "../contracts/watcher-child.js"
 const OperationSchema = z.object({
   plan: RewindPlanSchema,
@@ -244,6 +244,9 @@ export class WorkspaceSnapshots {
   private readonly pins = new Map<string, number>()
   private privateReads = 0
   private readonly waitingReads: (() => void)[] = []
+  private readonly urgentReads: (() => void)[] = []
+  /** Repositories a turn waits on, by how many of their captures haven't yet held the workspace: their reads go first. */
+  private readonly waiting = new Map<string, number>()
   /** Workspaces whose files a rewind is rewriting. */
   private readonly restoring = new Set<string>()
   private readonly runs = new Map<string, ActiveRun>()
@@ -259,6 +262,13 @@ export class WorkspaceSnapshots {
   private marking: { history: FileHistory; pending: Promise<HistoryMark | undefined> } | undefined
   /** Timed-out reads still belong to the shared history reader; do not pile new asks behind them. */
   private readonly slowHistory = new Set<Promise<unknown>>()
+  /**
+   * The repositories whose history waits to be read, as one read (`changedSince`), and the read before them. Reads
+   * hold parcel's FSEvents lock one at a time, so a wave of turns starting together, one read each, had the last of
+   * them wait for all the others, past the checkpoint's wait for history.
+   */
+  private sinceBatch: { history: FileHistory; mark: HistoryMark; roots: Set<string>; read: Promise<HistoryRead | undefined> } | undefined
+  private sinceReading: Promise<unknown> = Promise.resolve()
   /**
    * The last checkpoint taken of each repository, with what it was taken of: where the watcher's history stood as it
    * began, HEAD, and a digest of what the index stages. A turn starting there with all of them as they were is that
@@ -483,9 +493,15 @@ export class WorkspaceSnapshots {
     const history = this.history
     const marking = history ? this.markHistory(history) : undefined
     let told = false
+    if (frozen) this.waiting.set(scope, (this.waiting.get(scope) ?? 0) + 1)
     const tell = () => {
       if (told) return
       told = true
+      if (frozen) {
+        const left = (this.waiting.get(scope) ?? 1) - 1
+        if (left) this.waiting.set(scope, left)
+        else this.waiting.delete(scope)
+      }
       frozen?.()
     }
     await this.budget.prepareCapture(this.retention.maxSnapshotBytes)
@@ -574,6 +590,34 @@ export class WorkspaceSnapshots {
   }
 
   /**
+   * What changed in `scope` since `mark`, read with every other repository asking while the read before is under way:
+   * one read from the oldest of their marks. A path that changed after this repository's own mark but before another's
+   * is read again by its capture for nothing, never missed. Undefined when the history is slow or failed.
+   */
+  private changedSince(history: FileHistory, mark: HistoryMark, scope: string): Promise<HistoryRead | undefined> {
+    let batch = this.sinceBatch
+    if (batch?.history !== history) {
+      const asking: NonNullable<typeof batch> = { history, mark, roots: new Set(), read: Promise.resolve(undefined) }
+      batch = asking
+      this.sinceBatch = asking
+      // After the read under way, and a turn of the loop at least, so repositories asking together go together.
+      asking.read = this.sinceReading.then(() => new Promise<void>((resolve) => setImmediate(resolve))).then(() => {
+        if (this.sinceBatch === asking) this.sinceBatch = undefined
+        const roots = [...asking.roots]
+        return this.readHistory(() => history.since(asking.mark, roots, { exclude: roots.map((root) => join(root, ".git")) }))
+      })
+      this.sinceReading = asking.read
+    }
+    if (BigInt(mark.id) < BigInt(batch.mark.id)) batch.mark = mark
+    batch.roots.add(scope)
+    return batch.read.then((read) => read && {
+      paths: read.paths.filter((path) => path === scope || path.startsWith(`${scope}/`)),
+      lost: read.lost.filter((root) => root === scope),
+      ignored: [],
+    })
+  }
+
+  /**
    * Where the repository stands against its last checkpoint: the same, when nothing it holds can have changed since
    * (the watcher's history names no path in the working tree, Git's own folder aside, HEAD is where it was, the index
    * stages the same and the ignore rules outside the tree are as they were); changed, with the paths, when only the
@@ -595,7 +639,7 @@ export class WorkspaceSnapshots {
       return undefined
     }
     const [read, staged] = await Promise.all([
-      this.readHistory(() => history.since(last.mark, [scope], { exclude: [join(scope, ".git")] })),
+      this.changedSince(history, last.mark, scope),
       // A listing that fails here is forgotten: the whole capture this falls through to lists the index itself, and
       // only its own failure fails the capture.
       this.listing(scope, now).then(() => now.staged, () => {
@@ -873,9 +917,12 @@ export class WorkspaceSnapshots {
     }, () => mkdtemp(join(this.root, "compare-")))
   }
 
-  /** A Git command for a checkpoint: its own index and object stores, and Mako as author. */
+  /**
+   * A Git command for a checkpoint: its own index and object stores, and Mako as author. Ahead of the host's other reads
+   * while a turn in the repository waits for its checkpoint to hold the workspace (`waiting`).
+   */
   private snapshotGit(cwd: string, args: string[], index?: string, input?: string, objects?: SnapshotObjects): Promise<string> {
-    return snapshotGit(this.git, cwd, args, index, input, objects)
+    return snapshotGit(this.git, cwd, args, index, input, objects, this.waiting.has(cwd))
   }
 
   /** A rewind to a checkpoint; its result names the files it left as they were (`keptAsIs`). */
@@ -1199,7 +1246,7 @@ export class WorkspaceSnapshots {
   private async capturing<T>(scope: string, work: (gitDir: string, copied: () => void, fixed: () => void, finished: () => void) => Promise<T>, frozen: () => void): Promise<T> {
     const { pending, ordered } = await this.queued(scope, async () => {
       // Fingerprints also list files; take a slot before those reads and before the live index is copied.
-      const finished = await this.reading()
+      const finished = await this.reading(this.waiting.has(scope))
       try {
         const repository = await this.git.openRepository(scope)
         if (!repository) throw new Error("Workspace checkpoints currently require a Git repository.")
@@ -1255,14 +1302,15 @@ export class WorkspaceSnapshots {
     held.clear()
   }
 
-  private async reading(): Promise<() => void> {
+  /** A read slot (`PRIVATE_READS`); `urgent`, for a capture a turn waits on, before those waiting that no turn does. */
+  private async reading(urgent = false): Promise<() => void> {
     if (this.privateReads < PRIVATE_READS) this.privateReads++
-    else await new Promise<void>((resolve) => this.waitingReads.push(resolve))
+    else await new Promise<void>((resolve) => (urgent ? this.urgentReads : this.waitingReads).push(resolve))
     let held = true
     return () => {
       if (!held) return
       held = false
-      const next = this.waitingReads.shift()
+      const next = this.urgentReads.shift() ?? this.waitingReads.shift()
       if (next) next()
       else this.privateReads--
     }
@@ -1557,7 +1605,7 @@ export class WorkspaceSnapshots {
         throw new Error(
           "The checkpoint exceeds its object storage limit. No workspace files were changed."
         )
-      const objects = await privateSnapshotObjects(this.git, scope, directory, facts)
+      const objects = await privateSnapshotObjects(this.git, scope, directory, facts, this.waiting.has(scope))
       if (!since && !head.endsWith(":unborn")) {
         const previous = await this.publishing(scope, async () => {
           const row = this.db.prepare(`SELECT value FROM snapshots WHERE json_extract(value, '$.scope') = ?

@@ -101,10 +101,10 @@ import {
   LIST_ENDED_FOR_MS,
   type AgentOperations,
   type AgentsApexes,
-  type AgentsCrew,
+  type AgentsShiver,
   type OtherApex,
   type AgentStrip,
-  type CrewMate,
+  type ShiverMate,
   type AgentsLinkInput,
   type AgentsLinkResult,
   type AgentsListInput,
@@ -139,6 +139,7 @@ import {
   type WaitedReport,
   type FrontDoorChild,
   frontDoorNote,
+  LEGACY_SHIVER_SCOPE,
 } from "../contracts/agent-tools.js"
 import { agentWords, answerText, FOCUS_MS, isBrief, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, childStateOf, finName, fromApex, HANDED_OVER_NOTE, membershipLine, openAsk, type OpenAsk, PASSED_ON_NOTE, passedOn, personsApproval, QUIET_MS, quietLine, rollup, stoodFor, YOUR_APEX } from "../contracts/children.js"
 import { KeyedAdmission } from "../base/keyed-admission.js"
@@ -158,7 +159,7 @@ import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTA
 import { uniqueName, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
 import { holdOf, keepsLine, nextInLine } from "../contracts/request-hold.js"
-import { foldCrew, foldList } from "./agent-list-fold.js"
+import { foldList, foldShiver } from "./agent-list-fold.js"
 import { FinChanges, type ChangeFacts } from "./fin-changes.js"
 import type { ThreadHistoryTools } from "./thread-history.js"
 import { AgentWakes, DIGEST_WAITS, firstParagraph, FROM_AGENTS, fromAgent, type Notice, type ParentReady } from "./agent-wakes.js"
@@ -175,7 +176,7 @@ import type { TurnReply } from "./live-goals.js"
 import { PULL_WATCH_EVERY_MS, PullWatch, type PullWait } from "./pull-watch.js"
 import { QuietWatch } from "./fin-quiet.js"
 import { TurnWaits } from "./turn-waits.js"
-import { CREW_STEPS_MAX, CREW_WAIT, crewWaitNote, crewWaitSeconds, turnWaitItemKey, turnWaitItemWords, turnWaitLine, turnWaitMovedNote, type CrewFin, type TurnWait, type TurnWaitItem, type TurnWaitLine } from "../contracts/turn-waits.js"
+import { SHIVER_STEPS_MAX, SHIVER_WAIT, shiverWaitNote, shiverWaitSeconds, turnWaitItemKey, turnWaitItemWords, turnWaitDescription, turnWaitLine, turnWaitMovedNote, type ShiverFin, type TurnWait, type TurnWaitItem, type TurnWaitLine } from "../contracts/turn-waits.js"
 import { AFTER_WAIT, type TurnWaitInput, type TurnWaitResult } from "../contracts/thread-tools.js"
 import { AgentPlaces, placeName, type AwayRefused, type OutboxNotice, type PlacedAsk, type PlaceLink, type ResolvedPlace } from "./agent-places.js"
 import { checkedFinSource } from "./fin-source.js"
@@ -188,6 +189,8 @@ import type { PullTarget as ReadTarget } from "../git/index.js"
 const NONE: readonly NativeAgent[] = []
 /** How long `agents_move` holds its answer for the switch to settle: within the door's window, and a failure later reports. */
 const MOVE_WAIT_MS = 20_000
+/** The Shiver check-in's wait ID seed (`turn_waits.id`), as stored since before the Shiver was named: kept for its stored IDs. */
+const SHIVER_WAIT_KEY = "crew"
 /** At most this long `personAsk` answers from its kept walk of a tree, should a change reach it no other way. */
 const ASKS_KEPT_MS = 1_000
 /** Conversations `agents_list` with `scope: threads` answers with. */
@@ -1370,7 +1373,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     return agents
   }
 
-  /** Uses the same current-state reading as the crew, never just its last done report. */
+  /** Uses the same current-state reading as the Shiver, never just its last done report. */
   finishedThreadAt(thread: ThreadId): number | undefined {
     this.sync()
     const edge = this.store()?.edges().of(thread)
@@ -1600,48 +1603,48 @@ export class Agents implements AgentOperations, ConversationChildren {
       this.owedAfterTurn(edge, conversation)
     }
     if (!edge) this.apexLimit(conversation, request)
-    this.crewCheckIn(conversation, request)
+    this.shiverCheckIn(conversation, request)
     void this.drain()
     // Where the engine settles anyway: a Fin whose time came since the last pass closes without waiting for the job.
     if (this.finishedDemand.on) this.sweepFinished()
   }
 
   /**
-   * An Apex whose turn ended with its Fins at work, and no wait of its own armed, waits for the crew: Capy's captain's
-   * sweep, made automatic. Each turn's end arms it again, replacing the last; a wait the agent arms replaces it. Their
+   * An Apex whose turn ended with its Fins at work, and no wait of its own armed, waits for the Shiver: a check-in on its
+   * Fins, made automatic. Each turn's end arms it again, replacing the last; a wait the agent arms replaces it. Their
    * reports still wake it as ever; at its time it hears how each one stands. It backs off: a turn its own note started,
-   * with no report since, doubles the next (`crewWaitSeconds`); any report, or a turn anyone else started, resets it.
+   * with no report since, doubles the next (`shiverWaitSeconds`); any report, or a turn anyone else started, resets it.
    */
-  private crewCheckIn(conversation: string, request: string): void {
+  private shiverCheckIn(conversation: string, request: string): void {
     const store = this.store()
     if (!store || !this.isApex(conversation) || this.deps.live.atWork(conversation) || this.deps.archived?.(conversation)) return
     const armed = store.armedTurnWaitOf(conversation)
     if (armed && armed.armedBy !== "mako") return
-    if (!this.crewAtWork(conversation).length) return
+    if (!this.shiverAtWork(conversation).length) return
     const woke = store.turnWaitOfRequest(request)
-    const step = woke?.armedBy === "mako" && !this.crewReportedSince(conversation, woke.createdAt) ? Math.min((woke.crewStep ?? 0) + 1, CREW_STEPS_MAX) : 0
-    this.armCrew(conversation, `crew\0${request}`, step)
+    const step = woke?.armedBy === "mako" && !this.shiverReportedSince(conversation, woke.createdAt) ? Math.min((woke.crewStep ?? 0) + 1, SHIVER_STEPS_MAX) : 0
+    this.armShiver(conversation, `${SHIVER_WAIT_KEY}\0${request}`, step)
   }
 
-  private armCrew(conversation: string, clientKey: string, step: number): void {
+  private armShiver(conversation: string, clientKey: string, step: number): void {
     const thread = this.store()?.journalPlacement(conversation)?.thread
     if (!thread) return
-    this.turnWaits.arm({ conversation, thread, clientKey, description: CREW_WAIT, seconds: crewWaitSeconds(step), armedBy: "mako", crewStep: step })
+    this.turnWaits.arm({ conversation, thread, clientKey, description: SHIVER_WAIT, seconds: shiverWaitSeconds(step), armedBy: "mako", crewStep: step })
   }
 
   /** Whether any of the conversation's Fins reported since `at`: what resets the check-in's backoff. */
-  private crewReportedSince(conversation: string, at: number): boolean {
+  private shiverReportedSince(conversation: string, at: number): boolean {
     return this.roster(conversation).some((agent) => {
       const report = agent.child && this.latest.get(agent.child.thread)
       return report !== undefined && report.at >= at
     })
   }
 
-  /** The conversation's Fins at work or about to start, as its crew check-in names them. */
-  private crewAtWork(conversation: string): CrewFin[] {
+  /** The conversation's Fins at work or about to start, as its Shiver check-in names them. */
+  private shiverAtWork(conversation: string): ShiverFin[] {
     if (!this.showsFins(conversation)) return []
     const now = this.now()
-    return this.roster(conversation).flatMap((agent): CrewFin[] => {
+    return this.roster(conversation).flatMap((agent): ShiverFin[] => {
       if (!agent.child) return []
       const state = childStateOf(agent)
       const group = childGroup(state)
@@ -2503,7 +2506,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const apex = this.apexOf(caller)
     if ("refused" in apex) return apex
     if (input.scope === "threads") return this.threadsMatching(apex, input.query)
-    if (input.scope === "crew") return this.crewOf(apex, input.ended === true)
+    if (input.scope === "shiver" || input.scope === LEGACY_SHIVER_SCOPE) return this.shiverOf(apex, input.ended === true)
     if (input.scope === "apexes") return this.apexesOf(apex)
     const store = this.store()!
     const strips: AgentStrip[] = []
@@ -2709,7 +2712,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     // Progress that hands work to another Fin of its Apex, said so (`handoff`, or `fin:<name>`), is a handoff: the Apex
     // has to act on it, so it wakes. A Fin merely mentioned ("waiting on loop-holds' PR") is progress.
     const handedTo = input.handoff ? this.siblingOf(edge, input.handoff.to) : undefined
-    if (input.handoff && !handedTo) return { refused: "unknown-child", why: `No other ${FIN_WORD} of your ${APEX_WORD} is ${input.handoff.to}: handoff names one by its name or Thread. agents_list with scope crew lists them.` }
+    if (input.handoff && !handedTo) return { refused: "unknown-child", why: `No other ${FIN_WORD} of your ${APEX_WORD} is ${input.handoff.to}: handoff names one by its name or Thread. agents_list with scope shiver lists them.` }
     const handed = handedTo ?? (input.status === "progress" ? this.siblingNamed(edge, `${input.summary}\n${input.action ?? ""}`) : undefined)
     if (handed && input.status === "progress") report.handoff = { to: handed.name, child: ThreadIdSchema.parse(handed.child) }
     // Progress that first waits on a review or on the person waits on what its Apex arranges or passes on: it wakes
@@ -3665,7 +3668,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       wait: armed.wait.id,
       waitsOn: armed.wait.items.map(turnWaitItemWords),
       ...(armed.wait.endsBy !== undefined && { endsBy: new Date(armed.wait.endsBy).toISOString() }),
-      ...(armed.replaced.length && { replaced: armed.replaced.map((wait) => wait.description) }),
+      ...(armed.replaced.length && { replaced: armed.replaced.map(turnWaitDescription) }),
       next: AFTER_WAIT.armed,
     }
   }
@@ -3734,21 +3737,21 @@ export class Agents implements AgentOperations, ConversationChildren {
     const due = wait.fired
     if (!due) return "taken"
     let fired = due
-    // The crew check-in says how the crew stands as it's due, only once one of them has been quiet past QUIET_MS:
-    // a crew still showing work is armed again at the same step, a turn under way ends by arming the next, and a crew
+    // The Shiver check-in says how the Shiver stands as it's due, only once one of them has been quiet past QUIET_MS:
+    // a Shiver still showing work is armed again at the same step, a turn under way ends by arming the next, and a Shiver
     // that finished has reported.
     if (wait.armedBy === "mako") {
-      const crew = this.crewAtWork(wait.conversation)
-      const reported = this.crewReportedSince(wait.conversation, wait.createdAt)
-      const quiet = !reported && crew.some((fin) => fin.quietMs !== undefined && fin.quietMs >= (this.deps.quietMs ?? QUIET_MS))
+      const shiver = this.shiverAtWork(wait.conversation)
+      const reported = this.shiverReportedSince(wait.conversation, wait.createdAt)
+      const quiet = !reported && shiver.some((fin) => fin.quietMs !== undefined && fin.quietMs >= (this.deps.quietMs ?? QUIET_MS))
       const busy = this.deps.live.atWork(wait.conversation)
-      if (!crew.length || busy || !quiet) {
-        const why = !crew.length ? "no Fin at work" : busy ? "at work" : reported ? "a Fin reported" : "the crew shows work"
-        hostLog("waits", "crew check-in passed quietly", { wait: wait.id, conversation: wait.conversation, why })
-        if (crew.length && !busy) this.armCrew(wait.conversation, `crew\0${wait.id}\0again`, reported ? 0 : wait.crewStep ?? 0)
+      if (!shiver.length || busy || !quiet) {
+        const why = !shiver.length ? "no Fin at work" : busy ? "at work" : reported ? "a Fin reported" : "the Shiver shows work"
+        hostLog("waits", "Shiver check-in passed quietly", { wait: wait.id, conversation: wait.conversation, why })
+        if (shiver.length && !busy) this.armShiver(wait.conversation, `${SHIVER_WAIT_KEY}\0${wait.id}\0again`, reported ? 0 : wait.crewStep ?? 0)
         return "taken"
       }
-      fired = { ...due, text: crewWaitNote(crew, stoodFor, crewWaitSeconds(wait.crewStep ?? 0)) }
+      fired = { ...due, text: shiverWaitNote(shiver, stoodFor, shiverWaitSeconds(wait.crewStep ?? 0)) }
     }
     const child = this.childOfConversation(wait.conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
@@ -4932,7 +4935,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       const rerouted = edge && (store.rerouteEdge(edge.child, { from: harness, ...(until !== undefined && { until }), ...(from && { account: from.label }), to: step, at: now, line }) ?? edge)
       moved = store.finishFinMove(thread, this.generation, { visited: [placeKey(place), stepKey(step)] })
       if (edge) this.movedNotes.set(edge.parent, [...(this.movedNotes.get(edge.parent) ?? []), `"${edge.name}" ${line.charAt(0).toLowerCase()}${line.slice(1)}.`])
-      // Its Apex's transcript says it too, where the person reads the crew, as a line of its own.
+      // Its Apex's transcript says it too, where the person reads the Shiver, as a line of its own.
       const apexConversation = edge && this.frontOf(edge.parent, edge.parentSession)
       if (edge && apexConversation) {
         const said = membershipLine({ kind: "moved", fin: store.thread(edge.child)?.title ?? edge.name, to: words.to, why: words.why })
@@ -6548,7 +6551,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * A discovered sibling is readable crew, not an authorized send target: what it was sent goes to the Apex instead, as
+   * A discovered sibling is a Shiver mate to read, not an authorized send target: what it was sent goes to the Apex instead, as
    * a handoff that wakes it (`Report.handoff`, carrying the words), and the Apex passes it on in one step. The send is
    * still refused (`relayed`): nothing reached the sibling.
    */
@@ -7667,10 +7670,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** A Fin's Apex as it stands, and the other open Fins it started, as its front-door note names them: no transcript is read. */
-  private crewOf(fin: Apex, ended: boolean): AgentsCrew | AgentRefused {
+  private shiverOf(fin: Apex, ended: boolean): AgentsShiver | AgentRefused {
     const store = this.store()!
     const edge = store.edges().of(fin.thread)
-    if (!edge) return { refused: "no-parent", why: `This Thread has no ${APEX_WORD}: scope crew is for a ${FIN_WORD}. Leave scope out for this Thread's own ${FIN_WORD}s.` }
+    if (!edge) return { refused: "no-parent", why: `This Thread has no ${APEX_WORD}: scope shiver is for a ${FIN_WORD}. Leave scope out for this Thread's own ${FIN_WORD}s.` }
     this.sync()
     const conversation = this.frontOf(edge.parent, edge.parentSession)
     const session = conversation ? this.deps.live.session(conversation) : undefined
@@ -7680,7 +7683,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const step = held && session ? lastStep(held.blocks.slice(-24), session.harness) : undefined
     const title = session?.title ?? store.thread(ThreadIdSchema.parse(edge.parent))?.title
     const above = store.edges().of(edge.parent)
-    const mates = store.edges().children(edge.parent).filter((other) => other.child !== edge.child && !other.closedAt).map((other) => crewMate(this.frontDoorChild(other, true)))
+    const mates = store.edges().children(edge.parent).filter((other) => other.child !== edge.child && !other.closedAt).map((other) => shiverMate(this.frontDoorChild(other, true)))
     return {
       you: edge.name,
       apex: {
@@ -7690,7 +7693,7 @@ export class Agents implements AgentOperations, ConversationChildren {
         ...(step && { step }),
         ...(above && { asked: noteLine(above.asked.brief.objective, 160) }),
       },
-      ...(ended ? { crew: mates } : foldCrew(mates, this.now())),
+      ...(ended ? { shiver: mates } : foldShiver(mates, this.now())),
     }
   }
 
@@ -7809,7 +7812,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /**
    * A Fin as its Apex's front-door note names it: what it was asked, where it stands and what it said last; with
-   * `facts`, as the crew view reads it, how long it has been idle and its open pull requests too. `acting`: the
+   * `facts`, as the Shiver view reads it, how long it has been idle and its open pull requests too. `acting`: the
    * Threads a pending action names, read once by a note of many Fins.
    */
   private frontDoorChild(edge: ThreadParent, facts = false, acting?: ReadonlySet<string>): FrontDoorChild {
@@ -8334,7 +8337,7 @@ function unknownFin(ref: string): AgentRefused {
 }
 
 /** A Fin as another Fin of its Apex reads it: the person's words to it directly stay its own. */
-function crewMate(fin: FrontDoorChild): CrewMate {
+function shiverMate(fin: FrontDoorChild): ShiverMate {
   return { name: fin.name, harness: fin.harness, state: fin.state, topic: fin.topic, ...(fin.branch && { branch: fin.branch }), ...(fin.report && { report: fin.report }), ...(fin.idleFor !== undefined && { idleFor: fin.idleFor }), ...(fin.openPRs && { openPRs: fin.openPRs }) }
 }
 
