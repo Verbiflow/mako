@@ -1,4 +1,4 @@
-import { Worker } from "node:worker_threads"
+import { StoppableWorker } from "../base/worker-stop.js"
 import { z } from "zod"
 import type { FileResolution, MovedPaths } from "../contracts/file-references.js"
 import type { ChangeUsage, ThreadChangeSummary } from "../contracts/thread-changes.js"
@@ -114,7 +114,7 @@ interface Pending {
  * keeps the process alive. A failed read rejects; turn counts never fall back to the host's thread.
  */
 export class JournalReader {
-  private worker: Worker | undefined
+  private worker: StoppableWorker | undefined
   private nextId = 0
   private readonly pending = new Map<number, Pending>()
   private closed = false
@@ -289,8 +289,8 @@ export class JournalReader {
     worker.postMessage(request(id))
   }
 
-  private start(): Worker {
-    const worker = new Worker(new URL("./journal-reader-worker.js", import.meta.url), {
+  private start(): StoppableWorker {
+    const worker = new StoppableWorker(new URL("./journal-reader-worker.js", import.meta.url), {
       workerData: { path: this.path },
       // Room for what resolving file names keeps between questions (the work of up to 16 Threads, tens of MB for one of
       // 84,000 calls), which the host's own heap held before: past the limit the worker ends and every read waiting fails.
@@ -321,7 +321,7 @@ export class JournalReader {
   }
 
   /** A Git read the worker asked for, run by the host's Git and answered to that worker. */
-  private runGit(worker: Worker, asked: z.infer<typeof GitAskSchema>): void {
+  private runGit(worker: StoppableWorker, asked: z.infer<typeof GitAskSchema>): void {
     const { git, cwd, args, timeoutMs } = asked
     const answer = (reply: { git: number; ok: true; stdout: Uint8Array } | { git: number; ok: false; error: string }) => { if (this.worker === worker) worker.postMessage(reply) }
     if (!this.git) return answer({ git, ok: false, error: "This reader has no Git." })
@@ -340,8 +340,9 @@ export class JournalReader {
     }
     this.pending.clear()
     if (worker) {
+      // Asked to end itself, not terminated mid-read (`StoppableWorker`).
       const released = (async () => {
-        try { await worker.terminate() }
+        try { await worker.stop() }
         catch (error) { this.releaseFailure ??= new Error("The journal's reader could not be released.", { cause: error }) }
       })()
       this.retiring.add(released)
@@ -359,7 +360,7 @@ const COLLECT_TIMEOUT_MS = 10 * 60_000
 /** What collecting the journal at `path` drops (`collectPlan`), read on a worker of its own (`journal-collect-worker.ts`). */
 export function collectPlanOffThread(path: string, retainAfter: number, budget: number): Promise<CollectPlan> {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./journal-collect-worker.js", import.meta.url), {
+    const worker = new StoppableWorker(new URL("./journal-collect-worker.js", import.meta.url), {
       workerData: { path, retainAfter, budget },
       resourceLimits: { maxOldGenerationSizeMb: 128 },
     })
@@ -368,7 +369,7 @@ export function collectPlanOffThread(path: string, retainAfter: number, budget: 
       if (done) return
       done = true
       clearTimeout(timer)
-      void worker.terminate()
+      void worker.stop()
       if (outcome instanceof Error) reject(outcome)
       else resolve(outcome)
     }

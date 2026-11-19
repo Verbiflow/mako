@@ -1,4 +1,4 @@
-import { Worker } from "node:worker_threads"
+import { StoppableWorker } from "../../base/worker-stop.js"
 import { z } from "zod"
 import type { ProviderBinding } from "../../contracts/conversation-control.js"
 import { NativeQuestionHistorySchema, type NativeQuestionHistory } from "../../contracts/live-questions.js"
@@ -16,7 +16,7 @@ interface Request {
 
 /** One lazy, bounded worker keeps native JSON parsing off the host's event loop. */
 export class CodexQuestionReader {
-  private worker: Worker | undefined
+  private worker: StoppableWorker | undefined
   private idle: ReturnType<typeof setTimeout> | undefined
   private sequence = 0
   private readonly requests = new Map<number, Request>()
@@ -42,8 +42,8 @@ export class CodexQuestionReader {
     return result
   }
 
-  private start(): Worker {
-    const reader = new Worker(new URL("./question-worker.js", import.meta.url), { resourceLimits: { maxOldGenerationSizeMb: 128 } })
+  private start(): StoppableWorker {
+    const reader = new StoppableWorker(new URL("./question-worker.js", import.meta.url), { resourceLimits: { maxOldGenerationSizeMb: 128 } })
     this.worker = reader
     reader.on("message", (raw) => {
       const parsed = reply.safeParse(raw)
@@ -65,13 +65,13 @@ export class CodexQuestionReader {
     return reader
   }
 
-  private stop(reader: Worker, error: Error): void {
+  private stop(reader: StoppableWorker, error: Error): void {
     if (this.worker !== reader) return
     this.worker = undefined
     clearTimeout(this.idle)
     for (const request of this.requests.values()) { clearTimeout(request.timer); request.reject(error) }
     this.requests.clear()
     this.reads.clear()
-    void reader.terminate()
+    void reader.stop()
   }
 }

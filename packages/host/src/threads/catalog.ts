@@ -24,7 +24,7 @@ import { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js
 import { existsSync } from "node:fs"
 import { homedir } from "node:os"
 import { isAbsolute, join } from "node:path"
-import { MessageChannel, Worker } from "node:worker_threads"
+import { MessageChannel } from "node:worker_threads"
 import { connectOnDemandCatalog } from "./catalog-connection.js"
 import { ReaderHistory } from "./reader-history.js"
 import type { SessionReaderHistory } from "../contracts/session-reader.js"
@@ -61,6 +61,7 @@ import type {
 import { daemonIsForeign } from "./daemon-vintage.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { StoppableWorker } from "../base/worker-stop.js"
 import { onProviderChildChange } from "../base/provider-children.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { threadFileWorkspace } from "../contracts/thread-file-workspace.js"
@@ -551,7 +552,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   const readers = new ReaderHistory()
   /** Why this host closed a reader it served from, when it did: the loss is recorded with that, not `closed here`. */
   const closingFor = new WeakMap<DaemonClient, string>()
-  let catalogWorker: Worker | null = null
+  let catalogWorker: StoppableWorker | null = null
   let stopMonitoring: (() => void) | null = null
   /** On within `DAEMON_QUIET_MS` of the sync daemon's last event: its memory is watched only then. */
   const daemonBusy = jobs.demand("the sync daemon works")
@@ -1050,7 +1051,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       ...deps.profiles && { profiles: { ...deps.profiles, dataRoot: deps.dataRoot, sessionMemory: sessionMemoryPath(deps.userRoot), home: homedir() } },
     }
     const compiled = new URL("./catalog-worker.js", import.meta.url)
-    const worker = new Worker(compiled, {
+    const worker = new StoppableWorker(compiled, {
       workerData: data,
       transferList: [channel.port2],
       // Its young generation held to 32 MB: grown to 76 MB reading the catalog in, it stayed that size at rest with 6 MB in use.
@@ -1168,11 +1169,11 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   }
 
   async function stopCatalogWorker(
-    worker: Worker | null = catalogWorker
+    worker: StoppableWorker | null = catalogWorker
   ): Promise<void> {
     if (!worker) return
     if (catalogWorker === worker) catalogWorker = null
-    await worker.terminate().catch(() => {})
+    await worker.stop().catch(() => {})
   }
 
   function recoverDaemon(signal: AbortSignal): Promise<void> {

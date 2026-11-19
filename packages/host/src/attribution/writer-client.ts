@@ -1,4 +1,4 @@
-import { Worker } from "node:worker_threads"
+import { STOP_GRACE_MS, StoppableWorker } from "../base/worker-stop.js"
 import { postToWriter } from "./writer-messages.js"
 import { fileURLToPath } from "node:url"
 import { existsSync } from "node:fs"
@@ -15,7 +15,7 @@ const MAX_PENDING = 256
 interface Pending { resolve(reply: WriterReply): void; reject(error: Error): void; timer: NodeJS.Timeout }
 interface Subscription { closed: boolean; close?: () => void }
 interface Generation {
-  child: Worker
+  child: StoppableWorker
   ready: Promise<WriterSnapshot>
   accept(snapshot: WriterSnapshot): void
   fail(error: Error): void
@@ -33,7 +33,8 @@ interface Generation {
 interface WriterClientOptions {
   entry?: string
   applied?(): Promise<void>
-  timing?: { startMs?: number; askMs?: number; probeMs?: number }
+  /** `stopMs`: how long a retired worker has to end itself before it is terminated (`StoppableWorker`). */
+  timing?: { startMs?: number; askMs?: number; probeMs?: number; stopMs?: number }
   /** A read-back pass asked with `read-back` ended. */
   readBack?(result: BackfillResult | undefined): void
   /** The writer settled every change made by `through`. */
@@ -52,7 +53,7 @@ export class AttributionWriter {
   private closed = false
   private closing: Promise<void> | undefined
   private state: WriterSnapshot | undefined
-  private readonly timing: { startMs: number; askMs: number; probeMs: number }
+  private readonly timing: { startMs: number; askMs: number; probeMs: number; stopMs: number }
 
   constructor(deps: AttributionDeps, settings: Omit<WriterSettings, "privateReason">, options: WriterClientOptions = {}) {
     this.deps = deps
@@ -60,7 +61,7 @@ export class AttributionWriter {
     this.entry = options.entry ?? defaultEntry()
     this.applied = options.applied
     this.said = { readBack: options.readBack, settled: options.settled }
-    this.timing = { startMs: options.timing?.startMs ?? START_MS, askMs: options.timing?.askMs ?? ASK_MS, probeMs: options.timing?.probeMs ?? PROBE_MS }
+    this.timing = { startMs: options.timing?.startMs ?? START_MS, askMs: options.timing?.askMs ?? ASK_MS, probeMs: options.timing?.probeMs ?? PROBE_MS, stopMs: options.timing?.stopMs ?? STOP_GRACE_MS }
   }
 
   snapshot(): WriterSnapshot | undefined { return this.state }
@@ -129,7 +130,7 @@ export class AttributionWriter {
     const entry = this.entry
     // The writing owner drains acknowledged writes before ending its worker.
     // The outer host owns this close; termination must not race the accepted-write drain.
-    const child = new Worker(entry, {
+    const child = new StoppableWorker(entry, {
       name: "attribution-writer", resourceLimits: { maxYoungGenerationSizeMb: 4 }, execArgv: entry.endsWith(".ts") ? process.execArgv : [],
     })
     let accept!: (snapshot: WriterSnapshot) => void
@@ -141,7 +142,7 @@ export class AttributionWriter {
     const generation: Generation = { child, ready, accept, fail, exit, pending: new Map(), subscriptions: new Map(), repositories: new Map(), context: { version: 0, byPath: new Map(), running: "" }, closed: false, started: false, privateReason }
     const timer = setTimeout(() => {
       this.retire(generation, new Error("The record of changes' writer took too long to open."))
-      void child.terminate()
+      void child.stop(this.timing.stopMs)
     }, this.timing.startMs)
     timer.unref()
     child.on("message", message => {
@@ -227,7 +228,7 @@ export class AttributionWriter {
     for (const subscription of generation.subscriptions.values()) { subscription.closed = true; release(subscription) }
     generation.subscriptions.clear()
     if (this.generation === generation) this.state = undefined
-    generation.cleanup = generation.child.terminate().then(() => {})
+    generation.cleanup = generation.child.stop(this.timing.stopMs).then(() => {})
     void generation.cleanup.catch(() => {})
   }
 

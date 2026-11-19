@@ -1,6 +1,7 @@
 import { parentPort, workerData } from "node:worker_threads"
 import { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { z } from "zod"
+import { exitWhenStopped } from "./base/worker-stop.js"
 import { createHarnessHost, detachedHarnessContext, usageHarnesses } from "./harnesses/index.js"
 import { UsageLedger, UsageWorkerDataSchema, usageSummary, type UsageWorkerReply } from "./usage/index.js"
 
@@ -30,3 +31,4 @@ port.on("message", raw => {
   })
 })
 port.on("close", () => ledger.close())
+exitWhenStopped(() => ledger.close())

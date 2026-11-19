@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite"
 import { parentPort, workerData } from "node:worker_threads"
 import { z } from "zod"
+import { exitWhenStopped } from "../base/worker-stop.js"
 import { COLLECT_MOST, collectPlan } from "./journal-store.js"
 
 /*
@@ -9,6 +10,7 @@ import { COLLECT_MOST, collectPlan } from "./journal-store.js"
  * what this finds (`JournalStore.dropPlanned`), less what it wrote since this read began.
  */
 const { path, retainAfter, budget } = z.object({ path: z.string(), retainAfter: z.number(), budget: z.number() }).parse(workerData)
+exitWhenStopped()
 // The connection closes before the answer goes: the host ends this worker as the answer lands, and a connection left
 // open then would keep its read lock on the journal.
 const answer = (() => {

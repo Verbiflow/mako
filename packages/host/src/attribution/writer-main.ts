@@ -1,6 +1,7 @@
 import type { z } from "zod"
 import { parentPort } from "node:worker_threads"
 import { followHostLog, hostLog } from "../base/host-log.js"
+import { exitWhenStopped } from "../base/worker-stop.js"
 import { openWriter } from "./writer-runtime.js"
 import { Git } from "@mako/git"
 import { gitRepository } from "./ports.js"
@@ -198,4 +199,5 @@ async function main(): Promise<void> {
   })
 }
 
+exitWhenStopped()
 void main().catch(error => { console.error(error); process.exitCode = 1; disconnect() })

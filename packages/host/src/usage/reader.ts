@@ -1,4 +1,4 @@
-import { Worker } from "node:worker_threads"
+import { StoppableWorker } from "../base/worker-stop.js"
 import type { UsageSummary } from "../contracts/automations-usage-updates.js"
 import { UsageWorkerReplySchema, type UsageWorkerData } from "./worker-contract.js"
 
@@ -11,7 +11,7 @@ interface Pending {
 
 /** Scans, SQLite writes and aggregation stay off the host, including cold history reads. */
 export class UsageReader {
-  private worker: Worker | undefined
+  private worker: StoppableWorker | undefined
   private pending: Pending | undefined
   private idle: ReturnType<typeof setTimeout> | undefined
   private closed = false
@@ -32,7 +32,7 @@ export class UsageReader {
     if (this.pending) return this.pending.promise
     if (this.stopping) return this.stopping.then(() => this.read())
     clearTimeout(this.idle)
-    let reader: Worker
+    let reader: StoppableWorker
     try {
       reader = this.worker ?? this.start()
     } catch (error) {
@@ -49,8 +49,8 @@ export class UsageReader {
     return promise
   }
 
-  private start(): Worker {
-    const reader = new Worker(this.entry, {
+  private start(): StoppableWorker {
+    const reader = new StoppableWorker(this.entry, {
       workerData: this.data,
       resourceLimits: { maxOldGenerationSizeMb: 768 },
     })
@@ -74,13 +74,13 @@ export class UsageReader {
     return reader
   }
 
-  private async stop(reader: Worker, error: Error): Promise<void> {
+  private async stop(reader: StoppableWorker, error: Error): Promise<void> {
     if (this.worker !== reader) return
     this.worker = undefined
     clearTimeout(this.idle)
     const pending = this.pending
     this.pending = undefined
-    const stopped = reader.terminate().then(() => undefined)
+    const stopped = reader.stop().then(() => undefined)
     this.stopping = stopped
     if (pending) { clearTimeout(pending.timer); pending.reject(error) }
     try { await stopped }

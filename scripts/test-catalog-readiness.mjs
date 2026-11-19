@@ -107,9 +107,13 @@ state.catalog = () => {
   return client
 }
 state.Worker = class extends EventEmitter {
-  constructor() {
+  constructor(entry, options) {
     super()
     state.workers.push(this)
+    // A worker asked to stop through its stop port (`StoppableWorker`) ends itself, as `exitWhenStopped` does; at once, as
+    // this stand-in's `terminate()` does.
+    const stop = options?.workerData?.makoStopPort
+    if (stop) stop.exit = () => this.emit("exit", 0)
   }
   async terminate() {
     this.emit("exit", 0)
@@ -118,7 +122,9 @@ state.Worker = class extends EventEmitter {
 }
 const mocks = {
   "./catalog-connection.js": `export const connectOnDemandCatalog = async () => globalThis.__catalogReadinessTest.sharedEnabled ? globalThis.__catalogReadinessTest.connect() : null;`,
-  "node:worker_threads": `export class MessageChannel { port1 = { close() {} }; port2 = {} }; export const Worker = globalThis.__catalogReadinessTest.Worker;`,
+  "node:worker_threads": `export class MessagePort {}
+    export class MessageChannel { port2 = new MessagePort(); port1 = { close() {}, postMessage: () => this.port2.exit?.() } }
+    export const workerData = undefined; export const Worker = globalThis.__catalogReadinessTest.Worker;`,
   "@mako/sessions": `const s = globalThis.__catalogReadinessTest;
     export const connectDaemonPort = () => s.connect();
     export const defaultCatalog = () => s.catalog();
