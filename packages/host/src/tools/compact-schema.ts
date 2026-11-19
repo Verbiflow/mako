@@ -13,8 +13,9 @@ const EmptyObject = z.strictObject({})
 /**
  * A tool's input schema as an agent's context pays for it, said in fewer tokens and meaning the same: no `$schema`
  * (no harness reads it; 697 tokens over the `mako` server), a union of literals as one `enum` (zod writes each as
- * `{type, const}` in an `anyOf`; 840 tokens), and no `additionalProperties: {}`, which allows what leaving it out
- * allows. Plain JSON Schema that Claude Code, Codex, Cursor, Grok, OpenCode and Devin all take.
+ * `{type, const}` in an `anyOf`; 840 tokens), and no `additionalProperties: {}` or a field's `properties: {}` (a
+ * tool's own stays: some clients want it), which allow what leaving them out allows. Plain JSON Schema that Claude
+ * Code, Codex, Cursor, Grok, OpenCode and Devin all take.
  */
 export function compactSchema(schema: JsonSchema, root = true): JsonSchema {
   if (Array.isArray(schema)) return schema.map((each) => compactSchema(each, false))
@@ -24,6 +25,7 @@ export function compactSchema(schema: JsonSchema, root = true): JsonSchema {
   for (const [key, value] of Object.entries(object.data)) {
     if (root && key === "$schema") continue
     if (key === "additionalProperties" && EmptyObject.safeParse(value).success) continue
+    if (!root && key === "properties" && object.data.type === "object" && EmptyObject.safeParse(value).success) continue
     const literals = key === "anyOf" ? literalUnion(value) : undefined
     if (literals) {
       if (literals.type !== undefined) compact.type = literals.type

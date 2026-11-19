@@ -3,8 +3,8 @@
   "roles": {
     "thread": {
       "total": {
-        "tokens": 15105,
-        "bytes": 66056
+        "tokens": 14774,
+        "bytes": 64737
       },
       "instructions": {
         "tokens": 727,
@@ -164,8 +164,8 @@
           "bytes": 881
         },
         "automation": {
-          "tokens": 580,
-          "bytes": 2391
+          "tokens": 249,
+          "bytes": 1072
         },
         "wait": {
           "tokens": 541,
@@ -175,8 +175,8 @@
     },
     "apex": {
       "total": {
-        "tokens": 15105,
-        "bytes": 66056
+        "tokens": 14774,
+        "bytes": 64737
       },
       "instructions": {
         "tokens": 727,
@@ -336,8 +336,8 @@
           "bytes": 881
         },
         "automation": {
-          "tokens": 580,
-          "bytes": 2391
+          "tokens": 249,
+          "bytes": 1072
         },
         "wait": {
           "tokens": 541,
@@ -347,8 +347,8 @@
     },
     "fin": {
       "total": {
-        "tokens": 16101,
-        "bytes": 70416
+        "tokens": 15770,
+        "bytes": 69097
       },
       "instructions": {
         "tokens": 727,
@@ -512,8 +512,8 @@
           "bytes": 881
         },
         "automation": {
-          "tokens": 580,
-          "bytes": 2391
+          "tokens": 249,
+          "bytes": 1072
         },
         "wait": {
           "tokens": 541,
@@ -523,8 +523,8 @@
     },
     "fin-apex": {
       "total": {
-        "tokens": 16101,
-        "bytes": 70416
+        "tokens": 15770,
+        "bytes": 69097
       },
       "instructions": {
         "tokens": 727,
@@ -688,8 +688,8 @@
           "bytes": 881
         },
         "automation": {
-          "tokens": 580,
-          "bytes": 2391
+          "tokens": 249,
+          "bytes": 1072
         },
         "wait": {
           "tokens": 541,
