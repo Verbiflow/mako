@@ -5141,7 +5141,14 @@ locals are `mako$` names, so it can never capture one of the bundle's: 1.4.1
 moved the retry loop's attempt counter off `y` and put the action there, and
 a port by renames alone would have compared the action with 0. A release
 whose code changed fails the install naming the patch and the anchor that
-is gone. The tests (`test:cursor-child`, `test-cursor-sdk-resume.mjs`) find
+is gone. Patching never needs the network: the first time it rewrites a file it
+keeps the file's unpatched bytes beside the package (`@cursor/sdk/.mako-pristine`,
+gzipped, with the version and each file's hash; left out of the app), and a
+later patch starts again from those; modules an older build patched, which a
+local update's `npm install` leaves in place, get them from npm's cache on the
+machine (the tarball by the integrity the install recorded, read off disk with no
+npm request), and failing both the patch says so and to
+reinstall `@cursor/sdk`. The tests (`test:cursor-child`, `test-cursor-sdk-resume.mjs`) find
 what they run the same way (`scripts/lib/cursor-sdk-sites.mjs`), so a
 release that only renames needs no edit anywhere.
 `scripts/test-cursor-sdk.ts` covers the projection, modes and wire; a live

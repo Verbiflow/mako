@@ -566,6 +566,7 @@
       "mako-icons/_masters/desktop-dark.png",
       "package.json",
       "!**/*.map",
+      "!node_modules/@cursor/sdk/.mako-pristine/**",
       {
         "from": "packages/sessions",
         "to": "node_modules/@mako/sessions",

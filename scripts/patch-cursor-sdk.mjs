@@ -65,10 +65,13 @@
 // stands on may not. A release that changed it fails the install, naming the patch and the anchor that is gone.
 // The patch's own locals are `mako$` names, which no bundle uses, so they can't capture one of the bundle's.
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
+import { gunzipSync, gzipSync } from "node:zlib"
+import { z } from "zod"
 import { fileURLToPath } from "node:url"
 import { applyAnchored, bind, locate } from "./lib/anchored-patch.mjs"
 
@@ -289,19 +292,94 @@ export function assertCursorSdkPatched(read, files) {
     throw new Error(`@cursor/sdk ${version} lacks Mako's complete ${missing.map((patch) => `${patch.change} (${patch.build})`).join(", ")} patch; rebuild with scripts/patch-cursor-sdk.mjs`)
 }
 
+/** Beside the package: the bytes of each file before Mako first patched it, so a patch can start again from them. */
+export const PRISTINE_FOLDER = ".mako-pristine"
+/** The store's record: the package version its bytes are of, and each kept file's sha256. */
+const PristineManifest = z.object({ version: z.string(), files: z.record(z.string(), z.string()) })
+const sha256 = (text) => createHash("sha256").update(text).digest("hex")
+
 /**
- * Each target's bytes as npm ships them, from npm's cache when it holds the package: where a target carrying an older
- * or incomplete patch starts again, since a patch can't be undone in place. A checkout whose modules were installed
- * before this patch changed (the updater copies the person's own) has exactly those.
+ * What the installed files were before any patch, kept the first time each is patched (`.mako-pristine`, gzipped, with
+ * the package's version and each file's hash). Kept for another version, or with bytes that don't hash to what was
+ * kept, they are not there: `missing` says why.
  */
-export function shippedCursorSdk(version) {
+export function pristineStore(root, version) {
+  const folder = join(root, PRISTINE_FOLDER)
+  const manifestFile = join(folder, "manifest.json")
+  const load = () => {
+    if (!existsSync(manifestFile)) return { manifest: { version, files: {} }, why: `nothing is kept in ${PRISTINE_FOLDER}` }
+    try {
+      const parsed = PristineManifest.safeParse(JSON.parse(readFileSync(manifestFile, "utf8")))
+      if (!parsed.success) return { manifest: { version, files: {} }, why: `${PRISTINE_FOLDER}/manifest.json isn't a manifest` }
+      const manifest = parsed.data
+      if (manifest.version !== version) return { manifest: { version, files: {} }, why: `${PRISTINE_FOLDER} holds @cursor/sdk ${manifest.version}'s bytes, not ${version}'s` }
+      return { manifest }
+    } catch (error) {
+      return { manifest: { version, files: {} }, why: `${PRISTINE_FOLDER}/manifest.json can't be read: ${error.message}` }
+    }
+  }
+  let state = load()
+  return {
+    get(target) {
+      const hash = state.manifest.files[target]
+      if (!hash) return { why: state.why ?? `${PRISTINE_FOLDER} keeps nothing of ${target}` }
+      try {
+        const text = gunzipSync(readFileSync(join(folder, `${target}.gz`))).toString("utf8")
+        return sha256(text) === hash ? { text } : { why: `${PRISTINE_FOLDER}'s copy of ${target} doesn't hash to what was kept` }
+      } catch (error) {
+        return { why: `${PRISTINE_FOLDER}'s copy of ${target} can't be read: ${error.message}` }
+      }
+    },
+    save(target, text) {
+      if (text.includes(ANY_MARKER)) throw new Error(`refusing to keep a patched ${target} as its pristine bytes`)
+      const file = join(folder, `${target}.gz`)
+      mkdirSync(dirname(file), { recursive: true })
+      writeFileSync(`${file}.tmp`, gzipSync(text))
+      renameSync(`${file}.tmp`, file)
+      state = { manifest: { version, files: { ...state.manifest.files, [target]: sha256(text) } } }
+      writeFileSync(`${manifestFile}.tmp`, `${JSON.stringify(state.manifest, null, 2)}\n`)
+      renameSync(`${manifestFile}.tmp`, manifestFile)
+    },
+  }
+}
+
+/** The lockfile's record of the installed package: npm writes it into `node_modules/.package-lock.json`. */
+const LockEntry = z.object({ version: z.string(), integrity: z.string() })
+const HiddenLock = z.object({ packages: z.record(z.string(), z.unknown()) })
+
+/**
+ * The package's files as npm shipped them, from the tarball npm's own cache on this machine holds, found by the
+ * integrity the install recorded and checked against it; no npm request and no network. For modules a build before
+ * `.mako-pristine` patched, which a local update's `npm install` keeps as they are. A failure says what was looked for.
+ */
+export function npmCacheCursorSdk(root, version) {
   let folder
+  const tarball = () => {
+    const lockFile = join(root, "..", "..", ".package-lock.json")
+    if (!existsSync(lockFile)) throw new Error(`no ${lockFile} names the installed tarball`)
+    const entry = LockEntry.safeParse(HiddenLock.parse(JSON.parse(readFileSync(lockFile, "utf8"))).packages["node_modules/@cursor/sdk"])
+    if (!entry.success || entry.data.version !== version) throw new Error(`${lockFile} records no @cursor/sdk ${version}`)
+    const [algorithm, digest] = entry.data.integrity.split(/-(.*)/s)
+    const hex = Buffer.from(digest, "base64").toString("hex")
+    // npm says where its cache is to the scripts it runs; asked otherwise, it answers from its configuration alone.
+    let cache = process.env.npm_config_cache
+    if (!cache) try {
+      cache = execFileSync("npm", ["config", "get", "cache"], { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
+    } catch (error) {
+      throw new Error(`npm couldn't say where its cache is (exited ${error.status ?? error.signal}: ${`${error.stderr ?? ""}`.trim().split("\n").pop()})`)
+    }
+    const file = join(cache, "_cacache", "content-v2", algorithm, hex.slice(0, 2), hex.slice(2, 4), hex.slice(4))
+    if (!existsSync(file)) throw new Error(`npm's cache at ${cache} holds no tarball with @cursor/sdk ${version}'s integrity ${entry.data.integrity.slice(0, 24)}…`)
+    const bytes = readFileSync(file)
+    if (createHash(algorithm).update(bytes).digest("base64") !== digest) throw new Error(`npm's cached tarball for @cursor/sdk ${version} doesn't match its integrity`)
+    return file
+  }
   return {
     read(target) {
       if (!folder) {
+        const file = tarball()
         folder = mkdtempSync(join(tmpdir(), "mako-cursor-sdk-"))
-        const packed = execFileSync("npm", ["pack", `@cursor/sdk@${version}`, "--prefer-offline", "--silent", "--pack-destination", folder], { encoding: "utf8" }).trim().split("\n").pop()
-        execFileSync("tar", ["-xzf", join(folder, packed), "-C", folder])
+        execFileSync("tar", ["-xzf", file, "-C", folder], { stdio: ["ignore", "ignore", "pipe"] })
       }
       return readFileSync(join(folder, "package", target), "utf8")
     },
@@ -310,47 +388,93 @@ export function shippedCursorSdk(version) {
 }
 
 /**
- * Patches every build. A file that needs a patch starts from the bytes npm shipped when it carries an earlier one
- * (`ANY_MARKER`), and takes every patch that lives in it at once, each found in those bytes before any is written.
+ * Patches every build, with no network. A file that needs a patch takes every patch that lives in it at once, each
+ * found in its unpatched bytes before any is written: the installed bytes when it carries no patch (kept then in
+ * `.mako-pristine` before the first write), else what `.mako-pristine` kept, else npm's local cache (`cache`), else
+ * it fails saying why and how to get the bytes back.
  */
-export function patchCursorSdk(root, shipped) {
+export function patchCursorSdk(root, cache) {
   const read = (target) => readFileSync(join(root, target), "utf8")
   const files = folderFiles(root)
   const version = noteVersion(read)
-  shipped ??= shippedCursorSdk(version)
+  const pristine = pristineStore(root, version)
+  cache ??= npmCacheCursorSdk(root, version)
   const failures = []
   try {
     for (const build of ["esm", "cjs"]) {
       const patches = CURSOR_SDK_PATCHES.filter((patch) => patch.build === build)
       const done = new Map(patches.map((patch) => [patch, patchFile(read, files, patch, true)]).filter(([, file]) => file))
       if (done.size === patches.length) continue
-      // A file holding a patch, this one complete or any earlier one, starts again from npm's bytes, with every patch
-      // that lives in it: a patch can't be undone in place, and some (the lock wait) leave no marker.
+      // A file holding a patch, this one complete or any earlier one, starts again from its unpatched bytes, with every
+      // patch that lives in it: a patch can't be undone in place, and some (the lock wait) leave no marker.
       const holding = new Set(done.values())
       const original = new Map()
       const unpatched = (target) => {
         if (!original.has(target)) {
           const source = read(target)
-          original.set(target, source.includes(ANY_MARKER) || holding.has(target) ? shipped.read(target) : source)
+          if (!source.includes(ANY_MARKER) && !holding.has(target)) original.set(target, { text: source, keep: true })
+          else {
+            const kept = pristine.get(target)
+            if (kept.text !== undefined) original.set(target, { text: kept.text })
+            else {
+              let text
+              try {
+                text = cache.read(target)
+              } catch (error) {
+                throw new Error(`@cursor/sdk ${version}'s ${target} carries an earlier Mako patch, and its unpatched bytes are neither kept beside it (${kept.why}) nor in npm's cache (${error.message}). Reinstall the package to get them back: rm -rf node_modules/@cursor/sdk && npm install`)
+              }
+              original.set(target, { text, keep: true })
+            }
+          }
         }
-        return original.get(target)
+        return original.get(target).text
+      }
+      // Where a patch lives is looked for in each file's bytes as they are, unless an earlier patch's marker says they
+      // were rewritten: a file holding only a finished patch (the lock wait) still holds every other anchor it had.
+      // A marked file whose unpatched bytes can't be had is searched as it is: that only matters if the patch lives there.
+      const blocked = new Map()
+      const searched = (target) => {
+        if (!read(target).includes(ANY_MARKER)) return read(target)
+        try {
+          return unpatched(target)
+        } catch (error) {
+          blocked.set(target, error)
+          return read(target)
+        }
       }
       const byFile = new Map()
       for (const patch of patches) {
-        const file = done.get(patch) ?? patchFile(unpatched, files, patch)
+        const file = done.get(patch) ?? patchFile(searched, files, patch)
         if (file) byFile.set(file, [...(byFile.get(file) ?? []), patch])
-        else failures.push(explain(unpatched, files, patch))
+        else if (blocked.size) throw blocked.get(patch.target) ?? [...blocked.values()][0]
+        else failures.push(explain(searched, files, patch))
       }
       if (failures.length) continue
       for (const [file, here] of byFile) {
         if (here.every((patch) => done.get(patch) === file)) continue
-        const { source, renamed } = applyAnchored(unpatched(file), here.flatMap((patch) => patch.sites))
+        const base = unpatched(file)
+        const { source, renamed } = applyAnchored(base, here.flatMap((patch) => patch.sites))
+        if (original.get(file).keep) pristine.save(file, base)
         writeFileSync(join(root, file), source)
         console.log(`patched @cursor/sdk ${file}: ${here.map((patch) => patch.change).join(", ")}${renamed.length ? ` (here ${renamed.join(" ")})` : ""}`)
       }
     }
+    // Every file holding a patch keeps its unpatched bytes, so the next patch of it needs nothing else: one an earlier
+    // build patched, and this one left as it was, takes them from npm's cache when it holds them, and goes without
+    // otherwise (a patch that later needs them says so then).
+    if (!failures.length)
+      for (const patch of CURSOR_SDK_PATCHES) {
+        const file = patchFile(read, files, patch, true)
+        if (!file || pristine.get(file).text !== undefined) continue
+        try {
+          const text = cache.read(file)
+          if (!text.includes(ANY_MARKER)) pristine.save(file, text)
+        } catch {
+          // Nothing cached: kept the next time the file is rewritten from bytes it can read.
+        }
+      }
   } finally {
-    shipped.close?.()
+    cache.close?.()
   }
   if (failures.length)
     throw new Error(`@cursor/sdk ${version} changed the code Mako's patches stand on (written against ${CURSOR_SDK_ANCHORED_ON}):\n${failures.join("\n")}\nPort each of those patches, or delete it where ${version} does the same itself.`)
