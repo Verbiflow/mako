@@ -13,7 +13,7 @@ export const MAKO_CALLS: readonly { tool: string; args: ToolArguments; output: s
   { tool: "agents_start", args: { name: "own-words", harness: "codex", brief: { objective: "Make every tool row say what happened." }, clientKey: "k1" }, output: answer({ child: "t1", name: "own-words", conversation: "c1", state: "starting", next: "Its report wakes you." }) },
   { tool: "agents_start", args: { title: "Map the rail's search", brief: { objective: "Map the rail's search path and say where helpers fall out." }, clientKey: "k2" }, output: answer({ child: "t2", name: "rail-search", state: "starting", next: "Its report wakes you." }) },
   { tool: "agents_list", args: {}, output: answer({ children: [{ name: "own-words" }, { name: "rail-search" }, { name: "review" }], tree: { running: 2, started: 3 } }) },
-  { tool: "agents_list", args: { scope: "crew" }, output: answer({ you: "own-words", apex: { working: true }, crew: [] }) },
+  { tool: "agents_list", args: { scope: "shiver" }, output: answer({ you: "own-words", apex: { working: true }, shiver: [] }) },
   { tool: "agents_list", args: { scope: "apexes" }, output: answer({ apexes: [] }) },
   { tool: "agents_read", args: { child: "fin:own-words" }, output: answer({ name: "own-words", text: "Done." }) },
   { tool: "agents_read", args: { child: "rail-search", view: "transcript" }, output: answer({ name: "rail-search", text: "…" }) },

@@ -394,8 +394,6 @@
   "tsx scripts/test-attribution-watcher.ts": 4,
   "tsx scripts/test-attribution-writer.ts": 19,
   "tsx scripts/test-automation-approval.ts": 13,
-  "tsx scripts/test-automation-watchers.mjs": 1,
-  "tsx scripts/test-automation-workspace.ts": 2,
   "tsx scripts/test-automations.ts": 1,
   "tsx scripts/test-away-notes.ts": 1,
   "tsx scripts/test-browser-connection.ts": 1,

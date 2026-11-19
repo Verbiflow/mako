@@ -1,5 +1,5 @@
 import { FIN_WORD } from "../contracts/agents.js"
-import { LIST_BUDGET_CHARS, LIST_ENDED_FOR_MS, type AgentStrip, type AgentsListFolded } from "../contracts/agent-tools.js"
+import { LIST_BUDGET_CHARS, LIST_ENDED_FOR_MS, type AgentStrip, type AgentsListFolded, type ShiverMate } from "../contracts/agent-tools.js"
 
 /** What the answer holds besides its rows: the tree's counts and the fold's note. */
 const ENVELOPE_CHARS = 1024
@@ -25,10 +25,16 @@ function rankOf(strip: AgentStrip): Rank {
   return "attention"
 }
 
-/** When a Fin last moved: its quiet time when the list knows it, else its last report, else its start. */
+/** When a Fin last moved: the later of its quiet time and its last report, else its start. */
 function lastMoved(strip: AgentStrip, now: number): number {
-  if (strip.idleFor !== undefined) return now - strip.idleFor * 1000
-  return strip.report?.at ?? strip.startedAt
+  return movedAt(strip, now) ?? strip.startedAt
+}
+
+/** The later of when a Fin went quiet and when it last reported, as far as the list knows either. */
+function movedAt(fin: { idleFor?: number; report?: { at: number } }, now: number): number | undefined {
+  const quiet = fin.idleFor === undefined ? undefined : now - fin.idleFor * 1000
+  if (quiet === undefined) return fin.report?.at
+  return fin.report ? Math.max(quiet, fin.report.at) : quiet
 }
 
 /** An idle or ended row without its bulk, for a list over its budget: its pull requests are `agents_read`'s to give. */
@@ -42,8 +48,8 @@ function shed(strip: AgentStrip): AgentStrip {
 const size = (strip: AgentStrip) => JSON.stringify(strip).length + 1
 
 /**
- * The rows an Apex's list shows and what it folds (`AgentsListFolded`). A Fin that ended over `LIST_ENDED_FOR_MS` ago with
- * nothing open always folds; one needing attention never does, even past `budget`. The rest, idle then ended, newest
+ * The rows an Apex's list shows and what it folds (`AgentsListFolded`). A Fin that ended or sat idle over
+ * `LIST_ENDED_FOR_MS` ago with nothing open always folds; one needing attention never does, even past `budget`. The rest, idle then ended, newest
  * first, are kept while the rows fit `budget` characters of JSON, so the whole answer fits `LIST_BUDGET_CHARS` unless what
  * needs attention alone doesn't; past it they first lose their bulk (`shed`), and only then fold. The rows kept stay in
  * the list's order. `unlisted`: ended Fins the list folded before it built their rows (`Agents.unlisted`), counted with
@@ -59,7 +65,7 @@ export function foldList(strips: readonly AgentStrip[], now: number, budget = LI
     if (rank === "attention") {
       kept.set(index, strip)
       used += size(strip)
-    } else if (rank === "ended" && now - lastMoved(strip, now) > LIST_ENDED_FOR_MS) folded.ended++
+    } else if (now - lastMoved(strip, now) > LIST_ENDED_FOR_MS) folded[rank]++
     else rest.push({ strip, index, rank, moved: lastMoved(strip, now) })
   })
   rest.sort((a, b) => (a.rank === b.rank ? 0 : a.rank === "idle" ? -1 : 1) || b.moved - a.moved)
@@ -76,8 +82,32 @@ export function foldList(strips: readonly AgentStrip[], now: number, budget = LI
     kept.set(each.index, strip)
   }
   const children = [...kept].sort((a, b) => a[0] - b[0]).map(([, strip]) => strip)
+  const note = foldedNote(folded)
+  return note ? { children, folded: note } : { children }
+}
+
+/** The fold's one line: how many it left out, by where they stand, and how to list them. */
+function foldedNote(folded: { idle: number; ended: number }): AgentsListFolded | undefined {
   const left = folded.idle + folded.ended
-  if (!left) return { children }
+  if (!left) return undefined
   const parts = [folded.idle && `${folded.idle} idle`, folded.ended && `${folded.ended} ended`].filter(Boolean)
-  return { children, folded: { ...folded, note: `${left} more ${FIN_WORD}s not listed (${parts.join(", ")}); agents_list with scope all lists every one.` } }
+  return { ...folded, note: `${left} more ${FIN_WORD}s not listed (${parts.join(", ")}), with nothing open; agents_list with ended: true lists them.` }
+}
+
+/**
+ * A Fin's Shiver as `scope: shiver` lists it: the other Fins that ended or sat idle over `LIST_ENDED_FOR_MS` ago with nothing
+ * open (no decision, no wait) are counted, not listed. One whose age the host doesn't hold stays listed.
+ */
+export function foldShiver(shiver: readonly ShiverMate[], now: number): { shiver: ShiverMate[]; folded?: AgentsListFolded } {
+  const folded = { idle: 0, ended: 0 }
+  const listed = shiver.filter((mate) => {
+    const { state } = mate
+    const rank = state.kind === "ended" && !state.decision && !state.waitingOn?.length ? "ended" : state.kind === "idle" && !state.waitingOn?.length ? "idle" : undefined
+    const moved = movedAt(mate, now)
+    if (!rank || moved === undefined || now - moved <= LIST_ENDED_FOR_MS) return true
+    folded[rank]++
+    return false
+  })
+  const note = foldedNote(folded)
+  return note ? { shiver: listed, folded: note } : { shiver: listed }
 }

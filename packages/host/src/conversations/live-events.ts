@@ -21,6 +21,7 @@ import { revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
 import { observedDriverEvents } from "./live-stages.js"
 import { requestTurnEnd, sessionTurnEnd, settleRequest, turnSpendAt, usageMark } from "./live-settlement.js"
 import { updateBinding } from "./live-sources.js"
+import { noteHeard, sameNoteHeard } from "./control-cadence.js"
 import { turnReply } from "./live-goals.js"
 
 type EventsAccess = Pick<LiveAccess,
@@ -58,10 +59,34 @@ export class LiveEvents {
   private readonly access: EventsAccess
   private readonly parts: EventParts
 
-  /** Its harness compacted or rewound its history: the next prompt carries an Apex's roster again (`rosterForgotten`). */
-  private forgotRoster(resident: Resident): void {
+  /**
+   * Its harness compacted or rewound its history, which may have dropped Mako's note: the next prompt carries the note
+   * whole (`controlSaid`, `noteHeard`) and an Apex's roster again (`rosterForgotten`).
+   */
+  private forgotNote(resident: Resident): void {
+    resident.controlSaid = undefined
     const control = this.access.control(resident)
-    if (!control.rosterForgotten) resident.snapshot = { ...resident.snapshot, control: { ...control, rosterForgotten: true } }
+    if (!control.rosterForgotten || control.noteHeard) {
+      const next = { ...control, rosterForgotten: true as const }
+      delete next.noteHeard
+      resident.snapshot = { ...resident.snapshot, control: next }
+    }
+  }
+
+  /**
+   * The model answered the prompt under way: the note that prompt carried is in its session's transcript, kept in the
+   * journal (`noteHeard`) so a later process resuming that session hears only what changed.
+   */
+  private noteAnswered(resident: Resident): void {
+    const said = resident.controlSaid
+    const control = this.access.control(resident)
+    const bindingId = control.activeBindingId
+    if (!said || said.bindingId !== bindingId) return
+    if (said.generation !== (resident.bindingGenerations.get(bindingId) ?? 0)) return
+    const nativeId = control.bindings.find((item) => item.id === bindingId)?.nativeId ?? resident.snapshot.session.nativeId
+    if (nativeId === undefined || (said.nativeId !== undefined && said.nativeId !== nativeId)) return
+    const kept = noteHeard(said, nativeId, resident.snapshot.session.cwd)
+    if (!sameNoteHeard(control.noteHeard, kept)) resident.snapshot = { ...resident.snapshot, control: { ...control, noteHeard: kept } }
   }
 
   constructor(access: EventsAccess, parts: EventParts) {
@@ -274,8 +299,7 @@ export class LiveEvents {
       if (gone && previousStatus !== "running")
         resident.snapshot = { ...resident.snapshot, ...turnSpendAt(resident.snapshot, bindingId, { ended: false, ownTurn: false, gone }) }
     } else if (event.type === "live-rewound") {
-      resident.controlSaid = undefined
-      this.forgotRoster(resident)
+      this.forgotNote(resident)
       this.access.nativeRewound(resident, event.run)
     } else if (event.type === "live-goal") {
       this.access.goalObserved(resident, event.goal === null ? null : GoalObservationSchema.parse(event.goal))
@@ -298,10 +322,7 @@ export class LiveEvents {
         }),
       }
     } else if (event.type === "live-activity") {
-      if (event.activity?.kind === "compacting") {
-        resident.controlSaid = undefined
-        this.forgotRoster(resident)
-      }
+      if (event.activity?.kind === "compacting") this.forgotNote(resident)
       const nativeActivity = observeNativeActivity(
         resident.snapshot.nativeActivity,
         resident.snapshot.session.status === "running" && !replaying ? event.activity : null
@@ -359,6 +380,7 @@ export class LiveEvents {
     // The model answering again is the end of a retry's wait.
     if (resident.snapshot.nativeActivity?.kind === "retrying" && prepared.some((update) => update.kind !== "user"))
       resident.snapshot = { ...resident.snapshot, nativeActivity: undefined }
+    if (dispatching && prepared.some(modelAnswered)) this.noteAnswered(resident)
     const { requests } = resident.snapshot
     const unheard = (request: LiveRequest): boolean => unheardDigest(request) || unheardFolded(request, requests)
     if (prepared.some(modelAnswered) && requests.some(unheard))
@@ -366,10 +388,7 @@ export class LiveEvents {
     for (const update of prepared) {
       if (dispatching && update.kind === "user") continue
       // What the harness kept of its history may have dropped Mako's note.
-      if (update.kind === "event" && update.label === CONTEXT_COMPACTED) {
-        resident.controlSaid = undefined
-        this.forgotRoster(resident)
-      }
+      if (update.kind === "event" && update.label === CONTEXT_COMPACTED) this.forgotNote(resident)
       resident.steps?.observe(update)
       if (queueLiveUpdate(resident, update) === "full") {
         this.access.keep(resident)

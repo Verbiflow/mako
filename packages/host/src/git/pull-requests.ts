@@ -1,12 +1,14 @@
 import { readdir, readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { clipTemplate, MERGE_METHODS, pullBaseFor, pullMergeReason, pullSetupReason, type MergeMethod } from "../contracts/git-actions.js"
-import type { PullRequest } from "../contracts/git-workspace-search.js"
+import type { CheckSummary, PullRequest } from "../contracts/git-workspace-search.js"
 import {
   createPull,
   editPull,
   failedRunLog,
   failedRuns,
+  jobLog,
+  pullByNumber,
   forgetGitHubReads,
   githubStatus,
   listRemoteBranches,
@@ -213,7 +215,11 @@ export async function openPullRequest(git: Git, cwd: string, draft: PullRequestD
     forgetGitHubReads()
     const edit = { title: draft.title?.trim() || undefined, body: draft.body === undefined ? undefined : draft.body.trim() }
     const edited = edit.title !== undefined || edit.body !== undefined
-    if (edited) await writing(editPull(cwd, existing.number, edit, acting?.env))
+    // The push already happened: a refused edit says so, so nobody pushes again thinking nothing went.
+    if (edited) await writing(editPull(cwd, existing.number, edit, acting?.env)).catch((error: Error) => {
+      const done = pushed ? `Pushed ${plural(pushed, "commit")} to #${existing.number}` : `#${existing.number} had nothing new to push`
+      throw new Error(`${done}, but GitHub didn't change its title or body: ${error.message}`, { cause: error })
+    })
     return { pull: (await pullForBranch(cwd)) ?? existing, opened: false, pushed, edited, uncommitted: left, ...author }
   }
   const title = draft.title?.trim()
@@ -273,10 +279,11 @@ export interface PullRequestReport {
     number: number
     title: string
     url: string
-    state: "open" | "draft"
+    state: "open" | "draft" | "merged" | "closed"
     base: string
     unpushedCommits?: number
-    checks: { name: string; state: string; url?: string }[] | "none reported"
+    /** Totals and the checks that didn't pass (`compactChecks`); with `checks: "all"`, every check. */
+    checks: CompactChecks | { name: string; state: string; url?: string }[] | "none reported"
     review: PullRequest["reviewDecision"]
     reviews?: string[]
     mergeable: PullRequest["mergeable"]
@@ -295,6 +302,40 @@ export interface PullRequestReport {
   lastPullRequest?: { number: number; state: "merged" | "closed"; url: string }
 }
 
+/** The checks as an agent waiting on CI reads them: a count per state, then each check that didn't pass, one line each. */
+export interface CompactChecks {
+  /** `59 passed, 12 skipped, 2 failed`: only the states some check is in. */
+  totals: string
+  /** `name: state link`, a matrix family sharing a state as one line: `gate (4, 9, 17): running link-of-the-first`. */
+  notPassed?: string[]
+}
+
+const CHECK_STATES = ["passed", "skipped", "failed", "running", "cancelled", "unknown"] as const
+/** A matrix job's name, `gate (12)` or `checks (eslint)`: its family and its value. */
+const MATRIX = /^(.+) \(([^()]+)\)$/
+
+export function compactChecks(checks: readonly CheckSummary[]): CompactChecks {
+  const counts = new Map<string, number>()
+  const families = new Map<string, { family: string | null; state: string; checks: CheckSummary[] }>()
+  for (const check of checks) {
+    const state = check.skipped ? "skipped" : check.state
+    counts.set(state, (counts.get(state) ?? 0) + 1)
+    if (state === "passed" || state === "skipped") continue
+    const family = MATRIX.exec(check.name)?.[1] ?? null
+    const key = family === null ? `\0${check.name}\0${state}` : `${family}\0${state}`
+    const group = families.get(key) ?? { family, state, checks: [] }
+    group.checks.push(check)
+    families.set(key, group)
+  }
+  const totals = CHECK_STATES.filter((state) => counts.get(state)).map((state) => `${counts.get(state)} ${state}`).join(", ")
+  const notPassed = [...families.values()].map(({ family, state, checks: group }) => {
+    const name = family !== null && group.length > 1 ? `${family} (${group.map((check) => MATRIX.exec(check.name)![2]).join(", ")})` : group[0]!.name
+    const url = group.find((check) => check.url)?.url
+    return `${name}: ${state}${url ? ` ${url}` : ""}`
+  })
+  return notPassed.length ? { totals, notPassed } : { totals }
+}
+
 function threadLines(threads: ReviewThread[]) {
   return threads.slice(0, 20).map((thread) => ({
     at: thread.line === null ? thread.path : `${thread.path}:${thread.line}`,
@@ -303,7 +344,7 @@ function threadLines(threads: ReviewThread[]) {
 }
 
 /** The branch's pull request with its checks, reviews and unresolved comments; with none open, what opening one would carry. */
-export async function pullRequestReport(git: Git, cwd: string, options: { startedFrom?: string | null; logs?: boolean } = {}): Promise<PullRequestReport> {
+export async function pullRequestReport(git: Git, cwd: string, options: { startedFrom?: string | null; logs?: boolean; checks?: "all" } = {}): Promise<PullRequestReport> {
   const [status, branch, left] = await Promise.all([githubStatus(cwd), branchOf(git, cwd), uncommitted(git, cwd)])
   const report: PullRequestReport = { branch: branch || null, uncommittedFiles: left }
   const reason = pullSetupReason(status)
@@ -313,21 +354,9 @@ export async function pullRequestReport(git: Git, cwd: string, options: { starte
   if (pull?.state === "open") {
     const [remote, threads] = await Promise.all([pushedRef(git, cwd, branch), status.repo ? openReviewThreads(cwd, status.repo, pull.number) : null])
     const unpushed = remote ? await count(git, cwd, `${remote}..HEAD`) : null
-    const view: NonNullable<PullRequestReport["pullRequest"]> = {
-      number: pull.number,
-      title: pull.title,
-      url: pull.url,
-      state: pull.draft ? "draft" : "open",
-      base: pull.base,
-      checks: pull.checks.length ? pull.checks.map(({ name, state, url }) => (url ? { name, state, url } : { name, state })) : "none reported",
-      review: pull.reviewDecision,
-      mergeable: pull.mergeable,
-      merge: pullMergeReason(pull) ?? "GitHub would merge it now. Merge only when the user asks.",
-    }
+    const view = pullView(pull, threads, options.checks)
     if (unpushed) view.unpushedCommits = unpushed
-    if (pull.reviews.length) view.reviews = pull.reviews.map((review) => `${review.login}: ${review.state}`)
-    if (threads?.length) view.reviewComments = threadLines(threads)
-    if (options.logs) view.failedLogs = await failedLogs(git, cwd, branch)
+    if (options.logs) view.failedLogs = await failedLogs(cwd, branch, await pushedCommit(git, cwd, branch))
     return { ...report, pullRequest: view }
   }
   if (pull) report.lastPullRequest = { number: pull.number, state: pull.state === "merged" ? "merged" : "closed", url: pull.url }
@@ -344,8 +373,63 @@ export async function pullRequestReport(git: Git, cwd: string, options: { starte
   return report
 }
 
-async function failedLogs(git: Git, cwd: string, branch: string): Promise<NonNullable<PullRequestReport["pullRequest"]>["failedLogs"]> {
-  const runs = await failedRuns(cwd, branch, await pushedCommit(git, cwd, branch))
+type PullView = NonNullable<PullRequestReport["pullRequest"]>
+
+/** A pull request as `pull_request_status` reads it: its checks, reviews and unresolved comments. */
+function pullView(pull: PullRequest, threads: ReviewThread[] | null, checks: "all" | undefined): PullView {
+  const view: PullView = {
+    number: pull.number,
+    title: pull.title,
+    url: pull.url,
+    state: pull.state === "open" ? (pull.draft ? "draft" : "open") : pull.state,
+    base: pull.base,
+    checks: !pull.checks.length
+      ? "none reported"
+      : checks === "all"
+        ? pull.checks.map(({ name, state, skipped, url }) => ({ name, state: skipped ? "skipped" : state, ...url && { url } }))
+        : compactChecks(pull.checks),
+    review: pull.reviewDecision,
+    mergeable: pull.mergeable,
+    merge: pull.state === "open" ? pullMergeReason(pull) ?? "GitHub would merge it now. Merge only when the user asks." : `It is ${pull.state}.`,
+  }
+  if (pull.reviews.length) view.reviews = pull.reviews.map((review) => `${review.login}: ${review.state}`)
+  if (threads?.length) view.reviewComments = threadLines(threads)
+  return view
+}
+
+/** Another pull request of the same repository, read by its number as `pull_request_status` reads the branch's own: read only. */
+export interface PullByNumberReport {
+  /** Why GitHub can't be used here. */
+  github?: string
+  /** Its head branch, and the commit at its head as GitHub has it. */
+  pullRequest?: PullView & { head: string; headCommit?: string }
+}
+
+export async function pullRequestByNumber(cwd: string, number: number, options: { logs?: boolean; checks?: "all" } = {}): Promise<PullByNumberReport> {
+  const status = await githubStatus(cwd)
+  const reason = pullSetupReason(status)
+  if (reason) return { github: reason }
+  const pull = await pullByNumber(cwd, number)
+  if (!pull) throw new Error(`${status.repo ?? "This repository"} has no pull request #${number} that gh could read. A pull request of another repository is read from a checkout of that repository.`)
+  const threads = pull.state === "open" && status.repo ? await openReviewThreads(cwd, status.repo, pull.number) : null
+  const view: NonNullable<PullByNumberReport["pullRequest"]> = { ...pullView(pull, threads, options.checks), head: pull.head }
+  if (pull.headCommit) view.headCommit = pull.headCommit
+  if (options.logs) view.failedLogs = pull.headCommit ? await failedLogs(cwd, pull.head, pull.headCommit) : "GitHub didn't say which commit is its head, so its runs can't be matched."
+  return { pullRequest: view }
+}
+
+/** One GitHub Actions job's or run's log in the repository, by the id its check's link ends with: read only. */
+export async function namedLog(cwd: string, named: { job: number } | { run: number }): Promise<{ job?: number; run?: number; log: string }> {
+  const status = await githubStatus(cwd)
+  const reason = pullSetupReason(status)
+  if (reason) throw new Error(reason)
+  if ("job" in named) return { job: named.job, log: await jobLog(cwd, named.job, LOG_LINES) }
+  const log = await failedRunLog(cwd, named.run, LOG_LINES)
+  return { run: named.run, log: log || "No job of this run failed, so it has no failed log." }
+}
+
+async function failedLogs(cwd: string, branch: string, commit: string): Promise<PullView["failedLogs"]> {
+  const runs = await failedRuns(cwd, branch, commit)
   if (!runs.length) return "No GitHub Actions run failed on the pushed commit. A failing check from another service has its link in checks."
   return Promise.all(runs.slice(0, LOG_RUNS).map(async (run) => ({
     workflow: run.workflow,

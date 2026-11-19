@@ -10,14 +10,22 @@ import { activeAcp, useAcp } from "@/state/acp"
 import { apexConversation, useApexView, useThreadAsks, useThreadChildren } from "@/state/apex-fins"
 import { useOnScreen } from "@/state/thread-sessions"
 import {
-  scrollCrewNeedsIntoView,
-  useCrewCardVisible,
-} from "@/state/crew-card-view"
+  scrollShiverNeedsIntoView,
+  useShiverCardVisible,
+} from "@/state/shiver-card-view"
 import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
+import { automationView, automationsStore } from "@/state/automations"
+import { openAutomations, showAutomation } from "@/state/automations-view"
+
+/** A proposal is reviewed where its change is shown: its page, or the list for one not yet in the file (a create). */
+function reviewProposal(project: string, id: string): void {
+  if (automationView(automationsStore.get(), project, id)) showAutomation(project, id)
+  else openAutomations({ kind: "list" })
+}
 
 /**
- * One line while the crew card is scrolled away and Fins need the person:
+ * One line while the Shiver card is scrolled away and Fins need the person:
  * their marks and the count. It brings the card's Needs you group back.
  * Nothing while the card is in view, since the asks live there. A Thread
  * with no card doesn't render this; its dock keeps the asks themselves.
@@ -29,7 +37,7 @@ export function FinsNeedYou({
   thread: string | undefined
   compact?: boolean
 }) {
-  const visible = useCrewCardVisible(thread)
+  const visible = useShiverCardVisible(thread)
   const children = useThreadChildren(thread)
   const needs = useMemo(
     () =>
@@ -47,9 +55,9 @@ export function FinsNeedYou({
     <div className={cn(!compact && "bg-surface/60")}>
       <button
         type="button"
-        data-crew-away
+        data-shiver-away
         data-compact={compact || undefined}
-        onClick={scrollCrewNeedsIntoView}
+        onClick={scrollShiverNeedsIntoView}
         className={cn(
           "pressable flex w-full items-center gap-2 text-left text-ui text-foreground",
           compact ? "min-h-11 px-3" : "px-4 py-2"
@@ -80,7 +88,7 @@ export function FinsNeedYou({
 export function FinAsks() {
   const key = useAcp((state) => activeAcp(state)?.key)
   const thread = useAcp((state) => activeAcp(state)?.threadId)
-  const card = useCrewCardVisible(thread)
+  const card = useShiverCardVisible(thread)
   const asks = useThreadAsks(thread)
   const shown = useShownFinAsks()
   // A Fin opened in its Apex says what it waits on above its own composer: the "Needs you" that opened it answers here.
@@ -113,7 +121,7 @@ export function FinAsks() {
 
 /**
  * The Fin on screen, when it's opened in its Apex's Thread: what it asks of the person, read from its Apex's roster as
- * the crew card reads it, and the Apex's conversation that answers it.
+ * the Shiver card reads it, and the Apex's conversation that answers it.
  */
 function useShownFinAsks(): { apex: string | undefined; asks: readonly PersonAsk[]; waits?: string } {
   const here = useOnScreen().thread
@@ -177,7 +185,29 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-1.5">
-        {approval ? (
+        {ask.ask.review ? (
+          // An automation proposal: approved where its change is shown, never from here. Its way there, or Decline.
+          <>
+            <button
+              type="button"
+              data-fin-answer="review"
+              onClick={() => reviewProposal(ask.ask.review!.project, ask.ask.review!.automation)}
+              className="pressable flex items-center gap-1.5 border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90"
+            >
+              Review the change
+            </button>
+            <button
+              type="button"
+              data-fin-answer="refuse"
+              disabled={sending}
+              onClick={() => send({ allow: false })}
+              className="pressable flex items-center gap-1.5 border border-hairline px-2 py-1 text-label text-foreground hover:bg-fill-hover disabled:opacity-50"
+            >
+              <XIcon className="size-3" />
+              Decline
+            </button>
+          </>
+        ) : approval ? (
           <>
             <button
               type="button"

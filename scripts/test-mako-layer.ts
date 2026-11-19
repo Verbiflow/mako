@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
 import { NATIVE_CAPABILITIES, TOOL_FAMILIES, replacementPath, type LayerCapabilities } from "@mako/host/contracts/mako-layer"
 import { nativeSpawnsOff, type RoutedThread } from "@mako/host/contracts/native-routing"
-import { conversationServers, launchInstructions, type ConversationTools } from "@mako/host/harnesses/live-driver"
+import { MAKO_THREAD_SERVER, withoutInstructions } from "@mako/host/contracts/mcp-reach"
+import { MAKO_SERVER_INSTRUCTIONS } from "@mako/host/contracts/primer"
+import { conversationServers, launchBlocks, launchInstructions, type ConversationTools } from "@mako/host/harnesses/live-driver"
 import { layerOf } from "@mako/host/harnesses/mako-layer"
 import { claudeLayer, type ClaudeLayerFragment } from "@mako/host/harnesses/claude/layer"
 import { codexLayer } from "@mako/host/harnesses/codex/layer"
@@ -46,8 +48,10 @@ for (const tools of grants) for (const routing of routings) {
     same(claude.agentTeams(requested), requested === undefined ? undefined : requested && routing?.().role !== "apex" ? "1" : "0", "claude agent teams")
 
   const codex = codexLayer.apply(layerOf(options), "c")
-  same(codex.servers, servers, "codex servers")
-  same(codex.instructions, launchInstructions(options), "codex instructions")
+  // With the primer on, Codex is served mako without its instructions and hears them once in its developer context.
+  const carried = launchBlocks(options).some((block) => block.id === "routes") && servers.some((server) => server.name === MAKO_THREAD_SERVER)
+  same(codex.servers, carried ? servers.map((server) => server.name === MAKO_THREAD_SERVER ? { ...server, url: withoutInstructions(server.url) } : server) : servers, "codex servers")
+  same(codex.instructions, carried ? `${launchInstructions(options)}\n\n${MAKO_SERVER_INSTRUCTIONS}` : launchInstructions(options), "codex instructions")
   same(codex.config(), off ? { "agents.enabled": false, "features.multi_agent_v2": false } : {}, "codex config")
 
   const cursor = cursorLayer.apply(layerOf(options), "c")

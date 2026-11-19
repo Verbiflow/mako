@@ -5,7 +5,10 @@ import type { MethodTable } from "../base/methods.js"
 import type { AgentCaller, AgentRefused, AgentsCancelInput, AgentsNoticeInput, AgentsPlaceInput } from "../contracts/agents.js"
 import {
   AGENT_TOOLS,
+  ROLE_HIDES,
   type AgentOperations,
+  type AgentToolRole,
+  type AgentVerb,
   type AgentToolDefinition,
   type AgentToolFilled,
   type AgentsAnswerInput,
@@ -24,6 +27,7 @@ import {
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import type { TurnWaitInput, TurnWaitResult } from "../contracts/thread-tools.js"
 import { AgentListResults } from "./agent-list-results.js"
+import { compactAnswer } from "./agent-tool-compact.js"
 
 const UNAVAILABLE: AgentRefused = { refused: "unavailable", why: "Children need the Thread store, which didn't open on this host." }
 
@@ -84,24 +88,48 @@ export function agentToolSchema(tool: AgentToolDefinition): z.ZodType {
   if (!(input instanceof z.ZodObject)) throw new Error(`${tool.channel}'s input isn't an object`)
   const generated = z.toJSONSchema(input, { io: "input" })
   const asked = (field: string) => !tool.filled.some((filled) => filled === field)
+  const advertisedValues = new Map<string, string[]>()
   const properties = Object.entries(generated.properties ?? {}).flatMap(([field, schema]): [string, z.core.JSONSchema._JSONSchema][] => {
     if (!asked(field)) return []
     const description = tool.mcp.fields[field]
-    return [[field, description && schema !== true && schema !== false ? { ...schema, description } : schema]]
+    const aliases = tool.aliases?.[field]
+    const values = aliases ? literalsOf(schema).filter((value) => !(value in aliases)) : undefined
+    if (values) advertisedValues.set(field, values)
+    const advertised: z.core.JSONSchema._JSONSchema = values ? { type: "string", enum: values } : schema
+    return [[field, description && advertised !== true && advertised !== false ? { ...advertised, description } : advertised]]
   })
-  return z.fromJSONSchema({ ...generated, properties: Object.fromEntries(properties), required: generated.required?.filter(asked) })
+  const schema = z.fromJSONSchema({ ...generated, properties: Object.fromEntries(properties), required: generated.required?.filter(asked) })
+  if (!advertisedValues.size) return schema
+  if (!(schema instanceof z.ZodObject)) throw new Error(`${tool.channel}'s MCP schema isn't an object`)
+  // An aliased field is advertised as its own values alone and still takes its aliases (`AgentToolDefinition.aliases`).
+  return schema.extend(Object.fromEntries([...advertisedValues].map(([field, values]) => {
+    const accepted = new Set([...values, ...Object.keys(tool.aliases?.[field] ?? {})])
+    const description = tool.mcp.fields[field]
+    const taken = z.string().refine((value) => accepted.has(value)).meta({ enum: values, ...(description && { description }) })
+    return [field, generated.required?.includes(field) ? taken : taken.optional()]
+  })))
 }
+
+/** The string literals a generated union names (`{ anyOf: [{ const: "shiver" }, …] }`). */
+function literalsOf(schema: z.core.JSONSchema._JSONSchema): string[] {
+  const union = UnionSchema.safeParse(schema)
+  return union.success ? union.data.anyOf.flatMap((option) => option.const === undefined ? [] : [option.const]) : []
+}
+
+const UnionSchema = z.looseObject({ anyOf: z.array(z.looseObject({ const: z.string().optional() })) })
+
 
 /** An operation's answer as a door relays it: the JSON the host sent, a refusal named by `refused`. */
 export const AgentAnswerSchema = z.looseObject({ refused: z.string().optional() })
 export type AgentAnswer = z.infer<typeof AgentAnswerSchema>
 
 /**
- * What a door says back: the operation's answer as JSON on one line, every field kept (indentation was a third of a
- * list's tokens); a refusal's first line names it, so an agent reads why before the fields.
+ * What a door says back: the operation's answer as JSON on one line (indentation was a third of a list's tokens), with
+ * what repeats cut for the model where `tool` names one (`compactAnswer`: `agents_list` rows, `agents_move { all }`);
+ * a refusal's first line names it, so an agent reads why before the fields.
  */
-export function agentToolText(answer: AgentAnswer): string {
-  const json = JSON.stringify(answer)
+export function agentToolText(answer: AgentAnswer, tool?: string): string {
+  const json = JSON.stringify(compactAnswer(tool, answer))
   return answer.refused === undefined ? json : `refused: ${answer.refused}\n${json}`
 }
 
@@ -117,9 +145,15 @@ export interface AgentToolDoor {
   filled(): AgentToolFilled
 }
 
-/** Every operation on a `mako` server, projected from `AGENT_TOOLS`: the only place any server registers them. */
-export function registerAgentTools(server: McpServer, door: AgentToolDoor): void {
+/**
+ * Every operation on a `mako` server, projected from `AGENT_TOOLS`: the only place any server registers them. With a
+ * `role`, the verbs it would only be refused (`ROLE_HIDES`) are left out; without one (a role nobody could read, the
+ * `mako mcp` command), every verb is.
+ */
+export function registerAgentTools(server: McpServer, door: AgentToolDoor, role?: AgentToolRole): void {
+  const hidden = new Set<AgentVerb>(role ? ROLE_HIDES[role] : [])
   for (const tool of AGENT_TOOLS) {
+    if (hidden.has(tool.verb)) continue
     server.registerTool(
       tool.mcp.name,
       { description: tool.mcp.description, inputSchema: agentToolSchema(tool), annotations: tool.mcp.annotations },
@@ -128,7 +162,7 @@ export function registerAgentTools(server: McpServer, door: AgentToolDoor): void
           const known = door.filled()
           const filled = Object.fromEntries(tool.filled.map((field) => [field, known[field]]))
           const answer = await door.invoke(tool.channel, [door.caller(), { ...filled, ...ToolArgumentsSchema.parse(input) }])
-          return { ...(answer.refused !== undefined && { isError: true }), content: [{ type: "text" as const, text: agentToolText(answer) }] }
+          return { ...(answer.refused !== undefined && { isError: true }), content: [{ type: "text" as const, text: agentToolText(answer, tool.mcp.name) }] }
         } catch (error) {
           return { isError: true, content: [{ type: "text" as const, text: error instanceof Error ? error.message : String(error) }] }
         }

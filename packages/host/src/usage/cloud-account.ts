@@ -1,3 +1,4 @@
+import { AUTOMATIONS_PATH, CloudClaimSchema, CloudHookSchema, CloudRunsSchema, type CloudAutomation, type CloudClaim, type CloudHook, type CloudRun } from "@mako/protocol/automations-cloud"
 import { CLOUD_FIN_START_PATH, CLOUD_FINS_PATH, CloudFinAnswerSchema, type CloudFinPlace, CloudFinPlacedSchema, CloudFinStatusSchema, type CloudFinStart, type CloudFinStatus } from "@mako/protocol/cloud-fins"
 import { SOURCE_PROJECT_PATH, SourceProjectReceiptSchema, type SourceProjectCommand } from "@mako/protocol/source-project"
 import { stoppingSignal } from "../base/host-stopping.js"
@@ -184,6 +185,8 @@ export type DeviceCode = {
 }
 const DevicesSchema = z.object({ devices: z.array(CloudDeviceSchema), current: z.string() })
 /** Where on GitHub its person gives the cloud access to a repository: a GitHub page, or nothing. */
+/** What the account says of its registrations: only why one no longer fires (a GitHub trigger whose access went) is read here. */
+const AutomationIssuesSchema = z.object({ automations: z.array(z.object({ project: z.string(), id: z.string(), issue: z.string().max(1000).optional() }).loose()).max(1000) }).loose()
 const InstallSchema = z.url({ protocol: /^https$/, hostname: /^github\.com$/ }).optional().catch(undefined)
 /** Read leniently: a state this build doesn't know reads as the cloud not saying. */
 const BaseStandingSchema = z.union([
@@ -841,6 +844,43 @@ export class CloudAccounts {
   async writePreferences(preferences: Preferences): Promise<PreferencesAnswer | null> {
     const response = await this.#call("preferences.write", "PATCH", PREFERENCES_PATH, { preferences }, false, [404])
     return response.status === 404 ? null : PreferencesAnswerSchema.parse(await response.json())
+  }
+
+  /** One automation registered with the account (`PUT /v1/automations`): 200, or 409 with why it wasn't. */
+  async registerAutomation(automation: CloudAutomation): Promise<{ ok: true } | { conflict: string }> {
+    const response = await this.#call("automations.register", "PUT", AUTOMATIONS_PATH, automation, false, [409])
+    return response.status === 409 ? { conflict: await problemOf(response, "The cloud account wouldn't register it.") } : { ok: true }
+  }
+
+  /** What the account no longer fires of its registrations, and why (`GET /v1/automations`): a GitHub trigger whose access went. */
+  async automationIssues(): Promise<Array<{ project: string; id: string; issue: string }>> {
+    const listed = AutomationIssuesSchema.parse(await (await this.#call("automations.list", "GET", AUTOMATIONS_PATH)).json())
+    return listed.automations.flatMap(({ project, id, issue }) => (issue ? [{ project, id, issue }] : []))
+  }
+
+  /** One automation taken back; one the account doesn't hold (404) is taken back already. */
+  async unregisterAutomation(project: string, id: string): Promise<void> {
+    await this.#call("automations.unregister", "DELETE", `${AUTOMATIONS_PATH}/${encodeURIComponent(id)}?project=${encodeURIComponent(project)}`, undefined, false, [404])
+  }
+
+  /** The account's automation runs changed after `after`, oldest change first. */
+  async automationRuns(after: number): Promise<{ runs: CloudRun[]; next: number }> {
+    return CloudRunsSchema.parse(await (await this.#call("automations.runs", "GET", `${AUTOMATIONS_PATH}/runs?after=${after}`)).json())
+  }
+
+  /** Claims an occurrence before this Mac runs it: this Mac's (200), or the run that holds it (409). */
+  async claimAutomationRun(input: { project: string; id: string; occurrence: string; cause: CloudRun["cause"] }): Promise<CloudClaim> {
+    return CloudClaimSchema.parse(await (await this.#call("automations.claim", "POST", `${AUTOMATIONS_PATH}/claim`, input, false, [409])).json())
+  }
+
+  /** Declines an occurrence offered to this Mac, saying why. */
+  async declineAutomationRun(input: { project: string; id: string; occurrence: string; why: string }): Promise<void> {
+    await this.#call("automations.decline", "POST", `${AUTOMATIONS_PATH}/decline`, input, false, [404])
+  }
+
+  /** A webhook made in the account, or its secret rotated: the secret is in this answer only. */
+  async automationHook(input: { name: string; provider: "webhook" | "linear" | "sentry"; rotate?: boolean; secret?: string }): Promise<CloudHook> {
+    return CloudHookSchema.parse(await (await this.#call("automations.hook", "POST", `${AUTOMATIONS_PATH}/hooks`, input)).json())
   }
 
   async devices(): Promise<{ devices: CloudDevice[]; current: string }> {

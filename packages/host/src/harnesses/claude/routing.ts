@@ -4,6 +4,7 @@ import { FIN_SUBAGENT } from "../../contracts/primer.js"
 import { hostLog } from "../../base/host-log.js"
 import { MAKO_THREAD_SERVER } from "../../contracts/mcp-reach.js"
 import { NATIVE_CHILD_INSTRUCTIONS, routeNativeSpawn, type NativeSpawn, type RoutedThread } from "../../contracts/native-routing.js"
+import type { CallNotes } from "../call-notes.js"
 import { mcpToolName, routeNativeTool, routeShellCall, type CallRoute, type CallThread } from "../../contracts/native-calls.js"
 
 /** Claude's tools that start subagents: `Agent` (`Task` before Claude Code 2.1) and `Workflow`, which runs a script of them. */
@@ -59,6 +60,8 @@ export interface ClaudeRouting {
   /** The launch turned agent teams on. */
   teams: boolean
   conversation: string
+  /** What the conversation heard: each rule's note is given once (`CallNotes`); every note when absent. */
+  notes?: CallNotes
 }
 
 /** Mako's tools as Claude names an MCP server's tool. */
@@ -81,7 +84,9 @@ function claudeNativeCall(routing: ClaudeRouting, input: PreToolUseHookInput): S
   if (!routing.calls) return undefined
   const route = claudeCallRoute(routing.calls(), input)
   if (route.kind === "allow") return undefined
-  hostLog("routing", route.kind === "deny" ? "native call denied" : "native call warned", { harness: "claude", tool: input.tool_name, family: route.family, rule: route.rule, conversation: routing.conversation, toolUse: input.tool_use_id })
+  const noted = route.kind === "deny" || !routing.notes || routing.notes.first(routing.conversation, route.rule)
+  hostLog("routing", route.kind === "deny" ? "native call denied" : "native call warned", { harness: "claude", tool: input.tool_name, family: route.family, rule: route.rule, conversation: routing.conversation, toolUse: input.tool_use_id, ...route.kind === "warn" && { noted } })
+  if (!noted) return undefined
   return route.kind === "deny"
     ? { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: route.message } }
     : { hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: route.message } }

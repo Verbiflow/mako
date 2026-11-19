@@ -3,6 +3,7 @@ import { hostLog } from "../base/host-log.js"
 import type { WriteHolds } from "./write-holds.js"
 import { readOnlyCommand } from "../attribution/index.js"
 import type { JsonObject } from "../contracts/json.js"
+import type { CallNotes } from "./call-notes.js"
 import { mcpToolName, routeNativeTool, routeShellCall, scriptFlag, type CallRoute, type CallThread } from "../contracts/native-calls.js"
 
 /** A shell tool's command as one line: argv (`["bash", "-lc", "…"]`) reads as its script. */
@@ -77,8 +78,9 @@ function hookRoute(call: HookCall, thread: CallThread): CallRoute {
  * ran (or before it, for `before`), or nothing. A deny carries both spellings
  * a hook may answer with (`decision: "block"` and PreToolUse's
  * `permissionDecision`), so one answer serves every harness that reads either.
+ * With `notes`, a rule's note is given once per conversation; a deny always.
  */
-export function callGateAnswer(event: "pre" | "post" | "before", call: HookCall | undefined, thread: CallThread, conversation: string): JsonObject {
+export function callGateAnswer(event: "pre" | "post" | "before", call: HookCall | undefined, thread: CallThread, conversation: string, notes?: CallNotes): JsonObject {
   if (!call) return {}
   const route = hookRoute(call, thread)
   if (route.kind === "deny" && event !== "post") {
@@ -86,7 +88,9 @@ export function callGateAnswer(event: "pre" | "post" | "before", call: HookCall 
     return { decision: "block", reason: route.message, hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: route.message } }
   }
   if (route.kind === "warn" && event !== "pre") {
-    hostLog("routing", "native call warned", { tool: call.tool_name, conversation, family: route.family, rule: route.rule })
+    const noted = !notes || notes.first(conversation, route.rule)
+    hostLog("routing", "native call warned", { tool: call.tool_name, conversation, family: route.family, rule: route.rule, noted })
+    if (!noted) return {}
     return { hookSpecificOutput: { hookEventName: event === "before" ? "PreToolUse" : "PostToolUse", additionalContext: route.message } }
   }
   return {}

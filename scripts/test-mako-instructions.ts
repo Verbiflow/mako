@@ -1,37 +1,42 @@
 import assert from "node:assert/strict"
+import { Client } from "@modelcontextprotocol/sdk/client/index.js"
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
+import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { ORCHESTRATION_INSTRUCTIONS } from "@mako/host/contracts/agent-tools"
+import { MAKO_THREAD_SERVER, withoutInstructions } from "@mako/host/contracts/mcp-reach"
+import { MAKO_SERVER_INSTRUCTIONS, primerText } from "@mako/host/contracts/primer"
 import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "@mako/host/contracts/report-actions"
-import { MAKO_INSTRUCTIONS } from "@mako/host/tools/conversation-mcp"
+import { makoNote } from "@mako/host/conversations/mako-note"
+import { codexLayer } from "@mako/host/harnesses/codex/layer"
+import { DEVIN_LAYER } from "@mako/host/harnesses/devin/layer"
+import { layerOf } from "@mako/host/harnesses/mako-layer"
+import { MAKO_INSTRUCTIONS, startConversationMcp } from "@mako/host/tools/conversation-mcp"
 
 /*
  * The `mako` server's instructions reach every harness whole only while they fit the shortest cut a harness makes:
  * Claude Code shows server instructions up to 4,096 characters and drops the rest (code.claude.com/docs/en/mcp, "Tool
- * search for MCP server authors"). Past it, Claude agents never saw the second half, the Fins' rules among it. What
- * doesn't fit goes in the description of the tool it governs, which loads whole when the tool is used.
+ * search for MCP server authors"). Past it, Claude agents never saw the second half, the Fins' rules among it. Grok
+ * cuts at about 2,047 characters, so the Fins' rules come first. What doesn't fit goes in the description of the tool
+ * it governs, which loads whole when the tool is used.
  */
 const CLAUDE_INSTRUCTIONS_CUT = 4_096
+const GROK_INSTRUCTIONS_CUT = 2_047
 
+assert.equal(MAKO_INSTRUCTIONS, MAKO_SERVER_INSTRUCTIONS)
 assert.ok(MAKO_INSTRUCTIONS.length <= CLAUDE_INSTRUCTIONS_CUT, `MAKO_INSTRUCTIONS is ${MAKO_INSTRUCTIONS.length} characters; Claude cuts at ${CLAUDE_INSTRUCTIONS_CUT}. Move detail into the tool descriptions.`)
 assert.ok(ORCHESTRATION_INSTRUCTIONS.length <= CLAUDE_INSTRUCTIONS_CUT, "mako mcp's instructions fit too")
 // What must survive the cut, wherever it sits in the text.
 for (const rule of [
-  "worktree_move, never `git worktree add`",
-  "never `gh pr merge`",
   "MAKO_NATIVE=1",
-  "thread_history",
-  "show:",
   "After starting, end your turn: reports wake you.",
   "`forward: true`",
   "`agents_move`",
   "call `agents_report`",
-  REPORT_FOLLOW_UP_INSTRUCTIONS,
   "`waitingOn`",
   "never gh --watch",
   "`scope: apexes`",
   "thread_move: ",
   "That's this Thread going on elsewhere, not new work for a Fin",
-  "port_holder",
-  "never a server started by hand",
   "end your turn: Mako wakes you",
   "`decides`",
   // #827's reporting rules: what's ready for review or waits on someone is a result, and a turn ending on progress is one.
@@ -43,12 +48,71 @@ for (const rule of [
   "Never run an agent CLI with nohup",
   "wait: to wait on your Fins",
 ]) assert.ok(MAKO_INSTRUCTIONS.includes(rule), `the instructions say ${JSON.stringify(rule.slice(0, 60))}`)
-// Each tool family on a line of its own that says what it's for: what a harness's tool search reads to find it.
+// Grok reads only the start: every Fin rule and the wait rule sit inside its cut.
+const grokSees = MAKO_INSTRUCTIONS.slice(0, GROK_INSTRUCTIONS_CUT)
+for (const rule of ["call `agents_report`", "`waitingOn`", "`agents_move`", "`forward: true`", "`scope: apexes`", "wait: to wait on your Fins"])
+  assert.ok(grokSees.includes(rule), `Grok's cut keeps ${JSON.stringify(rule)}`)
+
+// Each fact once: the routes are the primer's, the follow-up rule the Fin's brief's and agents_report's.
+const primer = primerText({ role: "thread", noRecipe: false, computer: true })
+for (const route of ["worktree_move", "pull_request_open", "never a server started by hand", "recipe_save", "port_holder", "Prefer show", "Prefer thread_history"]) {
+  assert.ok(primer.includes(route), `the primer says ${route}`)
+  assert.equal(MAKO_INSTRUCTIONS.includes(route), false, `the server's instructions don't repeat ${route}`)
+}
+assert.equal(MAKO_INSTRUCTIONS.includes(REPORT_FOLLOW_UP_INSTRUCTIONS), false, "the follow-up rule is the brief's and agents_report's")
 const startsALine = (text: string) => MAKO_INSTRUCTIONS.split("\n").some((line) => line.startsWith(text))
 assert.ok(MAKO_INSTRUCTIONS.startsWith("Mako's tools for the Thread this Session belongs to."), "it opens with what the server is for")
-for (const family of ["worktree_*", "pull_request_*", "app_*", "thread_move", "thread_history", "port_holder", "wait"])
+for (const family of ["thread_move", "wait"])
   assert.ok(startsALine(`${family}: `), `a line says what ${family} is for`)
-// The words every tool uses, each defined on a line of its own.
-for (const word of ["main checkout", "worktree", "checkout", "project folder", "app", "recipe"])
+// The words every tool uses, each defined on a line of its own, with the tool family that acts on it.
+for (const word of ["main checkout", "worktree", "checkout", "project folder", "app", "recipe", "pull request"])
   assert.ok(startsALine(`- ${word}: `), `the instructions define "${word}"`)
-process.stdout.write(`mako instructions: ${MAKO_INSTRUCTIONS.length} of ${CLAUDE_INSTRUCTIONS_CUT} characters, every rule inside the cut\n`)
+for (const family of ["worktree_*", "app_*", "recipe_*", "pull_request_*"])
+  assert.ok(MAKO_INSTRUCTIONS.includes(family), `the words name ${family}`)
+
+// Who hears the server's instructions where. Codex is served `mako` without them and hears them once in its
+// developer context; every other harness reads the server as it is.
+const tools = { token: "t", computerUrl: "http://127.0.0.1:1/computer", makoUrl: "http://127.0.0.1:1/mako" }
+const layer = layerOf({ conversationTools: tools })
+const codex = codexLayer.apply(layer, "c")
+assert.equal(codex.servers.find((server) => server.name === MAKO_THREAD_SERVER)?.url, withoutInstructions(tools.makoUrl), "Codex's mako URL asks for no instructions")
+assert.equal(codex.servers.find((server) => server.name !== MAKO_THREAD_SERVER)?.url, tools.computerUrl, "mako-computer is untouched")
+assert.equal(codex.instructions, `${primer}\n\n${MAKO_SERVER_INSTRUCTIONS}`, "Codex's developer context carries the server's instructions once")
+assert.deepEqual(layer.servers.map((server) => server.url), [tools.computerUrl, tools.makoUrl], "the layer every other harness reads keeps the plain URL")
+const off = codexLayer.apply(layerOf({ conversationTools: tools, primer: false }), "c")
+assert.equal(off.servers.find((server) => server.name === MAKO_THREAD_SERVER)?.url, tools.makoUrl, "with no primer Codex reads them from the server")
+// Devin never shows the model a server's instructions, so its note carries them; Cursor and Grok read the server.
+assert.equal(DEVIN_LAYER.serverInstructions?.kind, "unread")
+const standing = async (serverUnread: boolean) => {
+  const note = await makoNote({ cloudMachine: false, launchedWith: () => undefined, controlLine: () => undefined, ownSlot: () => false, serverUnread: () => serverUnread, notices: () => [] })("b", "c", { role: "thread" })
+  return note.standing
+}
+assert.equal((await standing(true))["server"], MAKO_SERVER_INSTRUCTIONS, "Devin's note carries the server's instructions")
+assert.equal((await standing(false))["server"], undefined, "a harness that reads the server hears them there only")
+
+// Over HTTP, as the harnesses connect: the plain URL serves the instructions, Codex's serves none.
+const servers = await startConversationMcp({ authorizeAgent() {} }, async () => ({ content: [] }), [() => {}])
+try {
+  const grant = servers.mint("binding", "conversation")
+  const instructionsAt = async (url: string) => {
+    const client = new Client({ name: "instructions-check", version: "1" })
+    await client.connect(new StreamableHTTPClientTransport(new URL(url), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))
+    try {
+      return client.getInstructions()
+    } finally {
+      await client.close()
+    }
+  }
+  assert.equal(await instructionsAt(grant.makoUrl!), MAKO_INSTRUCTIONS, "Claude, Cursor, Grok, OpenCode and Devin are served the instructions")
+  assert.equal(await instructionsAt(withoutInstructions(grant.makoUrl!)), undefined, "Codex's connection carries no instructions")
+  const [here, there] = InMemoryTransport.createLinkedPair()
+  const inProcess = await grant.makoServer!()
+  const reader = new Client({ name: "instructions-check", version: "1" })
+  await inProcess.connect(here)
+  await reader.connect(there)
+  assert.equal(reader.getInstructions(), MAKO_INSTRUCTIONS, "Claude's in-process server keeps them")
+  await reader.close()
+} finally {
+  servers.close()
+}
+process.stdout.write(`mako instructions: ${MAKO_INSTRUCTIONS.length} of ${CLAUDE_INSTRUCTIONS_CUT} characters, the Fins' rules inside Grok's ${GROK_INSTRUCTIONS_CUT}; Codex served without them\n`)

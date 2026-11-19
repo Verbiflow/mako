@@ -35,7 +35,7 @@ import { streamPath, streamsRoot } from "../packages/sessions/src/record-streams
  * was held, then how long a live capture waited for the store while the
  * backfill ran against a baseline with none running, and the second pass,
  * where every session is held at its stamp. The harnesses' stores are only
- * read; everything written goes under `$MAKO_THREAD_DATA_DIR` (or the temp
+ * read; everything written goes under `$MAKO_THREAD_SCRATCH_DIR`, then `$MAKO_THREAD_DATA_DIR` (or the temp
  * folder) and is removed unless `--keep`.
  */
 
@@ -59,7 +59,7 @@ const liveEvery = Number(options["live-ms"])
 const GIB = 1024 ** 3
 const MIB = 1024 ** 2
 
-const base = process.env.MAKO_THREAD_DATA_DIR ?? join(homedir(), ".mako", "tmp")
+const base = process.env.MAKO_THREAD_SCRATCH_DIR ?? process.env.MAKO_THREAD_DATA_DIR ?? join(homedir(), ".mako", "tmp")
 const scratch = join(base, `bench-backfill-${Date.now()}`)
 const folder = join(scratch, "records")
 mkdirSync(folder, { recursive: true })

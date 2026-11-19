@@ -9,6 +9,8 @@ import { closeWorkbenchPane, usePaneScope } from "@/state/session-panes"
 import { PaneComposer } from "@/components/composer/pane-composer"
 import { SearchView } from "@/components/search/search-view"
 import { InboxView } from "@/components/inbox/inbox-view"
+import { AutomationsView } from "@/components/automations/automations-view"
+import { AutomationRunLine } from "@/components/automations/automation-run-line"
 import { SessionDraftReceipt } from "@/components/stage/session-draft-receipt"
 import { openSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { Divider } from "@/components/shell/divider"
@@ -253,6 +255,7 @@ const AgentSurface = memo(function AgentSurface({ session, composer, paneId }: A
   return (
     <main className="agent-surface relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {composer ? <ChildBreadcrumb /> : null}
+      {composer ? <AutomationRunLine /> : null}
       <ConversationScopeContext.Provider value={scope}>
         <TranscriptPaneContext value={paneId ?? null}>
           <ConversationSurface />
@@ -266,6 +269,7 @@ const AgentSurface = memo(function AgentSurface({ session, composer, paneId }: A
           <Composer />
           <SearchView />
           <InboxView />
+          <AutomationsView />
         </>
       ) : null}
     </main>

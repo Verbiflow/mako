@@ -44,8 +44,9 @@ export interface PlaceLink {
   /**
    * One host call answered by a place's host, its value decoded: a device's runtime (`d-<device>`), or a cloud
    * Thread's machine. Throws as a gateway call does: `OwnerUnavailableError` at once for a device that isn't connected.
+   * `passive`: a look that never wakes a cloud Thread's machine asleep; it answers at once that it sleeps.
    */
-  call(target: PlaceTarget, channel: string, args: readonly Json[]): Promise<Json | undefined>
+  call(target: PlaceTarget, channel: string, args: readonly Json[], how?: { passive?: boolean }): Promise<Json | undefined>
 }
 
 /** What an Apex asks of a Fin it placed, each the input of the operation it names (`AgentPlaces.ask`). */

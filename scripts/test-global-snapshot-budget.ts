@@ -48,7 +48,7 @@ try {
   }
   assert.equal(proof().valid, true)
   assert.equal(proof().settledIds.length, 6)
-  assert.equal((await store.budget.settings()).mode, "preview")
+  assert.equal((await store.budget.settings()).mode, "evict", "the newest 8 GiB are kept, older settled checkpoints go, by default")
   await store.budget.configure({ mode: "preview", maxBytes: 1024 ** 2 })
   const plan = await store.budget.preview()
   assert.ok(plan.payloadBytes > plan.settings.maxBytes)

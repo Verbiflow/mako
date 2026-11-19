@@ -85,7 +85,7 @@ await writeFile(join(home, ".config", "opencode", "opencode.json"), JSON.stringi
 const project = join(home, "projects", "tools-proof")
 await mkdir(join(project, ".mako"), { recursive: true })
 await writeFile(join(project, "README.md"), "A proof's project.\n")
-await writeFile(join(project, ".mako", "automations.json"), JSON.stringify({ automations: [{ id: "proof-run", name: "Proof run", prompt: "Reply with the single word AUTOMATED.", trigger: { kind: "manual" } }] }))
+await writeFile(join(project, ".mako", "automations.json"), JSON.stringify({ version: 2, automations: [{ id: "proof-run", name: "Proof run", prompt: { objective: "Reply with the single word AUTOMATED." }, start: { harness: "codex", access: "chat", place: "here" }, triggers: [{ kind: "manual" }] }] }))
 await run("git", ["-C", project, "init", "-q", "-b", "main"], { env: { ...scratch.env } })
 await run("git", ["-C", project, "add", "-A"], { env: { ...scratch.env } })
 await run("git", ["-C", project, "-c", "user.name=proof", "-c", "user.email=proof@example.invalid", "commit", "-qm", "start"], { env: { ...scratch.env } })
@@ -179,7 +179,7 @@ const codexFrom = (value: JsonValue | RuntimeValue) => Harnesses.parse(value)["c
 
 async function runProof() {
   await call("mako:open-tab", [{ cwd: project }])
-  await call("mako:reload-automations", [])
+  await call("mako:automations-read", [project])
   const full = await start("full", "Tools on full access")
   const ask = await start("ask", "Tools on ask")
 
@@ -216,10 +216,10 @@ async function runProof() {
   check("allowed, the setting changes", await until(async () => z.object({ continueAfterRestart: z.boolean() }).parse(await call("mako:conversation-settings", [])).continueAfterRestart === !flipped))
 
   // automation
-  const listed = z.object({ automations: z.array(z.object({ id: z.string(), enabled: z.boolean() }).loose()) }).loose().parse(await tool(full.conversation, "automation", { action: "list" }))
+  const listed = z.object({ automations: z.array(z.object({ id: z.string(), standing: z.string() }).loose()) }).loose().parse(await tool(full.conversation, "automation", { action: "list" }))
   check("automation list has the project's", listed.automations.some((each) => each.id === "proof-run"), listed)
-  check("an id nobody has is refused", outcomeOf(await tool(full.conversation, "automation", { action: "run", id: "nobody" })).refused === "no-automation")
-  const run1 = outcomeOf(await tool(ask.conversation, "automation", { action: "run", id: "proof-run" }))
+  check("an id nobody has is refused", outcomeOf(await tool(full.conversation, "automation", { action: "run_now", id: "nobody" })).refused === "no-automation")
+  const run1 = outcomeOf(await tool(ask.conversation, "automation", { action: "run_now", id: "proof-run" }))
   check("below full access, automation run only asks", run1.outcome === "asked", run1)
   await call("mako:agent-ask-answer", [ask.conversation, run1.ask, true])
   check("allowed, the automation ran", await until(async () => automated, 60_000), "its prompt never reached a model")

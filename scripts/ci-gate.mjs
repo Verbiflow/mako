@@ -11,6 +11,7 @@ import { runSuite } from "./lib/run-suite.mjs"
  *
  *   node scripts/ci-gate.mjs <shard> <shards>     what CI runs, shards counted from 1
  *   node scripts/ci-gate.mjs --plan <shards>      each shard's steps and estimated seconds
+ *   node scripts/ci-gate.mjs --needs <shard> <shards>   what the shard installs first (`NEEDS`), for CI's cache
  *   --mac, before either, takes `MAC_STEPS` instead
  */
 
@@ -160,6 +161,8 @@ export const STEPS = [
   [6, "npm run test:steer-landing"],
   [2, "npm run test:thread-stays-live"],
   [14, "npm run test:agents-doors"],
+  // What the `mako` server's tools and instructions cost each role's context, held to scripts/tool-budget.json, and each role's tool set.
+  [6, "npm run test:tool-budget"],
   [3, "npm run bench:person-ask"],
   [32, "npm run test:agents-cli"],
   [7, "npm run test:thread-move-tool"],
@@ -364,6 +367,8 @@ export const STEPS = [
   [3, "tsx scripts/test-refreshed-fork.ts"],
   [2, "tsx scripts/test-release-timelines.ts"],
   [3, "node scripts/test-remove-fixture-desk.mjs"],
+  // build-control-runtime's cache: a build over another run's outputs is a cold build's, whatever their times (#987).
+  [2, "node scripts/test-restored-build.mjs"],
   [1, "tsx --tsconfig tsconfig.app.json scripts/test-render-caches.ts"],
   [1, "tsx scripts/test-repeated-calls.ts"],
   [3, "tsx scripts/test-replay-setup-notices.ts"],
@@ -486,24 +491,21 @@ const NEEDS = {
 const NEEDS_NOTHING = [/scripts\/test-mcp\.ts\b/, /scripts\/test-computer-tools\.ts\b/]
 /** What a part run outside an npm script needs, by its file: recording reads ffmpeg and ffprobe. */
 const NEEDS_BY_FILE = [[/scripts\/test-(native-recording|control-recording|control-recording-idle|control-recording-stream|browser-recording|browser-video)\.ts\b/, "ffmpeg"]]
+/**
+ * Each prints `install-via: <path>` last: image (already there), cache, apt or archive (`install-apt-cached.sh`), brew.
+ * On Linux, ffmpeg comes from the .debs `MAKO_APT_DEBS` holds, which the gate job keeps between runs, so a shard that
+ * restored them installs it with no network: on 2026-11-19 the runners couldn't reach Ubuntu's mirrors and every
+ * shard that recorded hung on `apt-get update` until this budget ran out.
+ */
+/** Runs `install` unless `tool` is on PATH already. */
+function unlessPresent(tool, install) {
+  return `if command -v ${tool} >/dev/null; then echo "install-via: image"; else ${install}; fi`
+}
 const INSTALL = {
   // Recording reads ffmpeg and ffprobe on PATH; the runner's image has neither.
-  ffmpeg: process.platform === "darwin" ? "command -v ffmpeg >/dev/null || HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg" : `command -v ffmpeg >/dev/null || ${aptInstall("ffmpeg")}`,
-}
-
-/**
- * Installs an apt package without waiting on a mirror that doesn't answer. The runner's own mirror once let
- * `apt-get update` hang for the whole install budget on every shard that recorded (2026-11-19). The package is tried
- * from the lists the image already has; then the lists are refreshed with each network step bounded and retried; then
- * from Ubuntu's own archive in place of the runner's mirror.
- */
-function aptInstall(name) {
-  const net = "-o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20"
-  const install = `sudo timeout 120 apt-get install -y -qq --no-install-recommends ${net} ${name}`
-  const refresh = (extra = "") => `sudo timeout 90 apt-get update -qq ${net} ${extra}`
-  const archive = "-o Dir::Etc::sourcelist=/tmp/apt-archive.list -o Dir::Etc::sourceparts=-"
-  const archiveList = 'echo "deb http://archive.ubuntu.com/ubuntu $(. /etc/os-release; echo $VERSION_CODENAME) main universe" | sudo tee /tmp/apt-archive.list >/dev/null'
-  return `(${install} || (${refresh()} && ${install}) || (${archiveList} && ${refresh(archive)} && sudo timeout 120 apt-get install -y -qq --no-install-recommends ${net} ${archive} ${name}))`
+  ffmpeg: unlessPresent("ffmpeg", process.platform === "darwin"
+    ? 'HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg && echo "install-via: brew"'
+    : `"${new URL("install-apt-cached.sh", import.meta.url).pathname}" "\${MAKO_APT_DEBS:-\${RUNNER_TEMP:-/tmp}/apt-debs}" ffmpeg`),
 }
 
 /**
@@ -682,9 +684,10 @@ if (args[0] === "--plan") {
   }
   process.exit(0)
 }
-const [shard, count] = args.map(Number)
+const needsOnly = args[0] === "--needs"
+const [shard, count] = args.slice(needsOnly ? 1 : 0).map(Number)
 if (!Number.isInteger(shard) || !Number.isInteger(count) || shard < 1 || shard > count) {
-  console.error("Use: node scripts/ci-gate.mjs [--mac] <shard> <shards>, or [--mac] --plan <shards>")
+  console.error("Use: node scripts/ci-gate.mjs [--mac] [--needs] <shard> <shards>, or [--mac] --plan <shards>")
   process.exit(2)
 }
 
@@ -696,6 +699,10 @@ const planned = lanesOf(count).slice((shard - 1) * LANES, shard * LANES).map((la
 const first = planned.flat().filter(isAlone)
 const lanes = planned.map((steps) => steps.filter((step) => !isAlone(step)).toSorted((a, b) => Number(Boolean(needOf(a))) - Number(Boolean(needOf(b)))))
 const picked = [...first, ...lanes.flat()]
+if (needsOnly) {
+  console.log([...new Set(picked.map(needOf).filter(Boolean))].join(" "))
+  process.exit(0)
+}
 /**
  * Each install starts at once, beside the parts, and only a part that needs it waits for it: awaited first, apt's
  * ffmpeg (17 to 45 s) held every test of the 20 shards that picked a recording part, and decided pr-gate's time
@@ -705,7 +712,8 @@ const installing = new Map([...new Set(picked.map(needOf).filter(Boolean))].map(
   let output = ""
   const began = Date.now()
   const code = await runSuite("bash", ["-c", INSTALL[need]], { limitMs: 5 * 60_000, quietMs: 5 * 60_000, write: (text) => { output += text } })
-  console.log(`::group::install ${need}\n${output}::endgroup::\n${code === 0 ? "installed" : "INSTALL FAILED"}: ${need} in ${Math.round((Date.now() - began) / 1000)} s`)
+  const via = output.match(/^install-via: (\S+)$/m)?.[1] ?? "nothing"
+  console.log(`::group::install ${need}\n${output}::endgroup::\n${code === 0 ? "installed" : "INSTALL FAILED"}: ${need} in ${Math.round((Date.now() - began) / 1000)} s, via ${via}`)
   return code
 })()]))
 

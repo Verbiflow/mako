@@ -72,7 +72,6 @@ import { skillDeliveryFor } from "@mako/host/contracts/skill-reach"
 import type { AccountLogin, AccountLoginResult, AccountProviderInfo, AccountRemovalPlan, AccountRemovalSession, AccountUsage, HarnessAccount, ResetCreditOutcome } from "@mako/host/contracts/accounts"
 import type { ThreadFileContext } from "@mako/host/contracts/conversation-session"
 import type {
-  Automation,
   LiveSessionState,
   BootPayload,
   HostEvent,
@@ -96,6 +95,7 @@ import {
   initialTerminalSessions,
   mockThreads,
 } from "./mock-runtime-fixtures"
+import { automationRefs, automationSnapshots, automationSummaries, mockAutomations, RUN_THREADS } from "./mock-automations"
 import { agedGroup, busyRefs, busySnapshot, busySummaries, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE } from "./mock-busy-thread"
 import { openAsk } from "@mako/host/contracts/children"
 import { apexWorktrees, apexWorktreeSummaries, benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
@@ -420,10 +420,10 @@ export function installMockBridge() {
   const returnCalls: string[] = []
   let refuseNextAgentAnswer = false
   const continueCalls: string[] = []
-  const crewContinueCalls: { conversation: string; request: string; choice: LimitNoticeChoice }[] = []
-  let crewLimitRoom = true
-  let crewNextCalls = 0
-  const crewWait = crypto.randomUUID()
+  const shiverContinueCalls: { conversation: string; request: string; choice: LimitNoticeChoice }[] = []
+  let shiverLimitRoom = true
+  let shiverNextCalls = 0
+  const shiverWait = crypto.randomUUID()
   /** Sessions whose work is paused because the account signed out mid-turn, as the host pauses them. */
   const signInPauses = new Map<string, SignInHold>()
   /** Messages that already waited for this Mac to hear its account. */
@@ -512,6 +512,32 @@ export function installMockBridge() {
   let crowdedReads = 0
   if (crowded) boot.live.push(...crowded.own)
   /** `?app=busy`: a long Thread of four Sessions, its first waiting on three agents and twenty-two commands. */
+  const automationMock = mockAutomations(emit)
+  /** An agent's ask taken out of its conversation, as the host settles it once answered or decided. */
+  const settleAgentAsk = (conversationId: string, ask: string) => {
+    const snapshot = liveSnapshots.get(conversationId)
+    if (!snapshot?.control?.asks?.some((each) => each.id === ask)) return
+    const control = { ...snapshot.control, asks: snapshot.control.asks.filter((each) => each.id !== ask) }
+    const next = { ...snapshot, revision: snapshot.revision + 1, control }
+    liveSnapshots.set(conversationId, next)
+    emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversationId, revision: next.revision, updates: [], control })) })
+  }
+  /** `?app=automations`: the Threads automations ran and the Thread proposing a change, live, its proposal in the Inbox. */
+  if (scene === "automations") {
+    for (const snapshot of automationSnapshots()) {
+      liveSnapshots.set(snapshot.session.id, snapshot)
+      acpSessions.set(snapshot.session.id, snapshot.session)
+    }
+    boot.live.push(...automationSummaries())
+    // The proposer's ask, as the host's control-only batch says it once the window listens.
+    setTimeout(() => {
+      const snapshot = liveSnapshots.get(RUN_THREADS.proposer.conversation)
+      if (!snapshot?.control) return
+      const next = { ...snapshot, revision: snapshot.revision + 1 }
+      liveSnapshots.set(snapshot.session.id, next)
+      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: snapshot.session.id, revision: next.revision, updates: [], control: snapshot.control })) })
+    }, 600)
+  }
   if (scene === "busy") {
     BUSY_SESSIONS.forEach((entry, index) => liveSnapshots.set(entry.conversation, busySnapshot(index)))
     boot.live.push(...busySummaries())
@@ -590,15 +616,15 @@ export function installMockBridge() {
         emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: APEX_CONVERSATION, revision: next.revision, updates: [], control })) })
       },
       continues: () => [...continueCalls],
-      crewContinues: () => [...crewContinueCalls],
-      crewReads: () => crewNextCalls,
-      crewLimitRoom(value: boolean) {
-        crewLimitRoom = value
+      shiverContinues: () => [...shiverContinueCalls],
+      shiverReads: () => shiverNextCalls,
+      shiverLimitRoom(value: boolean) {
+        shiverLimitRoom = value
         setChildren((liveSnapshots.get(APEX_CONVERSATION)?.nativeAgents?.agents ?? []).map(agent => ({ ...agent, ...(agent.child && { child: { ...agent.child } }) })))
       },
       /**
        * The Apex's own turn starts or ends, as a wake or a settle would: ending it also settles its own still-
-       * dispatching request (the digest it was reading), so the crew card draws in its place, the Fins in the
+       * dispatching request (the digest it was reading), so the Shiver card draws in its place, the Fins in the
        * roster untouched.
        */
       /** The Apex's session goes through a transition as its host would say it: starting, reconnecting, hibernated, failed. */
@@ -1129,12 +1155,6 @@ export function installMockBridge() {
       ]
     },
     worktreeAhead: async () => null,
-    snapshotBudget: async () => ({ settings: { mode: "preview", maxBytes: 8 * 1024 ** 3 }, at: Date.now(), payloadBytes: 0, selectedBytes: 0, remainingBytes: 0, untrackedBytes: 0, inventoryKnown: true, entries: [] }),
-    setSnapshotBudget: async settings => ({ settings, at: Date.now(), payloadBytes: 0, selectedBytes: 0, remainingBytes: 0, untrackedBytes: 0, inventoryKnown: true, entries: [] }),
-    threadScratch: async () => ({ settings: { mode: "preview", idleDays: 7, kept: [] }, at: Date.now(), everyMs: 3_600_000, entries: [] }),
-    setThreadScratch: async (settings) => ({ settings, at: Date.now(), everyMs: 3_600_000, entries: [] }),
-    worktreeRetention: async () => ({ settings: { mode: "preview", days: 7, kept: [] }, everyMs: 3_600_000, minimumPassMs: 600_000, repositoryFetches: 0, at: Date.now(), checkouts: [] }),
-    setWorktreeRetention: async (settings) => ({ settings, everyMs: 3_600_000, minimumPassMs: 600_000, repositoryFetches: 0, at: Date.now(), checkouts: [] }),
     worktreeInventory: async () => (scene === "rail" ? railInventory(removedWorktrees) : { worktrees: [], spares: { count: 0, bytes: null } }),
     ...mockStorage(),
     worktreeReview: async (path: string): Promise<WorktreeReview> => {
@@ -1196,10 +1216,10 @@ export function installMockBridge() {
       const snapshot = liveSnapshots.get(conversationId)
       const pending = snapshot?.control?.asks?.find((each) => each.id === ask)
       if (!snapshot?.control || !pending) return { outcome: "missing", ask } as const
-      const control = { ...snapshot.control, asks: snapshot.control.asks?.filter((each) => each.id !== ask) }
-      const next = { ...snapshot, revision: snapshot.revision + 1, control }
-      liveSnapshots.set(conversationId, next)
-      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversationId, revision: next.revision, updates: [], control })) })
+      // As the host: a proposal is approved where its change is shown (its card's `decide`); its ask only declines.
+      if (pending.want.kind === "automation-proposal" && allow) throw new Error("A proposal is approved where its change is shown: its card in Automations or the Inbox. Its ask only declines.")
+      if (pending.want.kind === "automation-proposal") automationMock.decideByAsk(ask, allow)
+      settleAgentAsk(conversationId, ask)
       return { outcome: "answered", ask, allow, want: pending.want } as const
     },
     threadChanges: async () => null,
@@ -1807,7 +1827,7 @@ export function installMockBridge() {
         if (crowdedReads === 2) setTimeout(() => emit({ type: "live-listed", summaries: crowded.elsewhere }), 1_000)
         return { ready: crowdedReads > 1, threads: crowdedReads > 1 ? crowded.refs : crowded.early, activity: {} }
       }
-      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...(scene === "apex" ? [...apexRefs(), ...benchScene.refs] : []), ...fixture.threads]
+      const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...(scene === "apex" ? [...apexRefs(), ...benchScene.refs] : []), ...(scene === "automations" ? automationRefs() : []), ...fixture.threads]
       if (scene === "rail" && !railRunsSent) {
         railRunsSent = true
         setTimeout(() => {
@@ -3462,19 +3482,13 @@ export function installMockBridge() {
       },
     abortThreadRun: async () => {},
     usage: async () => fixtureUsageSummary(),
-    automations: async () => [
-      {
-        id: "a1",
-        name: "Check the schema doc",
-        prompt: "A migration changed. Check docs/schema.md still matches.",
-        trigger: { kind: "files" as const, paths: ["migrations/*.sql"] },
-        enabled: false,
-      },
-    ],
-    saveAutomations: async (next: Automation[]) => next,
-    setAutomationEnabled: async () => [],
-    runAutomation: async () => {},
-    reloadAutomations: async () => [],
+    ...automationMock.bridge,
+    // Deciding a proposal settles the ask that carried it, wherever it waits, as the host's `decide` does.
+    decideAutomationProposal: async (proposal: string, approve: boolean) => {
+      const decided = await automationMock.bridge.decideAutomationProposal(proposal, approve)
+      if (decided.ask) for (const [conversationId] of liveSnapshots) settleAgentAsk(conversationId, decided.ask)
+      return decided
+    },
     terminalList: async () => terminalSessions,
     terminalCreate: async (options) => {
       const now = Date.now()
@@ -3715,15 +3729,15 @@ export function installMockBridge() {
     },
     agentsNextPlace: async (conversation: string, notice?: string) => {
       if (!notice) return { label: "Codex", harness: "codex" }
-      crewNextCalls++
+      shiverNextCalls++
       const agent = liveSnapshots.get(conversation)?.nativeAgents?.agents.find(agent => agent.child?.limitNotice?.id === notice && agent.child.limitNotice.waiting)
-      return crewLimitRoom && agent?.child ? { label: "Codex", harness: "codex", choice: { notice, place: "codex", waits: [{ thread: agent.child.thread, request: agent.child.limitNotice!.waiting!.version ?? crewWait }] } } : null
+      return shiverLimitRoom && agent?.child ? { label: "Codex", harness: "codex", choice: { notice, place: "codex", waits: [{ thread: agent.child.thread, request: agent.child.limitNotice!.waiting!.version ?? shiverWait }] } } : null
     },
     agentsContinueNext: async (conversation: string, request: string, choice?: LimitNoticeChoice) => {
       if (!choice) { continueCalls.push(conversation); return true }
-      crewContinueCalls.push({ conversation, request, choice })
+      shiverContinueCalls.push({ conversation, request, choice })
       const snapshot = liveSnapshots.get(conversation)
-      if (!snapshot?.nativeAgents || !crewLimitRoom) return false
+      if (!snapshot?.nativeAgents || !shiverLimitRoom) return false
       const agents = snapshot.nativeAgents.agents.map(agent => {
         if (agent.child?.limitNotice?.id !== choice.notice) return agent
         const child = { ...agent.child }; delete child.limitNotice

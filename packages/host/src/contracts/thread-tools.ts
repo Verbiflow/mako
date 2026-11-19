@@ -100,20 +100,42 @@ export type HarnessActResult =
   | { outcome: "asked"; ask: string; next: string }
   | { refused: "unavailable" | "no-thread" | "no-harness" | "cloud-machine" | "failed"; why: string }
 
-/** Lists the person's automations, runs one now, or turns one on or off. */
+/**
+ * The person's automations (`contracts/automations.ts`), for an agent: read them and their runs, run one now, turn one
+ * off, and propose creating, changing, deleting or turning one on, which waits for the person's approval.
+ */
+export type AutomationAction = "list" | "get" | "runs" | "create" | "update" | "delete" | "enable" | "disable" | "run_now" | "proposal"
+
 export interface AutomationActInput {
-  action: "list" | "run" | "on" | "off"
-  /** run, on, off: the automation, as list gives it. */
+  action: AutomationAction
+  /** The project folder; absent: the caller's Thread's folder, else the folder in front. */
+  project?: string
+  /** Every action but list, create and proposal: the automation, as list gives it. create may name it here or in definition. */
   id?: string
-  /** The caller's own key for this. */
+  /** create: the whole definition. update: the parts that change, merged over the current one. */
+  definition?: JsonValue
+  /** create, update, delete, enable: why, in a sentence the person reads with the proposal. */
+  why?: string
+  /** proposal: the proposal's id, to read how it stands. */
+  proposal?: string
+  /** runs: at most this many, newest first (default 10). */
+  limit?: number
+  /** The caller's own key for this: a repeat with it is the same action. */
   clientKey: string
 }
 
 export type AutomationActResult =
-  | { outcome: "listed"; automations: JsonValue }
-  | { outcome: "done"; action: string; id: string }
+  /** `definitionGuide`: what a definition holds, for a create (`AUTOMATION_DEFINITION_GUIDE`). */
+  | { outcome: "listed"; automations: JsonValue; definitionGuide: string }
+  | { outcome: "got"; automation: JsonValue }
+  | { outcome: "runs"; runs: JsonValue }
+  /** A create, update, delete or enable waits for the person: the agent isn't held, and hears the decision as Mako's note. */
+  | { outcome: "proposed"; proposal: string; status: "pending"; expiresAt: string; diff: JsonValue; next: string }
+  | { outcome: "proposal"; proposal: JsonValue }
+  /** disable and run_now: done now. `run` names the run run_now recorded, and its Thread once it has one. */
+  | { outcome: "done"; action: string; id: string; run?: JsonValue }
   | { outcome: "asked"; ask: string; next: string }
-  | { refused: "unavailable" | "no-thread" | "no-automation" | "failed"; why: string }
+  | { refused: "unavailable" | "no-thread" | "no-automation" | "no-project" | "invalid" | "failed"; why: string }
 
 /** One thing a turn waits on, as the agent names it: a Fin of this Thread, a pull request until checks, review or merge, or this Thread's app check under way. */
 export type TurnWaitOn = { fin: string } | { pull: string; until?: "checks" | "review" | "merge" } | { check: "quick" | "full"; target?: string }
@@ -157,6 +179,8 @@ export interface ThreadToolDefinition {
     name: string
     description: string
     fields: Readonly<Record<string, string>>
+    /** Inputs the door lists and takes as a JSON object, said in a few tokens, where the host call takes any JSON. */
+    objects?: readonly string[]
     annotations: { readOnlyHint: boolean; destructiveHint: boolean; idempotentHint: boolean; openWorldHint: boolean }
   }
 }
@@ -236,12 +260,14 @@ export const AUTOMATION_TOOL: ThreadToolDefinition = {
   filled: [],
   mcp: {
     name: "automation",
-    description: "List the person's automations, Run one now, or turn one on or off, as Settings › Automations does. Call it when the person asks. list answers at once; the rest happen now on full access, and on other access Mako asks the person first. To run work beside this Thread, use agents_start.",
+    description: "The person's automations, prompts Mako runs as Threads on a trigger or Run now; call it when the person asks. list (with a definition guide), get, runs and proposal read. disable and run_now act on full access, else once allowed. create, update, delete and enable propose: the person decides, you hear later, so go on.",
     fields: {
-      action: "list, run, on or off.",
-      id: "run, on, off: the automation's id, from list.",
-      clientKey: "Your own key for this: a repeat with it is the same action.",
+      project: "Default: this Thread's.",
+      definition: "create: all of it; update: what changes.",
+      why: "Read with the proposal.",
+      clientKey: "Same key, same action.",
     },
+    objects: ["definition"],
     annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
   },
 }

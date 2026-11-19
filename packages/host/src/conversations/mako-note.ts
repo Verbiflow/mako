@@ -1,6 +1,6 @@
 import { hostWarn } from "../base/host-log.js"
 import type { RoutedThread } from "../contracts/native-routing.js"
-import { primerBlocks } from "../contracts/primer.js"
+import { primerBlocks, serverBlock } from "../contracts/primer.js"
 import type { ThreadEnvironment } from "../contracts/thread-environments.js"
 import { CLOUD_MACHINE_INSTRUCTIONS, threadEnvironmentInstructions } from "../workspaces/index.js"
 import type { ControlInstructions } from "./control-cadence.js"
@@ -14,6 +14,8 @@ export interface MakoNoteSources {
   controlLine(bindingId: string): string | undefined
   /** Whether the conversation's harness takes Mako's blocks in a slot of its own (`makoInstructions`); undefined before it has one. */
   ownSlot(conversationId: string): boolean | undefined
+  /** Whether the conversation's harness never shows the model the `mako` server's instructions (`LayerCapabilities.serverInstructions`). */
+  serverUnread?(conversationId: string): boolean
   notices(conversationId: string, signal: AbortSignal): string[] | Promise<string[]>
 }
 
@@ -43,12 +45,16 @@ async function promptNotices(sources: MakoNoteSources, conversationId: string): 
  * A harness without a slot of its own hears the primer's blocks here, each a
  * standing line under its block's id, so they go on the note's cadence
  * (`standingLines`): whole to a process that hasn't heard them, then as they change.
+ * One that never shows the model the `mako` server's instructions hears them
+ * here too, as the `server` block.
  */
 export function makoNote(sources: MakoNoteSources) {
   return async (bindingId: string, conversationId: string, thread: Pick<RoutedThread, "role">): Promise<ControlInstructions> => {
     const notices = await promptNotices(sources, conversationId)
     const launched = sources.launchedWith(conversationId)
-    const blocks = sources.ownSlot(conversationId) === false ? primerBlocks({ role: thread.role, noRecipe: launched?.recipe?.kind === "none", computer: true }) : []
+    const blocks = sources.ownSlot(conversationId) === false
+      ? [...primerBlocks({ role: thread.role, noRecipe: launched?.recipe?.kind === "none", computer: true }), ...sources.serverUnread?.(conversationId) ? [serverBlock()] : []]
+      : []
     return {
       standing: {
         machine: sources.cloudMachine ? CLOUD_MACHINE_INSTRUCTIONS : undefined,

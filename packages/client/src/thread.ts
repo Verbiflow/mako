@@ -17,8 +17,9 @@ export const THREAD_HELP = `  mako thread move cloud|back [--conversation <id>] 
                     (harnesses first to last, comma-separated), commit-model, keep-awake and keep-awake-lid-closed.
   mako harness read | install <harness> | update <harness>
                     Install and Update in Settings › Harnesses, as the harness tool does.
-  mako automation list | run <id> | on <id> | off <id>
-                    Settings › Automations, as the automation tool does.`
+  mako automation list | get <id> | runs <id> | run_now <id> | disable <id> | enable <id> | delete <id>
+                    The person's automations, as the automation tool does; run, on and off still name
+                    run_now, enable and disable. From a shell outside any Thread they apply at once.`
 
 const OPTIONS = {
   conversation: { type: "string" },
@@ -68,11 +69,18 @@ export function harnessInput(argv: string[]): HarnessActInput {
   return { action, clientKey: values.key ?? randomUUID(), ...(harness && { harness }) }
 }
 
-/** `mako automation list|run|on|off`'s input, from its arguments. */
+const AUTOMATION_ACTIONS = {
+  list: "list", get: "get", runs: "runs", run_now: "run_now", disable: "disable", enable: "enable", delete: "delete",
+  // The words before the automation tool took proposals.
+  run: "run_now", on: "enable", off: "disable",
+} satisfies Record<string, AutomationActInput["action"]>
+
+/** `mako automation <action> [id]`'s input, from its arguments. */
 export function automationInput(argv: string[]): AutomationActInput {
   const { values, positionals } = parseArgs({ args: argv, allowPositionals: true, options: OPTIONS })
-  const [, action, id] = positionals
-  if (action !== "list" && action !== "run" && action !== "on" && action !== "off") throw new Error("automation needs list, run <id>, on <id> or off <id>")
+  const [, said, id] = positionals
+  const action = Object.entries(AUTOMATION_ACTIONS).find(([word]) => word === said)?.[1]
+  if (!action) throw new Error("automation needs list, get <id>, runs <id>, run_now <id>, disable <id>, enable <id> or delete <id>")
   return { action, clientKey: values.key ?? randomUUID(), ...(id && { id }) }
 }
 

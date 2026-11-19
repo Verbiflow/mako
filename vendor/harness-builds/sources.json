@@ -2,34 +2,34 @@
   "builds": [
     {
       "harness": "devin",
-      "version": "3000.13.4",
+      "version": "3000.14.30821",
       "target": "x86_64-unknown-linux",
-      "archive": "devin-3000.13.4-x86_64-unknown-linux.tar.gz",
-      "url": "https://static.devin.ai/cli/3000.13.4/devin-3000.13.4-x86_64-unknown-linux.tar.gz",
-      "sha256": "e1bd618ec61f4d21069335162cf6d854d8cd2e662f2395efb06edb5796ed16e9",
-      "unpack": ".local/share/devin/cli/_versions/3000.13.4",
+      "archive": "devin-3000.14.30821-x86_64-unknown-linux.tar.gz",
+      "url": "https://static.devin.ai/cli/3000.14.30821/devin-3000.14.30821-x86_64-unknown-linux.tar.gz",
+      "sha256": "4dc43e3e4388bace60fe2aa8010cbb399402e724892d7175845b1cdef00e7ddb",
+      "unpack": ".local/share/devin/cli/_versions/3000.14.30821",
       "links": {
-        ".local/share/devin/cli/_versions/current": "3000.13.4",
+        ".local/share/devin/cli/_versions/current": "3000.14.30821",
         ".local/bin/devin": "~/.local/share/devin/cli/_versions/current/bin/devin"
       },
       "files": {
-        ".local/share/devin/cli/_versions/3000.13.4/distribution": "curl-bash\n"
+        ".local/share/devin/cli/_versions/3000.14.30821/distribution": "curl-bash\n"
       }
     },
     {
       "harness": "devin",
-      "version": "3000.13.4",
+      "version": "3000.14.30821",
       "target": "aarch64-unknown-linux",
-      "archive": "devin-3000.13.4-aarch64-unknown-linux.tar.gz",
-      "url": "https://static.devin.ai/cli/3000.13.4/devin-3000.13.4-aarch64-unknown-linux.tar.gz",
-      "sha256": "725a7b1eb6d2a57dd99d6ab6e632330dc639f2382776241cf75a6c0b3e04d337",
-      "unpack": ".local/share/devin/cli/_versions/3000.13.4",
+      "archive": "devin-3000.14.30821-aarch64-unknown-linux.tar.gz",
+      "url": "https://static.devin.ai/cli/3000.14.30821/devin-3000.14.30821-aarch64-unknown-linux.tar.gz",
+      "sha256": "3deb8af6b026060e975ed371936e139818020e5dc5abbcba07cde039f473a5a5",
+      "unpack": ".local/share/devin/cli/_versions/3000.14.30821",
       "links": {
-        ".local/share/devin/cli/_versions/current": "3000.13.4",
+        ".local/share/devin/cli/_versions/current": "3000.14.30821",
         ".local/bin/devin": "~/.local/share/devin/cli/_versions/current/bin/devin"
       },
       "files": {
-        ".local/share/devin/cli/_versions/3000.13.4/distribution": "curl-bash\n"
+        ".local/share/devin/cli/_versions/3000.14.30821/distribution": "curl-bash\n"
       }
     }
   ]

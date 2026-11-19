@@ -376,11 +376,19 @@ conflation; Settings > Diagnostics lists each session's background work with
 its sources.
 
 Glossary: a Thread that starts others is an **Apex**, and each one it
-started or took is a **Fin** (`APEX_WORD`, `FIN_WORD`); there is no word for
-the group. Data structures still say parent and child (`thread_parents`,
-`ChildState`), and the wire keeps `"lead"` for the role and for a question
-the Apex answers (`APEX_ROLE`, `blocked.on`), so builds on either side of the
-names read each other.
+started or took is a **Fin** (`APEX_WORD`, `FIN_WORD`); an Apex and its Fins
+together are its **Shiver** (`SHIVER_WORD`), as a group of sharks is. Data
+structures still say parent and child (`thread_parents`, `ChildState`), and
+the wire keeps `"lead"` for the role and for a question the Apex answers
+(`APEX_ROLE`, `blocked.on`), so builds on either side of the names read each
+other. The group's word before the Shiver, `crew`, stays only where an older
+build or a stored record still says it: `agents_list` takes `scope: crew` as
+`scope: shiver` (`LEGACY_SHIVER_SCOPE`, never advertised in its schema), the
+CLI takes `--crew`, a kept brief's intro still reads as one
+(`CREW_INTRO_TAIL`), a kept transcript's `agents_list` row still reads as
+the Shiver (`makoToolWords`), and a turn wait keeps its stored `crewStep` key
+and ID seed (`SHIVER_WAIT_KEY`); a check-in stored as "Waiting for the crew"
+reads as "Waiting for the Shiver" (`turnWaitDescription`).
 
 A Fin's edge is the record (`thread_parents`, `contracts/agents.ts`), on its
 `ThreadRef.parent`, so `threadList` lists it under its Apex and never as a
@@ -528,7 +536,7 @@ Apex is, is left alone. Closing is bookkeeping: its reason is
 `FINISHED_CLOSE`, a stop's reason on the wire, so an older build shows it
 as any closed edge and opens it as it opens a stopped one; this build reads
 it as done or failed (`childState`), never stopped. Nothing is cancelled,
-stopped or reported, and it leaves the front door's note, the crew view,
+stopped or reported, and it leaves the front door's note, the Shiver view,
 the `apexes` digest, `personAsk`'s walk and the list (counted in `folded`).
 It never cuts a Fin off: whatever reaches it opens it again in the same
 Session (`reopen`), and the Fin above it with it when that one is closed
@@ -657,7 +665,7 @@ or `other` in a few words), carried on the blocked state and the open
 decision and said as "waiting on #412 checks" (`waitingWords`) in the digest,
 the front door and the strip. A progress report that names it, with the
 Fin's turn ended, reads as idle waiting since the report (`ChildState`'s
-`idle.waitingOn`, `since`), in the crew row, the strip and the front door
+`idle.waitingOn`, `since`), in the Shiver row, the strip and the front door
 as "Waiting on acme/app#371 checks · 12m" (`waitingStateWords`); the
 orchestration text tells a Fin to report so and end its turn rather than
 poll checks. The report result's `subscriptions` distinguishes a registered
@@ -718,7 +726,7 @@ next host sends it on through that same handoff, keeping a Stop's mark. "Newest
 report" means the store's order of taking them (`rowid`), since `at` can tie.
 `test:fin-pull-waits` covers it with a stub reader and a fake clock, and a real
 SIGKILL with the note prepared on each harness (`test-fin-pull-wake-crash.ts`).
-A Fin's strip, its crew
+A Fin's strip, its Shiver
 mates' view and the `apexes` digest say how long it has been idle
 (`idleFor`, seconds, only while it isn't working) and its open pull requests
 (`openPRs`, `finPullRequests`): its worktree branch's as the worktree
@@ -1068,11 +1076,19 @@ deployed cloud.
 
 What an Apex and its Fins tell each other is kept short without dropping
 what the reader needs. Every `agents_*` answer is its JSON on one line
-(`agentToolText`), every field kept. `agents_list` lists what an Apex can act on (`foldList`): a Fin that ended over a day ago with
-nothing open, or was closed as finished, is counted in `folded`, not listed, its row never built (`Agents.unlisted`); past `LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose
-their pull requests, then fold, oldest first. A Fin needing attention (a question, an action, a decision, at work,
-waiting or blocked) is never folded, past the budget if it must be; `scope: all` lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens, a
-call (`test-agents-list-fold.ts`). Neither a list nor a prompt reads a Fin's
+(`agentToolText`). What a model reads of `agents_list` and `agents_move` is cut where it repeats itself
+(`compactAnswer`, `agent-tool-compact.ts`; the engine, host callers and `--json` keep every field): a row's
+`idleFor` and `report.at` become ages in words (`idle: "3h"`, `report.ago`), `startedAt`, `changedAt`, `origin:
+started`, `model` beside `runsOn` and a title other rows share go, and a Shiver mate's topic is cut at 80 characters; every
+question, decision, wait and pull request stays. `agents_move { all }` says what its Fins share (harness, state, the
+sentence each hears) once under `each`. `agents_list` lists what an Apex can act on (`foldList`, and `foldShiver` for a
+Fin's `scope: shiver`): a Fin that ended or sat idle over a day ago with nothing open, or was closed as finished, is
+counted in `folded`, not listed, an ended or closed one's row never built (`Agents.unlisted`); past
+`LIST_BUDGET_CHARS` (16 KB) idle and ended rows lose their pull requests, then fold, oldest first. A Fin needing
+attention (a question, an action, a decision, at work, waiting or blocked) is never folded, past the budget if it
+must be; `ended: true` (or `scope: all`) lists every one. An Apex's 130 Fins were once 105 KB, about 26,000 tokens,
+a call; 40 Fins of a week (5 at work, 2 waiting) read 1,802 tokens, a Shiver of them 1,524
+(`test-agents-list-fold.ts`). Neither a list nor a prompt reads a Fin's
 reports again while none is new: the engine keeps, by Fin, what a row takes
 from them (`Agents.reportsOf`: the pull requests they name and each one's
 mark for `owesApex`), added to as each report is kept (`reportKept`) and read
@@ -1083,7 +1099,7 @@ whose Fins held 6,520 (`test-fin-reports-held.ts`). Each Fin has a change mark t
 (`FinChanges`): when its state, report, open questions or pull requests last
 changed as the host read them, a working Fin's step and a queued one's place in
 line not counting, on the host's own clock (a tick never earlier than the
-last). Each row says it (`changedAt`) and each list answers a `mark` naming this
+last). Each row holds it (`changedAt`, left out of the model's text) and each list answers a `mark` naming this
 host life and a tick; with `since: <mark>` only the Fins that changed since are
 listed and the rest counted in `unchanged`, but a Fin waiting on its Apex (a
 question, an action, a decision, a block) is always listed, and a mark this
@@ -1106,13 +1122,13 @@ check-in). A finished Fin's digest line
 line, at most `FINISHED_CHARS`, with how many more characters the
 report holds (`agents_read` gives them), and every artifact by its ref with
 its label beside it.
-A Fin reads its Apex and the other open Fins it started with `agents_list`
-`scope: crew` (`AgentsCrew`): the Apex's title, harness, whether it works and
+A Fin reads its Shiver, its Apex and the other open Fins it started, with `agents_list`
+`scope: shiver` (`AgentsShiver`): the Apex's title, harness, whether it works and
 its last step, what it was asked when it is a Fin too, and each other Fin as
 the front door's note names it (name, harness, state, what it was asked, its
 branch and last report). The person's direct words to a Fin stay out. It
 reads typed state, never a transcript, and its brief's first line says it's
-there. Crew discovery grants no sibling-send authority. A sibling send is
+there. Reading the Shiver grants no sibling-send authority. A sibling send is
 refused as `relayed`: nothing reaches the sibling, and its words go to the
 Apex instead as a handoff (`Report.handoff`, a progress report that wakes it),
 which the digest lists under "hands work to another Fin" for the Apex to pass
@@ -2156,7 +2172,7 @@ later turn streams.
 An Apex's transcript ends, once its turn has, on what it waits on by name
 (`WaitingLine`: "Waiting on Docs pass, Token sweep, and 4 other Fins", the
 first two past three, each opening its Fin; "Queued since 3:42 PM" for a
-message a minute unsent), above the crew card; a Thread with no Fins says its
+message a minute unsent), above the Shiver card; a Thread with no Fins says its
 background work on `BackgroundWorkLine` and a turn's own wait on
 `TurnWaitLineView`. Beside "Jump to latest", which counts what arrived below
 a reader who left the end ("· 3 new"), a pill counts what is at work and
@@ -2370,7 +2386,7 @@ Four rules hold this together, and each has a specific failure it prevents:
   a trackpad's rest jitter never lets go while a flick up does at once, and a
   wheel up then as far back down follows the end again (its net was nothing,
   which read as rest, and the end went unfollowed). A wheel taken by a
-  scroller inside the transcript (the crew card's list, a code block) stays
+  scroller inside the transcript (the Shiver card's list, a code block) stays
   with it until it settles, as the browser's own gesture does. Input ends when
   it settles (`INPUT_SETTLE_MS`), for input that moved nothing and a browser
   with no `scrollend`: left standing, the next layout shift would read as the
@@ -2546,7 +2562,7 @@ another surface while that Thread is on screen; the pick is that Thread's
 (`apexCompanions` in the prefs, `shownCompanion` in `state/stage.ts`), and a
 Thread with no Fins keeps the tab's own surface. The Overview's sections draw
 only while they hold something, in this order: Needs you (each ask in a line,
-with the crew card's own answer buttons), Working, Waiting (the idle and the
+with the Shiver card's own answer buttons), Working, Waiting (the idle and the
 queued, what a Fin waits on first), Failed, Done (newest first), Pull requests
 (each Thread of the tree's worktree branch's, from the worktree summaries the
 rail keeps, and any a Fin says it waits on: nothing is read for it), then
@@ -3262,9 +3278,14 @@ test. Existing debt is never a reason to add new debt.
 
 ## Disk space
 
-Scratch copies of the checkout and scratch builds go in the Thread's data
-folder (`$MAKO_THREAD_DATA_DIR`), and you delete them before you hand off the
-task. Never copy `release/` or `node_modules` by hand: one hand-made update
+Scratch copies of the checkout, scratch builds, packaged apps, test homes and
+benchmark worlds go in the Thread's scratch folder (`$MAKO_THREAD_SCRATCH_DIR`),
+never the data folder (`$MAKO_THREAD_DATA_DIR`, for screenshots and reports),
+and you delete them before you hand off the task. Mako removes a Thread's scratch
+once it is archived, its Fin finished, or it has been quiet three days; told to
+use the data folder, Fins left 175 GB there on one Mac (`thread-data/<app key>`,
+which `AppDataRetention` now offers to remove in Settings › Storage). The
+benches that write a scratch tree take `$MAKO_THREAD_SCRATCH_DIR` first. Never copy `release/` or `node_modules` by hand: one hand-made update
 rehearsal copied `release/`, reached 25.6 GB and filled the disk. To rehearse
 a Settings update, run `npm run test:settings-build` (`-- --as-installed-updater`
 rehearses an older installed updater, which passes no `MAKO_BUILD_SOURCE`); it
@@ -3584,10 +3605,10 @@ deliberate action and never rides along with a commit.
   `useOffered` keeps a row away while nothing stands behind it. A reading
   selects its own fact, so a token repaints no row. Changes is a list and a
   diff opens as a tab (`changesView` keeps Review, every diff in one scroll,
-  in Settings). No Fin has a tab for starting: the crew card and the rail hold
+  in Settings). No Fin has a tab for starting: the Shiver card and the rail hold
   them, and `OpenFinTab` is the one tab of the Fin opened in place, whose close
   is the Apex again. The phone has a count in the bar (`PhoneFinCount`) and the
-  crew card, whose rows open a Fin through `RoutedOpenContext` on the web, as
+  Shiver card, whose rows open a Fin through `RoutedOpenContext` on the web, as
   `openFinInApex` does on the desk; a laptop's browser draws the same rail
   (`WebSideRail`: Changes, Files and Agents, at the desktop's width) and one Fin tab. Open Fins hold no state that can
   outlive them: `openFinInApex` is the one way in, routed by `windowRoutes.fin` where a Thread's page holds the Fin; the
@@ -3595,7 +3616,7 @@ deliberate action and never rides along with a commit.
   on screen, and `watchApexView` ends the desk's view once anything else shows. `npm run test:side-rail-ui` holds the
   rail, and `test:fin-transitions-ui` each way in through closing, another Thread, a reload and the rail on every form.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
-  composer's chip, the crew card, the rail's pips, the Overview, the stop
+  composer's chip, the Shiver card, the rail's pips, the Overview, the stop
   card, the phone's row) counts from the Thread's one roster
   (`threadChildren` / `threadRollup` in `src/state/apex-fins.ts`) through
   `rollup`, and words it with `rollupLine`, `rollupChip` or `rollupLabel`
@@ -3613,7 +3634,7 @@ deliberate action and never rides along with a commit.
   from when it got there. A working Fin with no known turn says no time. Its line always says something (`At work`
   with nothing else known), and "answered" only for an answer to this turn, in plain words: a plain message from its
   Apex may close a question (rule 13), and it's still the next job and not an answer. `npm run test:fin-row-time` holds the rule, and
-  `test:orch-deliver` and `test:crew-card-ui` the real turn and every form.
+  `test:orch-deliver` and `test:shiver-card-ui` the real turn and every form.
 - **The notice above the composer speaks for what the person did.** A steer Mako sent by itself (a Fin's digest, an
   Apex's message) raises nothing, whatever became of it, and hides nothing of theirs: what the harness didn't take goes
   as the next turn, which is Mako's to handle. `actionNotice` picks the person's newest, and `sentByMako` tells them
@@ -3654,7 +3675,7 @@ deliberate action and never rides along with a commit.
   asking its Apex it drifts, failed it lists over in negative; queued, idle
   and open elsewhere are still and dimmed, and an answer to read wears the
   unread sphere. The open Thread's face takes the sea, the pane's one accent.
-  The rail, the tabs, the Agents panel, the crew card, the Inbox, the folder
+  The rail, the tabs, the Agents panel, the Shiver card, the Inbox, the folder
   chip, the asks and the phone draw this one mark, and avatars draw it still.
   Its motion is `transform` and `opacity` on HTML boxes only (an SVG
   element's own transform runs on the main thread), every moving layer runs
@@ -3891,6 +3912,54 @@ the Inbox and above its Thread's composer, and Keep, Add to setup and the Add
 menu draft the recipe change in a new Thread for the person to send. No value
 is ever shown. `packages/protocol/test/setup.mjs` (in `test:protocol`) covers the
 rows and words; `npm run test:setup` the host's readings and brokers.
+
+## Automations
+
+An automation is a stored `agents_start` plus triggers (`contracts/automations.ts`): its brief, start (harness,
+model, access, place, worktree with a branch template), `thread: new|standing`, triggers (`schedule` with a
+timezone, `commit`, `manual` here; GitHub, Slack, Linear, Sentry and webhook ones the cloud fires once it registers
+them), an optional gate (a command whose exit 1 skips and whose JSON `key` dedupes), limits and a result kind.
+Definitions are the project's `.mako/automations.json` (the reader takes the first shape too and keeps what it can't
+read word for word); on/off, next runs, run records and agents' proposals are the host's, in
+`<dataRoot>/automations/state.json` (`AutomationStore`), keyed by project and id. `Automations`
+(`workspaces/automations.ts`) serves every project a window has open and every one with an automation on, ticked by
+`AutomationScheduler` (`HostJobs` here, the cloud account's Durable Object later). A run is recorded before its
+Thread starts, under `automation:<id>:<occurrence>` (a schedule's occurrence is `scheduleOccurrence(slot)`), whose
+conversation id is fixed by that key, so a repeat or a restart reaches the same Thread; it completes when that
+Thread's turn ends (`turnEnded`, read back on each tick). One run at a time, one catch-up within
+`AUTOMATION_CATCH_UP_GRACE_MS`, a pause after `AUTOMATION_PAUSE_AFTER_FAILURES` failures in a row, and a pause when
+the definition changes after the person turned it on (a pull can't change what runs). An agent's create, update,
+delete or enable through the `automation` tool is a proposal: saved pending, carried to the person by an
+`automation-proposal` ask (person-only: an Apex can't answer it), decided from the card or Automations, its agent
+told by Mako's note; stale and expired ones apply nothing. `runWhen` asks the person's utility model
+(`UtilityRunWhen`). The cloud account's half is `AutomationCloud` (`workspaces/automation-cloud.ts`, wire in
+`@mako/protocol/automations-cloud`): each automation that's on with a trigger the account holds is registered under its
+project's stable key (`github.com/<owner>/<name>[/<folder>]`, never a path; `cloudRegistered`, or `cloudIssue` on a
+409), the account's runs are read every half minute while one is registered, on the account's `automations-changed`
+event and when its link opens, and kept as runs marked `cloud`, which only the account settles. An offered run is held to
+this Mac's cap, overlap and gate, then claimed (`POST /claim`) or declined; a registered schedule's slot or event is
+claimed before it runs here, and a 409 or an unreachable account means it doesn't. A cloud run's agent's proposals stay
+on its machine's host (`relaysProposals`) until the Mac reads them (`mako:automations-forwarded`), applies the
+person's decision to the project's file here, and says how it went (`mako:automations-forward-settle`).
+A cloud run starts on its cloud Thread's host through `mako:automations-cloud-start`, which settles its harness,
+rule, model, reasoning and mode with the same planner as a run here (`planAutomationStart`, `workspaces/automation-start.ts`):
+its mode is the harness's own at its access or the strictest below, and anything it can't apply fails the run, never a
+looser start. A rule a registered automation follows goes with it as what the person's rule names (`ruled`); one they
+don't have isn't registered. A cloud run past its limit is stopped on its Thread (`mako:live-cancel`), not only failed.
+`mako:automations-run-of` names the run a Thread is, from an index of every kept run by conversation.
+Nothing runs a definition the person didn't approve, by one rule (`isApproved`, `contracts/automations.ts`, the
+same in the host and every window): `AutomationLocal.approvedDefinition` is kept and its SHA-256 fingerprint is the
+file's now. No kept definition is never approved. Every run (schedule, commit, event, offer, Run now, `run_now`, a queued
+or recovered run) is of the approved definition, and only an approved one is registered with the cloud. A file that
+says something else pauses it; turning it on (the first time too), Run now, an enable proposal or an editor save shows
+all it says, or its change from what was approved, and approves only with the reviewed fingerprint (`approve`).
+Approving a create or update approves what it wrote, and a create starts off and afresh; an id that leaves its file
+keeps nothing. A proposal is approved only from its card in Automations or the Inbox (`decide`): its ask, wherever it's
+drawn (its Thread, a Fin's row, a phone), only declines and points there, and an allow sent through it is refused.
+A run's agent reads an event's words, a commit's subject and the gate's output only fenced as untrusted after the
+brief. A cloud machine's report of a decision is never one: the Mac decides. The state file is read record by record,
+a bad one passed over and the file copied aside first.
+`npm run test:automations` holds all of it.
 
 ## Notifications
 
@@ -5697,6 +5766,22 @@ reads once: HEAD from Git's files (`headFromFiles`), one listing of the copied
 index, and the answers that only configuration changes (`CheckoutFacts`), kept
 per checkout until a config file's stamp differs. `test-checkpoint-reuse.ts`
 holds the process counts and `test-checkpoint-order.ts` the lock's span.
+
+A turn's checkpoint follows on from the repository's last one when FSEvents'
+history says what changed since (`WorkspaceSnapshots.sinceLast`): only those
+paths are read, and the agent goes before the checkpoint is saved. History only
+avoids a whole capture, so a mark or read slower than `CHECKPOINT_HISTORY_MS` is
+bypassed. Checkpoints read it in a child of their own
+(`Workspaces.checkpointHistory`) that stays up between turns: in the child the
+journal's footprints and the apps' probes share, a read holds parcel's FSEvents
+lock for seconds when its mark is hours back, and a turn's mark waited behind
+it, and a child started for the turn's mark took longer than the wait. Turns
+asking while a read is under way go as one read after it, from the oldest of
+their marks (`changedSince`), so a wave of turns across worktrees doesn't queue
+read by read. A capture's Git reads go ahead of the host's other reads until its
+checkpoint holds the workspace (`RunOptions.urgent`). `bench-checkpoint-load.ts`
+measures how long turns wait at the scale of several worktrees and a project
+folder under load.
 
 Retained checkpoint payloads are limited to 1 GiB per profile/workspace, with a
 512 MiB per-capture limit, a 30-day/1,000-record retention target, and at most 64

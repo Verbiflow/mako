@@ -1,7 +1,7 @@
 import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "./report-actions.js"
 import type { ReportAction, ReportActionTarget, ReportActionsPage, ReportDisposition } from "./report-actions.js"
 import type { AccessTier } from "./access.js"
-import { type AgentsCancelInput, type AgentsCancelled, type AgentsCapabilities, type AgentsNoticed, type AgentsNoticeInput, type AgentsPlaced, type AgentsPlaceInput, APEX_WORD, decisionWords, UNFINISHED_WORDS, FIN_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import { type AgentsCancelInput, type AgentsCancelled, type AgentsCapabilities, type AgentsNoticed, type AgentsNoticeInput, type AgentsPlaced, type AgentsPlaceInput, APEX_WORD, decisionWords, UNFINISHED_WORDS, FIN_WORD, SHIVER_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
@@ -136,11 +136,11 @@ export interface AgentsListInput {
   /** Full by default at every door. Summary explicitly opts into PR details lost after expiry or host restart. */
   presentation?: "summary" | "full"
   /**
-   * `tree` adds every descendant, each under its parent; `crew`, from a Fin, is its Apex and the other Fins it started
-   * (`AgentsCrew`); `apexes`, the person's other Apexes on this host (`AgentsApexes`); `threads`, the conversations
+   * `tree` adds every descendant, each under its parent; `shiver`, from a Fin, is its Apex and the other Fins it started
+   * (`AgentsShiver`); `apexes`, the person's other Apexes on this host (`AgentsApexes`); `threads`, the conversations
    * on this device an `@` picker offers, newest first (`AgentsThreads`).
    */
-  scope?: "children" | "tree" | "all" | "crew" | "apexes" | "threads"
+  scope?: "children" | "tree" | "all" | "shiver" | "apexes" | "threads" | typeof LEGACY_SHIVER_SCOPE
   /** With `threads`: words of a title, a Thread ID or a Fin's name. */
   query?: string
   /**
@@ -148,14 +148,19 @@ export interface AgentsListInput {
    * since are listed, and the rest are counted in `unchanged`.
    */
   since?: string
+  /**
+   * With `children`, `tree` or `shiver`: list the Fins the default folds too (`AgentsListFolded`), those that ended or
+   * sat idle over `LIST_ENDED_FOR_MS` ago with nothing open, and any past the budget.
+   */
+  ended?: boolean
 }
 
 /**
- * What a `children` or `tree` list leaves out (`foldList`): every Fin that ended more than `LIST_ENDED_FOR_MS` ago with
- * nothing open, and past `LIST_BUDGET_CHARS` of rows, idle and ended ones, after their bulk. A Fin needing attention (a
- * question, an action, a decision, at work, waiting or blocked) is always listed, past the budget if it must be.
- * `scope: all` lists every one. An Apex's list once held every Fin it ever started: 130 of them were 105 KB, about 26,000
- * tokens, a call.
+ * What a `children`, `tree` or `shiver` list leaves out (`foldList`, `foldShiver`): every Fin that ended or sat idle more than
+ * `LIST_ENDED_FOR_MS` ago with nothing open, and past `LIST_BUDGET_CHARS` of rows, idle and ended ones, after their bulk.
+ * A Fin needing attention (a question, an action, a decision, at work, waiting or blocked) is always listed, past the
+ * budget if it must be. `ended: true` (or `scope: all`) lists every one. An Apex's list once held every Fin it ever
+ * started: 130 of them were 105 KB, about 26,000 tokens, a call.
  */
 export interface AgentsListFolded {
   /** Fins left out, by where each stands. */
@@ -210,12 +215,12 @@ export interface AgentStrip {
   changedAt?: number
 }
 /**
- * A Fin's view of the work it's part of (`agents_list` with `scope: crew`):
+ * A Fin's view of the work it's part of (`agents_list` with `scope: shiver`):
  * its Apex as it stands now, and the other Fins that Apex started, each as
  * the front door's note names it. Typed facts the host holds, never a
  * transcript, so it costs no read of one.
  */
-export interface AgentsCrew {
+export interface AgentsShiver {
   /** The caller's own name among them. */
   you: string
   apex: {
@@ -227,9 +232,10 @@ export interface AgentsCrew {
     /** What it was asked, its first sentence, when it is a Fin too. */
     asked?: string
   }
-  crew: CrewMate[]
+  shiver: ShiverMate[]
+  folded?: AgentsListFolded
 }
-export type CrewMate = Omit<FrontDoorChild, "direct">
+export type ShiverMate = Omit<FrontDoorChild, "direct">
 
 /**
  * The person's other Apexes on this host (`agents_list` with `scope: apexes`),
@@ -273,7 +279,7 @@ export interface AgentsListed {
   mark?: string
   unchanged?: number
 }
-export type AgentsListResult = AgentsListed | AgentsCrew | AgentsApexes | AgentsThreads | AgentRefused
+export type AgentsListResult = AgentsListed | AgentsShiver | AgentsApexes | AgentsThreads | AgentRefused
 
 /** Explicit summary's short-lived PR details; the engine, UI and default tool output keep full facts. */
 export interface AgentPullsSummary {
@@ -388,7 +394,7 @@ export interface AgentsSettleInput {
 export type AgentsSettleResult = { action: ReportAction; deduped?: true } | AgentRefused
 
 export interface AgentsSendInput {
-  /** Your own Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. Crew siblings need a parent relay through agents_report; discovery grants no send authority. */
+  /** Your own Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. Shiver siblings need a parent relay through agents_report; discovery grants no send authority. */
   to: string
   /** Pass on the person's message this turn answers, word for word, as theirs: the host fills it in, so the call stays short. */
   forward?: boolean
@@ -552,7 +558,15 @@ export interface AgentToolDefinition {
   /** Inputs the door fills in; the MCP schema leaves them out. */
   filled: readonly (keyof AgentToolFilled)[]
   mcp: AgentToolProjection
+  /** Values a field still takes from older builds' agents, each to the value it means: accepted, never advertised. */
+  aliases?: Readonly<Record<string, Readonly<Record<string, string>>>>
 }
+
+/**
+ * `agents_list`'s `scope: crew`, as builds before the Shiver named it: briefs and agents of those builds still send it,
+ * so the host takes it as `shiver` (wire compatibility; the MCP schema leaves it out).
+ */
+export const LEGACY_SHIVER_SCOPE = "crew"
 
 /** What a door knows of its caller and fills in for it. */
 export interface AgentToolFilled {
@@ -596,17 +610,18 @@ export function afterStart(wake: WakeOn, waited?: StartWaited): string {
 /**
  * The paragraph the `mako` server's instructions carry on every harness, with
  * the roles' words from `APEX_WORD` and `FIN_WORD`. The routing workstream
- * proposes changes to it; it's written here once.
+ * proposes changes to it; it's written here once. A Fin's own rules come
+ * first, since Grok cuts server instructions at about 2,047 characters; the
+ * follow-up rule for a Fin's reports is in its brief and `agents_report`.
  */
 export const ORCHESTRATION_INSTRUCTIONS = [
   `agents_*: other Threads this Thread starts, its ${FIN_WORD}s; it is their ${APEX_WORD}.`,
+  `If you're a ${FIN_WORD}, call \`agents_report\` when you finish, are blocked, or need a decision; finished work that leaves a decision is done with its question, options and \`decides\`. Ready for review, or waiting on your ${APEX_WORD} or the person, is done with an \`action\`, never progress: progress is for a turn that goes on; a turn ending on progress nothing will wake tells your ${APEX_WORD} it ended unfinished.`,
+  "To wait on a pull request, report progress with `waitingOn` (checks, review or merge) and end your turn: Mako wakes you. Read PR and CI status with pull_request_status, never gh --watch. If you poll gh yourself: at most once a minute per repository; after a 403/429 stop all GitHub calls until Retry-After.",
   "Parallel, background, cross-harness or remote work goes through `agents_start`, even when your harness has its own subagent tool (keep that for a quick look you wait for); a one-file change, a question, or work that needs your own context is faster in your turn. Never run an agent CLI with nohup: it can't report or ask.",
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   `The person writes to this Thread: a message for a ${FIN_WORD} goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn. Answer a ${FIN_WORD}'s question with \`agents_answer\` within your access, or \`person: true\` when it's theirs.`,
   `A ${FIN_WORD} whose harness runs out or should change moves with \`agents_move\`; never start a new one to take over.`,
-  `If you're a ${FIN_WORD}, call \`agents_report\` when you finish, are blocked, or need a decision; finished work that leaves a decision is done with its question, options and \`decides\`. Ready for review, or waiting on your ${APEX_WORD} or the person, is done with an \`action\`, never progress: progress is for a turn that goes on; a turn ending on progress nothing will wake tells your ${APEX_WORD} it ended unfinished.`,
-  REPORT_FOLLOW_UP_INSTRUCTIONS,
-  "To wait on a pull request, report progress with `waitingOn` (checks, review or merge) and end your turn: Mako wakes you. Read PR and CI status with pull_request_status, never gh --watch. If you poll gh yourself: at most once a minute per repository; after a 403/429 stop all GitHub calls until Retry-After.",
   `Read the person's other ${APEX_WORD}es with \`agents_list\` \`scope: apexes\` before touching shared files or branches; reading never wakes them. Message one only when the person asked or it alone can give or decide what you need.`,
 ].join(" ")
 
@@ -623,9 +638,9 @@ export interface FrontDoorChild {
   report?: { status: ReportStatus; unfinished?: true; line: string; at: number }
   /** The person's newest words to it directly: in its own Thread, or from its Apex's composer. */
   direct?: { line: string; at: number }
-  /** Seconds since its last activity, while it isn't working (`idleFor`): the crew view carries it, the note doesn't. */
+  /** Seconds since its last activity, while it isn't working (`idleFor`): the Shiver view carries it, the note doesn't. */
   idleFor?: number
-  /** Its open pull requests (`finPullRequests`): the crew view carries them, the note doesn't. */
+  /** Its open pull requests (`finPullRequests`): the Shiver view carries them, the note doesn't. */
   openPRs?: FinPullRequest[]
   /** When its state, report, open questions or pull requests last changed, as the host saw them (`FinChanges`). */
   changedAt?: number
@@ -702,7 +717,7 @@ function routeOrder(state: ChildState): number {
   return state.kind === "blocked" || (state.kind === "ended" && state.decision) ? 0 : state.kind === "working" || state.kind === "starting" ? 1 : state.kind === "queued" || state.kind === "idle" ? 2 : 3
 }
 
-function ago(at: number, now: number): string {
+export function ago(at: number, now: number): string {
   const minutes = Math.max(0, Math.round((now - at) / 60_000))
   if (minutes < 1) return "just now"
   if (minutes < 60) return `${minutes}m ago`
@@ -711,18 +726,36 @@ function ago(at: number, now: number): string {
 }
 
 const START = [
-  `Start a ${FIN_WORD}, another Thread that works for this one: its own Session on any harness, in this checkout or its own worktree and branch, with its own model and access (at most yours).`,
-  "Use it for work that outlives this turn, runs in parallel with other work, writes code beside another writer, needs another harness or model, or should be something the person can open and steer.",
-  "Don't use it for a one-file change, a question you can answer, or work that needs this conversation's own context: do those in your turn.",
-  "The brief is everything it knows; it sees none of this conversation.",
-  `Never start one to take over from a ${FIN_WORD} whose harness ran out or should change: agents_move moves that same Thread. Attach a Thread its brief refers to with context, not a path.`,
-  "By default it returns at once and its reports wake you (mode background, wake decisions): use that whenever you have other work or can end your turn.",
-  "Use mode wait only when your next step can't go on without its result: you get the result here if it comes within " + WAIT_WORDS + ", else your turn ends and the result starts your next one.",
-  "Don't wait or poll after starting.",
-  "Pass model, reasoning or fast only as the person said them (\"Codex on high\", \"the fast one\"); left out, it runs on what the person uses.",
-  "Past this device's capacity a start is refused unless you pass queue: true, which starts it when one ends; after: [names] starts it once those finish.",
-  "Never run an agent CLI with nohup instead: it shows as your Fin but can't report or ask.",
+  `Start a ${FIN_WORD}: another Thread working for this one, on any harness, in this checkout or its own worktree, with its own model and access (at most yours).`,
+  "Use it for work that outlives this turn, runs in parallel, writes beside another writer, needs another harness or model, or that the person should be able to open and steer; not for a one-file change, a question you can answer, or work that needs this conversation's context.",
+  "The brief is all it knows; attach Threads it refers to with context, not paths.",
+  `To replace a ${FIN_WORD} whose harness ran out or should change, use agents_move instead.`,
+  "It returns at once and its reports wake you; don't wait or poll after. Use mode wait only when your next step can't go on without its result: you get it here within " + WAIT_WORDS + ", else your turn ends and the result starts your next.",
+  "Pass model, reasoning or fast only as the person said them (\"Codex on high\", \"the fast one\").",
+  "Never run an agent CLI with nohup instead: it can't report or ask.",
 ].join(" ")
+
+/**
+ * What a Thread is in its tree, for the `agents_*` tools its `mako` server lists: a top-level Thread with no Fins
+ * (`thread`), one with Fins (`apex`), a Fin (`fin`), or a Fin with Fins of its own, started as a lead or since
+ * (`fin-apex`). Read as the server is built for a launch; a harness lists tools once and Mako never says the list
+ * changed, so a role's tools hold for the whole launch, however its Thread changes meanwhile.
+ */
+export const AGENT_TOOL_ROLES = ["thread", "apex", "fin", "fin-apex"] as const
+export type AgentToolRole = (typeof AGENT_TOOL_ROLES)[number]
+
+/**
+ * The verbs a role's listing leaves out: only one the host would refuse it for the rest of the launch. A top-level
+ * Thread never gets an Apex, so it never reports. Nothing else goes, since a Thread's own start or link can make it an
+ * Apex mid-launch: a Thread that starts its first Fin then settles, and a Fin that does answers, links, moves and
+ * settles, with the tools listed when it launched. The `mako agents` command and `mako mcp` keep every verb.
+ */
+export const ROLE_HIDES = {
+  thread: ["report"],
+  apex: ["report"],
+  fin: [],
+  "fin-apex": [],
+} as const satisfies Record<AgentToolRole, readonly AgentVerb[]>
 
 export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
   {
@@ -734,25 +767,25 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       name: "agents_start",
       description: START,
       fields: {
-        brief: "objective: what to do and why, with everything it needs; doneWhen: the checks that say it's done; boundaries: what not to touch; output: what its report must carry.",
-        name: `A short name, unique among this Thread's ${FIN_WORD}s (made from the brief when absent).`,
-        harness: "claude, codex, cursor, grok, opencode or devin; this Thread's own when absent. When that one's account is at its limit, the person's next harness with room, and the answer says so; one you name at its limit is refused with when it resets and what the person can use instead.",
-        model: "Only when the person named one: a model the harness lists, by id or name (\"opus 5.5\", \"gpt-6.1-sol\"). Absent: what the person uses: their Fins default for the harness, else this Thread's own model on this Thread's harness, else their last model there. A model it doesn't list is refused with the ones it does.",
-        reasoning: "Only when the person said one (\"on high\"): a level the model takes, such as low, medium, high, xhigh or max. Absent: the level of the model's choice above.",
-        rule: "The number of the person's rule that fits this work, from their rules in Mako's note. Its harness and model apply; leave harness, model, reasoning and fast out unless the person named them. Absent: their choice for work no rule fits.",
-        fast: "Only when the person asked for it: true for the fast lane (\"the fast one\", quicker and pricier), false for the standard one. A harness whose fast model is a model of its own switches to it.",
-        access: "plan, chat, ask, edits, auto, full or deny: at most this Thread's own; this Thread's when absent. A harness without that level runs the Fin on its nearest one below, and one whose every level is above it is refused.",
-        place: "Only when the person said where a new Fin runs: here, device:<name> or cloud. Absent: where this Thread runs. To continue this Thread's own work in the cloud, use thread_move instead.",
-        workspace: "Its own worktree: on branch if it exists, else a new branch from base; in a project folder of several repositories, branch is every repository's. Absent: this Thread's folder, for reading or one writer.",
+        brief: "objective (what and why, with all it needs), doneWhen (the checks that say it's done), boundaries (what not to touch), output (what its report carries).",
+        name: `Short, unique among your ${FIN_WORD}s; made from the brief when absent.`,
+        harness: "claude, codex, cursor, grok, opencode or devin; yours when absent. If that one's account is at its limit, the person's next harness with room, said in the answer; a named one at its limit is refused with its reset and what else they can use.",
+        model: "Only one the person named, by id or name (\"opus 5.5\"). Absent: their Fins default for the harness, else your model on your harness, else their last one there. One the harness doesn't list is refused with those it does.",
+        reasoning: "Only a level the person said (\"on high\"): low, medium, high, xhigh or max, as the model takes. Absent: the model's choice.",
+        rule: "The number of the person's rule (in Mako's note) that fits; its harness and model apply, so leave harness, model, reasoning and fast out unless the person named them. Absent: their choice for work no rule fits.",
+        fast: "Only when the person asked: true for the fast lane (quicker, pricier), false for standard.",
+        access: "plan, chat, ask, edits, auto, full or deny, at most yours (the default). A harness without it runs at its nearest level below; one with none at or below is refused.",
+        place: "Only where the person said: here, device:<name> or cloud. Absent: where you run. To move this Thread's own work to the cloud, use thread_move.",
+        workspace: "Its own worktree on branch (taken if it exists, else made from base), the same branch in every repository of a project folder. Absent: your folder, for reading or one writer.",
         title: "A few words the person sees for it.",
-        role: `worker (default), reviewer, verifier, researcher, or lead: an ${APEX_WORD} of its own, which starts its own ${FIN_WORD}s.`,
-        mode: "background (default): returns at once; work on or end your turn. wait: only when your next step needs its result; you get it here if it's quick, else your turn ends and the result starts your next turn. Never wait on work that can run while you do other things.",
-        wake: "What wakes you: decisions (default: it finished, failed, is blocked or asks), finish (only its result; its questions go to the person), or never (nothing; read it with agents_read; its questions go to the person).",
-        timeoutMs: `For wait: how long to hold for its result here, at most ${WAIT_LIMIT_MS} (the default).`,
-        after: `Only to order work: your ${FIN_WORD}s, by name or Thread (queued ones too), at most ${AFTER_LIMIT}, that must finish first. It waits until each has; if one fails or is stopped it doesn't start, and you're woken to decide.`,
-        context: `Threads this work refers to, as [{ thread }], each a thread:<harness>:<id> ref, a Thread ID or a ${FIN_WORD}'s name: attached as the person's @ chip attaches one, and read whole with thread_history. agents_list with scope threads finds a ref.`,
-        queue: `true: if its place is full (a device's capacity, the cloud's plan, or the person's ceiling across places) or this tree's running budget is, it waits for one to end. Absent: a full place refuses the start, saying where else it could run.`,
-        clientKey: `Your own key for this spawn: a repeat with it answers the same ${FIN_WORD}.`,
+        role: `worker (default), reviewer, verifier, researcher, or lead: an ${APEX_WORD} that starts its own ${FIN_WORD}s.`,
+        mode: "background (default): returns at once. wait: only when your next step needs its result. Never wait on work that can run while you do other things.",
+        wake: "decisions (default): its result, a block or a question wakes you. finish: only its result. never: nothing; read it with agents_read. With finish or never, its questions go to the person.",
+        timeoutMs: `For wait: how long to hold here, at most ${WAIT_LIMIT_MS} (the default).`,
+        after: `Your ${FIN_WORD}s (names or Threads, queued ones too, at most ${AFTER_LIMIT}) that must finish first; if one fails or is stopped this doesn't start, and you're woken to decide.`,
+        context: `Threads it refers to, as [{ thread }]: a thread:<harness>:<id> ref, a Thread ID or a ${FIN_WORD}'s name, attached as an @ chip and read whole with thread_history. agents_list scope threads finds refs.`,
+        queue: "true: when its place (a device, the cloud plan, the person's ceiling) or this tree's running budget is full, wait for room. Absent: a full place refuses, naming where else it could run.",
+        clientKey: `Your key for this start: a repeat answers the same ${FIN_WORD}.`,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -774,10 +807,11 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     channel: "mako:agents-list",
     replay: "read",
     filled: [],
+    aliases: { scope: { [LEGACY_SHIVER_SCOPE]: "shiver" } },
     mcp: {
       name: "agents_list",
-      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Every PR fact stays inline by default. Explicit presentation summary replaces large PR arrays with counts: open and draft are known open; reported means its current state is unknown. Pass each read object to agents_read, then follow pulls.next as offset. These details expire at expiresAt, at most 30 minutes from capture, or on host restart; they require the same caller Session and current access. After that the original facts cannot be recovered; a new list gives current facts. Use full for lasting evidence. Reports wake you on their own, so read this when you need the whole picture, not to wait. Each answer carries a mark: pass it as since next time to list only the ${FIN_WORD}s that changed. A ${FIN_WORD} reads its ${APEX_WORD} and the other ${FIN_WORD}s it started with scope crew, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
-      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting, idle or need a decision, and those that ended in the last day; what needs you is always listed, and other idle or ended ones may be counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, since: "The mark an earlier list answered: only the Fins that changed since (state, report, open questions or pull requests) are listed, the rest counted in unchanged. A Fin waiting on you is always listed. A mark from another host or an earlier host life lists every Fin.", presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
+      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Every PR fact stays inline by default. Explicit presentation summary replaces large PR arrays with counts: open and draft are known open; reported means its current state is unknown. Pass each read object to agents_read, then follow pulls.next as offset. These details expire at expiresAt, at most 30 minutes from capture, or on host restart; they require the same caller Session and current access. After that the original facts cannot be recovered; a new list gives current facts. Use full for lasting evidence. Reports wake you on their own, so read this when you need the whole picture, not to wait. Each answer carries a mark: pass it as since next time to list only the ${FIN_WORD}s that changed. A ${FIN_WORD} reads its ${SHIVER_WORD} (its ${APEX_WORD} and the other ${FIN_WORD}s it started) with scope shiver, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
+      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting or need a decision, and those that ended or went idle in the last day; what needs you is always listed, and older idle or ended ones are counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, shiver: your ${SHIVER_WORD} (your ${APEX_WORD} and the other ${FIN_WORD}s it started), what each was asked and last reported, folded the same way; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, since: "The mark an earlier list answered: only the Fins that changed since (state, report, open questions or pull requests) are listed, the rest counted in unchanged. A Fin waiting on you is always listed. A mark from another host or an earlier host life lists every Fin.", ended: `With children, tree or shiver: also list the ${FIN_WORD}s that ended or went idle over a day ago, which folded counts.`, presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
@@ -824,18 +858,18 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       fields: {
         status: "done, failed, blocked, needs-input or progress.",
         summary: "What happened, first sentence first; where to read more.",
-        artifacts: "Branches, commits, pull requests, files, screenshots or test runs, each by reference.",
-        question: "For blocked or needs-input: the decision you need. With done: the decision your finished work leaves (a merge, a pick between results), with its options.",
+        artifacts: "What it made, each by ref.",
+        question: "blocked or needs-input: the decision you need. done: the decision your work leaves (a merge, a pick), with options.",
         decides: "With a done question: apex (default) or person, who decides it.",
-        handoff: "Work you hand to another Fin of your Apex: {to: its name or Thread}. Progress with it, or naming fin:<name> in its summary, wakes your Apex to pass it on; a mere mention of a Fin doesn't.",
-        answers: "Request IDs of your Apex's messages this report answers, as a reminder names them. Any result settles a reply you owe; use this when progress is your answer: it then wakes your Apex.",
-        waitingOn: 'Automatic wakes: {kind:"pull-request", ref:"owner/repo#412" or its URL, until:"checks"|"review"|"merge"}. {kind:"person",what} and {kind:"other",text} record prose only: NO automatic subscription, including for Actions runs or main-commit CI. Inspect subscriptions in the result; an unsupported/unavailable wait needs a verified external notification or an explicit owner to verify its outcome.',
-        options: "For a decision: the answers to pick from, each a label of a few words and what it does (detail). The person can pick one with a tap.",
+        handoff: "{to}: another Fin of your Apex you hand work to. Progress with it, or fin:<name> in the summary, wakes your Apex to pass it on; a bare mention doesn't.",
+        answers: "Request IDs (as a reminder names them) of your Apex's messages this answers. Any result settles them; progress with this wakes your Apex.",
+        waitingOn: "Only pull-request waits (ref owner/repo#412 or its URL, until checks, review or merge) wake you. person and other only record it: nothing watches them, nor Actions runs or main-commit CI. Check subscriptions in the result; one unsupported or unavailable needs an outside notification or an owner who verifies it.",
+        options: "A decision's answers: each a label of a few words and what it does (detail); the person can tap one.",
         recommended: "The option you recommend, by its place in options, from 0.",
-        followUp: "For a local done/failed action-only result, pair action with {ref,version} of its exact immutable target. It stays pending independently of delivery/read/later reports. Questions use their existing ask contract; progress cannot register follow-up.",
-        action: "The exact next action. Local done/failed action-only results also include followUp with a stable target/version; questions keep their existing ask.",
+        followUp: "With a local done/failed action-only result: {ref,version} of the action's exact immutable target. It stays pending whatever is delivered, read or reported later; not for questions or progress.",
+        action: "The exact next action; a local done/failed action-only result pairs it with followUp.",
         clientKey: "Your own key for this report: a repeat with it is the same report.",
-        supersedes: "Exact IDs of your own report questions to withdraw or replace; summary gives the reason. An unrelated update settles nothing. Progress remains quiet.",
+        supersedes: "Exact IDs of your own report questions this withdraws or replaces, with why in summary. Nothing else settles them; progress stays quiet.",
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -847,8 +881,8 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     filled: [],
     mcp: {
       name: "agents_settle",
-      description: "Record an exact disposition of an ordinary report follow-up. Delivery/read never resolves it. This is silent: no Fin reply or new wake. Resolve with explicit outcome evidence; dismiss/supersede only this exact action. Defer stays pending. Dispatch/handoff names an admitted request to your own Fin and stays pending under that custodian. Source Apex retains final disposition, even after receiver failure/Stop/archive. Reclaim returns custody to Apex. No success/report auto-resolves it. Questions/approvals still use agents_answer and their existing access rules.",
-      fields: { to: "Your Fin's name or Thread ID.", report: "Exact follow-up report ID from agents_read.actions.", version: "The action's current version (not the target's version). Stale versions refuse.", target: "Exact {ref,version} returned for this action; cannot be retargeted.", disposition: "resolve with caller-verified evidence; dismiss with reason; reclaim with reason (pending under source Apex); defer with reason/resume (still pending); supersede with exact newer report/reason; dispatch or handoff with to and actual request receipt. No permission or merge authority is inferred.", clientKey: "Stable operation key; exact retries return the first result, changed inputs refuse." },
+      description: "Record your disposition of one exact report follow-up (agents_read view actions). Silent: no reply to the Fin, no wake. Nothing else settles it: not delivery, a read, a later report or success. As source Apex you keep the final say, even after a Fin you dispatched it to fails, stops or is archived. Questions and approvals use agents_answer.",
+      fields: { to: "Your Fin's name or Thread ID.", report: "Exact follow-up report ID from agents_read actions.", version: "The action's current version, not its target's; a stale one is refused.", target: "The exact {ref,version} returned for this action; it can't be retargeted.", disposition: "resolve with evidence you verified; dismiss with reason; reclaim with reason (pending under you again); defer with reason and resume (still pending); supersede with the exact newer report and reason; dispatch or handoff with to and the request's receipt (pending under that Fin). Grants no permission or merge.", clientKey: "Your key for this: an exact retry returns the first result; changed inputs are refused." },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },

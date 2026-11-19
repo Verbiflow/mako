@@ -122,6 +122,8 @@ export interface CheckSummary {
    * one cancelled that nothing replaced is `cancelled`, never `failed`.
    */
   state: "passed" | "failed" | "running" | "cancelled" | "unknown"
+  /** A passed check GitHub skipped (its job's condition was false): it ran nothing. */
+  skipped?: true
   url?: string
 }
 

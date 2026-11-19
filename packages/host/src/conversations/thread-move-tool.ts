@@ -186,9 +186,14 @@ export function threadToolSchema(tool: ThreadToolDefinition): z.ZodType {
   const properties = Object.entries(generated.properties ?? {}).flatMap(([field, schema]): [string, z.core.JSONSchema._JSONSchema][] => {
     if (!asked(field)) return []
     const description = tool.mcp.fields[field]
-    return [[field, description && schema !== true && schema !== false ? { ...schema, description } : schema]]
+    // Any JSON, as zod writes it, is a recursive union of every JSON type: some 450 tokens for one field.
+    const listed = tool.mcp.objects?.includes(field) ? { type: "object" as const } : schema
+    return [[field, description && listed !== true && listed !== false ? { ...listed, description } : listed]]
   })
-  return z.fromJSONSchema({ ...generated, properties: Object.fromEntries(properties), required: generated.required?.filter(asked) })
+  const { definitions, $defs, ...rest } = generated
+  // Shared schemas that only a field left out or listed as an object referred to go with it.
+  const shared = JSON.stringify(properties).includes("\"$ref\"") ? { definitions, $defs } : {}
+  return z.fromJSONSchema({ ...rest, ...shared, properties: Object.fromEntries(properties), required: generated.required?.filter(asked) })
 }
 
 /** A move's answer as a door relays it: the JSON the host sent, a refusal named by `refused`. */

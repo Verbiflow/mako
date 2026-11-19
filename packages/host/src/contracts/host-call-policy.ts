@@ -96,6 +96,8 @@ const reads = [
   "mako:thread-scratch",
   /** Measures Mako's folders with `du`; writes nothing. */
   "mako:storage",
+  /** Previews what each store could give back, measuring with `du`; removes nothing. */
+  "mako:storage-plan",
   "mako:worktree-review",
   "mako:worktree-review-diffs",
   "mako:worktree-branches",
@@ -229,8 +231,14 @@ const reads = [
   "mako:integrations",
   "mako:skills-discover",
   "mako:skills-resolve",
-  "mako:automations",
-  "mako:automation-context",
+  /** Automations (`contracts/automations.ts`): reads of the project's file and this Mac's records. */
+  "mako:automations-read",
+  "mako:automations-runs",
+  "mako:automations-draft",
+  "mako:automations-templates",
+  "mako:automations-run-of",
+  /** A cloud machine's host's proposals its person's Mac takes, as they stand. */
+  "mako:automations-forwarded",
   "mako:external-editors",
   "mako:default-commit-prompt",
   "mako:native-requests",
@@ -263,6 +271,8 @@ const replays = [
   "mako:file-events-dismiss",
   /** `MakoStorage.free`: a pass asked for while one runs is that pass, and a second finds nothing more to free. */
   "mako:storage-free",
+  /** Sets the same low-disk switch. */
+  "mako:storage-budget-set",
   /** `LiveConversations.submit`: the request id; content is fingerprinted. */
   "mako:live-prompt",
   "mako:live-continue",
@@ -283,6 +293,18 @@ const replays = [
   "mako:live-capture",
   /** `NativeRequests.submit`: the request id; content is fingerprinted. */
   "mako:native-submit",
+  /** Writes the same definition, the same switch, or the same deletion again: the end state a repeat reaches is the first's. */
+  "mako:automations-save",
+  "mako:automations-delete",
+  "mako:automations-enabled",
+  /** Run now is settled by the caller's key: a repeat is the same occurrence, so the same run and Thread. */
+  "mako:automations-run-now",
+  /** A decided proposal answers as it was decided. */
+  "mako:automations-decide",
+  /** A settled forwarded proposal answers as it was settled. */
+  "mako:automations-forward-settle",
+  /** `LiveConversations.start` under the run's conversation id: a second start returns the session. */
+  "mako:automations-cloud-start",
   /** A spawn, a link, a report, a message and an answer are settled by the caller's key; stopping a stopped child stops nothing. */
   "mako:agents-start",
   "mako:agents-move",

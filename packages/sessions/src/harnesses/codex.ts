@@ -15,9 +15,9 @@ const MAKO_COMPUTER = "Mako's own computer tool, which Codex records by its bare
 export const CODEX_VOCABULARY = defineVocabulary({
   harness: "codex",
   checked: {
-    version: "0.169.0",
-    on: "2026-11-16",
-    against: "the sealed model requests of 0.169.0's app-server: 25 tools across 27 model, plan and Apex configurations (scripts/fixtures/native-tools/codex-0.169.0.json); tool names unchanged from 0.167.0, exec descriptions reworded and view_image.detail removed; generated app-server input types and scripted live/store decoder pairs",
+    version: "0.170.0",
+    on: "2026-11-18",
+    against: "the sealed model requests of 0.170.0's app-server: 26 tools across 33 model, plan and Apex configurations (scripts/fixtures/native-tools/codex-0.170.0.json); 0.170.0 lists gpt-6.2-sol and gpt-6.2-astra, which alone add send_message_to_user_async and reword exec, and rewords spawn_agent for every model with the same parameters; generated app-server input types and scripted live/store decoder pairs",
   },
   mcp: ["s.t", "s: t"],
   tools: {
@@ -36,6 +36,8 @@ export const CODEX_VOCABULARY = defineVocabulary({
     update_plan: { kind: "todo", unlisted: "0.166.0 defines it for no listed model; older rollouts record it." },
     request_user_input: { kind: "question" },
     request_user_input_async: { kind: "question" },
+    // A note to the person while the turn goes on; Codex answers it `{"accepted":true}`, live and in the rollout alike.
+    send_message_to_user_async: { kind: "other", label: "Message to you" },
     spawn_agent: { kind: "agent" },
     send_message: { kind: "agent-message" },
     send_input: { kind: "agent-message", unlisted: "0.166.0 defines it for no listed model; older rollouts record it." },
@@ -67,9 +69,9 @@ export const CODEX_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "0.169.0",
-      on: "2026-11-16",
-      against: "0.169.0's generated app-server types and harness:self-report: all 14 declared instruction and hook names found, all four skill locations listed; semantics retained from the prior native and developers.openai.com/codex checks at 0.159.3",
+      version: "0.170.0",
+      on: "2026-11-18",
+      against: "0.170.0's generated app-server types and harness:self-report: all 14 declared instruction and hook names found, all four skill locations listed; semantics retained from the prior native and developers.openai.com/codex checks at 0.159.3",
     },
     instructions: {
       files: ["AGENTS.override.md", "AGENTS.md"],

@@ -1,4 +1,5 @@
 import { join } from "node:path"
+import type { AutomationCloudApi } from "../workspaces/index.js"
 import type { CloudFinAnswer, CloudFinPlace, CloudFinPlaced, CloudFinStart, CloudFinStatus } from "@mako/protocol/cloud-fins"
 import type { SourceProjectCommand, SourceProjectReceipt } from "@mako/protocol/source-project"
 import type { Advertisement, ClientSessionOverSockets } from "@mako/protocol"
@@ -189,6 +190,10 @@ export interface CloudAccount {
   onThreadListings?(listener: (heard: AccountListNotice) => void): () => void
   /** Hears each time this device's runtime is enrolled on a new link: its account's other devices' calls reach it from then. */
   onRuntimeLinked?(listener: () => void): () => void
+  /** The account's automations calls (`@mako/protocol/automations-cloud`), through this Mac's device sign-in. */
+  automations?: AutomationCloudApi
+  /** Hears the account say its automations' runs changed (`automations-changed`), and its link open; returns how to stop. */
+  onAutomationsChanged?(listener: () => void): () => void
   /** Whether the account's link is open and heard from within a ping: what the account says reaches this Mac now. */
   accountHeard?(): boolean
   /** The account's link tried now if it isn't heard, rather than at its next backoff step: whether it opened (`CloudLink.reach`). */
@@ -306,6 +311,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onChange: (signIns) => emit({ type: "cloud-sign-ins", signIns }),
   })
   const threadListeners = new Set<(heard: AccountListNotice) => void>()
+  const automationListeners = new Set<() => void>()
   const runtimeListeners = new Set<() => void>()
   const cloud = new CloudAccounts({
     url: cloudUrl(environment),
@@ -353,6 +359,10 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
         preferences?.heard({ preferences: event.preferences, revision: event.revision })
         return
       }
+      if (event.type === "automations-changed") {
+        for (const listener of automationListeners) listener()
+        return
+      }
       hostLog("cloud", "account event", { seq: heard.seq, type: event.type, mine: heard.mine })
       emit({ type: "cloud-account-event", seq: heard.seq, at: heard.at, event, mine: heard.mine })
     },
@@ -366,6 +376,8 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onAccountLinked: () => {
       void cloud.cloudFinLimits().catch(() => {})
       for (const listener of threadListeners) listener("linked")
+      // What the account fired or offered while its link was down is read now, not at the next poll.
+      for (const listener of automationListeners) listener()
     },
     onRuntimeLinked: () => {
       for (const listener of runtimeListeners) listener()
@@ -499,6 +511,20 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     onRuntimeLinked: (listener) => {
       runtimeListeners.add(listener)
       return () => runtimeListeners.delete(listener)
+    },
+    automations: {
+      deviceId: () => cloud.deviceId(),
+      register: (automation) => cloud.registerAutomation(automation),
+      unregister: (project, id) => cloud.unregisterAutomation(project, id),
+      issues: () => cloud.automationIssues(),
+      runs: (after) => cloud.automationRuns(after),
+      claim: (input) => cloud.claimAutomationRun(input),
+      decline: (input) => cloud.declineAutomationRun(input),
+      hook: (input) => cloud.automationHook(input),
+    },
+    onAutomationsChanged: (listener) => {
+      automationListeners.add(listener)
+      return () => automationListeners.delete(listener)
     },
     leaving: (why) => cloud.leaving(why),
     accountHeard: () => cloud.accountHeard(),

@@ -15,7 +15,7 @@ export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--mo
                     [--worktree --branch <b> | --base <b>] [--title <words>] [--name <n>] [--key <k>]
                     [--wait [--timeout <ms>]] [--wake decisions|finish|never] [--thread <ref|id|fin>]…
   mako agents move <fin|all> <harness> [--model <id>] [--reasoning <level>] [--fast|--standard] [--key <k>]
-  mako agents list [--tree | --crew | --apexes | --threads [words]]
+  mako agents list [--tree | --shiver | --apexes | --threads [words]]
   mako agents read <fin> [--transcript | --actions] [--report <id>] [--after-ask <id>] [--after-action <id>]
   mako agents report <status> <summary> [--question <q>] [--action <words> --follow-up <target-json>] [--supersedes <id>]… [--key <k>]
   mako agents settle <fin> --report <id> --version <n> --target <json> --disposition <json> [--key <k>]
@@ -73,6 +73,8 @@ const OPTIONS = {
   name: { type: "string" },
   key: { type: "string" },
   tree: { type: "boolean" },
+  shiver: { type: "boolean" },
+  // `--crew`, the flag's name before the Shiver: agents briefed by those builds still pass it.
   crew: { type: "boolean" },
   apexes: { type: "boolean" },
   transcript: { type: "boolean" },
@@ -151,7 +153,7 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
       }
     }
     case "list":
-      return { tool: tool("list"), input: values.threads ? { scope: "threads", ...(positionals.length && { query: positionals.join(" ") }) } : values.apexes ? { scope: "apexes" } : values.crew ? { scope: "crew" } : values.tree ? { scope: "tree" } : {} }
+      return { tool: tool("list"), input: values.threads ? { scope: "threads", ...(positionals.length && { query: positionals.join(" ") }) } : values.apexes ? { scope: "apexes" } : values.shiver || values.crew ? { scope: "shiver" } : values.tree ? { scope: "tree" } : {} }
     case "read":
       if (!first) throw new Error("agents read needs a Fin")
       return { tool: tool("read"), input: { child: first, ...(values.transcript && { view: "transcript" }), ...(values.actions && { view: "actions" }), ...(values.report !== undefined && { report: values.report }), ...(values["after-ask"] !== undefined && { afterAsk: values["after-ask"] }), ...(values["after-action"] !== undefined && { afterAction: values["after-action"] }) } }
@@ -205,7 +207,7 @@ export async function agentsMain(argv: string[]): Promise<void> {
     if (!verb) throw new Error("agents needs a command: start, move, list, read, report, settle, wait, send, stop or link")
     const call = await input(verb, { ...parsed, positionals: rest }, cwd)
     const result = await door(transport, cwd).invoke(call.tool.channel, [caller(), call.input])
-    process.stdout.write(`${parsed.values.json ? JSON.stringify(result) : agentToolText(result)}\n`)
+    process.stdout.write(`${parsed.values.json ? JSON.stringify(result) : agentToolText(result, call.tool.mcp.name)}\n`)
     if (result.refused !== undefined) process.exitCode = 1
   } finally {
     transport.close()
