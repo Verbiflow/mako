@@ -449,8 +449,10 @@ export class Repository {
   }
 
   /**
-   * Reserves the real index while a checkpoint copies it and writes a private
-   * one. External Git writers are excluded; work must not write the reserved index.
+   * Reserves the real index while a checkpoint copies it, or for as long as a
+   * rewind rewrites the workspace. External Git writers are excluded and fail
+   * at once ("index.lock: File exists"), so a caller holds it for no longer
+   * than the files it must read or write; work must not write the reserved index.
    */
   withLockedIndex<T>(action: () => Promise<T>): Promise<T> {
     return this.write(() => withReservedIndex(this.gitDir, action))

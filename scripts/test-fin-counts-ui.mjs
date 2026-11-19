@@ -150,7 +150,8 @@ async function check() {
   assert.ok(rows.some((row) => /\bIdle\b/.test(row)), `the idle Fin says it's idle: ${JSON.stringify(rows)}`)
 
   // The Agents panel, opened from the chip, counts the same.
-  await evaluate("document.querySelector('[data-agents-toggle]').click(); true")
+  // An Apex's rail opens on its Overview, so the chip, which puts the panel away when it's showing, is pressed only when it isn't.
+  if (!(await evaluate("Boolean(document.querySelector('[data-apex-fins]'))"))) await evaluate("document.querySelector('[data-agents-toggle]').click(); true")
   await until("Boolean(document.querySelector('[data-apex-fins]'))", "the Agents panel's Fins")
   assert.equal(await counts("[data-apex-fins]"), label, "the Agents panel counts the roster as every surface does")
   agrees("the Agents panel", await text("[data-apex-fins] > div"), truth)

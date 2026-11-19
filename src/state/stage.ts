@@ -1,4 +1,6 @@
 import { createHook, createStore } from "@/state/store"
+import { railAcpStore } from "@/state/acp-state"
+import { apexOnScreen } from "@/state/agents-offered"
 import { prefsStore, setPref } from "@/state/prefs"
 import { tabsStore } from "@/state/tabs"
 
@@ -37,6 +39,35 @@ export function stageOf(tabId: string): TabStage {
   return stageStore.get().byTab[tabId] ?? CLOSED
 }
 
+/** The surface an Apex's right rail opens on: its Overview, which the Agents surface draws for a Thread with Fins. */
+export const APEX_COMPANION = "agents"
+/** The most Threads whose pick is kept; past it the oldest pick goes. */
+const APEX_COMPANIONS_KEPT = 200
+
+/**
+ * What the right rail shows: the tab's companion, or while an Apex is on screen (`apexOnScreen`) that Thread's pick
+ * (`chosen`), its Overview until the person picks another there. Nothing while the rail is closed, whoever is on screen.
+ */
+export function shownCompanion(tab: TabStage, apex: string | undefined, chosen: string | undefined): string | null {
+  if (!tab.companion) return null
+  return apex ? (chosen ?? APEX_COMPANION) : tab.companion
+}
+
+function apexShown(): string | undefined {
+  return apexOnScreen(railAcpStore.get())
+}
+
+function shownIn(tabId: string): string | null {
+  const apex = apexShown()
+  return shownCompanion(stageOf(tabId), apex, apex ? prefsStore.get().apexCompanions[apex] : undefined)
+}
+
+/** Keeps the person's pick for an Apex's Thread, newest last, so the oldest is the one that goes. */
+function chooseFor(apex: string, surfaceId: string) {
+  const kept = Object.entries(prefsStore.get().apexCompanions).filter(([thread]) => thread !== apex)
+  setPref("apexCompanions", Object.fromEntries([...kept.slice(-(APEX_COMPANIONS_KEPT - 1)), [apex, surfaceId]]))
+}
+
 function write(tabId: string, next: TabStage) {
   stageStore.set((state) => ({ byTab: { ...state.byTab, [tabId]: next } }))
 }
@@ -52,6 +83,14 @@ export const stage = {
   ) {
     const tabId = activeTab()
     if (!tabId) return
+    const apex = options.remember === false ? undefined : apexShown()
+    if (apex) {
+      // On an Apex the pick is that Thread's: the tab keeps what any other Thread shows, and the rail what it reopens.
+      chooseFor(apex, surfaceId)
+      const current = stageOf(tabId)
+      write(tabId, { ...current, companion: current.companion ?? surfaceId, presentation: options.presentation ?? "beside" })
+      return
+    }
     write(tabId, {
       ...stageOf(tabId),
       companion: surfaceId,
@@ -73,7 +112,7 @@ export const stage = {
   toggle(surfaceId: string, options: { remember?: boolean } = {}) {
     const tabId = activeTab()
     if (!tabId) return
-    if (stageOf(tabId).companion === surfaceId) stage.close()
+    if (shownIn(tabId) === surfaceId) stage.close()
     else stage.open(surfaceId, options)
   },
 
@@ -110,7 +149,8 @@ export const stage = {
     const tabId = activeTab()
     if (!tabId) return
     if (stageOf(tabId).companion) stage.close()
-    else stage.open(prefsStore.get().lastCompanion ?? "changes")
+    // Reopened as it was left: an Apex's own pick, or its Overview, shows over it (`shownCompanion`).
+    else stage.open(prefsStore.get().lastCompanion ?? "changes", { remember: false })
   },
 
   /** Uncover the chat without closing the companion. */

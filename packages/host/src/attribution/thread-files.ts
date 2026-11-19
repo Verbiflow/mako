@@ -1,7 +1,5 @@
-import { existsSync } from "node:fs"
-import { stat } from "node:fs/promises"
+import { access, stat } from "node:fs/promises"
 import { basename, isAbsolute, join, relative, sep } from "node:path"
-import type { Git } from "@mako/git"
 import { inSlices, type Steps } from "@mako/sessions/slices"
 import type { CarriedEffect, CarriedName } from "@mako/protocol"
 import { homedir } from "node:os"
@@ -75,9 +73,24 @@ interface ThreadWork {
 
 const NO_WORK: ThreadWork = { activity: [], writes: [], names: new Map(), roots: [] }
 
+/** The Git reads resolving makes: the host's Git where it runs on the host's thread, an ask of it on the reader's worker. */
+export interface ReferenceGit {
+  run(options: { cwd: string; args: readonly string[]; read: true; timeoutMs?: number }): Promise<{ stdout: Buffer }>
+}
+
 export interface ThreadFilesDeps {
-  git: Git
+  git: ReferenceGit
   home: string
+}
+
+/** What every question about a Thread's work reads of it, made once for each reading of the work (`ThreadFiles.historyOf`). */
+interface WorkHistory {
+  /** Its activity, latest first. */
+  latestFirst: readonly Worked[]
+  /** Every checkout and folder its work ran in. */
+  folders: readonly string[]
+  /** Each file it touched by now, once asked. */
+  touched?: Map<string, Touch>
 }
 
 interface Indexed {
@@ -118,6 +131,8 @@ export class ThreadFiles {
   private readonly repositories = new Map<string, Promise<string | undefined>>()
   private readonly renames = new Map<string, Reading>()
   private readonly carried = new Map<string, Carried>()
+  /** By the work it was made from, so it lasts exactly as long as that reading does. */
+  private readonly history = new WeakMap<ThreadWork, WorkHistory>()
   private journal = ""
   private readonly deps: ThreadFilesDeps
 
@@ -156,6 +171,7 @@ export class ThreadFiles {
     const [old, next] = await Promise.all([this.toplevel(from), this.toplevel(to)])
     if (!old || !next || within(old, next) || within(next, old)) return undefined
     const roots = store.roots()
+    const rootOf = rootFinder(roots)
     const work = await this.workOf(store, roots, thread)
     const touched = await inSlices(touchesOf(work.activity, work.writes))
     const used = [...touched]
@@ -166,7 +182,7 @@ export class ThreadFiles {
     // One line a file: its latest spelling, when several of the agent's led to it.
     const named = new Set<string>()
     for (const [path, touch] of used) {
-      const now = renamedTo(store, roots, path, work.names)
+      const now = renamedTo(store, rootOf, path, work.names)
       const known = now && (touched.get(now)?.at ?? -1) >= touch.at
       if (now && now !== path) {
         if (!known && !named.has(now)) drafts.push({ was: path, now: rebind(now) })
@@ -198,29 +214,55 @@ export class ThreadFiles {
     // Every root the journal has known: a file renamed in a checkout since forgotten still followed.
     const roots = store.roots()
     const work = source.thread ? await this.workOf(store, roots, source.thread) : NO_WORK
-    const activity = work.activity.filter((item) => item.start <= until).sort((a, b) => b.start - a.start)
+    const history = this.historyOf(work)
+    const activity = history.latestFirst.filter((item) => item.start <= until)
     const folders: string[] = []
-    for (const item of activity) if (item.cwd && !folders.includes(item.cwd) && folders.length < MAX_FOLDERS) folders.push(item.cwd)
-    if (source.cwd && !folders.includes(source.cwd)) folders.push(source.cwd)
-    const touched = await inSlices(touchesOf(activity, work.writes, until))
-    // Only where the Thread has been: the roots its work ran in or touched, and where it works now.
-    const been = new Set(source.current)
-    for (const item of work.activity) {
-      if (item.checkout) been.add(item.checkout)
-      if (item.cwd) been.add(item.cwd)
+    for (const item of activity) {
+      if (folders.length >= MAX_FOLDERS) break
+      if (item.cwd && !folders.includes(item.cwd)) folders.push(item.cwd)
     }
-    const near = (root: StoredRoot) =>
-      [...been].some((folder) => within(folder, root.path) || within(root.path, folder)) || [...touched.keys()].some((path) => within(path, root.path))
+    if (source.cwd && !folders.includes(source.cwd)) folders.push(source.cwd)
+    // An answer being written now reads the same touches as the last did, until the Thread's work moves.
+    const touched = source.asOf === undefined ? (history.touched ??= await inSlices(touchesOf(activity, work.writes, until))) : await inSlices(touchesOf(activity, work.writes, until))
+    // Only where the Thread has been: the roots its work ran in or touched, and where it works now.
+    const been = new Set([...source.current, ...history.folders])
+    // One lookup a root or place: asked of every folder and touched path in turn, each cost thousands of comparisons.
+    const aboveBeen = new Set<string>()
+    for (const folder of been) addAbove(aboveBeen, folder)
+    const aboveTouched = new Set<string>()
+    for (const path of touched.keys()) addAbove(aboveTouched, path)
+    const aboveFolders = new Set<string>()
+    for (const folder of folders) addAbove(aboveFolders, folder)
+    const near = (root: StoredRoot) => aboveBeen.has(root.path) || aboveTouched.has(root.path) || someAbove(root.path, (folder) => been.has(folder))
     const places = await this.places(store, roots.filter(near), source, activity, work.roots)
-    const histories = source.asOf === undefined ? new Map<string, RenameHistory>() : this.histories(places, [...folders, ...touched.keys()])
+    const histories = source.asOf === undefined ? new Map<string, RenameHistory>() : this.histories(places, (root) => aboveFolders.has(root) || aboveTouched.has(root))
+    const rootOf = rootFinder(roots)
     return {
       folders,
       touched,
       places,
-      renamed: (path) => renamedTo(store, roots, path, work.names) ?? (source.asOf === undefined ? undefined : renamedInGit(histories, path, source.asOf)),
+      renamed: (path) => renamedTo(store, rootOf, path, work.names) ?? (source.asOf === undefined ? undefined : renamedInGit(histories, path, source.asOf)),
       home: this.deps.home,
       ...(source.thread && { chosen: store.choices(source.thread) }),
     }
+  }
+
+  /**
+   * A reading of a Thread's work in the order and the sets each question wants: sorting 84,000 calls and walking them
+   * for their folders was done again for every message drawn.
+   */
+  private historyOf(work: ThreadWork): WorkHistory {
+    let history = this.history.get(work)
+    if (!history) {
+      const folders = new Set<string>()
+      for (const item of work.activity) {
+        if (item.checkout) folders.add(item.checkout)
+        if (item.cwd) folders.add(item.cwd)
+      }
+      history = { latestFirst: [...work.activity].sort((a, b) => b.start - a.start), folders: [...folders] }
+      this.history.set(work, history)
+    }
+    return history
   }
 
   /**
@@ -322,11 +364,11 @@ export class ThreadFiles {
     return carried
   }
 
-  /** The Git renames of each repository a path in `paths` is in, as far as read; the rest are read for the next answer. */
-  private histories(places: readonly Place[], paths: readonly string[]): Map<string, RenameHistory> {
+  /** The Git renames of each repository `holds` says a path the answer may name is in, as far as read; the rest are read for the next answer. */
+  private histories(places: readonly Place[], holds: (root: string) => boolean): Map<string, RenameHistory> {
     const histories = new Map<string, RenameHistory>()
     for (const place of places) {
-      if (!place.repository || place.gone || !paths.some((path) => within(path, place.root))) continue
+      if (!place.repository || place.gone || !holds(place.root)) continue
       const history = this.renamesOf(place.root)
       if (history) histories.set(place.root, history)
     }
@@ -361,9 +403,17 @@ export class ThreadFiles {
   private async places(store: JournalStore, roots: readonly StoredRoot[], source: ReferenceSource, activity: readonly Worked[], carried: ThreadWork["roots"]): Promise<Place[]> {
     const current = (root: string) => source.current.some((folder) => within(folder, root) || within(root, folder))
     const indexes = this.indexesOf(store, roots.filter((root) => root.active))
+    // Folders another journal tracked the Thread in, before it came here: this machine's own index has them if it tracks them too.
+    const tracked = new Set(roots.map((root) => root.path))
+    const elsewhere = carried.filter((root) => !tracked.has(root.path))
+    const placed = new Set([...tracked, ...elsewhere.map((root) => root.path)])
+    // The checkouts the Thread was in that the journal no longer tracks: a worktree since removed.
+    const untracked = [...new Set(activity.flatMap((item) => (item.checkout ? [item.checkout] : [])))].filter((checkout) => !placed.has(checkout))
+    // Asked together and before any place is made, so the places come in the order they did when each was asked in turn.
+    const missing = await missingOf([...roots.filter((root) => !root.active).map((root) => root.path), ...elsewhere.map((root) => root.path), ...untracked])
     const places: Place[] = []
     await Promise.all(roots.map(async (root) => {
-      const gone = !root.active && !existsSync(root.path)
+      const gone = !root.active && missing.has(root.path)
       const repository = root.repository && !gone ? await this.repository(root.path) : undefined
       places.push({
         root: root.path,
@@ -374,17 +424,13 @@ export class ThreadFiles {
         ...(indexes.has(root.id) && { index: indexes.get(root.id) }),
       })
     }))
-    // Folders another journal tracked the Thread in, before it came here: this machine's own index has them if it tracks them too.
-    const known = new Set(places.map((place) => place.root))
-    await Promise.all(carried.filter((root) => !known.has(root.path)).map(async (root) => {
-      known.add(root.path)
-      const gone = !existsSync(root.path)
+    await Promise.all(elsewhere.map(async (root) => {
+      const gone = missing.has(root.path)
       const repository = root.repository && !gone ? await this.repository(root.path) : undefined
       places.push({ root: root.path, name: basename(root.path), current: current(root.path), ...(repository && { repository }), ...(gone && { gone }) })
     }))
-    // The checkouts the Thread was in that the journal no longer tracks: a worktree since removed.
-    for (const checkout of new Set(activity.flatMap((item) => (item.checkout ? [item.checkout] : []))))
-      if (!known.has(checkout) && !existsSync(checkout)) places.push({ root: checkout, name: basename(checkout), current: false, gone: true })
+    for (const checkout of untracked)
+      if (missing.has(checkout)) places.push({ root: checkout, name: basename(checkout), current: false, gone: true })
     return places
   }
 
@@ -413,12 +459,12 @@ export class ThreadFiles {
     const behind = new Map<string, Indexed>()
     for (const root of roots) {
       const indexed = this.indexes.get(root.id)
-      if (!indexed || last - indexed.seq > CATCH_UP) this.indexes.set(root.id, { index: SuffixIndex.of(store.stats(root.id).keys()), seq: last })
+      if (!indexed || last - indexed.seq > CATCH_UP) this.indexes.set(root.id, { index: SuffixIndex.of(store.statPaths(root.id)), seq: last })
       else if (indexed.seq < last) behind.set(root.id, indexed)
     }
     let seq = Math.min(...[...behind.values()].map((indexed) => indexed.seq))
     while (behind.size && seq < last) {
-      const batch = store.entries(seq, 1_000)
+      const batch = store.entryPaths(seq, 1_000)
       if (!batch.length) break
       for (const entry of batch) {
         const indexed = behind.get(entry.root)
@@ -483,13 +529,12 @@ function* touchesOf(activity: readonly Worked[], writes: ThreadWork["writes"], u
  * says whether it was renamed away, so a file renamed on the laptop and
  * again on a cloud machine is followed through both.
  */
-function renamedTo(store: JournalStore, roots: readonly StoredRoot[], path: string, carried: ReadonlyMap<string, CarriedName>): string | undefined {
+function renamedTo(store: JournalStore, rootOf: (path: string) => StoredRoot | undefined, path: string, carried: ReadonlyMap<string, CarriedName>): string | undefined {
   let current = path
   let since = Number.NEGATIVE_INFINITY
   let after = { root: "", seq: 0 }
   for (let hops = 0; hops < 16; hops++) {
-    let root: StoredRoot | undefined
-    for (const candidate of roots) if (within(current, candidate.path) && current !== candidate.path && (!root || candidate.path.length > root.path.length)) root = candidate
+    const root = rootOf(current)
     const inside = root && current.slice(root.path.length + 1)
     const local = root && inside ? store.last(root.id, inside, after.root === root.id ? after.seq : 0) : undefined
     const elsewhere = carried.get(current)
@@ -564,6 +609,44 @@ function renamedInGit(histories: ReadonlyMap<string, RenameHistory>, path: strin
 }
 
 const within = (path: string, root: string) => path === root || path.startsWith(root + sep)
+
+/** `path`, then each folder above it, the nearest first: exactly the `root`s `within(path, root)` holds for. */
+function* above(path: string): Generator<string> {
+  yield path
+  for (let at = path.lastIndexOf(sep); at >= 0; at = at > 0 ? path.lastIndexOf(sep, at - 1) : -1) yield path.slice(0, at)
+}
+
+/** `path` and the folders above it into `into`. One already there has its own there too, so the walk ends at it. */
+function addAbove(into: Set<string>, path: string): void {
+  for (const folder of above(path)) {
+    if (into.has(folder)) return
+    into.add(folder)
+  }
+}
+
+function someAbove(path: string, is: (folder: string) => boolean): boolean {
+  for (const folder of above(path)) if (is(folder)) return true
+  return false
+}
+
+/** The deepest root a path is inside, by the folders above the path: asked of every root for every path, it was each against all. */
+function rootFinder(roots: readonly StoredRoot[]): (path: string) => StoredRoot | undefined {
+  const byPath = new Map(roots.map((root) => [root.path, root]))
+  return (path) => {
+    for (const folder of above(path)) {
+      const root = folder === path ? undefined : byPath.get(folder)
+      if (root) return root
+    }
+    return undefined
+  }
+}
+
+/** Which of `paths` aren't there now, asked without holding the thread as `existsSync` did for each. */
+async function missingOf(paths: readonly string[]): Promise<Set<string>> {
+  const missing = new Set<string>()
+  await Promise.all([...new Set(paths)].map((path) => access(path).catch(() => missing.add(path))))
+  return missing
+}
 
 /**
  * Which of `paths` are files now, `PARALLEL` `stat`s at a time. A path in another app's container is never one: a

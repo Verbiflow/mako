@@ -1,7 +1,7 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./provider-process.js"
 import { basename } from "node:path"
-import { environmentForExecutable, resolveExecutable } from "../base/executable.js"
+import { environmentForExecutable, Executables } from "../base/executable.js"
 import { onWindows } from "../base/platform.js"
 
 export interface DiscoveryOptions {
@@ -46,6 +46,8 @@ export class DiscoveryProcesses {
   private readonly stopping = new AbortController()
   /** Each query until its process has exited. */
   private readonly running = new Set<Promise<void>>()
+  /** Where a launch's and a query's executable is found, kept for the host's every harness. */
+  readonly executables = new Executables()
 
   private available(priority: Priority): boolean {
     return this.active < 4 && (priority === "launch" || this.background < 3)
@@ -97,7 +99,7 @@ export class DiscoveryProcesses {
     run: (process: DiscoveryProcess) => Promise<T>
   ): Promise<T> {
     const requestedAt = performance.now()
-    const executable = resolveExecutable(options.command, options.env)
+    const executable = await this.executables.find(options.command, options.env)
     const label = basename(options.command)
     if (!executable) throw new Error(`${label} is not installed`)
     const queuedAt = performance.now()

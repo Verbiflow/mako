@@ -265,6 +265,10 @@ export interface ProtocolContext {
   decoder: CodexDecoder
   /** The thread's rollout, read as Codex appends to it (`drawRollout`). */
   rollout?: CodexRolloutTail
+  /** Whether the rollout was read for the stdout chunk being handled (`drawRolloutOnce`). */
+  rolloutRead?: boolean
+  /** When the rollout was last read (`performance.now()`), for a streamed delta's reads (`drawRolloutPaced`). */
+  rolloutReadAt?: number
   /** Records each message as it arrived, when the host keeps streams. */
   stream?: NativeStream<CodexFrame> | null
   /**
