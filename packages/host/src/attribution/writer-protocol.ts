@@ -52,18 +52,15 @@ export function applyContextChange(held: HeldContext, change: WriterContextChang
   for (const session of change.sessions) sessions.set(session.path, session)
   return { version: change.version, sessions, context: { sessions: [...sessions.values()], running: change.running, stores: change.stores } }
 }
-export const WriterRepositorySchema = z.object({ watchHead: z.boolean(), ignoredEntries: z.boolean() }).nullable()
-export const WriterInventorySchema = z.object({ tracked: z.array(z.string()), untracked: z.array(z.string()), changed: z.array(z.string()) })
-export const WriterStringSchema = z.string().nullable()
-export const WriterSetSchema = z.set(z.string())
-export const WriterBytesSchema = z.instanceof(Uint8Array).nullable()
+/** Whether a root is a repository, and its Git folder watched by the host: Git itself runs in the writer. */
+export const WriterRepositorySchema = z.object({ watchHead: z.boolean() }).nullable()
 export const WriterBooleanSchema = z.boolean()
 export const WriterVoidSchema = z.undefined()
 export const WriterHistoryMarkSchema = z.object({ id: z.string(), at: z.string() })
 export const WriterHistorySchema = z.object({ paths: z.array(z.string()), lost: z.array(z.string()), ignored: z.array(z.number()) })
 export const WriterChildrenSchema = ChildTranscriptsSchema.nullable()
 export const WriterThreadSchema = ThreadSchema.nullable()
-export type WriterHostResult = WriterContextChange | z.infer<typeof WriterRepositorySchema> | z.infer<typeof WriterInventorySchema> | string | null | Set<string> | readonly string[] | Uint8Array | boolean | undefined | z.infer<typeof WriterHistoryMarkSchema> | z.infer<typeof WriterHistorySchema> | Awaited<ReturnType<ChildSource["children"]>> | Awaited<ReturnType<ChildSource["open"]>>
+export type WriterHostResult = WriterContextChange | z.infer<typeof WriterRepositorySchema> | null | boolean | undefined | z.infer<typeof WriterHistoryMarkSchema> | z.infer<typeof WriterHistorySchema> | Awaited<ReturnType<ChildSource["children"]>> | Awaited<ReturnType<ChildSource["open"]>>
 
 export interface WriterPorts {
   context(): Promise<WriterContext>
@@ -131,12 +128,6 @@ const Root = z.object({ root: z.string() })
 export const WriterHostRequestSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("context"), have: z.number().int().nonnegative() }),
   Root.extend({ kind: z.literal("repository") }),
-  Root.extend({ kind: z.literal("head") }),
-  Root.extend({ kind: z.literal("inventory"), includeTracked: z.boolean().optional() }),
-  Root.extend({ kind: z.literal("ignored"), paths: z.array(z.string()) }),
-  Root.extend({ kind: z.literal("ignored-entries") }),
-  Root.extend({ kind: z.literal("read"), commit: z.string(), path: z.string() }),
-  Root.extend({ kind: z.literal("changed"), from: z.string().nullable(), to: z.string() }),
   Root.extend({ kind: z.literal("watch"), subscription: z.number().int() }),
   Root.extend({ kind: z.literal("watch-head"), subscription: z.number().int() }),
   z.object({ kind: z.literal("unwatch"), subscription: z.number().int() }),

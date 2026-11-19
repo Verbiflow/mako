@@ -6,7 +6,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 
 | Harness | Checked on | Version | Places confirmed by |
 | --- | --- | --- | --- |
-| Claude Code | 2026-11-17 | 2.1.326 | its own listing (MCP) |
+| Claude Code | 2026-11-18 | 2.1.327 | its own listing (MCP) |
 | Codex | 2026-11-16 | 0.169.0 | its own listing (skills) |
 | Cursor | 2026-11-17 | SDK 1.4.0 | its own listing (skills, MCP) |
 | OpenCode | 2026-11-17 | 2.3.0 | its own listing (skills, MCP) |

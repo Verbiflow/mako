@@ -1,6 +1,5 @@
 import { acpDefaultMode, acpSessionModes } from "./acp-access.js"
 import { acpClientCapabilities, type ProviderAcpSource } from "./acp-source.js"
-import { resolveExecutable } from "../base/executable.js"
 import { heavy } from "../base/heavy-packages.js"
 import { realpath } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -51,7 +50,7 @@ export function createAcpLiveDriver(
     delete env.CLAUDECODE
     delete env.CLAUDE_CODE_ENTRYPOINT
     spec.configureEnvironment(env)
-    const command = resolveExecutable(spec.command, env)
+    const command = await host.discovery.executables.find(spec.command, env)
     if (!command) return undefined
     const { PROTOCOL_VERSION } = await heavy.acpSdk.load("read a start ahead")
     const params = { protocolVersion: PROTOCOL_VERSION, clientCapabilities: acpClientCapabilities(source) }

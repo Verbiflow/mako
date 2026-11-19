@@ -53,7 +53,14 @@ Inside the package, `contracts/` is the wire and imports only itself;
 reports, the platform, secrets, the lifecycle, the scheduler, the lock, heavy
 packages) and imports only itself and the contracts. Each domain is a folder
 that reaches another domain only through its entry, `<domain>/index.ts`, and
-files directly in `src/` compose the host. `transport/` is how a host is
+files directly in `src/` compose the host. A domain too large to read and
+run in one stretch of the host's thread has a second entry for those files
+alone, `<domain>/load.ts`: its modules in parts, the last its `index.ts`,
+which `create-host.ts` imports a part a turn of the loop before the core
+opens (workspaces, harnesses, conversations: with the compile cache warm no
+part holds the loop 50 ms, where each whole held it 60 to 90). A part is
+only modules the entry imports anyway; a harness added to the host is a
+part of `harnesses/load.ts`. `transport/` is how a host is
 reached: the socket server and the method table, and the wire's client end
 (`connection.ts`, and `service.ts` for where a host lives and how it starts),
 which the desktop imports by file and another host through the entry.
@@ -160,9 +167,12 @@ conversations?.live`) rather than a domain importing another's files.
   failure as `jobs <name> failed`, and stops with the host.
 - **A held loop says what held it.** `loop event loop held` names every piece
   of work open at a hold, most of it waiting on a process or a reply; a hold
-  of a second or more starts a 10-second profile of the host's own thread
-  (`HeldLoopProfiler`, at most one per 10 minutes), logged as `held loop
-  profiled` with its longest slices by the host's own functions. On a day of
+  of five seconds or more (one second with `MAKO_HELD_LOOP_PROFILE=1`) starts
+  a 10-second profile of the host's own thread once the loop turns freely
+  (`HeldLoopProfiler`, at most one per 10 minutes; its start is itself a
+  hold of a few hundred milliseconds, V8 listing its compiled functions),
+  logged as `held loop profiled` with its longest slices by the host's own
+  functions. On a day of
   many Fins the log blamed worktree summaries and live reads while Git
   spawns held the thread. `npm run bench:host-load` runs a real host on a
   world of that day's size (52 Threads' worktrees, 95 apps, Fins editing,
@@ -184,10 +194,101 @@ conversations?.live`) rather than a domain importing another's files.
   (local, with `MAKO_BENCH_OUT` naming a folder) fails when the steady busy
   share or a hold outside start and stop passes its budget. What walks a
   whole journal or every journal isn't on the thread either: a cold open's
-  count and turn index come from a reader (`JournalReaders.scan`), the
-  start's listing and the stop's closes go a slice at a time (`listJournals`,
-  `LiveClosing.stop`), and a whole catalog is placed a batch a turn
-  (`ThreadStore.placeAll`).
+  count and turn lines come from a reader (`JournalReaders.scan`), the
+  start's listing, the stop's closes, the sweep that measures each journal's
+  copy and the one that lets conversations go over the memory budget go a
+  slice at a time (`listJournals`, `LiveClosing.stop`, `settleNow`,
+  `unloadOverBudget`), and a whole catalog is placed a batch a turn
+  (`ThreadStore.placeAll`). Awaiting a step that finishes within its slice
+  doesn't leave the thread: a loop over many such steps keeps one slice's
+  time for all of them.
+- **A journal keeps a turn index** (`turn_index`, `turnRowOf`): a line for
+  each block that begins a turn or names a request, written in the
+  transaction that writes the block, on the journal's connection and on the
+  writer's, and removed with it at a rewind. A cold open reads the index and
+  the newest blocks (`readTurnIndex`) and never walks `blocks`, on the host's thread and with
+  no reader (`turnIndexWhole`): 35 to 50 ms in slices for a 150 MB
+  conversation of 5,330 requests that took 2.3 s to walk, 8 to 10 s with its
+  pages out of the disk's cache. The index is whole only once built from a walk
+  (`buildTurnIndex`, on the reader's thread at a journal's first cold open);
+  each commit then says so again by writing its revision in `progress` row
+  2, so a commit by a build that knows no index leaves the two rows apart
+  and the journal is walked and indexed again. `test:journal-writer` holds
+  the index equal to the walk through appends, a block changing kind, a
+  rewind, an older build's commit and a host killed mid-stream.
+- **The Thread store keeps what a commit didn't change.** The parent edges,
+  each Thread's record and its conversations stand through a commit that
+  wrote none of the tables they're read from, and are read again after one
+  that did, another process's commit, a rollback, and the store's opening.
+  Every table says what its writes can change (`HELD_BY_TABLE`); a statement
+  `sql` hands out goes by its table (`heldBy`), and a table without a line or
+  a statement that can't be read drops everything, so what is added
+  unclassified is slow, never stale. Read again at every commit, 30 Fins
+  ending their turns at once re-read every Fin's for each of their commits.
+  After its opening the store writes only through `sql`: `test:flush-costs`
+  fails on a table of the schema without a line, and on the connection used
+  directly outside the opening.
+- **A running turn's streamed flushes are written off the thread**
+  (`JournalWriter`, `LiveJournal.streamed`). A flush that is only blocks new
+  or grown and the revision, of a turn running before and after it, goes to
+  the writer's connection, in order, one transaction a message, and what
+  comes while one is written waits as one message more. Every other flush (a
+  request, the session's state, a permission, the base, the controls, Mako's
+  log, a turn's start and end) the journal commits on its own connection
+  before the batch goes out, after waiting for the writer (`settleWrites`),
+  as does every read of its rows (`db`). So what a window or a harness is
+  told happened is committed first, as it always was, and a host killed
+  mid-stream may lose the last streamed frames the writer hadn't written
+  (one transaction under way and one waiting), which the provider's own
+  record still holds. A write that fails on the writer is made good by the
+  journal from memory, block by block, and failing that is a
+  `JournalWriteError` like any commit. `MAKO_JOURNAL_WRITER=0` has each
+  journal write its own. `npm run test:journal-writer` holds it (a reader
+  following a write, close and stop with writes waiting, a failed write, a
+  host killed mid-stream).
+- **A hold says whether the thread ran.** `bench:host-load --record` keeps
+  the thread's own CPU time for each hold: one that used little of its gap
+  waited (a file call, or not being run), and no function on its stack
+  explains it. `--max-run-ms` budgets what the thread computed,
+  `--max-hold-ms` any hold. File calls a flush or a recurring job makes go
+  off the thread where they can: the process log appends what is pending as
+  one awaited write, the Git index lock's steps are awaited, `docker context
+  inspect` runs in the probe child, whether this host holds a session
+  (`SessionMemory.owns`) is answered from what was read until that session's
+  hold is written (another host's commits looked for once a turn of the
+  loop), and a launch, a discovery query and the advertised tools find
+  their executable awaited and kept (`Executables`, held by
+  `DiscoveryProcesses`), `gh` and an MCP server's command awaited each time
+  (`findExecutable`); `resolveExecutable` waits on the thread and is for
+  code that runs once or at the person's own action. Codex processes' output is handled a turn's worth at
+  a time (`StdoutPace`): what one turn of the loop has no time for waits,
+  its pipe paused, for the next. The rollout a Codex message's handling
+  reads is read ahead, awaited (`CodexRolloutTail.load`, the pace's
+  `before`), with that process's output queued behind it in order; `read`
+  takes what was loaded and goes to the file itself only for what wasn't.
+  The writer holds a journal's connection only while it streams: opened at
+  its first streamed flush, let go at rest, and a journal's close lets go of
+  it without waiting on the thread (`JournalWrites.release`, awaited before
+  the file is tidied); waited on the thread, a close sat behind every other
+  journal's writes. As the host stops, the journal writer closes every
+  journal's writes awaited (`JournalWriter.closeAll`) before the journals
+  close.
+- **A journal at rest gives back its pages** (`LiveJournal.rest`): SQLite
+  keeps up to 2 MB of pages for each connection, and every conversation in
+  memory has one. Read in, or quiet after its turn, a journal frees them.
+  A conversation in memory weighs its content and `RESIDENT_HELD_BYTES`
+  beside it (its connection, statements and log index, about 160 KB outside
+  the heap), so a few hundred small ones at rest count against the budget
+  and are let go to their listing's line; reading one back takes about a
+  millisecond. What waits on the person (an approval, a question, an
+  agent's ask) keeps a conversation in memory, so a row never reads one back
+  to say what it waits on.
+  A worker that parses much (a journal reader, the catalog's) has its young
+  generation held to 32 MB (`maxYoungGenerationSizeMb`): V8 grew each to 76
+  to 122 MB while it read and kept it at rest with a few MB in use.
+  `bench:host-load --memory` writes what the host's memory is made of
+  (`regions-*.txt`, each thread's heap, a sample of the live heap by the
+  function that allocated it).
 - **Follow, don't poll.** What only says where something stands (a line a
   window shows) reads what each owner already holds, and is woken by the
   owner's own change (its event or callback). That read never sets off the
@@ -736,9 +837,18 @@ reads "Ended without a result" in the list, its row, the phone and the digest
 once with its last words (`unfinishedSummary`), and asks nobody, so nothing
 reaches the person's Inbox; its Apex sends it on (the row's Continue) or takes
 the reply as its result. What was to start `after` it waits on (the digest
-says so) and starts once it reports done; a stop drops it. An idle Apex waits
-`WAKE_COALESCE_MS` and takes ONE turn with the digest, its provider waking
-through that wait when it sleeps; a busy one is left to
+says so) and starts once it reports done; a stop drops it. An idle Apex hears the
+first report at once, not after the burst's two seconds, which a lone report
+paid for nothing (`bench:orch-wake-latency`: 2,006 ms to 37). What follows is
+ONE digest: at the end of the Apex's turn on the first, or `WAKE_COALESCE_MS`
+after the last digest went (`RESULT_COALESCE_MS` for a result it waited on)
+when that turn is already over, its provider waking through that wait when it
+sleeps (`AgentWakes.start`). Some wait the window even so: reports a previous
+host left unheard (a receipt read back as the Apex is taken up, a steer its
+harness had, takes them back rather than the Apex hearing them twice), and a
+digest for an Apex moving off a harness that ran out (sent at once, it knocks
+on that limit). A result a `wait` start still waits on waits
+`RESULT_COALESCE_MS`, for that call's answer to take it back. A busy one is left to
 think: only a question or decision it can answer is steered into its running
 turn, at its next step where its harness steers there, and what else its
 Fins report waits for the turn's end as one digest, unless the turn is still
@@ -4066,6 +4176,24 @@ startup, so a default Mako read from the first can be a model it no longer
 routes: the driver treats `models-dev.refreshed` and `integration.updated` as
 catalog changes, and a session still on the default it was given moves to the
 refreshed default before its next prompt.
+
+A new OpenCode conversation asks its model about 380 ms later through Mako than
+`opencode run` does by itself (`npm run bench:vs-bare -- --harness opencode`,
+N=5 on 2026-11-18: 917 ms against 533), most of it OpenCode's own: Mako runs one
+`opencode serve` per conversation (`opencode/servers.ts`), so each new one pays
+the server's handshake (159 ms) and its plugin activation (310 ms). Starting
+that server ahead while the person types was looked at and left: the server is
+the conversation's own, spawned with its grant (the write-hold plugin's URL and
+token, minted per binding), its permission tier, routing denies, primer and
+Thread values in its environment, so the one a launch would start exists only
+once the conversation does, and a conversation started ahead and never sent
+leaves a journal, a Thread in the person's list and a native session, at some
+400 MB of server for every draft. One server shared by every conversation isn't
+safe as Mako uses OpenCode for the same reason: those settings are the
+process's, so every session's calls would post under one binding's grant and
+one tier. `mako:launch-prewarm` still lists the folder's MCP servers and loads
+what a first launch loads (`host-warmup.ts`); it carries the folder alone, and
+the warm-up already keeps to the harnesses used on this device.
 No test, probe or proof runs a real harness in the person's own home. A
 session it starts there is a real entry in their Codex, Cursor, Claude or
 Grok history, and their own Mako lists it and keeps a copy: deleting the
@@ -4756,6 +4884,34 @@ events are fenced by the resident generation and cannot close its replacement.
 Running or queued work, permissions, child delivery, transfers, checkpoints,
 rewinds and automatic continuation prevent hibernation. A retired driver's late
 events are fenced by the resident generation and cannot close its replacement.
+Writing in the composer wakes a session whose process has gone (`noteComposing`
+in `src/state/prewarm.ts`, `mako:live-prewarm`), so the start overlaps the
+typing: once a half minute for one that's awake, and again at the next key for
+one that's hibernated or disconnected, since the signal before it woke nothing.
+
+What a person does to a conversation is timed by `npm run bench:actions`
+(`scripts/bench-actions.ts`): a message, a steer, a Stop, a message after a
+Stop or to a hibernated session, an access change, a model, reasoning or fast
+change and an approval's answer, on a real host with each real harness against
+the scripted model, with Claude Code also driven bare over its stream-json
+input. It reads the host through the probe `bench:vs-bare` uses
+(`scripts/lib/bench-host.ts`, `bench-vs-bare-probe.mjs`), and what has no
+request to be a stage of (`conversations/live-stages.ts`) is a step
+(`liveSteps`, `mako:live-step`, in `base/live-steps.ts`, where a harness's
+driver may say its own round trips too): name a new wait there (`stagedWait`,
+`stagedCall`) rather than timing it where it happens.
+Three rules came of it. A selection reaches the running process when it changes,
+never with each message: the window sends its model, reasoning and fast lane
+with every message, and Claude's `tune` sets only what differs from what the
+process has (`Live.tuned`; `test-claude-tune.ts` counts the round trips). A
+running session's access shows from the person's pick (`src/state/live-mode.ts`,
+on the desk and the phone alike) and is believed only from its host's answer:
+refused, the picker goes back and says why. And nothing starts a turn under a
+level wider than the person chose while a change is on its way: the window's
+sends, steers, goals and reviews wait for the answer (`modeSettled`), a message
+that waited on a refused narrowing isn't sent, and the host dispatches nothing
+while a `setMode` is unanswered (`Resident.modeChanging`), whichever client
+asked. `test-live-mode.ts` and `test-live-mode-gate.ts` hold both sides.
 
 A saved binding's fate is a `ResumeVerdict`
 (`packages/host/src/contracts/conversation-control.ts`), not a boolean: `resumable`
@@ -5016,7 +5172,17 @@ each real harness against the scripted model (Cursor on its own): a 15 s
 command steered 4 s in. Claude, OpenCode and Grok hear it once the command
 returns; Codex's command yields to the model at once and carries on; Devin
 hears it when its command hands back, which it does by itself after about 10 s;
-Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Enter steers a steerable running turn and
+Cursor cuts the command short. A Stop ends the turn within 0.2 s on all six. Claude
+Code's Stop keeps its process (`keepStopped`): an `interrupt` that also drops
+what the CLI had queued (`cancel_queued`, where its `init` says
+`interrupt_cancel_queued_v1`) and a `stop_task` for each background task, so
+the next message, and the person's steer, which lands by stopping the turn,
+cost a message and not a relaunch (`bench:actions`: 16 ms where it was 300 or
+more). It closes the process, as it always did, where the CLI can't, doesn't
+answer within two seconds, or had a message queued behind the running command,
+which the CLI would otherwise let finish; `test-claude-stop.ts` holds each
+with fakes, `test-claude-stop-live.ts` on the real CLI against the scripted
+model, and `scripts/probe-claude-stop.ts` reads it on the real model. Enter steers a steerable running turn and
 Cmd/Ctrl+Enter queues; the `steerOnEnter` preference swaps them. Re-verify a
 provider's kind with a real multi-step tool task before changing it: a single
 long generation cannot distinguish step delivery from turn-end delivery.

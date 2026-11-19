@@ -943,7 +943,10 @@ export class SharedJournal {
       const timer = setTimeout(() => {
         this.calls.delete(id)
         if (request.kind === "settled") {
-          this.options.log("the record of changes didn't answer in time; going on with what it holds", { waitedMs: patience.ms })
+          // The owner says what it waited on itself ("settled slowly"); this side says what it asked, and of whom.
+          this.options.log("the record of changes didn't answer in time; going on with what it holds", {
+            waitedMs: patience.ms, checkouts: request.checkouts?.length ?? "all", rescans: request.rescans !== false, owner: this.current.kind === "follower" ? this.current.owner.pid : this.current.kind,
+          })
           resolveCall({ kind: "settled", complete: false })
         } else rejectCall(new Error("Mako's record of changes didn't answer in time. Try again in a moment."))
       }, patience.ms)

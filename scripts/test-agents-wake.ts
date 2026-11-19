@@ -98,7 +98,7 @@ function described(): void {
   assert.match(start.mcp.description, new RegExp(`${WAIT_LIMIT_MS / 1000} seconds`))
 }
 
-/** Five children finishing within a second wake their idle apex once, with all five. */
+/** Five children finishing within a second wake their idle apex at most twice: the first as soon as it has settled, with what came beside it, then the rest as one digest. */
 async function burst(): Promise<void> {
   const w = world("burst", async (turn) => {
     if (!turn.text.includes("You're fin:")) return "ok"
@@ -111,8 +111,9 @@ async function burst(): Promise<void> {
       started(await w.agents.start(apex.caller, { brief: { objective: `Check part ${i}` }, harness, name: `part-${i}`, clientKey: `p${i}`, cwd: w.root }))
     await w.settle()
     const wakes = wakesOf(w, apex.conversation)
-    assert.equal(wakes.length, 1, "one wake for the burst")
-    assert.match(wakes[0]!.text, /5 finished:/)
+    assert.ok(wakes.length >= 1 && wakes.length <= 2, `at most two wakes for the burst, the first report's and everything else's: ${wakes.length}`)
+    // Each Fin's report is in exactly one of them.
+    for (let part = 0; part < 5; part += 1) assert.equal(wakes.filter((wake) => wake.text.includes(`"part-${part}"`)).length, 1, `part-${part} is reported once`)
     assert.equal(w.store.undeliveredReports().length, 0)
   } finally {
     await w.close()
@@ -215,7 +216,8 @@ async function progressThenTurnEnd(): Promise<void> {
     assert.ok("children" in listed)
     const kind = (name: string) => listed.children.find((child) => child.name === name)?.state
     assert.equal(childWord(kind("review")!), "Ended without a result", "its row never says done")
-    assert.match(heard, /3 ended without a result /, "apart from what finished")
+    // The first of the burst goes at once and alone, so the three are counted across its digests, each named once.
+    assert.equal(heard.match(/• "[^"]+" \(Claude\): Nothing it waits on will wake it\./g)?.length, 3, "three ended without a result, apart from what finished")
     assert.equal(kind("ci")?.kind, "idle", "the CI one waits")
     const merge = w.store.reportsOf(w.store.edges().all.find((edge) => edge.name === "merge")!.child)
     assert.deepEqual(merge.map((report) => [report.status, report.implicit ?? false]), [["progress", false]], "no turn-end result after a wait that woke the Apex")

@@ -805,8 +805,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly awaiting = new Map<string, { conversation: string; request: string; work?: string; woke?: true }>()
   /** By Fin, what cancels the timer that looks at its held work's end again past `HELD_WORK_CEILING_MS`: one at a time. */
   private readonly ceilings = new Map<string, () => void>()
-  /** Fins' conversations whose cut turn is looked at once Mako's own continuation would have been scheduled (`watchCut`). */
-  private readonly cutChecks = new Map<string, NodeJS.Timeout>()
+  /**
+   * Fins' conversations whose cut turn is looked at once Mako's own continuation would have been scheduled (`watchCut`),
+   * and whether that continuation was still on its way (being verified, or queued for its next try) when the look was set.
+   */
+  private readonly cutChecks = new Map<string, { timer: NodeJS.Timeout; continuing: boolean }>()
   /** Messages on their way to each Fin (`deliver`), which a Stop marks: one may open a session before it has a queue to wait in. */
   private readonly crossings = new Map<string, Set<Crossing>>()
   /** Followed runs' cut turns an answer is continuing now (`answerCut`). */
@@ -951,6 +954,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     })
     this.wakes = new AgentWakes({
       ready: (conversation) => this.ready(conversation),
+      moving: (conversation) => [...this.moving].some((key) => key.startsWith(`${conversation}:`)),
+      awaited: (notice) => [...this.holds].some((hold) => notice.id === `notice:${hold.child}:${notice.report.id}`),
+      lastSent: (conversation) => ((deps.live.held(conversation) ?? deps.live.snapshot(conversation))?.requests ?? []).reduce<number | undefined>((last, request) =>
+        request.digest?.sentAt !== undefined && (last === undefined || request.digest.sentAt > last) ? request.digest.sentAt : last, undefined),
       // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against. A digest
       // sent again says what the one it repeats said, so later news goes on its own.
       // Memory first: a notice for an Apex in memory reads nothing in, and one that isn't is read in before (`noticeOf`).
@@ -1168,7 +1175,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       const conversation = to?.why === "account" ? this.conversationOf(edge.child) : undefined
       if (to?.why === "account" && conversation) this.deps.live.adoptPin(conversation, to.harness, to.account)
     }
-    for (const { report, wake } of store.undeliveredReports()) {
+    const unheard = store.undeliveredReports()
+    this.wakes.leftOver(unheard.map(({ report }) => `notice:${report.child}:${report.id}`))
+    for (const { report, wake } of unheard) {
       const edge = edges.of(report.child)
       if (edge && report.status !== "progress") this.noticeOf(edge, report, wake)
     }
@@ -3813,7 +3822,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.noticeEnds.clear()
     this.stopped = true
     this.quiet.stop()
-    for (const timer of this.cutChecks.values()) clearTimeout(timer)
+    for (const { timer } of this.cutChecks.values()) clearTimeout(timer)
     this.cutChecks.clear()
     this.stopRoomWatch()
     this.stopFinishedSweep()
@@ -5191,26 +5200,52 @@ export class Agents implements AgentOperations, ConversationChildren {
    * A Fin's turn may have been cut short: once Mako's own continuation would
    * have been scheduled (`STRANDED_AFTER_MS`), a cut turn nothing picks up
    * becomes a question for its Apex (`reportCut`). Looked at once per cut.
+   *
+   * While Mako's own continuation of it is on its way (a reconnect whose native turn is still being verified, or queued
+   * for its next try after a check that couldn't finish yet, `NativeVerificationPendingError`), nothing is asked: the
+   * wait counts from when that continuation settled without going on. Counted from the cut, the question was once
+   * written while a verification still ran past the wait, and the turn then went on: the question was dropped as
+   * stale (`AgentWakes.notice`), a stored report its Apex never heard.
    */
   private watchCut(conversation: string): void {
-    if (this.stopped || this.cutChecks.has(conversation)) return
-    const last = this.deps.live.snapshot(conversation)?.requests.filter((request) => request.status !== "queued" && request.status !== "held" && request.status !== "canceled").at(-1)
-    if ((last?.status !== "interrupted" && last?.status !== "uncertain") || !last.interruption || last.interruption.reason === "stopped" || last.interruption.reason === "steered") return
+    if (this.stopped) return
+    const snapshot = this.deps.live.snapshot(conversation)
+    const last = snapshot?.requests.filter((request) => request.status !== "queued" && request.status !== "held" && request.status !== "canceled").at(-1)
+    if (!snapshot || (last?.status !== "interrupted" && last?.status !== "uncertain") || !last.interruption || last.interruption.reason === "stopped" || last.interruption.reason === "steered") return
+    const continuing = continuationUnsettled(snapshot, last.id)
+    const armed = this.cutChecks.get(conversation)
+    // Armed as things stand: its wait goes on. A continuation that settled since the look was set starts the wait anew,
+    // from now (a snapshot moves as it settles, `moved`); one that set out since makes the look wait for it.
+    if (armed && armed.continuing === continuing) return
+    if (armed) clearTimeout(armed.timer)
     const timer = setTimeout(() => {
       this.cutChecks.delete(conversation)
-      this.checkCut(conversation)
+      // Still on its way: looked at again, so a continuation that settled without a snapshot moving is still noticed.
+      if (continuing) this.watchCut(conversation)
+      else this.checkCut(conversation)
     }, STRANDED_AFTER_MS)
     timer.unref()
-    this.cutChecks.set(conversation, timer)
+    this.cutChecks.set(conversation, { timer, continuing })
   }
 
   private checkCut(conversation: string): void {
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
+    if (!edge || edge.closedAt !== undefined || !this.deps.live.snapshot(conversation)) return
+    // What Mako continues itself is continued before anyone is asked: a crash's cut whose continuation wasn't admitted
+    // when this host took the Fin up (its conversation not read in yet, or refused for that moment) is asked for again
+    // here, under the same request, so one admitted since changes nothing. Asked only after, the question was once
+    // written for a turn that then went on, and no digest ever carried it (`current`): a stored report its Apex never
+    // heard.
+    this.continueCrashed(conversation, { op: edge.op })
     const snapshot = this.deps.live.snapshot(conversation)
-    if (!edge || edge.closedAt !== undefined || !snapshot) return
+    if (!snapshot) return
     const cut = strandedTurn(snapshot.requests)
-    if (cut) this.reportCut(edge, snapshot.requests, cut)
+    if (!cut) return
+    // A continuation on its way through a reconnect is a transfer until it commits, not yet a request: the cut is
+    // looked at again once it has settled, and the wait before the question counts from then (`watchCut`).
+    if (continuationUnsettled(snapshot, cut.id)) return this.watchCut(conversation)
+    this.reportCut(edge, snapshot.requests, cut)
   }
 
   /**
@@ -8210,6 +8245,11 @@ const CUT_OPTIONS = [
 /** The question a cut turn, or a followed run's unexplained end (`run:<startedAt>`), is to its Apex: one per cut. */
 function cutReportId(child: string, cut: string): string {
   return `report:${child}:cut:${cut}`
+}
+
+/** Whether Mako's continuation of the cut turn `cut` is still on its way: a reconnect not yet committed or failed (`unsettled`). */
+function continuationUnsettled(snapshot: Pick<LiveSnapshot, "control">, cut: string): boolean {
+  return snapshot.control?.transfers.some((transfer) => transfer.continues?.requestId === cut && unsettled(transfer)) ?? false
 }
 
 /** The cut a cut turn's question names, from its id: a request, or `run:<startedAt>`. */

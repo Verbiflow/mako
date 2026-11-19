@@ -244,15 +244,15 @@ export class FootprintReader {
    * looked at again, for a file's times and for a folder made since.
    */
   private async look(trail: Trail, last: boolean, held: FolderRules): Promise<void> {
-    const { home, roots } = this.deps.options
+    const { roots } = this.deps.options
     const fresh = new Set(this.claims(trail).filter((path) => !trail.folders.has(path) && (last || !trail.seen.has(path))))
     const since = BigInt(trail.start) * 1_000_000n
     const changed = (stat: TrackerFileStat) => stat.mtimeNs >= since || stat.ctimeNs >= since
     // Shortest first, so a folder is known before the claims inside it.
     for (const path of [...fresh].sort((a, b) => a.length - b.length)) {
       trail.seen.add(path)
-      if (container(path, roots) || otherAppsData(path, home) || held.find(path) || holds(trail.folders, path)) continue
-      const stat = await this.deps.ports.fs.stat(path)
+      if (container(path, roots) || this.sealed(path) || held.find(path) || holds(trail.folders, path)) continue
+      const stat = await this.statOf(trail, path)
       if (stat?.kind === "directory") trail.folders.set(path, trail.mark)
       else if (last && stat?.kind === "file" && changed(stat)) this.changed(trail, path)
     }
@@ -301,6 +301,29 @@ export class FootprintReader {
       })
     }
     trail.readMs += performance.now() - started
+  }
+
+  /**
+   * Another app's data, never stat-ed, read or read for history: its container under the home folder, or its own
+   * folder in a temporary one (`com.electron.wispr-flow.ShipIt.QHgtYIUi`, an update it stages there). A turn that only
+   * listed the temporary folder once read another app's update package as its own footprint.
+   */
+  private sealed(path: string): string | undefined {
+    return otherAppsData(path, this.deps.options.home) ?? otherAppsTemporary(path, this.deps.options.roots.filter((root) => root !== this.deps.options.home))
+  }
+
+  /**
+   * A path's stat for a footprint; undefined for one that can't be read, which is left out and the footprint said
+   * incomplete, never the turn's whole read lost.
+   */
+  private statOf(trail: Trail, path: string): Promise<TrackerFileStat | null | undefined> {
+    return this.deps.ports.fs.stat(path).catch((error: Error) => this.unreadable(trail, path, error))
+  }
+
+  private unreadable(trail: Trail, path: string, error: Error): undefined {
+    trail.complete = false
+    this.deps.log("a footprint path could not be read", { path, error: error.message })
+    return undefined
   }
 
   private evidence(trail: Trail): TurnEvidence {
@@ -385,15 +408,16 @@ export class FootprintReader {
     const at = this.now()
     const entries: FootprintEntry[] = []
     const bases = new Map<FootprintBasis, number>()
-    const entry = async (path: string, access: "read" | "write", basis: FootprintBasis): Promise<"kept" | "folder"> => {
-      const stat = await this.deps.ports.fs.stat(path)
+    const entry = async (path: string, access: "read" | "write", basis: FootprintBasis): Promise<"kept" | "folder" | "unreadable"> => {
+      const stat = await this.statOf(trail, path)
+      if (stat === undefined) return "unreadable"
       if (stat && stat.kind !== "file") return "folder"
       const secret = secretPath(path)
       const kept: FootprintEntry = { thread: trail.thread, session: trail.session, turn: trail.turn, path, access, evidence: strength(basis), basis, at, secret }
       if (access === "write" && stat) {
         kept.size = stat.size
         if (!secret && stat.size <= READ_LIMIT) {
-          const bytes = await this.deps.ports.fs.read(path)
+          const bytes = await this.deps.ports.fs.read(path).catch((error: Error) => this.unreadable(trail, path, error) ?? null)
           if (bytes) kept.ref = contentRef(bytes)
         }
       }
@@ -408,7 +432,7 @@ export class FootprintReader {
     // person whether Mako may access that app's data, on every turn that touched it. The Fin's own call already read it.
     for (const path of [...trail.paths].sort()) {
       await turn.share()
-      const sealed = otherAppsData(path, home)
+      const sealed = this.sealed(path)
       if (sealed) {
         exclusions.add("noise", sealed, 1, "another app's data")
         decided(path, { rule: "noise", group: sealed, why: "another app's data" })
@@ -430,10 +454,10 @@ export class FootprintReader {
     }
     // Paths its calls named that didn't change: read, or written to what they already held.
     for (const [path, access] of trail.named) {
-      if (trail.paths.has(path) || otherAppsData(path, home)) continue
+      if (trail.paths.has(path) || this.sealed(path)) continue
       const folder = rules.find(path)
       if (folder?.rule === "tracked" || folder?.rule === "store" || staticNoise(path, home, roots)) continue
-      if ((await this.deps.ports.fs.stat(path))?.kind !== "file") continue
+      if ((await this.statOf(trail, path))?.kind !== "file") continue
       await entry(path, access, "named")
     }
     this.deps.store.transaction(() => {
@@ -526,6 +550,23 @@ class Turn {
     this.started = performance.now()
   }
 }
+/** A bundle id as a folder name: reverse DNS under a common top-level domain, three parts or more (`com.apple.Safari`, `com.electron.app.ShipIt.x`). */
+const BUNDLE_ID = /^(?:com|org|net|io|dev|app|co|me|ai|us|uk|de|fr|jp|group)\.[A-Za-z0-9-]+\.[A-Za-z0-9._-]+$/
+
+/**
+ * The folder of another app's that holds `path` in one of the temporary `roots`: the folder right under the root
+ * named by a bundle id, as macOS apps and their updaters name theirs. Undefined for anything else, a turn's own
+ * `mktemp -d` folder among them.
+ */
+export function otherAppsTemporary(path: string, roots: readonly string[]): string | undefined {
+  for (const root of roots) {
+    if (!within(root, path) || path === root) continue
+    const name = path.slice(root.length + 1).split("/")[0]!
+    if (BUNDLE_ID.test(name)) return `${root}/${name}`
+  }
+  return undefined
+}
+
 /** Whether `path` is one of `folders` or inside one: one lookup per folder on the way up. */
 function holds(folders: ReadonlyMap<string, unknown>, path: string): boolean {
   if (!folders.size) return false
