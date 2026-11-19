@@ -41,8 +41,11 @@ try {
   const emit = async (conversation: string, kind: "person" | "service", label: string, guidance: boolean) => {
     if (kind === "person") world.say(conversation, label)
     else world.live.submit(conversation, randomUUID(), label, [], undefined, undefined, undefined, { kind: "service", name: "auto-continue" })
-    await world.settle(40)
-    const prompt = world.prompts.filter(p => p.conversation === conversation && p.text.endsWith(label)).at(-1)
+    // Its turn, not the Fins' news: an idle Apex hears each first report at once, and a digest past the minute's budget
+    // (`WAKES_PER_MINUTE`) waits for its slot longer than a settle does.
+    await world.settle(40, 20_000, "ignore")
+    // A digest waiting in the queue may ride the message folded in after it (`joined`).
+    const prompt = world.prompts.filter(p => p.conversation === conversation && (p.text.endsWith(label) || p.text.includes(`${label}\n\n[mako · `))).at(-1)
     assert.ok(prompt, `actual driver input missing: ${label}`)
     for (const line of FRONT_DOOR_GUIDANCE) assert.equal(prompt.text.split(line).length - 1, Number(guidance), `${label}: exact fixed guidance follows cadence`)
     assert.equal(prompt.text.split(`action ${JSON.stringify(action.id)}`).length - 1, 1, `${label}: pending action identity is rebuilt exactly once`)

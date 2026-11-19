@@ -33,6 +33,8 @@ interface ProjectionCache {
   /** The projection's newest turn is one exchange from `cursor.start` on, so the next can re-project only that tail. */
   tail: boolean
   tools: ReturnType<typeof toolInputs>
+  /** The base's prompts the requests name (`nativePromptRequestIds`), read when a change of requests asks. */
+  names?: Map<string, string>
 }
 const cache = new WeakMap<LiveProjection, ProjectionCache>()
 
@@ -43,7 +45,13 @@ export function projectLive(
 ): LiveProjection {
   const held = previous && cache.get(previous)
   if (previous && held && canProjectTail(held, snapshot, pendingPrompts)) {
-    if (snapshot.blocks === held.input.blocks) return previous
+    // Only what the tail's own messages don't say moved (a request's status, the outbox): the same projection, held
+    // as of this input so the next one is weighed against it.
+    if (snapshot.blocks === held.input.blocks && snapshot.session.status === held.input.session.status) {
+      if (held.input.requests !== snapshot.requests || held.pending !== pendingPrompts)
+        cache.set(previous, { ...held, input: { ...snapshot, session: { ...snapshot.session } }, pending: pendingPrompts })
+      return previous
+    }
     const live = entriesToMessages(snapshot.blocks, {
       kind: "live",
       running: snapshot.session.status === "running",
@@ -120,7 +128,8 @@ export function projectLive(
       }).messages
     : []
   if (snapshot.base && snapshot.requests) {
-    const ids = nativePromptRequestIds(snapshot.base.ref, snapshot.requests)
+    // Its own map: what's ambiguous in the base is taken out of this one below.
+    const ids = new Map(namedPrompts(snapshot))
     const seen = new Set<string>()
     for (const message of base)
       if (message.role === "user" && message.anchor?.id && !message.steeringFor) {
@@ -140,7 +149,7 @@ export function projectLive(
   const result: LiveProjection = {
     messages,
     files: touchedFiles(messages),
-    exchanges: releasedExchanges(toExchanges(messages, previous?.exchanges), snapshot.releasedTurns),
+    exchanges: releasedExchanges(toExchanges(messages, previous?.exchanges), snapshot.releasedTurns, previous?.exchanges),
     plan: live.plan,
   }
   remember(result, snapshot, pendingPrompts, Boolean(starting))
@@ -155,19 +164,26 @@ function canProjectTail(
   if (
     !held.tail ||
     held.starting ||
-    held.pending !== pending ||
     held.input.base !== input.base ||
     held.input.releasedTurns !== input.releasedTurns ||
     held.input.baseCoveredBlocks !== input.baseCoveredBlocks ||
     held.input.history?.blockStart !== input.history?.blockStart ||
     held.input.history?.token !== input.history?.token ||
-    held.input.requests !== input.requests ||
-    held.input.session.status !== input.session.status ||
     held.input.session.harness !== input.session.harness ||
     input.blocks[held.cursor.start] !== held.input.blocks[held.cursor.start] ||
     changedEntryStart(held.input.blocks, input.blocks) < held.cursor.start
   )
     return false
+  /*
+   * The requests, the outbox and the status decide three things of a projection: a prompt drawn before its block is
+   * written (`promptDelivery`), which the tail doesn't draw; the request each of the base's prompts is named by; and
+   * whether the last reply streams, which is the tail's own. A turn starting, ending or settling its changes moves
+   * the requests each time, and read whole each time a long conversation was projected from nothing three times a turn.
+   */
+  if (held.pending !== pending || held.input.requests !== input.requests || held.input.session.status !== input.session.status) {
+    if (promptDelivery({ ...input, pendingPrompts: pending }).starting) return false
+    if (held.input.requests !== input.requests && !sameNames(namesOf(held), namedPrompts(input))) return false
+  }
   const prompts = new Set<string>()
   for (let index = held.cursor.start; index < input.blocks.length; index++) {
     const block = input.blocks[index]
@@ -175,6 +191,23 @@ function canProjectTail(
     if (block.steeringFor && !prompts.has(block.steeringFor)) return false
     if (block.requestId) prompts.add(block.requestId)
   }
+  return true
+}
+
+const NO_NAMES = new Map<string, string>()
+
+/** The request each of the base's prompts is named by, as the requests' receipts say (`nativePromptRequestIds`). */
+function namedPrompts(input: ProjectionInput): Map<string, string> {
+  return input.base && input.requests ? nativePromptRequestIds(input.base.ref, input.requests) : NO_NAMES
+}
+
+function namesOf(held: ProjectionCache): Map<string, string> {
+  return (held.names ??= namedPrompts(held.input))
+}
+
+function sameNames(left: Map<string, string>, right: Map<string, string>): boolean {
+  if (left.size !== right.size) return false
+  for (const [prompt, request] of left) if (right.get(prompt) !== request) return false
   return true
 }
 
@@ -249,10 +282,21 @@ function toolInputs(messages: ChatMessage[]) {
   )
 }
 
+/**
+ * A conversation's blocks as they're drawn: what it holds, its last block going on with what the host said ahead of
+ * its next batch, where that was said of the revision it holds.
+ */
+export function shownBlocks(conversation: Pick<AcpConversation, "blocks" | "ahead" | "revision">): Entry[] {
+  const { blocks, ahead } = conversation
+  const last = blocks.at(-1)
+  if (!ahead || ahead.revision !== conversation.revision || (last?.type !== "text" && last?.type !== "thinking")) return blocks
+  return [...blocks.slice(0, -1), { ...last, text: last.text + ahead.more }]
+}
+
 export function projectAcp(conversation: AcpConversation): LiveProjection {
   return projectLive(
     {
-      blocks: conversation.blocks,
+      blocks: shownBlocks(conversation),
       base: conversation.base ?? null,
       baseCoveredBlocks: conversation.baseCoveredBlocks,
       history: conversation.history,
@@ -263,7 +307,7 @@ export function projectAcp(conversation: AcpConversation): LiveProjection {
           ? conversation.session
           : { status: "starting", harness: conversation.harness },
     },
-    conversation.projection,
+    conversation.projection ?? conversation.behind,
     conversation.pendingPrompts
   )
 }

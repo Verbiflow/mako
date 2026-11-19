@@ -923,12 +923,12 @@ function keepField<Key extends keyof Shared>(target: Shared, source: Shared, key
 export function sharedFields<Snapshot extends Shared>(previous: Shared, next: Snapshot): Snapshot {
   let shared: Snapshot | undefined
   for (const key of WHOLE_FIELDS)
-    if (next[key] !== previous[key] && next[key] !== undefined && canonicalJson(next[key]) === canonicalJson(previous[key]))
+    if (next[key] !== previous[key] && next[key] !== undefined && sameCanonical(next[key], previous[key]))
       keepField(shared ??= { ...next }, previous, key)
   if (next.requests !== previous.requests) {
     const requests = next.requests.map((request, index) => {
       const held = previous.requests[index]
-      return request !== held && held?.id === request.id && canonicalJson(request) === canonicalJson(held) ? held : request
+      return request !== held && held?.id === request.id && sameCanonical(request, held) ? held : request
     })
     const unchanged = requests.length === previous.requests.length && requests.every((request, index) => request === previous.requests[index])
     if (unchanged || requests.some((request, index) => request !== next.requests[index]))
@@ -943,6 +943,28 @@ function canonicalJson<Value>(value: Value): string | undefined {
     field instanceof Object && !Array.isArray(field)
       ? Object.fromEntries(Object.entries(field).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
       : field)
+}
+
+/**
+ * Whether two values write the same `canonicalJson`, read through what they share: a list or an object whose parts are
+ * the same objects is the same without writing either, and only the parts that aren't are written out. An Apex's roster
+ * of 226 entries, one of them new, was written whole twice at each batch to learn that it had changed.
+ */
+function sameCanonical<Value>(next: Value, previous: Value): boolean {
+  if (next === previous) return true
+  if (Array.isArray(next) && Array.isArray(previous))
+    return next.length === previous.length && next.every((each, index) => each !== undefined && previous[index] !== undefined && sameCanonical(each, previous[index]))
+  if (plain(next) && plain(previous)) {
+    for (const key of Object.keys(next)) if (next[key] !== undefined && !sameCanonical(next[key], previous[key])) return false
+    for (const key of Object.keys(previous)) if (previous[key] !== undefined && next[key] === undefined) return false
+    return true
+  }
+  return canonicalJson(next) === canonicalJson(previous)
+}
+
+/** An object written key by key, none of them by a `toJSON` of its own. */
+function plain<Value>(value: Value): value is Value & Record<string, Value> {
+  return value instanceof Object && Object.getPrototypeOf(value) === Object.prototype
 }
 
 /** The requests after `batch`, from those the receiver held; `undefined` when the batch changed none. */
@@ -1034,10 +1056,10 @@ export type RosterPatch = { agents?: NativeAgent[]; gone?: string[]; limited?: b
 const agentKey = (agent: NativeAgent) => `${agent.bindingId}\0${agent.nativeId}`
 
 /** Each entry's seal, kept by the entry: an entry is never changed in place, and a roster keeps the ones that didn't move. */
-const entrySeals = new WeakMap<NativeAgent, [number, number]>()
+const entrySeals = new WeakMap<NativeAgent, [number, number, number]>()
 
-/** Every field of an entry, as two independent hashes (FNV-1a and djb2) of its JSON with its keys in order. */
-function entrySeal(agent: NativeAgent): [number, number] {
+/** Every field of an entry, as two independent hashes (FNV-1a and djb2) of its JSON with its keys in order, and that JSON's length. */
+function entrySeal(agent: NativeAgent): [number, number, number] {
   const held = entrySeals.get(agent)
   if (held) return held
   const text = canonicalJson(agent) ?? ""
@@ -1047,7 +1069,7 @@ function entrySeal(agent: NativeAgent): [number, number] {
     fnv = Math.imul(fnv ^ code, 0x01000193)
     djb = (Math.imul(djb, 33) + code) | 0
   }
-  const seal: [number, number] = [fnv >>> 0, djb >>> 0]
+  const seal: [number, number, number] = [fnv >>> 0, djb >>> 0, text.length]
   entrySeals.set(agent, seal)
   return seal
 }
@@ -1084,6 +1106,8 @@ export function applyRosterPatch(held: NativeAgentRoster, patch: RosterPatch): N
 
 /** `next` as what changed of `held`, where that makes `next` exactly, order included, in fewer characters than `next` whole. */
 function rosterPatch(held: NativeAgentRoster, next: NativeAgentRoster): RosterPatch | undefined {
+  const inPlace = rosterPatchInPlace(held, next)
+  if (inPlace !== null) return inPlace
   const heldEntries = new Map(held.agents.map((agent) => [agentKey(agent), agent]))
   const stays = new Set(next.agents.map(agentKey))
   const agents = next.agents.filter((agent) => {
@@ -1098,7 +1122,28 @@ function rosterPatch(held: NativeAgentRoster, next: NativeAgentRoster): RosterPa
     seal: rosterSeal(next),
   }
   if (applyRosterPatch(held, patch)?.agents.length !== next.agents.length) return undefined
-  return JSON.stringify(patch).length < JSON.stringify(next).length ? patch : undefined
+  // The roster whole is as long as its entries, each one's length kept with its seal: written out to be measured, an
+  // Apex's 226 entries were, at every step of any one of them.
+  const whole = next.agents.reduce((sum, agent) => sum + entrySeal(agent)[2] + 1, '{"agents":[],"limited":false}'.length)
+  return JSON.stringify(patch).length < whole ? patch : undefined
+}
+
+/**
+ * `rosterPatch` for the usual move, entries changed where they stand and none come, gone or moved: found by comparing
+ * the two lists place by place, with no index of either built. Null when the rosters differ any other way.
+ */
+function rosterPatchInPlace(held: NativeAgentRoster, next: NativeAgentRoster): RosterPatch | undefined | null {
+  if (held.agents.length !== next.agents.length) return null
+  const agents: NativeAgent[] = []
+  for (let at = 0; at < next.agents.length; at += 1) {
+    const agent = next.agents[at]!, was = held.agents[at]!
+    if (agent === was) continue
+    if (agentKey(agent) !== agentKey(was)) return null
+    if (canonicalJson(agent) !== canonicalJson(was)) agents.push(agent)
+  }
+  const patch: RosterPatch = { ...(agents.length && { agents }), ...(next.limited !== held.limited && { limited: next.limited }), seal: rosterSeal(next) }
+  const whole = next.agents.reduce((sum, agent) => sum + entrySeal(agent)[2] + 1, '{"agents":[],"limited":false}'.length)
+  return JSON.stringify(patch).length < whole ? patch : undefined
 }
 
 /**
@@ -1222,6 +1267,25 @@ export type LiveDriverEvent =
  * its model wrote it at the median, 72 at p95; on the paint's own frame each batch paints as it lands, 30 and 52.
  */
 export const LIVE_FRAME_MS = 50
+
+/**
+ * How often a window on the host's own machine hears the text a conversation's next batch will carry: a paint frame.
+ * The batches themselves keep `LIVE_FRAME_MS` and the long answer's pace, for the journal and every other device.
+ */
+export const LIVE_AHEAD_MS = 16
+
+/**
+ * The text a conversation's next batch will add to its last block, said ahead of that batch to the host's own windows
+ * (`LIVE_AHEAD_MS`): all of it that waits, each time, so one that's missed costs nothing and the next says it again.
+ * It is read only against the revision it names, the one the conversation's last batch made: a window that holds any
+ * other draws nothing of it, and the batch that follows carries the same text for everyone.
+ */
+export interface LiveAhead {
+  id: string
+  revision: number
+  epoch?: string
+  more: string
+}
 
 /** One batch in this many of a conversation is traced, besides each that changes its status, approvals or requests. */
 export const TRACE_EVERY = 25

@@ -28,6 +28,8 @@ export const OPENCODE_IGNORED: ReadonlySet<string> = new Set<OpenCodeEvent["type
   "filesystem.changed",
   "vcs.branch.updated",
   "websearch.updated",
+  // OpenCode's own artifacts changed: 2.3.2 says so with no data as its server starts, beside its catalogs. Mako keeps none.
+  "artifact.updated",
   "installation.updated",
   "installation.update-available",
   "mcp.resources.changed",

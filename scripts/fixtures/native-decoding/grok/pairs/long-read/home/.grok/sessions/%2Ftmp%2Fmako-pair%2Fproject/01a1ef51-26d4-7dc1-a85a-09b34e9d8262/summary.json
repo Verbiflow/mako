@@ -1,0 +1,24 @@
+{
+  "info": {
+    "id": "01a1ef51-26d4-7dc1-a85a-09b34e9d8262",
+    "cwd": "/tmp/mako-pair/project"
+  },
+  "agent_id": "ag1.bb5c42e4d0b4476eadc8b446a1daee1f",
+  "attempt_id": "at1.91952180f3f64558b844aa9c0f6fbe76",
+  "session_summary": "Notes",
+  "created_at": "2026-11-18T15:40:35.414837402Z",
+  "updated_at": "2026-11-18T15:40:35.493100311Z",
+  "num_messages": 6,
+  "num_chat_messages": 7,
+  "current_model_id": "grok-4.6",
+  "next_trace_turn": 1,
+  "chat_format_version": 1,
+  "request_id": "8a4292ff-159c-4295-b0da-5a7112e86907",
+  "grok_home": "/tmp/mako-pair/home/.grok",
+  "last_active_at": "2026-11-18T15:40:35.490721333Z",
+  "generated_title": "Notes",
+  "agent_name": "grok-build-plan",
+  "sandbox_profile": "off",
+  "last_turn_summary": "Notes",
+  "last_turn_summary_prompt_id": "8a4292ff-159c-4295-b0da-5a7112e86907"
+}

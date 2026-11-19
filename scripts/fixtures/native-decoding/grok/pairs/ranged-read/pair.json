@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.88"
+    "version": "1.0.89"
   },
   "about": "Read only lines 10 to 20 of log.md with your file read tool, once, and tell me the last line you were shown. Don't run commands. A read of lines 10 to 20 of a long file, so a harness's own cut can be told from one the model asked for.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1eb19-5127-7993-be3a-20cf5df7f568/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1ef51-2829-7071-9669-e0b831df3cf5/updates.jsonl",
       "known": []
     }
   ]

@@ -868,7 +868,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       description: [
         `Answer what one of this Thread's ${FIN_WORD}s waits on: the question its report asks, or its harness's own question or approval. The ${FIN_WORD} goes on at once.`,
         "Answer within your own access: an approval only when this Thread is on full access, a question on any.",
-        "Leave it to the person (person: true) when it's theirs to decide; it reaches them on every device with its options. One you leave unanswered for a minute goes to the person too.",
+        "Leave it to the person (person: true) when it's theirs to decide; it reaches them on every device with its options. One you leave unanswered for a minute goes to the person too, even if you acted on it another way: a message to the Fin isn't an answer.",
       ].join(" "),
       fields: {
         to: `The ${FIN_WORD}'s name (fin:<name>) or Thread ID.`,

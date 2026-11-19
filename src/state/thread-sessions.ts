@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react"
+import { everyWhileShown } from "@/lib/window-shown"
 import type { ThreadGroup } from "@mako/host/contracts/thread-groups"
 import type { OpenedBy, SessionFacts, SessionState } from "@mako/host/contracts/session-choice"
 import { laterPrompt } from "@mako/host/contracts/worked-at"
@@ -269,8 +270,7 @@ export function sessionPromptedAt(state: AcpState, session: string): number | un
 export function useMinute(): number {
   const [now, setNow] = useState(() => Date.now())
   useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 60_000)
-    return () => clearInterval(timer)
+    return everyWhileShown(60_000, () => setNow(Date.now()))
   }, [])
   return now
 }

@@ -4,7 +4,7 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, rmdir, unl
 import { tmpdir } from "node:os"
 import { dirname, join, relative, resolve } from "node:path"
 import { z } from "zod"
-import { contentRef, diffLines, splitLines, type Attribution, type CheckoutShares, type ChangeClass, type Partition, type PartitionFile, type Share } from "../attribution/index.js"
+import { contentRef, diffLines, splitLines, type Attribution, type CheckoutShares, type ChangeClass, type Partition, type PartitionFile, type PartitionOptions, type Share } from "../attribution/index.js"
 import type { MoveOutcome, MoveShare, MoveShares } from "../contracts/workspace-moves.js"
 import { copyGitIndex } from "./index-copy.js"
 import { mapLimit } from "@mako/protocol/map-limit"
@@ -37,7 +37,11 @@ import { mapLimit } from "@mako/protocol/map-limit"
  */
 
 /** What a move needs of the attribution journal. */
-export type MoveLedger = Pick<Attribution, "settled" | "track" | "head" | "partition" | "shares" | "mako"> & Partial<Pick<Attribution, "readBack" | "moved">>
+export type MoveLedger = Pick<Attribution, "settled" | "track" | "head" | "mako"> & Partial<Pick<Attribution, "readBack" | "moved">> & {
+  /** These two may answer later: the host's reads them on the journal's reader (`partitionOffLoop`, `sharesOffLoop`), never on its own thread. */
+  partition(checkout: string, thread: string, options?: PartitionOptions): Partition | Promise<Partition>
+  shares(checkout: string, thread: string): CheckoutShares | Promise<CheckoutShares>
+}
 
 /** How long a move, or its card, waits on sessions' records naming lines nobody is sure of. */
 const READ_BACK_MS = 3_000
@@ -346,10 +350,15 @@ async function planRepository(input: MoveInput, member: MoveInput["members"][num
       const roots = new Set(result.roots.filter((root) => root.path === repoRoot).map((root) => root.root))
       return result.files.filter((file) => roots.has(file.root))
     }
-    const moving = ledger.partition(repoRoot, thread, { bring: input.bring })
+    // Asked together, so the reader answers the three one after another from the same journal.
+    const [moving, bringing, divided] = await Promise.all([
+      ledger.partition(repoRoot, thread, { bring: input.bring }),
+      input.bring ? undefined : ledger.partition(repoRoot, thread, { bring: true }),
+      ledger.shares(repoRoot, thread),
+    ])
     taken = own(moving)
-    all = input.bring ? taken : own(ledger.partition(repoRoot, thread, { bring: true }))
-    shares = ledger.shares(repoRoot, thread)
+    all = bringing ? own(bringing) : taken
+    shares = divided
     whole = moving.whole
   } else {
     const paths = await everything(git, repoRoot)
@@ -1103,7 +1112,7 @@ export async function previewShares(git: Git, ledger: MoveLedger | undefined, pr
   if (ledger) {
     const found: CheckoutShares[] = []
     for (const root of roots) await ledger.readBack?.(root, READ_BACK_MS)
-    for (const root of roots) found.push(ledger.shares(root, thread))
+    for (const root of roots) found.push(await ledger.shares(root, thread))
     return moveShares(project, found)
   }
   const paths = (await Promise.all(roots.map(async (root) => (await everything(git, root)).map((path) => join(root, path))))).flat()

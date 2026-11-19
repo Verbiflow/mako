@@ -193,7 +193,7 @@ export function resumesFailedAfterAnswer(result: SdkRunResult): boolean {
 
 type Engine = LiveEngineApi<Live>
 
-function promptImages(attachments: readonly PromptAttachment[]): SdkImage[] {
+export function promptImages(attachments: readonly PromptAttachment[]): SdkImage[] {
   const images: SdkImage[] = []
   for (const attachment of attachments)
     if (attachment.data && attachment.mimeType.startsWith("image/"))
@@ -202,7 +202,7 @@ function promptImages(attachments: readonly PromptAttachment[]): SdkImage[] {
 }
 
 /** Files outside the SDK image transport retain typed metadata in native history. */
-function promptText(text: string, attachments: readonly PromptAttachment[]): string {
+export function promptText(text: string, attachments: readonly PromptAttachment[]): string {
   const files = attachments.filter((attachment) => attachment.path && !(attachment.data && attachment.mimeType.startsWith("image/")))
   if (files.length === 0) return text
   return appendPromptAttachments(text, files.map((file) => ({ name: file.name, mimeType: file.mimeType, path: file.path! })))

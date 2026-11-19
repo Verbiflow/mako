@@ -5,8 +5,8 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
-import { join } from "node:path"
-import { quietFoldersOf, watchTree } from "@mako/host/workspaces/tree-watcher"
+import { dirname, join } from "node:path"
+import { holdsTemporaryFolder, quietFoldersOf, watchTree } from "@mako/host/workspaces/tree-watcher"
 import { childBackend } from "@mako/host/workspaces/watch-backend"
 import { watchOutsideGitDir } from "@mako/host/workspaces/git-dir-watch"
 
@@ -31,6 +31,13 @@ async function drained(): Promise<void> {
 try {
   assert.equal(watchTree(gitRunner, backend, "/", () => {}, () => {}), undefined, "the filesystem root isn't watched")
   assert.equal(watchTree(gitRunner, backend, homedir(), () => {}, () => {}), undefined, "nor the home folder")
+  const temporary = realpathSync(tmpdir())
+  assert.equal(watchTree(gitRunner, backend, tmpdir(), () => {}, () => {}), undefined, "nor the temporary folder")
+  assert.equal(watchTree(gitRunner, backend, "/tmp", () => {}, () => {}), undefined, "nor the shared one, by its link")
+  assert.equal(watchTree(gitRunner, backend, dirname(temporary), () => {}, () => {}), undefined, "nor a folder holding one")
+  assert.ok(holdsTemporaryFolder(temporary) && holdsTemporaryFolder(dirname(temporary)) && holdsTemporaryFolder("/"), "a temporary folder and the folders above it are held")
+  assert.equal(holdsTemporaryFolder(root), false, "a scratch checkout inside one is watched")
+  assert.equal(holdsTemporaryFolder(`${temporary}-sibling`), false, "a folder whose name only starts the same isn't one")
 
   const many = join(root, "many")
   for (const name of ["node_modules", "dist", ".next", "target"]) mkdirSync(join(many, name), { recursive: true })
@@ -96,7 +103,7 @@ try {
   assert.equal(insideHeard, 0, "a Git directory inside the folder is left to the tree watch")
   await outside.close()
   await inside.close()
-  console.log("tree watcher: refuses / and home, excludes eight quiet folders, drops dependency writes, reports source writes; a worktree's commits are heard through its outside Git directory, and its reads are not")
+  console.log("tree watcher: refuses /, home, the temporary folders and folders holding one (not a checkout inside), excludes eight quiet folders, drops dependency writes, reports source writes; a worktree's commits are heard through its outside Git directory, and its reads are not")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

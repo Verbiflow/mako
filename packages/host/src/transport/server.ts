@@ -8,7 +8,7 @@ import { once } from "node:events"
 import { chmod } from "node:fs/promises"
 import { packageLoads } from "@mako/lazy"
 import { z } from "zod"
-import { saidWindowForm, type WindowLiveForm } from "@mako/protocol/live-form"
+import { ROSTER_LIVE_FORM, saidWindowForm, type WindowLiveForm } from "@mako/protocol/live-form"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import type { TerminalEvent } from "../contracts/terminal.js"
 import { CORRELATION_HEADER, CorrelationIdSchema, LIVE_FORM_HEADER, RuntimeCallSchema, decodeRuntimeArgs, runtimeEventRouting, runtimeFailure, type RuntimeInfo } from "../contracts/runtime.js"
@@ -16,12 +16,22 @@ import { encodeRuntimeEvent, payloadFor, runtimeEventLine, runtimeSuccessBody, t
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
 import { historyChangedNotice } from "./gateway.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { topic } from "../base/topic.js"
 import { failedCallWords } from "./failed-calls.js"
 import { filePolicyHeaders } from "../base/file-policy.js"
 import type { SecretKeyHandover } from "../base/host-secrets.js"
 import { HostJobs, type JobDemand } from "../base/host-jobs.js"
 import { DESKTOP_PATH } from "../contracts/desktop-channel.js"
 import { CONTROL_VIDEO_BATCH_TYPE, PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
+
+/** Each call as it arrives, its arguments decoded and before its method runs: when the host heard a send. */
+export const hostCalls = topic<{ channel: string; args: readonly unknown[] }>("mako:host-call")
+
+/** Each call as its answer, or its refusal, is written back: when the host was done with it (`npm run bench:actions`). */
+export const hostAnswers = topic<{ channel: string; args: readonly unknown[]; refused?: true }>("mako:host-answer")
+
+/** Each event line as it is written to a subscriber's stream: when a batch left the host for a window. */
+export const streamWrites = topic<{ client: string; type: string | undefined; conversation: string | undefined; line: string }>("mako:stream-write")
 
 /** How the host runs one call: the encoded value of `channel(...args)`, on behalf of `client`. */
 export type HostInvoke = (channel: string, args: unknown[], client?: string, history?: boolean, correlationId?: string) => Promise<EncodedValue>
@@ -36,6 +46,12 @@ const STREAM_BEHIND_BYTES = 8 * 1024 * 1024
  * batches add only a notice, so only a reader that has stopped reading gets here.
  */
 const STREAM_LOST_BYTES = 64 * 1024 * 1024
+/**
+ * What a window's stream may hold unsent and still be told what waits ahead of a batch (`windowEvent`). A window that
+ * reads as it's written holds nothing; one that doesn't hears the batches alone, at their own pace, until it has caught
+ * up, so what's said ahead never adds to what a slow reader makes the host hold.
+ */
+const AHEAD_HOLD_BYTES = 64 * 1024
 const WorkspaceClientSchema = z.string().uuid().optional()
 
 /** One client's subscription to `/events`. */
@@ -49,6 +65,11 @@ type EventStream = {
   eventLimit: number
   live: WindowLiveForm
   openedAt: number
+  /**
+   * Its window said nobody can see it (`windowShown`): it's told nothing that exists only to be painted (`sendWindows`)
+   * until it says it shows again. A stream that never says is shown, as every window before this was.
+   */
+  hidden?: boolean
   /**
    * Past `STREAM_BEHIND_BYTES`, until it catches up: the notice to read each conversation again, at the latest revision
    * it missed. Never the batch itself: a stream's memory is only what `heldBy` counts.
@@ -281,11 +302,14 @@ export async function startWebHost(
     // Whether the call reached its method, which says its own failure (`FailedCalls`); one refused before it is said here.
     let reached = false
     let called = "unread"
+    let taken: readonly unknown[] = []
     void readRequest(request)
       .then(async (call) => {
         const { channel, attempt } = call
         called = channel
         const args = decodeRuntimeArgs(call.args)
+        taken = args
+        if (hostCalls.heard) hostCalls.publish({ channel, args })
         if (channel === "mako:control-preview" && request.headers.accept === PREVIEW_MEDIA_TYPE) {
           if (!preview) throw new Error("Preview delivery requires a newer Mako host. Existing agents have not been restarted.")
           if (media.size >= 16 || [...media.values()].filter(owner => owner === clientId).length >= 2)
@@ -336,8 +360,10 @@ export async function startWebHost(
         // close() may already have answered this call with the farewell.
         if (response.destroyed || response.headersSent) return
         response.writeHead(200, { "content-type": "application/json" }).end(runtimeSuccessBody(value))
+        if (hostAnswers.heard) hostAnswers.publish({ channel, args })
       })
       .catch((error) => {
+        if (reached && hostAnswers.heard) hostAnswers.publish({ channel: called, args: taken, refused: true })
         if (!reached) hostWarn("rpc", "a call was refused before its method", { channel: called, client: clientId, correlationId, ...failedCallWords({ error }) })
         if (!response.destroyed && !response.headersSent)
           response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(runtimeFailure(error)))
@@ -391,7 +417,8 @@ export async function startWebHost(
     const lineOf = (payload: string) => {
       let held = lines.get(payload)
       if (!held) {
-        const line = runtimeEventLine(channel, { ...event, payload })
+        // Named field by field: a copy of the event would write out every form it has (`encodeRuntimeEvent`).
+        const line = runtimeEventLine(channel, { type: event.type, conversation: event.conversation, payload })
         lines.set(payload, (held = { line, bytes: Buffer.byteLength(line) }))
       }
       return held
@@ -425,10 +452,30 @@ export async function startWebHost(
         if (holds(stream, owner, Buffer.byteLength(notice()!))) stream.write(notice()!)
         continue
       }
-      if (holds(stream, owner, bytes)) stream.write(line)
+      if (!holds(stream, owner, bytes)) continue
+      stream.write(line)
+      if (streamWrites.heard) {
+        const { type, conversation } = runtimeEventRouting(event)
+        streamWrites.publish({ client: owner.client, type, conversation, line })
+      }
+    }
+  }
+  /**
+   * An event only this host's own windows hear (a stream that says the window's live form, `ROSTER_LIVE_FORM`, which
+   * nothing else says), and only while they keep up: each one stands alone and is said again, so it's never queued
+   * behind what a window hasn't read.
+   */
+  const sendWindows = (event: Extract<HostEvent, { type: "live-ahead" }>) => {
+    let line: string | undefined
+    for (const [stream, owner] of streams) {
+      if (owner.live < ROSTER_LIVE_FORM || owner.hidden || stream.destroyed || owner.missed || stream.writableLength > AHEAD_HOLD_BYTES) continue
+      line ??= runtimeEventLine("event", { type: event.type, conversation: event.ahead.id, payload: JSON.stringify(event) })
+      stream.write(line)
+      if (streamWrites.heard) streamWrites.publish({ client: owner.client, type: event.type, conversation: event.ahead.id, line })
     }
   }
   return {
+    windowEvent: sendWindows,
     clients: () => [...new Set([...streams.values()].filter((entry) => !entry.observer).map((entry) => entry.client))],
     /** The newest real window stream for this client, replaced even when a reload reuses its client ID. */
     windowStream: (client: string): string | undefined => {
@@ -437,6 +484,19 @@ export async function startWebHost(
       let id: string | undefined
       for (const stream of streams.values()) if (stream.client === client && stream.current && !stream.observer) id = stream.id
       return id
+    },
+    /**
+     * A window saying whether anyone can see it, for its newest stream alone: a stream opened after this is shown
+     * until its window says otherwise. False when this client has no window stream to mark.
+     */
+    windowShown: (client: string, shown: boolean): boolean => {
+      // Anonymous readers share "web": one of them hidden says nothing of the others.
+      if (client === "web") return false
+      let found: EventStream | undefined
+      for (const stream of streams.values()) if (stream.client === client && stream.current && !stream.observer) found = stream
+      if (!found) return false
+      found.hidden = !shown
+      return true
     },
     event: (event: HostEvent, client?: string) => send("event", encodeRuntimeEvent(event), client),
     /** Another host's conversation event, as that host encoded it. */
