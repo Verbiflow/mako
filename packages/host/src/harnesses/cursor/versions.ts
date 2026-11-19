@@ -23,6 +23,6 @@ export const CURSOR_VERSIONS: HarnessVersions = {
   feed: { npm: "@cursor/sdk" },
   checked: {
     on: "2026-11-18",
-    how: "@cursor/sdk 1.4.0 in Mako's lockfile: native-tools/cursor-1.4.0.json, cursor-concepts.json and 18 fresh supported live/store pairs; patched ESM/CJS blob, stream, transcript and retry controls",
+    how: "@cursor/sdk 1.4.1 in Mako's lockfile: native-tools/cursor-1.4.1.json, cursor-concepts.json, and its six patches found by shape in the ESM/CJS bundles with test:cursor-child passing; the 18 live/store pairs are still 1.4.0's until they're recorded on Cursor's own model",
   },
 }

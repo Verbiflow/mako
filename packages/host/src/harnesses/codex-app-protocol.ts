@@ -142,7 +142,23 @@ function drawRolloutOnce(context: ProtocolContext): void {
 }
 
 /** A streamed delta reads the rollout this often at most: a frame, as the windows see what it would draw. */
-const DELTA_READ_MS = 50
+export const DELTA_READ_MS = 50
+
+/**
+ * Whether every line of a stdout chunk is a streamed delta's notification, read from its first bytes: such a chunk
+ * reads the rollout only a frame apart (`drawRolloutPaced`). A chunk that begins or ends inside a line, or holds
+ * anything else, says no, and is treated as one whose handling may read the rollout.
+ */
+export function onlyDeltas(chunk: Buffer): boolean {
+  if (!chunk.length || chunk[chunk.length - 1] !== 0x0a) return false
+  for (let start = 0; start < chunk.length;) {
+    const end = chunk.indexOf(0x0a, start)
+    if (end > start && !DELTA_LINE.test(chunk.toString("latin1", start, Math.min(end, start + 160)))) return false
+    start = end + 1
+  }
+  return true
+}
+const DELTA_LINE = /^\{"(?:jsonrpc":"2\.0","|)method":"[^"]*[dD]elta"/
 
 /**
  * The rollout read for a streamed delta, when none was read in the last frame. Deltas come a token at a time, each in

@@ -28,6 +28,7 @@ import type { LiveCheckpoints } from "./live-checkpoints.js"
 import { contextPrompt } from "./live-context.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
 import { liveStages } from "./live-stages.js"
+import { stagedCall, stagedWait } from "../base/live-steps.js"
 import type { LiveTransfers } from "./live-transfers.js"
 import { baseUnread } from "./base-source.js"
 import { turnStart, usageMark } from "./live-settlement.js"
@@ -315,9 +316,12 @@ export class LiveDispatch {
    */
   private overBudget(resident: Resident, request: LiveRequest): boolean {
     const now = Date.now()
+    // A digest its harness refused before taking it (`not-accepted`) woke nobody: it keeps when it was tried, and isn't
+    // counted, or its own next try would wait out the minute it never spent.
     const recent = resident.snapshot.requests.flatMap((candidate) => {
       const at = candidate.digest?.sentAt
-      return at !== undefined && at > now - MINUTE_MS ? [{ at, asks: digestAsks(candidate.digest!.notices) }] : []
+      const refused = candidate.nativeDelivery?.evidence.kind === "not-accepted"
+      return at !== undefined && at > now - MINUTE_MS && !refused ? [{ at, asks: digestAsks(candidate.digest!.notices) }] : []
     }).sort((left, right) => left.at - right.at)
     if (recent.length < WAKES_PER_MINUTE) return false
     let at = recent[recent.length - WAKES_PER_MINUTE]!.at + MINUTE_MS
@@ -357,6 +361,8 @@ export class LiveDispatch {
       return
     }
     if (actions.blocks(resident)) return
+    // Nor while an access change is on its way to the harness: `setMode` drains again once it answers.
+    if (resident.modeChanging) return
     // Queued work stays queued, not held: cancelling a move starts it again.
     if (!this.access.moves.executes(resident)) return
     // Nor while this Mac checks with its account after it was away: its Session may have continued in the cloud.
@@ -612,7 +618,8 @@ export class LiveDispatch {
         // A continuation says what moved since the cut, read here too, so nothing crosses the read (`TurnContinuation.since`).
         const since = request.continues?.since
         const moved = since !== undefined ? await cutAccount(cwd, since, request.continues!.reason, Date.now()).catch(() => undefined) : undefined
-        const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
+        const toldSince = told?.since
+        const checkout = toldSince !== undefined ? checkoutAccount(await stagedWait(resident.snapshot.session.id, "interruption account", () => checkoutSince(cwd, toldSince)).catch(() => [])) : undefined
         const apex = !asWritten && (dependencies.agents?.()?.isApex(resident.snapshot.session.id) ?? false)
         const instructions = asWritten || !dependencies.controlInstructions ? undefined : await dependencies.controlInstructions(active, resident.snapshot.session.id, { role: apex ? "apex" : "thread" })
         const rules = asWritten ? {} : (dependencies.agents?.()?.ruleLines(resident.snapshot.session.id) ?? {})
@@ -654,8 +661,8 @@ export class LiveDispatch {
         // Where writes are held the message went ahead of its checkpoint; one whose submission runs the person's
         // code by itself waits for it here, as it is worded and before it is admitted.
         const held = heldSubmission(dependencies.writeHolds, driver.firstWrite?.submitRuns, active, text)
-        if (held) await held
-        return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
+        if (held) await stagedWait(resident.snapshot.session.id, "held submission", () => held)
+        return stagedCall(resident.snapshot.session.id, "driver.prompt", () => driver.prompt(active, text, request.attachments, request.tuning, dispatch))
       })
       .catch(async (error) => {
         // The harness may not have heard the note: the next prompt carries it whole, the roster it carried too.

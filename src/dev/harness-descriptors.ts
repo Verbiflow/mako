@@ -79,7 +79,7 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       },
       "backgroundStop": {
         "state": "implemented",
-        "via": "Stop interrupts and closes the Claude process, with or without a running turn, which ends its background tasks; the next prompt resumes the session. One task stops alone through the SDK's `stopTask`, from its row in the Agents panel."
+        "via": "Stop interrupts the turn, drops what the process had queued and stops each background task (`interrupt` with `cancel_queued`, `stop_task`), with or without a running turn, and keeps the process; a CLI that can't, or doesn't within two seconds, has its process closed instead, which ends them, and the next prompt resumes the session. One task stops alone through the SDK's `stopTask`, from its row in the Agents panel."
       },
       "contextBreakdown": {
         "state": "implemented",

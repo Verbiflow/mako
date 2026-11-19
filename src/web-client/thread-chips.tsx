@@ -8,7 +8,6 @@ import { rankModels } from "@/components/composer/model-rank"
 import { optionLabel } from "@/components/composer/settings-source"
 import { useComposerSettings, type ComposerSettingsView } from "@/components/composer/use-composer-settings"
 import { Spinner } from "@/components/ui/spinner"
-import { getMako } from "@/lib/bridge"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { chooseComposerModel, chooseComposerOption, resolveComposerSettings, settingsTargetKey } from "@/state/composer-settings"
@@ -19,7 +18,7 @@ import { useWebClient } from "./client"
 import { WebHarnessIcon } from "./harness-icon"
 import { webHarnessLabel } from "./labels"
 import { Sheet, SheetScroll } from "./sheet"
-import { setPending, useSwitching } from "./switching"
+import { switchLiveMode, useSwitching } from "@/state/live-mode"
 import { chipReading, effortControl, modeLabel, modeSummary, riskyMode, type SettingsReading } from "./thread-settings"
 
 /** Past this many models the sheet offers a search, as the desk's picker does. */
@@ -316,14 +315,8 @@ function Segmented({ label, choices, current, onChoose }: { label: string; choic
 
 /** Changes the running Session's access on its owner now; a refusal says why where it was asked. */
 async function switchAccess(conversation: string, mode: LiveSessionMode): Promise<void> {
-  setPending(conversation, mode.id)
-  try {
-    await getMako().liveSetMode(conversation, mode.id)
-  } catch (error) {
-    refused(modeLabel(mode), errorMessage({ error }))
-  } finally {
-    setPending(conversation, undefined)
-  }
+  const change = await switchLiveMode(conversation, mode.id)
+  if (change.kind === "refused") refused(modeLabel(mode), change.reason)
 }
 
 /**

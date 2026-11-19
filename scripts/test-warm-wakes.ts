@@ -29,7 +29,9 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
  * - memory pressure lowering it to the floor, and the excess hibernating then, without a turn ending;
  * - a wake that starts as a message is on its way: `agents_send` to a sleeping Fin and a digest queued for a sleeping
  *   Apex, and none for a message that's refused or held;
- * - a wake inside the idle window starting with the Thread's values its launch read, and one past it reading again.
+ * - a wake inside the idle window starting with the Thread's values its launch read, and one past it reading again;
+ * - a harness's own idle window (`idleWindow`, Cursor's two minutes): its providers rest that long, prewarm keeps one
+ *   warm while the person types, and the first key after it hibernated wakes it.
  */
 const GB = 1024 ** 3
 const root = mkdtempSync(join(tmpdir(), "mako-warm-wakes-"))
@@ -440,6 +442,60 @@ async function wakeReusesLaunchValues(): Promise<void> {
   }
 }
 
+// ── A harness that declares its own idle window rests warm that long, and no longer; prewarm keeps one warm while the
+// person types, and the first key after it slept wakes it. A harness that declares none keeps the host's window.
+async function harnessIdleWindow(): Promise<void> {
+  const folder = mkdtempSync(join(root, "window-"))
+  const closed: string[] = []
+  const starts: { id: string; resume?: string; environment?: ThreadEnvironment }[] = []
+  let owner: LiveConversations
+  const lasting = restingDriver(() => owner, folder, closed, starts)
+  const brief: ProviderLiveDriver = {
+    ...lasting,
+    provider: "brief-provider",
+    idleWindow: { ms: 400, evidence: "Injected driver fixture" },
+    start: async (cwd, options) => ({ ...(await lasting.start(cwd, options)), harness: "brief-provider" }),
+  }
+  owner = new LiveConversations({
+    appPath: folder, root: join(folder, "journals"), driver: (provider) => (provider === "brief-provider" ? brief : lasting), history: async () => null, emit: () => {},
+    providerWarmLimit: 8,
+    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
+  })
+  const connection = (id: string) => owner.snapshot(id)?.session.connection
+  const seed = async (provider: string, id: string) => {
+    await owner.start(provider, folder, { conversationId: id, title: "A thread" })
+    const request = randomUUID()
+    owner.submit(id, request, "seed")
+    await until("a seed turn", () => owner.snapshot(id)?.requests.some((asked) => asked.id === request && asked.status === "completed") === true)
+  }
+  const short = randomUUID()
+  const long = randomUUID()
+  try {
+    await seed("test-provider", long)
+    await seed("brief-provider", short)
+    const residency = owner.residency()
+    assert.equal(residency.idleMs, 10 * 60_000, "the host's window is still ten minutes")
+    assert.deepEqual(residency.idleWindows, { "brief-provider": 400 }, "Diagnostics names the harness resting for a window of its own")
+    // Typing for three windows: each signal restarts the window, as the composer's do every half minute.
+    const typingUntil = Date.now() + 1_200
+    while (Date.now() < typingUntil) {
+      assert.equal(owner.prewarm(short), "kept-warm")
+      await pause(150)
+      assert.equal(connection(short), "connected", "a provider the person is writing to doesn't hibernate under the draft")
+    }
+    await until("the brief harness's provider to hibernate on its own window", () => connection(short) === "hibernated", 5_000)
+    assert.deepEqual(closed, [short])
+    assert.equal(connection(long), "connected", "the other harness keeps the host's window")
+    // The first key after it slept wakes it, so its reopen overlaps the typing.
+    assert.equal(owner.prewarm(short), "waking")
+    await until("it to wake", () => connection(short) === "connected")
+    assert.equal(starts.at(-1)?.resume, short, "it resumes its own native session")
+    console.log("idle window: a harness's own window hibernates its provider after it, prewarm holds it while typing and wakes it after, another harness keeps ten minutes")
+  } finally {
+    await owner.stop()
+  }
+}
+
 // ── A held credential read kept standing while a conversation is warm, by a check that never reads the secret again.
 async function heldReadsStayFresh(): Promise<void> {
   let now = 1_000
@@ -803,31 +859,50 @@ async function stopCrossesAnEarlyWake(): Promise<void> {
   await w.close()
 }
 
-// ── A digest queued for a sleeping Apex wakes it through its burst's window, and goes when the window ends.
+// ── A lone report wakes a sleeping Apex and goes at once; the next, within its window after that one went, is held
+// for the rest of the window and wakes the Apex through it, going when the window ends.
 async function digestWakesASleepingApex(): Promise<void> {
   const f = await family()
   const { w } = f
-  await f.sleep(f.apex.conversation)
-  const before = w.prompts.length
-  // The Fin works again and reports: its Apex, idle and asleep, is owed a digest.
+  const apex = f.apex.conversation
+  const digestsSince = (before: number) => w.prompts.slice(before).filter((prompt) => prompt.conversation === apex)
+  await f.sleep(apex)
+  // Past the window after the digest its Fin's first turn sent, so the next report is a lone one.
+  await pause(WAKE_COALESCE_MS + 100)
+  f.calls.length = 0
+  let before = w.prompts.length
+  // The Fin works again and reports: its Apex, idle and asleep, is owed a digest, and hears it at once.
   const sent = await w.agents.send(f.apex.caller, { to: "labels", text: "Label the rest", clientKey: randomUUID() })
   assert.ok(!("refused" in sent), JSON.stringify(sent))
-  await until("the digest to be queued", () => f.calls.some((call) => call.what === "expect" && call.conversation === f.apex.conversation))
-  const expected = f.calls.find((call) => call.what === "expect" && call.conversation === f.apex.conversation)!
-  const admitted = f.calls.find((call) => call.what === "submit" && call.conversation === f.apex.conversation)!
+  await until("the first digest to go", () => digestsSince(before).length > 0)
+  const lone = f.calls.find((call) => call.what === "submit" && call.conversation === apex)!
+  const first = digestsSince(before)[0]!
+  assert.ok(!f.calls.some((call) => call.what === "expect" && call.conversation === apex), "a lone report is held for no window to wake through")
+  assert.ok(first.at - lone.at < 1_000, `a lone report goes at once (${first.at - lone.at} ms)`)
+  assert.equal(f.resumes(apex), 1, "its own submit woke the Apex")
+  // Right after it, asleep again: the next report is held until the window after the first went, and wakes it through it.
+  await w.settle(40, 20_000)
+  await f.sleep(apex)
+  f.calls.length = 0
+  before = w.prompts.length
+  const again = await w.agents.send(f.apex.caller, { to: "labels", text: "Label the rest again", clientKey: randomUUID() })
+  assert.ok(!("refused" in again), JSON.stringify(again))
+  await until("the digest to be queued", () => f.calls.some((call) => call.what === "submit" && call.conversation === apex))
+  const expected = f.calls.find((call) => call.what === "expect" && call.conversation === apex)
+  const admitted = f.calls.find((call) => call.what === "submit" && call.conversation === apex)!
+  assert.ok(expected, `the next digest, ${admitted.at - first.at} ms after the first went, is held for its window and wakes the Apex through it`)
   assert.equal(expected.request, admitted.request, "the wake is for the digest just queued")
   assert.ok(f.calls.indexOf(admitted) < f.calls.indexOf(expected), "and starts once the queue has taken it")
   assert.equal(expected.said, "waking")
-  await until("the Apex to wake", () => f.connection(f.apex.conversation) === "connected")
+  await until("the Apex to wake", () => f.connection(apex) === "connected")
   const wokeAt = Date.now()
-  assert.equal(w.live.snapshot(f.apex.conversation)?.requests.find((asked) => asked.id === expected.request)?.status, "held", "awake inside the window, with the digest still held")
-  await until("the digest to go", () => w.prompts.slice(before).some((prompt) => prompt.conversation === f.apex.conversation))
-  const digest = w.prompts.slice(before).find((prompt) => prompt.conversation === f.apex.conversation)!
-  assert.ok(digest.at - expected.at >= WAKE_COALESCE_MS - 100, `the digest still waits out its window (${digest.at - expected.at} ms)`)
-  assert.ok(wokeAt < digest.at - 1_000, `the provider was up ${digest.at - wokeAt} ms before the digest went`)
-  assert.equal(f.resumes(f.apex.conversation), 1, "one resume serves the early wake and the digest")
+  await until("the digest to go", () => digestsSince(before).length > 0)
+  const digest = digestsSince(before)[0]!
+  assert.ok(digest.at - first.at >= WAKE_COALESCE_MS - 100, `the digest waits out its window after the last one went (${digest.at - first.at} ms)`)
+  assert.ok(wokeAt <= digest.at, `the provider was up ${digest.at - wokeAt} ms before the digest went`)
+  assert.equal(f.resumes(apex), 2, "one resume serves the early wake and the digest")
   await w.settle()
-  console.log(`digest: its Apex woke ${wokeAt - expected.at} ms after it was queued and ${digest.at - wokeAt} ms before it went`)
+  console.log(`digest: a lone report went ${first.at - lone.at} ms after it was queued; the next waited ${digest.at - first.at} ms after it, its Apex up ${digest.at - wokeAt} ms before it went`)
   await w.close()
 }
 
@@ -839,6 +914,7 @@ try {
   await watchReadsWhilePastFloor()
   await pressureShrinksThePool()
   await wakeReusesLaunchValues()
+  await harnessIdleWindow()
   await heldReadsStayFresh()
   await prewarmBeginsTheAccountCheck()
   await expectRefusesWhatWontGo()

@@ -44,9 +44,9 @@ const RUN_LOST: StreamDifference = {
 export const CURSOR_VOCABULARY = defineVocabulary({
   harness: "cursor",
   checked: {
-    version: "SDK 1.4.0",
-    on: "2026-11-17",
-    against: "@cursor/sdk ToolType and its tool-call schema (scripts/fixtures/native-tools; 1.0.40 added computerUse, 1.2.0, 1.3.1 and 1.4.0 add none), and Cursor's SDK, CLI and Desktop stores through audit:tools",
+    version: "SDK 1.4.1",
+    on: "2026-11-18",
+    against: "@cursor/sdk ToolType and its tool-call schema (scripts/fixtures/native-tools; 1.0.40 added computerUse, 1.2.0, 1.3.1, 1.4.0 and 1.4.1 add none), and Cursor's SDK, CLI and Desktop stores through audit:tools",
   },
   mcp: ["s-t"],
   // `cursorUnfinishedToolNote` for a call the SDK's hooks refused: it reports no result of its own.
@@ -84,9 +84,9 @@ export const CURSOR_VOCABULARY = defineVocabulary({
   },
   concepts: {
     checked: {
-      version: "SDK 1.4.0",
-      on: "2026-11-17",
-      against: "@cursor/sdk 1.4.0 types and bundle (settingSources loaders, hook enum, skill and agent folders), cursor.com/docs (rules, hooks, skills, subagents), and the request context its agent sends, through harness:self-report",
+      version: "SDK 1.4.1",
+      on: "2026-11-18",
+      against: "@cursor/sdk 1.4.1 types and bundle (settingSources loaders, hook enum, skill and agent folders), cursor.com/docs (rules, hooks, skills, subagents), and the request context its agent sends, through harness:self-report",
     },
     instructions: {
       files: ["AGENTS.md", "CLAUDE.md", "CLAUDE.local.md", ".cursorrules"],
