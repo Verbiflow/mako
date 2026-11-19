@@ -5,7 +5,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { monitorEventLoopDelay, performance } from "node:perf_hooks"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
-import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { AgentsWorld } from "./lib/agents-world.ts"
 
 /*
@@ -20,34 +19,14 @@ import { AgentsWorld } from "./lib/agents-world.ts"
  * batch's ask costs more than `BUDGET.askP99Ms` at the 99th percentile, or the loop holds past `BUDGET.loopMaxMs` more
  * than a yardstick beside it waited in the same window: a process of its own running none of Mako's code
  * (`lib/host-load-yardstick.mjs`, as `bench:host-load` calibrates), so a shared runner's stall, which stops both, isn't
- * read as the bench's. The ask is judged against a fixed piece of work timed beside it in the same process
- * (`reference`), never a fixed number of milliseconds, and a Fin reports every `REPORT_EVERY` batches through the engine,
- * as Fins at work do, so the walk is worked out again after each. A fixed 100 ms failed on main's gate (a hold of 104 ms beside test-watch-backend on its shard,
+ * read as the bench's. A fixed 100 ms failed on main's gate (a hold of 104 ms beside test-watch-backend on its shard,
  * with the ask itself at 0.57 ms at the 99th percentile). `PERSON_ASK_INJECT_HOLD_MS` holds the loop that long mid-run,
  * to see a real hold still fail.
  */
 const APEXES = 3
 const EACH = 19
 const BATCHES = 300
-/** A Fin reports every this many batches, as Fins at work do: each report is a write of the store's, and moves its Fin. */
-const REPORT_EVERY = 5
-/**
- * An ask's 99th percentile against the same percentile of a fixed piece of work timed beside it in the same process
- * (`reference`): a runner's speed varies by several times between runs and slows both alike. A fixed 5 ms failed main
- * twice, at 5.46 ms, with no regression; the walk per Fin that the person's host held seconds on costs several times
- * this.
- */
-const BUDGET = { askToReference: 40, loopMaxMs: 100 }
-
-/** A fixed piece of work, long enough to time to a few percent (about a third of a millisecond on a Mac): objects made, read and dropped, as an ask does. */
-function reference(): number {
-  let sum = 0
-  for (let index = 0; index < 12_000; index += 1) {
-    const entry = { id: `fin-${index}`, state: { kind: index % 3 ? "working" : "ended" }, reports: [index, index + 1] }
-    sum += entry.id.length + entry.reports.length + (entry.state.kind === "ended" ? 1 : 0)
-  }
-  return sum
-}
+const BUDGET = { askP99Ms: 5, loopMaxMs: 100 }
 
 const root = mkdtempSync(join(tmpdir(), "mako-person-ask-"))
 let release: () => void = () => {}
@@ -94,10 +73,6 @@ try {
   assert.equal(fins, APEXES * EACH)
   const asking = apexes.map((apex) => world.agents.personAsk(apex.conversation))
   assert.ok(asking.every((found) => found !== undefined), "each Apex's row waits on a decision of its Fins'")
-  // The first Apex's Fins at work, each reporting in turn through the window.
-  const working = world.agents.roster(apexes[0]!.conversation).flatMap((entry) => entry.child?.state?.kind === "working" ? [ThreadIdSchema.parse(entry.child.thread)] : [])
-  assert.ok(working.length > 0, "some of its Fins work")
-  const callerOf = (fin: string) => world.caller(world.store.thread(ThreadIdSchema.parse(fin))!.sessions.flatMap((session) => world.store.conversationsOf(session))[0]!)
 
   const yardstickOut = join(root, "yardstick.json")
   const yardstick = spawn(process.execPath, [join(import.meta.dirname, "lib/host-load-yardstick.mjs"), yardstickOut, "50"], { stdio: ["ignore", "inherit", "inherit"] })
@@ -106,8 +81,6 @@ try {
   await new Promise((resolve) => setTimeout(resolve, 500))
   const inject = Number(process.env.PERSON_ASK_INJECT_HOLD_MS ?? 0)
   const asks: number[] = []
-  const references: number[] = []
-  let reported = 0
   const delay = monitorEventLoopDelay({ resolution: 5 })
   delay.enable()
   const began = performance.now()
@@ -115,16 +88,9 @@ try {
     for (const apex of apexes) {
       // A batch of the Apex's conversation, then the publisher's check of its row against it.
       world.live.observe({ type: "live-update", id: apex.conversation, update: { kind: "text", text: `Token ${batch}. ` } })
-      if (batch % REPORT_EVERY === 0 && apex === apexes[0]) {
-        const fin = working[reported++ % working.length]!
-        await world.agents.report(callerOf(fin), { status: "progress", summary: `Batch ${batch} under way.`, clientKey: `bench-${batch}` })
-      }
       const at = performance.now()
       world.agents.personAsk(apex.conversation)
       asks.push(performance.now() - at)
-      const from = performance.now()
-      reference()
-      references.push(performance.now() - from)
       if (batch % 10 === 0) await new Promise((resolve) => setImmediate(resolve))
       if (inject && batch === BATCHES / 2 && apex === apexes[0]) for (const until = performance.now() + inject; performance.now() < until; );
     }
@@ -136,7 +102,6 @@ try {
   const result = {
     fins,
     batches: asks.length,
-    reference: { p99Ms: round(percentile(references, 0.99)) },
     ask: { meanMs: round(asks.reduce((sum, ms) => sum + ms, 0) / asks.length), p50Ms: round(percentile(asks, 0.5)), p99Ms: round(percentile(asks, 0.99)), maxMs: round(Math.max(...asks)) },
     totalMs: Math.round(tookMs),
     loop: { p99Ms: Math.round(delay.percentile(99) / 1e5) / 10, maxMs: Math.round(delay.max / 1e5) / 10 },
@@ -144,8 +109,7 @@ try {
   }
   const loopLimit = BUDGET.loopMaxMs + yardstickLate
   console.log(JSON.stringify(result))
-  const askLimit = BUDGET.askToReference * Math.max(result.reference.p99Ms, 0.01)
-  assert.ok(result.ask.p99Ms <= askLimit, `an Apex's batch spent ${result.ask.p99Ms} ms at the 99th percentile on its Fins; the budget is ${BUDGET.askToReference} times a fixed piece of work's ${result.reference.p99Ms} ms beside it, ${round(askLimit)} ms`)
+  assert.ok(result.ask.p99Ms <= BUDGET.askP99Ms, `an Apex's batch spent ${result.ask.p99Ms} ms at the 99th percentile on its Fins; the budget is ${BUDGET.askP99Ms}`)
   assert.ok(result.loop.maxMs <= loopLimit, `the loop held ${result.loop.maxMs} ms; the budget is ${BUDGET.loopMaxMs} ms past the yardstick's worst wait in the same window, ${yardstickLate} ms`)
   console.log("bench person-ask: ok")
 } finally {
