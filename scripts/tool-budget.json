@@ -1,0 +1,701 @@
+{
+  "tokenizer": "o200k_base",
+  "roles": {
+    "thread": {
+      "total": {
+        "tokens": 15105,
+        "bytes": 66056
+      },
+      "instructions": {
+        "tokens": 727,
+        "bytes": 3096
+      },
+      "tools": {
+        "worktree_status": {
+          "tokens": 327,
+          "bytes": 1585
+        },
+        "worktree_bring": {
+          "tokens": 293,
+          "bytes": 1396
+        },
+        "worktree_move": {
+          "tokens": 493,
+          "bytes": 2206
+        },
+        "worktree_update": {
+          "tokens": 224,
+          "bytes": 1055
+        },
+        "worktree_merge": {
+          "tokens": 182,
+          "bytes": 873
+        },
+        "worktree_remove": {
+          "tokens": 144,
+          "bytes": 655
+        },
+        "app_status": {
+          "tokens": 146,
+          "bytes": 686
+        },
+        "app_start": {
+          "tokens": 354,
+          "bytes": 1534
+        },
+        "app_stop": {
+          "tokens": 186,
+          "bytes": 836
+        },
+        "app_restart": {
+          "tokens": 196,
+          "bytes": 854
+        },
+        "app_logs": {
+          "tokens": 176,
+          "bytes": 730
+        },
+        "app_probe": {
+          "tokens": 153,
+          "bytes": 719
+        },
+        "app_own_packages": {
+          "tokens": 151,
+          "bytes": 702
+        },
+        "app_check": {
+          "tokens": 369,
+          "bytes": 1583
+        },
+        "recipe_guide": {
+          "tokens": 181,
+          "bytes": 823
+        },
+        "recipe_save": {
+          "tokens": 417,
+          "bytes": 1872
+        },
+        "recipe_publish": {
+          "tokens": 385,
+          "bytes": 1729
+        },
+        "port_holder": {
+          "tokens": 114,
+          "bytes": 502
+        },
+        "pull_request_status": {
+          "tokens": 659,
+          "bytes": 2884
+        },
+        "pull_request_open": {
+          "tokens": 698,
+          "bytes": 3177
+        },
+        "pull_request_merge": {
+          "tokens": 415,
+          "bytes": 1857
+        },
+        "pull_request_rerun": {
+          "tokens": 228,
+          "bytes": 1030
+        },
+        "thread_history": {
+          "tokens": 580,
+          "bytes": 2235
+        },
+        "show": {
+          "tokens": 274,
+          "bytes": 1168
+        },
+        "agents_start": {
+          "tokens": 1264,
+          "bytes": 5342
+        },
+        "agents_link": {
+          "tokens": 239,
+          "bytes": 1027
+        },
+        "agents_list": {
+          "tokens": 621,
+          "bytes": 2772
+        },
+        "agents_move": {
+          "tokens": 356,
+          "bytes": 1544
+        },
+        "agents_read": {
+          "tokens": 593,
+          "bytes": 2737
+        },
+        "agents_settle": {
+          "tokens": 618,
+          "bytes": 2688
+        },
+        "agents_answer": {
+          "tokens": 335,
+          "bytes": 1505
+        },
+        "agents_send": {
+          "tokens": 615,
+          "bytes": 2705
+        },
+        "agents_stop": {
+          "tokens": 183,
+          "bytes": 817
+        },
+        "agents_wait": {
+          "tokens": 157,
+          "bytes": 680
+        },
+        "thread_move": {
+          "tokens": 268,
+          "bytes": 1126
+        },
+        "thread": {
+          "tokens": 194,
+          "bytes": 850
+        },
+        "settings": {
+          "tokens": 262,
+          "bytes": 1102
+        },
+        "harness": {
+          "tokens": 207,
+          "bytes": 881
+        },
+        "automation": {
+          "tokens": 580,
+          "bytes": 2391
+        },
+        "wait": {
+          "tokens": 541,
+          "bytes": 2102
+        }
+      }
+    },
+    "apex": {
+      "total": {
+        "tokens": 15105,
+        "bytes": 66056
+      },
+      "instructions": {
+        "tokens": 727,
+        "bytes": 3096
+      },
+      "tools": {
+        "worktree_status": {
+          "tokens": 327,
+          "bytes": 1585
+        },
+        "worktree_bring": {
+          "tokens": 293,
+          "bytes": 1396
+        },
+        "worktree_move": {
+          "tokens": 493,
+          "bytes": 2206
+        },
+        "worktree_update": {
+          "tokens": 224,
+          "bytes": 1055
+        },
+        "worktree_merge": {
+          "tokens": 182,
+          "bytes": 873
+        },
+        "worktree_remove": {
+          "tokens": 144,
+          "bytes": 655
+        },
+        "app_status": {
+          "tokens": 146,
+          "bytes": 686
+        },
+        "app_start": {
+          "tokens": 354,
+          "bytes": 1534
+        },
+        "app_stop": {
+          "tokens": 186,
+          "bytes": 836
+        },
+        "app_restart": {
+          "tokens": 196,
+          "bytes": 854
+        },
+        "app_logs": {
+          "tokens": 176,
+          "bytes": 730
+        },
+        "app_probe": {
+          "tokens": 153,
+          "bytes": 719
+        },
+        "app_own_packages": {
+          "tokens": 151,
+          "bytes": 702
+        },
+        "app_check": {
+          "tokens": 369,
+          "bytes": 1583
+        },
+        "recipe_guide": {
+          "tokens": 181,
+          "bytes": 823
+        },
+        "recipe_save": {
+          "tokens": 417,
+          "bytes": 1872
+        },
+        "recipe_publish": {
+          "tokens": 385,
+          "bytes": 1729
+        },
+        "port_holder": {
+          "tokens": 114,
+          "bytes": 502
+        },
+        "pull_request_status": {
+          "tokens": 659,
+          "bytes": 2884
+        },
+        "pull_request_open": {
+          "tokens": 698,
+          "bytes": 3177
+        },
+        "pull_request_merge": {
+          "tokens": 415,
+          "bytes": 1857
+        },
+        "pull_request_rerun": {
+          "tokens": 228,
+          "bytes": 1030
+        },
+        "thread_history": {
+          "tokens": 580,
+          "bytes": 2235
+        },
+        "show": {
+          "tokens": 274,
+          "bytes": 1168
+        },
+        "agents_start": {
+          "tokens": 1264,
+          "bytes": 5342
+        },
+        "agents_link": {
+          "tokens": 239,
+          "bytes": 1027
+        },
+        "agents_list": {
+          "tokens": 621,
+          "bytes": 2772
+        },
+        "agents_move": {
+          "tokens": 356,
+          "bytes": 1544
+        },
+        "agents_read": {
+          "tokens": 593,
+          "bytes": 2737
+        },
+        "agents_settle": {
+          "tokens": 618,
+          "bytes": 2688
+        },
+        "agents_answer": {
+          "tokens": 335,
+          "bytes": 1505
+        },
+        "agents_send": {
+          "tokens": 615,
+          "bytes": 2705
+        },
+        "agents_stop": {
+          "tokens": 183,
+          "bytes": 817
+        },
+        "agents_wait": {
+          "tokens": 157,
+          "bytes": 680
+        },
+        "thread_move": {
+          "tokens": 268,
+          "bytes": 1126
+        },
+        "thread": {
+          "tokens": 194,
+          "bytes": 850
+        },
+        "settings": {
+          "tokens": 262,
+          "bytes": 1102
+        },
+        "harness": {
+          "tokens": 207,
+          "bytes": 881
+        },
+        "automation": {
+          "tokens": 580,
+          "bytes": 2391
+        },
+        "wait": {
+          "tokens": 541,
+          "bytes": 2102
+        }
+      }
+    },
+    "fin": {
+      "total": {
+        "tokens": 16101,
+        "bytes": 70416
+      },
+      "instructions": {
+        "tokens": 727,
+        "bytes": 3096
+      },
+      "tools": {
+        "worktree_status": {
+          "tokens": 327,
+          "bytes": 1585
+        },
+        "worktree_bring": {
+          "tokens": 293,
+          "bytes": 1396
+        },
+        "worktree_move": {
+          "tokens": 493,
+          "bytes": 2206
+        },
+        "worktree_update": {
+          "tokens": 224,
+          "bytes": 1055
+        },
+        "worktree_merge": {
+          "tokens": 182,
+          "bytes": 873
+        },
+        "worktree_remove": {
+          "tokens": 144,
+          "bytes": 655
+        },
+        "app_status": {
+          "tokens": 146,
+          "bytes": 686
+        },
+        "app_start": {
+          "tokens": 354,
+          "bytes": 1534
+        },
+        "app_stop": {
+          "tokens": 186,
+          "bytes": 836
+        },
+        "app_restart": {
+          "tokens": 196,
+          "bytes": 854
+        },
+        "app_logs": {
+          "tokens": 176,
+          "bytes": 730
+        },
+        "app_probe": {
+          "tokens": 153,
+          "bytes": 719
+        },
+        "app_own_packages": {
+          "tokens": 151,
+          "bytes": 702
+        },
+        "app_check": {
+          "tokens": 369,
+          "bytes": 1583
+        },
+        "recipe_guide": {
+          "tokens": 181,
+          "bytes": 823
+        },
+        "recipe_save": {
+          "tokens": 417,
+          "bytes": 1872
+        },
+        "recipe_publish": {
+          "tokens": 385,
+          "bytes": 1729
+        },
+        "port_holder": {
+          "tokens": 114,
+          "bytes": 502
+        },
+        "pull_request_status": {
+          "tokens": 659,
+          "bytes": 2884
+        },
+        "pull_request_open": {
+          "tokens": 698,
+          "bytes": 3177
+        },
+        "pull_request_merge": {
+          "tokens": 415,
+          "bytes": 1857
+        },
+        "pull_request_rerun": {
+          "tokens": 228,
+          "bytes": 1030
+        },
+        "thread_history": {
+          "tokens": 580,
+          "bytes": 2235
+        },
+        "show": {
+          "tokens": 274,
+          "bytes": 1168
+        },
+        "agents_start": {
+          "tokens": 1264,
+          "bytes": 5342
+        },
+        "agents_link": {
+          "tokens": 239,
+          "bytes": 1027
+        },
+        "agents_list": {
+          "tokens": 621,
+          "bytes": 2772
+        },
+        "agents_move": {
+          "tokens": 356,
+          "bytes": 1544
+        },
+        "agents_read": {
+          "tokens": 593,
+          "bytes": 2737
+        },
+        "agents_report": {
+          "tokens": 996,
+          "bytes": 4360
+        },
+        "agents_settle": {
+          "tokens": 618,
+          "bytes": 2688
+        },
+        "agents_answer": {
+          "tokens": 335,
+          "bytes": 1505
+        },
+        "agents_send": {
+          "tokens": 615,
+          "bytes": 2705
+        },
+        "agents_stop": {
+          "tokens": 183,
+          "bytes": 817
+        },
+        "agents_wait": {
+          "tokens": 157,
+          "bytes": 680
+        },
+        "thread_move": {
+          "tokens": 268,
+          "bytes": 1126
+        },
+        "thread": {
+          "tokens": 194,
+          "bytes": 850
+        },
+        "settings": {
+          "tokens": 262,
+          "bytes": 1102
+        },
+        "harness": {
+          "tokens": 207,
+          "bytes": 881
+        },
+        "automation": {
+          "tokens": 580,
+          "bytes": 2391
+        },
+        "wait": {
+          "tokens": 541,
+          "bytes": 2102
+        }
+      }
+    },
+    "fin-apex": {
+      "total": {
+        "tokens": 16101,
+        "bytes": 70416
+      },
+      "instructions": {
+        "tokens": 727,
+        "bytes": 3096
+      },
+      "tools": {
+        "worktree_status": {
+          "tokens": 327,
+          "bytes": 1585
+        },
+        "worktree_bring": {
+          "tokens": 293,
+          "bytes": 1396
+        },
+        "worktree_move": {
+          "tokens": 493,
+          "bytes": 2206
+        },
+        "worktree_update": {
+          "tokens": 224,
+          "bytes": 1055
+        },
+        "worktree_merge": {
+          "tokens": 182,
+          "bytes": 873
+        },
+        "worktree_remove": {
+          "tokens": 144,
+          "bytes": 655
+        },
+        "app_status": {
+          "tokens": 146,
+          "bytes": 686
+        },
+        "app_start": {
+          "tokens": 354,
+          "bytes": 1534
+        },
+        "app_stop": {
+          "tokens": 186,
+          "bytes": 836
+        },
+        "app_restart": {
+          "tokens": 196,
+          "bytes": 854
+        },
+        "app_logs": {
+          "tokens": 176,
+          "bytes": 730
+        },
+        "app_probe": {
+          "tokens": 153,
+          "bytes": 719
+        },
+        "app_own_packages": {
+          "tokens": 151,
+          "bytes": 702
+        },
+        "app_check": {
+          "tokens": 369,
+          "bytes": 1583
+        },
+        "recipe_guide": {
+          "tokens": 181,
+          "bytes": 823
+        },
+        "recipe_save": {
+          "tokens": 417,
+          "bytes": 1872
+        },
+        "recipe_publish": {
+          "tokens": 385,
+          "bytes": 1729
+        },
+        "port_holder": {
+          "tokens": 114,
+          "bytes": 502
+        },
+        "pull_request_status": {
+          "tokens": 659,
+          "bytes": 2884
+        },
+        "pull_request_open": {
+          "tokens": 698,
+          "bytes": 3177
+        },
+        "pull_request_merge": {
+          "tokens": 415,
+          "bytes": 1857
+        },
+        "pull_request_rerun": {
+          "tokens": 228,
+          "bytes": 1030
+        },
+        "thread_history": {
+          "tokens": 580,
+          "bytes": 2235
+        },
+        "show": {
+          "tokens": 274,
+          "bytes": 1168
+        },
+        "agents_start": {
+          "tokens": 1264,
+          "bytes": 5342
+        },
+        "agents_link": {
+          "tokens": 239,
+          "bytes": 1027
+        },
+        "agents_list": {
+          "tokens": 621,
+          "bytes": 2772
+        },
+        "agents_move": {
+          "tokens": 356,
+          "bytes": 1544
+        },
+        "agents_read": {
+          "tokens": 593,
+          "bytes": 2737
+        },
+        "agents_report": {
+          "tokens": 996,
+          "bytes": 4360
+        },
+        "agents_settle": {
+          "tokens": 618,
+          "bytes": 2688
+        },
+        "agents_answer": {
+          "tokens": 335,
+          "bytes": 1505
+        },
+        "agents_send": {
+          "tokens": 615,
+          "bytes": 2705
+        },
+        "agents_stop": {
+          "tokens": 183,
+          "bytes": 817
+        },
+        "agents_wait": {
+          "tokens": 157,
+          "bytes": 680
+        },
+        "thread_move": {
+          "tokens": 268,
+          "bytes": 1126
+        },
+        "thread": {
+          "tokens": 194,
+          "bytes": 850
+        },
+        "settings": {
+          "tokens": 262,
+          "bytes": 1102
+        },
+        "harness": {
+          "tokens": 207,
+          "bytes": 881
+        },
+        "automation": {
+          "tokens": 580,
+          "bytes": 2391
+        },
+        "wait": {
+          "tokens": 541,
+          "bytes": 2102
+        }
+      }
+    }
+  }
+}

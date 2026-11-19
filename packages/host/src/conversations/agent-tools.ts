@@ -5,7 +5,10 @@ import type { MethodTable } from "../base/methods.js"
 import type { AgentCaller, AgentRefused, AgentsCancelInput, AgentsNoticeInput, AgentsPlaceInput } from "../contracts/agents.js"
 import {
   AGENT_TOOLS,
+  ROLE_HIDES,
   type AgentOperations,
+  type AgentToolRole,
+  type AgentVerb,
   type AgentToolDefinition,
   type AgentToolFilled,
   type AgentsAnswerInput,
@@ -142,9 +145,15 @@ export interface AgentToolDoor {
   filled(): AgentToolFilled
 }
 
-/** Every operation on a `mako` server, projected from `AGENT_TOOLS`: the only place any server registers them. */
-export function registerAgentTools(server: McpServer, door: AgentToolDoor): void {
+/**
+ * Every operation on a `mako` server, projected from `AGENT_TOOLS`: the only place any server registers them. With a
+ * `role`, the verbs it would only be refused (`ROLE_HIDES`) are left out; without one (a role nobody could read, the
+ * `mako mcp` command), every verb is.
+ */
+export function registerAgentTools(server: McpServer, door: AgentToolDoor, role?: AgentToolRole): void {
+  const hidden = new Set<AgentVerb>(role ? ROLE_HIDES[role] : [])
   for (const tool of AGENT_TOOLS) {
+    if (hidden.has(tool.verb)) continue
     server.registerTool(
       tool.mcp.name,
       { description: tool.mcp.description, inputSchema: agentToolSchema(tool), annotations: tool.mcp.annotations },
