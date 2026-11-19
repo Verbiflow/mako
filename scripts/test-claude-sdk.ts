@@ -1235,8 +1235,9 @@ console.log(
 }
 
 // A launch with a stdio MCP server of the person's holds its writes, so its message goes at once: the server's tools
-// reach Mako's PreToolUse callback like any other, and wait there for the turn's checkpoint. The person's hooks still
-// stop it (`personCodeRuns`). A fake query; the callback is the one the driver registered with it.
+// reach Mako's PreToolUse callback like any other, and wait there for the turn's checkpoint. One where the person's own
+// hooks run (`personCodeRuns`) holds too, and every tool of it waits, reads included. A fake query; the callback is the
+// one the driver registered with it.
 {
   const holds = new WriteHolds()
   const theirs = { options: { mcpServers: { theirs: { command: "node", args: ["server.js"] } } }, account: { name: "fixture-launch" } }
@@ -1251,7 +1252,19 @@ console.log(
     return { held, pre: hooks?.PreToolUse?.at(-1)?.hooks[0] }
   }
   const hooked = await launch("stdio-server-hooks", true)
-  assert.equal(holds.attends("stdio-server-hooks"), false, "the person's own hooks still make the message wait for the checkpoint")
+  assert.equal(holds.attends("stdio-server-hooks"), true, "beside the person's own hooks the launch still holds, so its message goes at once")
+  assert.ok(hooked.pre, "the driver registered its PreToolUse callback")
+  {
+    const gate = Promise.withResolvers<void>()
+    let early = 0
+    const unhold = holds.hold("stdio-server-hooks", { until: gate.promise, frozen: () => false, wrote: () => { early += 1 } })
+    const read = hooked.pre({ hook_event_name: "PreToolUse", tool_name: "Read", tool_input: {}, tool_use_id: randomUUID(), session_id: "s", transcript_path: "t", cwd: "/disposable" }, undefined, { signal: new AbortController().signal })
+    assert.equal(await Promise.race([read.then(() => true), delay(50).then(() => false)]), false, "beside the person's own hooks a read waits for the turn's checkpoint too")
+    gate.resolve()
+    await read
+    assert.equal(early, 0, "a read let go before the checkpoint held the workspace doesn't make it late")
+    unhold()
+  }
   await hooked.held.close("stdio-server-hooks")
   const { held, pre } = await launch("stdio-server", false)
   assert.equal(holds.attends("stdio-server"), true, "a launch with a stdio MCP server holds its writes, so its message is sent at once")

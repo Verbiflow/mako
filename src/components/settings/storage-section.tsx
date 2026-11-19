@@ -1,12 +1,17 @@
-import { useCallback, useEffect, useState } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { FolderOpenIcon, RefreshCwIcon, Trash2Icon } from "lucide-react"
-import type { StorageCollection, StoragePart, StorageReport } from "@mako/host/contracts/storage"
+import type { StorageBudgetSettings, StorageCollection, StoragePart, StorageReport } from "@mako/host/contracts/storage"
 import { Action, Chip, IconAction, ListCard, ListCardRow, Meter } from "@/components/ui/kit"
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { Shimmer } from "@/components/ui/shimmer"
 import { formatBytes, formatRelative } from "@/lib/format"
 import { desktop } from "@/state/desktop"
-import { freeStorage, readStorage } from "@/state/storage"
+import { freeStorage, planStorage, readStorage, reclaimStorage, setStorageBudget } from "@/state/storage"
+import { Biggest, ReclaimClasses, ReclaimHistory } from "./storage-reclaim"
+import { StorageRetention } from "./storage-retention"
+
+/** How often the section reads the report while a preview or a removal runs behind it. */
+const FOLLOW_MS = 1500
 
 const TRIGGERS = {
   scheduled: "on its schedule",
@@ -44,17 +49,32 @@ function collectionLine(collection: StorageCollection, parts: readonly StoragePa
   return `${label}: freed ${formatBytes(collection.freedBytes)} ${when}, ${TRIGGERS[collection.trigger]} (${collection.collected} looked at${left})`
 }
 
-/** What Mako keeps on this Mac, folder by folder, and freeing what its collectors can. */
+/**
+ * What Mako keeps on this Mac: the disk, what each store could give back by how expendable it is (with a preview of
+ * exactly what goes), the Threads and projects holding most, each folder's size, and how long each store keeps things.
+ */
 export function StorageSection() {
   const [report, setReport] = useState<StorageReport | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState<"measuring" | "freeing" | null>("measuring")
+  const follow = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
 
   const settle = useCallback((work: Promise<StorageReport>) => work.then(
     (next) => { setReport(next); setError(null) },
     (reason) => setError(reason instanceof Error ? reason.message : String(reason)),
   ).finally(() => setBusy(null)), [])
-  useEffect(() => { void settle(readStorage(true)) }, [settle])
+  useEffect(() => {
+    void settle(planStorage())
+    void settle(readStorage(true))
+  }, [settle])
+  // A preview or a removal runs behind its answer: read the report until neither runs.
+  useEffect(() => {
+    if (!report?.planning && !report?.reclaiming) return undefined
+    follow.current = setTimeout(() => void settle(readStorage(false)), FOLLOW_MS)
+    return () => clearTimeout(follow.current)
+  }, [report, settle])
+  const remove = (consent: "now" | "approve", ids: string[]) => void settle(reclaimStorage(consent, ids))
+  const budget = (next: StorageBudgetSettings) => void settle(setStorageBudget(next))
   const act = (kind: "measuring" | "freeing", work: () => Promise<StorageReport>) => {
     setBusy(kind)
     void settle(work())
@@ -71,8 +91,8 @@ export function StorageSection() {
       <section>
         <h3 className="text-ui font-medium">On this Mac</h3>
         <p className="mt-0.5 pb-3 text-label text-muted-foreground">
-          What Mako keeps in its folders. Free up space removes what nothing reads anymore, such as the copies of a
-          conversation Cursor saves after every step; it never removes a conversation, a worktree or anything you made.
+          What Mako keeps in its folders, and what of it can go. Nothing in use, holding uncommitted or unpushed work,
+          or kept on purpose is ever removed.
         </p>
 
         {disk ? (
@@ -84,7 +104,7 @@ export function StorageSection() {
             <Meter className="mt-2" tone={low ? "negative" : "neutral"} value={disk.totalBytes ? 1 - disk.freeBytes / disk.totalBytes : 0} />
             {low ? (
               <p className="pt-2 text-label text-negative">
-                Under {formatBytes(report?.lowBytes ?? 0)} free. Mako warns once the disk gets here and frees what it can; Free up space does it now.
+                Under {formatBytes(report?.lowBytes ?? 0)} free. Mako frees what&apos;s safe to remove now and warns about the rest; below, you choose what else goes.
               </p>
             ) : null}
           </div>
@@ -111,7 +131,27 @@ export function StorageSection() {
         </div>
 
         {!report && !error ? <p className="text-ui text-faint"><Shimmer text="Measuring Mako's folders…" /></p> : null}
+      </section>
 
+      <section>
+        <div className="flex items-baseline gap-2 pb-3">
+          <h3 className="flex-1 text-ui font-medium">What can go</h3>
+          <span className="text-label text-faint">
+            {report?.planning ? <Shimmer text="Looking through each Thread's folders…" /> : report?.reclaiming ? <Shimmer text="Removing…" /> : report?.plan ? `Looked ${formatRelative(report.plan.at) === "now" ? "just now" : `${formatRelative(report.plan.at)} ago`}` : ""}
+          </span>
+          <Action tone="outline" size="xs" disabled={report?.planning === true || report?.reclaiming === true} onClick={() => void settle(planStorage())}>
+            <RefreshCwIcon className="size-3" />
+            Look again
+          </Action>
+        </div>
+        {report?.plan ? <ReclaimClasses plan={report.plan} busy={report.reclaiming} onRemove={remove} /> : null}
+        {report ? <ReclaimHistory reclaims={report.reclaims} /> : null}
+      </section>
+
+      {report?.plan ? <Biggest plan={report.plan} /> : null}
+
+      <section>
+        <h3 className="pb-3 text-ui font-medium">Folders</h3>
         {parts.length ? (
           <div data-storage-parts>
             <ListCard>
@@ -130,6 +170,8 @@ export function StorageSection() {
 
         {error ? <p className="pt-2 text-label text-removed">Mako&apos;s folders couldn&apos;t be measured: {error}</p> : null}
       </section>
+
+      {report ? <StorageRetention budget={report.budget} lowBytes={report.lowBytes} onBudget={budget} /> : null}
     </div>
   )
 }
