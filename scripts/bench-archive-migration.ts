@@ -38,7 +38,7 @@ import { SAVED_HISTORY_READERS } from "../packages/sessions/src/readers.ts"
  *    session: every row whose harness has it dropped, then reclaimed.
  * 5. Opening a kept copy (its first page) before and after.
  *
- * Everything written goes under `$MAKO_THREAD_DATA_DIR` and is removed unless `--keep`.
+ * Everything written goes under `$MAKO_THREAD_SCRATCH_DIR` (or `$MAKO_THREAD_DATA_DIR`) and is removed unless `--keep`.
  */
 
 const { values: options } = parseArgs({
@@ -67,7 +67,7 @@ const fileBytes = (path: string) => ["", "-wal"].reduce((sum, suffix) => sum + (
 
 const source = join(options.source, "archive.sqlite")
 if (!existsSync(source)) throw new Error(`No archive at ${source}`)
-const base = process.env.MAKO_THREAD_DATA_DIR ?? join(homedir(), ".mako", "tmp")
+const base = process.env.MAKO_THREAD_SCRATCH_DIR ?? process.env.MAKO_THREAD_DATA_DIR ?? join(homedir(), ".mako", "tmp")
 const scratch = join(base, `bench-archive-migration-${Date.now()}`)
 const archivePath = join(scratch, "archive")
 mkdirSync(archivePath, { recursive: true })
