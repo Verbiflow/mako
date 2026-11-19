@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { z } from "zod"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
-import { AFTER_START, AGENT_TOOLS, type AgentsAnswered, type AgentsApexes, type AgentsCrew, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
+import { AFTER_START, AGENT_TOOLS, type AgentsAnswered, type AgentsApexes, type AgentsShiver, type AgentsListResult, type AgentsSent, type AgentsStarted, type AgentsWaitResult, type AgentToolDefinition } from "@mako/host/contracts/agent-tools"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { registerAgentTools, type AgentAnswer } from "@mako/host/conversations/agent-tools"
 import { registerThreadTools, ThreadMoveAnswerSchema } from "@mako/host/conversations/thread-move-tool"
@@ -65,13 +65,13 @@ export function stubAnswer(tool: string, args: ToolArgs, started: AgentsStarted[
     started.push(child)
     return { ...child }
   }
-  if (tool === "agents_list" && Scoped.parse(args).scope === "crew") {
-    const crew: AgentsCrew = {
+  if (tool === "agents_list" && Scoped.parse(args).scope === "shiver") {
+    const shiver: AgentsShiver = {
       you: FIN_NAME,
       apex: { title: "acme-app router", harness: "Codex", working: true, step: "Read src/router.ts" },
-      crew: [{ name: "router", harness: "Claude", state: { kind: "working", step: "Edit src/utils.ts" }, topic: "Port the handlers in src/handlers to the new router.", branch: "router-port" }],
+      shiver: [{ name: "router", harness: "Claude", state: { kind: "working", step: "Edit src/utils.ts" }, topic: "Port the handlers in src/handlers to the new router.", branch: "router-port" }],
     }
-    return { ...crew }
+    return { ...shiver }
   }
   if (tool === "agents_list" && Scoped.parse(args).scope === "apexes") return { ...apexes }
   if (tool === "agents_list") {

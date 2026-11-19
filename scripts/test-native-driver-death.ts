@@ -20,14 +20,17 @@ await writeFile(app, JSON.stringify({ "42:7": "", "43:9": "", "44:1": "" }))
 // Types `text` one character per 150 ms; "*" repeats forever.
 const typist = `
 const [app, log, key, text] = process.argv.slice(1);
-const { appendFileSync, readFileSync, writeFileSync } = require('node:fs');
+const { appendFileSync, readFileSync, renameSync, writeFileSync } = require('node:fs');
 let index = 0;
 const step = () => {
   const forever = text === '*';
   if (!forever && index >= text.length) return;
   const state = JSON.parse(readFileSync(app, 'utf8'));
   state[key] = forever ? String(index) : text.slice(0, index + 1);
-  writeFileSync(app, JSON.stringify(state));
+  // Whole or not at all, as an app saves: the restarted driver reads this file while the typist keeps writing, and a
+  // read between writeFileSync's truncate and its write failed its observation with a parse error (CI, 2026-11-19).
+  writeFileSync(app + '.' + process.pid, JSON.stringify(state));
+  renameSync(app + '.' + process.pid, app);
   appendFileSync(log, JSON.stringify({ pid: process.pid, event: 'char', key, index }) + '\\n');
   index++;
   setTimeout(step, 150);
@@ -36,14 +39,14 @@ step();
 `
 const driver = `
 import { spawn } from 'node:child_process';
-import { appendFileSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { appendFileSync, readFileSync, renameSync, writeFileSync, existsSync } from 'node:fs';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { ListToolsRequestSchema, CallToolRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 const LOG=${JSON.stringify(log)}, APP=${JSON.stringify(app)}, HOLD=${JSON.stringify(holdRead)}, TYPIST=${JSON.stringify(typist)};
 const note=(entry)=>appendFileSync(LOG, JSON.stringify({pid:process.pid,...entry})+'\\n');
 const read=()=>JSON.parse(readFileSync(APP,'utf8'));
-const change=(key,update)=>{const state=read(); state[key]=update(state[key]??''); writeFileSync(APP, JSON.stringify(state));};
+const change=(key,update)=>{const state=read(); state[key]=update(state[key]??''); writeFileSync(APP+'.'+process.pid, JSON.stringify(state)); renameSync(APP+'.'+process.pid, APP);};
 const sleep=(ms)=>new Promise(resolve=>setTimeout(resolve,ms));
 const reply=(value)=>({content:[{type:'text',text:JSON.stringify(value)}],structuredContent:value});
 const target={session:{type:'string'},pid:{type:'integer'},window_id:{type:'integer'},element_token:{type:'string'}};
