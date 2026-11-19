@@ -15,6 +15,7 @@ import {
 } from "@/state/crew-card-view"
 import { answerFin, type FinAnswer, type PersonAsk } from "@/state/fin-asks"
 import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
+import { showAutomation } from "@/state/automations-view"
 
 /**
  * One line while the crew card is scrolled away and Fins need the person:
@@ -177,7 +178,29 @@ function FinAskRow({ apex, ask }: { apex: string; ask: PersonAsk }) {
         </p>
       ) : null}
       <div className="flex flex-wrap items-center gap-1.5">
-        {approval ? (
+        {ask.ask.review ? (
+          // An automation proposal: approved where its change is shown, never from here. Its way there, or Decline.
+          <>
+            <button
+              type="button"
+              data-fin-answer="review"
+              onClick={() => showAutomation(ask.ask.review!.project, ask.ask.review!.automation)}
+              className="pressable flex items-center gap-1.5 border border-hairline bg-foreground px-2 py-1 text-label text-background hover:opacity-90"
+            >
+              Review the change
+            </button>
+            <button
+              type="button"
+              data-fin-answer="refuse"
+              disabled={sending}
+              onClick={() => send({ allow: false })}
+              className="pressable flex items-center gap-1.5 border border-hairline px-2 py-1 text-label text-foreground hover:bg-fill-hover disabled:opacity-50"
+            >
+              <XIcon className="size-3" />
+              Decline
+            </button>
+          </>
+        ) : approval ? (
           <>
             <button
               type="button"

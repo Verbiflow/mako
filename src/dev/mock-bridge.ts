@@ -513,6 +513,15 @@ export function installMockBridge() {
   if (crowded) boot.live.push(...crowded.own)
   /** `?app=busy`: a long Thread of four Sessions, its first waiting on three agents and twenty-two commands. */
   const automationMock = mockAutomations(emit)
+  /** An agent's ask taken out of its conversation, as the host settles it once answered or decided. */
+  const settleAgentAsk = (conversationId: string, ask: string) => {
+    const snapshot = liveSnapshots.get(conversationId)
+    if (!snapshot?.control?.asks?.some((each) => each.id === ask)) return
+    const control = { ...snapshot.control, asks: snapshot.control.asks.filter((each) => each.id !== ask) }
+    const next = { ...snapshot, revision: snapshot.revision + 1, control }
+    liveSnapshots.set(conversationId, next)
+    emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversationId, revision: next.revision, updates: [], control })) })
+  }
   /** `?app=automations`: the Threads automations ran and the Thread proposing a change, live, its proposal in the Inbox. */
   if (scene === "automations") {
     for (const snapshot of automationSnapshots()) {
@@ -1213,11 +1222,10 @@ export function installMockBridge() {
       const snapshot = liveSnapshots.get(conversationId)
       const pending = snapshot?.control?.asks?.find((each) => each.id === ask)
       if (!snapshot?.control || !pending) return { outcome: "missing", ask } as const
+      // As the host: a proposal is approved where its change is shown (its card's `decide`); its ask only declines.
+      if (pending.want.kind === "automation-proposal" && allow) throw new Error("A proposal is approved where its change is shown: its card in Automations or the Inbox. Its ask only declines.")
       if (pending.want.kind === "automation-proposal") automationMock.decideByAsk(ask, allow)
-      const control = { ...snapshot.control, asks: snapshot.control.asks?.filter((each) => each.id !== ask) }
-      const next = { ...snapshot, revision: snapshot.revision + 1, control }
-      liveSnapshots.set(conversationId, next)
-      emit({ type: "live-batch", batch: JSON.parse(JSON.stringify({ id: conversationId, revision: next.revision, updates: [], control })) })
+      settleAgentAsk(conversationId, ask)
       return { outcome: "answered", ask, allow, want: pending.want } as const
     },
     threadChanges: async () => null,
@@ -3481,6 +3489,12 @@ export function installMockBridge() {
     abortThreadRun: async () => {},
     usage: async () => fixtureUsageSummary(),
     ...automationMock.bridge,
+    // Deciding a proposal settles the ask that carried it, wherever it waits, as the host's `decide` does.
+    decideAutomationProposal: async (proposal: string, approve: boolean) => {
+      const decided = await automationMock.bridge.decideAutomationProposal(proposal, approve)
+      if (decided.ask) for (const [conversationId] of liveSnapshots) settleAgentAsk(conversationId, decided.ask)
+      return decided
+    },
     terminalList: async () => terminalSessions,
     terminalCreate: async (options) => {
       const now = Date.now()

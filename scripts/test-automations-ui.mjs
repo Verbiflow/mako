@@ -293,7 +293,7 @@ async function checkWindow() {
   assert.equal(await evaluate(`document.querySelector('[data-rail-top-row="automations"] [data-automations-proposed]')`), null, "the rail's count clears")
   console.log("PASS: approve and decline from the view; the rail's count follows")
 
-  // 8. The Inbox's card: a fresh scene, the proposal's diff, declined and approved through its ask.
+  // 8. The Inbox's card: a fresh scene, the proposal's diff, declined and approved from the card (its ask settles with it).
   for (const answer of ["decline", "approve"]) {
     await open(`${base}?mock&app=automations`)
     await evaluate(`import('/src/components/inbox/open-inbox.ts').then(({ openInbox }) => openInbox())`)
@@ -309,7 +309,7 @@ async function checkWindow() {
     const model = await store(`state.projects[0].automations.find((each) => each.definition.id === 'nightly-ci-triage').definition.start.model`)
     assert.equal(model, answer === "approve" ? "claude-sonnet-5" : "claude-opus-5-5")
   }
-  console.log("PASS: the Inbox's card shows the diff and decides through its ask, both ways")
+  console.log("PASS: the Inbox's card shows the diff and decides by what it shows, both ways")
 
   // A proposal's ask card, in its Thread or before the Inbox read its proposal, never approves unseen: it leads to the
   // change, or only declines.

@@ -13,7 +13,7 @@ import { harnessLabel } from "@/components/rail/harness-meta"
 import { formatRelative } from "@/lib/format"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
-import { agentAskCard, answerAgentAsk } from "@/state/agent-asks"
+import { agentAskCard } from "@/state/agent-asks"
 import { ProposalBlock } from "@/components/automations/automation-proposal"
 import { automations, proposalById, useAutomations } from "@/state/automations"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
@@ -249,7 +249,8 @@ function ProposalAsk({ item, sending, setSending }: { item: AgentAskInboxItem; s
     )
   return (
     <div data-inbox-proposal={proposal.id} className="flex min-w-0 flex-col pl-7">
-      <ProposalBlock proposal={proposal} compact inThread actions={open} onDecide={(approve) => answerAgentAsk(item.conversation, item.ask, approve)} />
+      {/* Decided as Automations decides it (`decide`, which settles its ask too): approving applies what this card shows. */}
+      <ProposalBlock proposal={proposal} compact inThread actions={open} onDecide={(approve) => automations.decide(proposal.id, approve).then(Boolean)} />
     </div>
   )
 }

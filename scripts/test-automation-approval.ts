@@ -5,6 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { AgentAskGate } from "@mako/host/conversations/agent-ask-gate"
+import { AGENT_ASK_ALLOW, AGENT_ASK_KEEP } from "@mako/host/contracts/agent-asks"
 import { AutomationTool } from "@mako/host/conversations/automation-tool"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { AutomationDefinitionSchema, automationFingerprint } from "@mako/host/contracts/automations"
@@ -42,7 +43,7 @@ function compose(root: string, conversation: string, onStart: (conversationId: s
     asks: { raise: (id, want) => gate.ask(id, want).id, settle: (id, ask) => void world.live.asks.settle(id, ask) },
   })
   const tool = new AutomationTool({ gate, conversationOf: () => conversation, tier: () => "auto", folderOf: () => root, automations: () => automations })
-  gate.runs = { automation: (id, want, ask) => tool.allowed(id, want, ask), "automation-proposal": async (_id, want) => tool.proposalAllowed(want) }
+  gate.runs = { automation: (id, want, ask) => tool.allowed(id, want, ask), "automation-proposal": async () => tool.proposalAllowed() }
   return { world, gate, tool, automations, close: async () => { automations.stop(); await world.close() } }
 }
 
@@ -134,7 +135,8 @@ if (process.argv[2] === "--child") {
       assert.equal(second.automations.proposal(proposed.id)?.status, "pending", "kept across the restart")
       const [ask] = second.gate.open(apex.conversation)
       assert.ok(ask?.want.kind === "automation-proposal", "its ask is still in the agent's conversation")
-      await Promise.all([second.gate.answer(apex.conversation, ask.id, true), second.gate.answer(apex.conversation, ask.id, true)])
+      // Approved where its change is shown (Automations, the Inbox's card), twice at once: applied once.
+      await Promise.all([second.automations.decide(proposed.id, true), second.automations.decide(proposed.id, true)])
       assert.equal(second.automations.proposal(proposed.id)?.status, "approved")
       assert.deepEqual((await second.automations.reading(root)).automations.map((each) => each.definition.id), ["one", "two", "three"], "applied once")
     } finally {
@@ -143,5 +145,36 @@ if (process.argv[2] === "--child") {
     console.log("automation approval: a pending proposal survives a restart and is applied once")
   } finally {
     rmSync(root, { recursive: true, force: true })
+  }
+
+  // An agent's proposal, as a Fin's ask reaches its Apex and the person (`LiveAsks.pending`): only Decline and the way to
+  // its change; an allow sent through it anyway (`LiveAsks.answer`, as `agents_answer` and a phone's card send it) is
+  // refused and applies nothing.
+  const fin = fixture()
+  try {
+    const host = compose(fin, "", () => {})
+    try {
+      host.world.live.asks.answering = async (conversation, ask, allow) => void (await host.gate.answer(conversation, ask, allow))
+      // As the host wires a refusal: the tool that keeps the proposal hears it.
+      host.gate.declined = async (_conversation, want) => {
+        if (want.kind === "automation-proposal") await host.tool.proposalDeclined(want)
+      }
+      const agent = await host.world.apex("codex", "auto")
+      const proposed = await host.automations.propose({ conversation: agent.conversation }, { project: fin, change: "enable", id: "one", clientKey: "e" })
+      assert.ok(!("refused" in proposed))
+      const pending = host.world.live.asks.pending(agent.conversation)
+      assert.deepEqual(pending?.options.map((option) => option.optionId), [AGENT_ASK_KEEP], "only Decline")
+      assert.deepEqual(pending?.review, { project: fin, automation: "one", proposal: proposed.id }, "and where its change is shown")
+      await assert.rejects(host.world.live.asks.answer(agent.conversation, pending!.request, { kind: "choice", optionId: AGENT_ASK_ALLOW }), /approved where its change is shown/)
+      assert.equal(host.automations.proposal(proposed.id)?.status, "pending")
+      assert.equal((await host.automations.reading(fin)).automations.find((each) => each.definition.id === "one")?.local.enabled, false, "nothing applied")
+      await host.world.live.asks.answer(agent.conversation, pending!.request, { kind: "choice", optionId: AGENT_ASK_KEEP })
+      assert.equal(host.automations.proposal(proposed.id)?.status, "declined", "Decline still answers it")
+    } finally {
+      await host.close()
+    }
+    console.log("automation approval: a proposal's ask only declines; an allow through it is refused and applies nothing")
+  } finally {
+    rmSync(fin, { recursive: true, force: true })
   }
 }

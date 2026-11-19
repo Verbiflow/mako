@@ -3932,7 +3932,9 @@ file's now. No kept definition is never approved. Every run (schedule, commit, e
 or recovered run) is of the approved definition, and only an approved one is registered with the cloud. A file that
 says something else pauses it; turning it on (the first time too), Run now, an enable proposal or an editor save shows
 all it says, or its change from what was approved, and approves only with the reviewed fingerprint (`approve`).
-Approving a create or update approves what it wrote. A proposal's ask card never approves: it leads to the change.
+Approving a create or update approves what it wrote, and a create starts off and afresh; an id that leaves its file
+keeps nothing. A proposal is approved only from its card in Automations or the Inbox (`decide`): its ask, wherever it's
+drawn (its Thread, a Fin's row, a phone), only declines and points there, and an allow sent through it is refused.
 A run's agent reads an event's words, a commit's subject and the gate's output only fenced as untrusted after the
 brief. A cloud machine's report of a decision is never one: the Mac decides. The state file is read record by record,
 a bad one passed over and the file copied aside first.

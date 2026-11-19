@@ -1709,7 +1709,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   }
   late.agentAsks.runs = {
     automation: (id, want, ask) => late.automationTool?.allowed(id, want, ask),
-    "automation-proposal": async (_id, want) => late.automationTool?.proposalAllowed(want),
+    "automation-proposal": async () => late.automationTool?.proposalAllowed(),
     harness: async (_id, want) => late.harnessTool?.allowed(want.action, want.harness),
     setting: async (_id, want) => void (await late.settingsTool?.run(want.setting)),
     move: (id, want) => late.threadMoves?.allowed(id, want),
