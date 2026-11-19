@@ -1,43 +1,40 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
+import { createRequire } from "node:module"
+import { dirname, join } from "node:path"
 import { setImmediate as nextTurn } from "node:timers/promises"
 import { runInNewContext } from "node:vm"
-import { locate } from "./lib/anchored-patch.mjs"
-import { bundleContext, installedPatch, readSdk, sdkFiles, sdkVersion as version, throughBlock, unpatched } from "./lib/cursor-sdk-sites.mjs"
+import { BIDI_READS } from "./patch-cursor-sdk.mjs"
 
-// Run with --expose-gc. The SDK's bidi transport, taken from its module by
-// shape, whatever this release names it, must let go of each message once it has been read,
+// Run with --expose-gc. The SDK's bidi transport, taken from its
+// version-pinned module, must let go of each message once it has been read,
 // on both the backend's side and the client's appending side, while the
 // stream stays open; and an append failure or abort must still reach a read.
+const require = createRequire(import.meta.url)
+const sdk = join(dirname(require.resolve("@cursor/sdk")), "../..")
+const { version } = JSON.parse(readFileSync(join(sdk, "package.json"), "utf8"))
 const collect = globalThis.gc
 assert.ok(collect, "run with node --expose-gc")
 
 const MESSAGES = 64
-/** The transport's head, in 1.4.0's names. */
 const CLASS_START = "class p{constructor(t,r,e,n,s={}){this.mapper=t,this.bidiClient=r"
 
 class Aborted extends Error {}
 
-/**
- * What the transport reaches out to in its module (the protocol's method kinds, its request message, the abort
- * error, Connect's errors), as one stand-in under whatever names this release gives them: called, it hands back its
- * argument; constructed, it is the abort.
- */
-function moduleStub(value) {
-  return new.target ? new Aborted() : value
-}
-Object.assign(moduleStub, {
-  MethodKind: { BiDiStreaming: "bidi" },
-  isMessage: () => true,
-  $r: class { constructor(fields) { Object.assign(this, fields) } },
-  T$: (inputs) => inputs,
-  ConnectError: class extends Error {},
-  Code: { DeadlineExceeded: 4 },
-})
-
 function transportClass(source) {
-  const start = locate(source, CLASS_START)
-  assert.equal(start.count, 1, `@cursor/sdk ${version} changed its bidi transport's head; find it and anchor it here`)
-  return runInNewContext(`(${throughBlock(source, start.index)})`, bundleContext({}, moduleStub))
+  const start = source.indexOf(CLASS_START)
+  assert.ok(start >= 0, `@cursor/sdk ${version} moved its bidi transport; find it and name it here`)
+  const end = source.indexOf("}var h=", start) + 1
+  return runInNewContext(`(${source.slice(start, end)})`, {
+    Promise, Symbol, Headers, Array, AbortController, Buffer, Math, BigInt, Error, Uint8Array, ArrayBuffer,
+    c: { MethodKind: { BiDiStreaming: "bidi" }, isMessage: () => true },
+    u: { $r: class { constructor(fields) { Object.assign(this, fields) } } },
+    m: { T$: (inputs) => inputs },
+    d: Aborted,
+    f: (cause) => cause,
+    l: { ConnectError: class extends Error {}, Code: { DeadlineExceeded: 4 } },
+    i: {},
+  })
 }
 
 const never = new Promise(() => {})
@@ -135,18 +132,23 @@ async function failures(Transport) {
   assert.equal(aborted.appends(), MESSAGES)
 }
 
-for (const build of ["esm", "cjs"]) {
-  // Throws when the installed SDK lacks the patch.
-  const { file: target } = installedPatch(readSdk, sdkFiles, "bidi-reads", build)
-  const source = readSdk(target)
-  const original = unpatched(build, "bidi-reads")
-  const before = await retention(transportClass(original))
+function unpatch(source) {
+  for (const [original, patched] of BIDI_READS) source = source.replace(patched, () => original)
+  return source
+}
+
+for (const target of ["dist/esm/index.js", "dist/cjs/index.js"]) {
+  const source = readFileSync(join(sdk, target), "utf8")
+  for (const [, patched] of BIDI_READS) assert.ok(source.includes(patched), `${target} lacks the bidi reads patch; run scripts/patch-cursor-sdk.mjs`)
+  const before = await retention(transportClass(unpatch(source)))
   assert.ok(before.sent >= MESSAGES - 1 && before.appended >= MESSAGES - 1, `${target} unpatched kept ${before.sent} read and ${before.appended} appended messages: this test no longer sees the leak`)
   const after = await retention(transportClass(source))
   assert.ok(after.sent <= 1, `${target} keeps ${after.sent} of ${MESSAGES} messages it read from the backend`)
   assert.ok(after.appended <= 1, `${target} keeps ${after.appended} of ${MESSAGES} messages it appended`)
   await failures(transportClass(source))
-  assert.deepEqual(await concurrent(transportClass(original)), ["rejected", "rejected"], `${target} unpatched no longer rejects both outstanding reads; this test no longer sees the race`)
-  assert.deepEqual(await concurrent(transportClass(source)), ["rejected", "rejected"], `${target} leaves an earlier outstanding read pending when an append fails`)
+  const Transport = transportClass(source)
+  const original = transportClass(unpatch(source))
+  assert.deepEqual(await concurrent(original), ["rejected", "rejected"], `${target} unpatched no longer rejects both outstanding reads; this test no longer sees the race`)
+  assert.deepEqual(await concurrent(Transport), ["rejected", "rejected"], `${target} leaves an earlier outstanding read pending when an append fails`)
 }
 console.log(`Cursor bidi reads (@cursor/sdk ${version}): ESM/CJS let go of each message once read on both sides of an open stream (the unpatched reads kept all ${MESSAGES}); an append failure rejects every outstanding read, and an abort still reaches a read`)

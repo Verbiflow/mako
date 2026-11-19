@@ -211,8 +211,7 @@ export function DiagnosticsSection() {
             <p className="mt-1 text-label leading-relaxed text-faint">
               Mako keeps at most {residency.warmLimit} resumable idle processes
               for faster follow-ups and hibernates them after idle for{" "}
-              {Math.round(residency.idleMs / 60_000)} minutes
-              {Object.entries(residency.idleWindows ?? {}).map(([harness, ms]) => `, ${harnessLabel(harness)}'s after ${Math.round(ms / 60_000)}`).join("")}.
+              {Math.round(residency.idleMs / 60_000)} minutes.
             </p>
             <p className="mt-1 text-label leading-relaxed text-faint">
               {residency.memory.loaded} conversations in memory, about{" "}

@@ -1,18 +1,18 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { createRequire } from "node:module"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { setImmediate as nextTurn } from "node:timers/promises"
 import { pathToFileURL } from "node:url"
 import { runInNewContext } from "node:vm"
-import { bundleContext, findInBuild, sdkRoot as sdk, sdkVersion as version, throughBlock } from "./lib/cursor-sdk-sites.mjs"
 
 // A cached streaming tool's source failure must reach every active and later
 // replay reader, never close them as a success or reject a promise nobody
 // observes (the child exits on one). Mako patched this into SDK 1.0.31; 1.0.40
 // does it itself, and this holds each later SDK to it.
 const require = createRequire(import.meta.url)
-/** The streaming-tool cache's head, in 1.4.0's names; found by shape in whichever chunk holds it. */
-const CACHE_HEAD = "class Sm{constructor(e){this.pastElements=[],this.closed=!1,this.forks=new Set,this.consume(e)}"
+const sdk = join(dirname(require.resolve("@cursor/sdk")), "../..")
+const { version } = JSON.parse(readFileSync(join(sdk, "package.json"), "utf8"))
 const unhandled = []
 const observeUnhandled = cause => unhandled.push(cause)
 process.on("unhandledRejection", observeUnhandled)
@@ -23,10 +23,15 @@ function deferred() {
   return { promise, resolve }
 }
 
-function cacheClass(source, index, queue) {
-  // The SDK's actual cache, taken from its module, not an imitation of its behavior; whatever its module calls the
-  // queue it forks readers from is the SDK's actual queue.
-  return runInNewContext(`(${throughBlock(source, index)})`, bundleContext({}, { Jt: queue }))
+function cacheClass(source, bundle, queue) {
+  const start = source.indexOf(`class ${bundle.name}{constructor(e){this.pastElements=[],this.closed=!1,this.forks=new Set,this.consume(e)}`)
+  assert.ok(start >= 0, `@cursor/sdk ${version} moved its streaming-tool cache out of ${bundle.target}; find it and name it here`)
+  const end = source.indexOf(`function ${bundle.next}(`, start)
+  // The SDK's actual cache and queue, taken from its version-pinned module,
+  // not an imitation of their behavior.
+  return runInNewContext(`${source.slice(start, end)};${bundle.name}`, {
+    Promise, Symbol, Set, Error, String, [bundle.queue]: { Jt: queue },
+  })
 }
 
 /** An Error arrives as itself; anything else thrown arrives as an Error saying it. */
@@ -61,16 +66,20 @@ async function failureCase(Cache, failure, partial) {
 }
 
 try {
-  for (const build of ["esm", "cjs"]) {
-    const { target, source, index } = findInBuild(build, CACHE_HEAD, "the streaming-tool cache")
-    const module = build === "esm" ? await import(pathToFileURL(join(sdk, target)).href) : require(join(sdk, target))
+  for (const bundle of [
+    { target: "dist/esm/993.js", name: "Sm", queue: "h", next: "km" },
+    { target: "dist/cjs/993.js", name: "_m", queue: "f", next: "Cm" },
+  ]) {
+    const module = bundle.target.includes("/esm/")
+      ? await import(pathToFileURL(join(sdk, bundle.target)).href)
+      : require(join(sdk, bundle.target))
     const factories = module.__webpack_esm_modules__ ?? module.modules
     const exports = {}
-    assert.ok(factories["../utils/dist/writable-iterable.js"], `@cursor/sdk ${version} moved the queue out of ${target}`)
     factories["../utils/dist/writable-iterable.js"]({}, exports, {
       d(target, getters) { for (const [key, get] of Object.entries(getters)) Object.defineProperty(target, key, { get }) },
     })
-    const Cache = cacheClass(source, index, exports.Jt)
+    const source = readFileSync(join(sdk, bundle.target), "utf8")
+    const Cache = cacheClass(source, bundle, exports.Jt)
     for (const failure of [
       Object.assign(new Error("network"), { name: "ConnectError", code: 14 }),
       Object.assign(new Error("auth"), { name: "ConnectError", code: 16 }),

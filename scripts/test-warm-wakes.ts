@@ -29,9 +29,7 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
  * - memory pressure lowering it to the floor, and the excess hibernating then, without a turn ending;
  * - a wake that starts as a message is on its way: `agents_send` to a sleeping Fin and a digest queued for a sleeping
  *   Apex, and none for a message that's refused or held;
- * - a wake inside the idle window starting with the Thread's values its launch read, and one past it reading again;
- * - a harness's own idle window (`idleWindow`, Cursor's two minutes): its providers rest that long, prewarm keeps one
- *   warm while the person types, and the first key after it hibernated wakes it.
+ * - a wake inside the idle window starting with the Thread's values its launch read, and one past it reading again.
  */
 const GB = 1024 ** 3
 const root = mkdtempSync(join(tmpdir(), "mako-warm-wakes-"))
@@ -437,60 +435,6 @@ async function wakeReusesLaunchValues(): Promise<void> {
     assert.equal(reads.length, 3, "a changed title reads again")
     assert.deepEqual(reads[2], { title: "Renamed", cwd: folder })
     console.log(`kept: ${starts.length} starts read the Thread's values ${reads.length} times; the resume verdict ${verdicts} times and the tools ${grants.length} times, at every wake`)
-  } finally {
-    await owner.stop()
-  }
-}
-
-// ── A harness that declares its own idle window rests warm that long, and no longer; prewarm keeps one warm while the
-// person types, and the first key after it slept wakes it. A harness that declares none keeps the host's window.
-async function harnessIdleWindow(): Promise<void> {
-  const folder = mkdtempSync(join(root, "window-"))
-  const closed: string[] = []
-  const starts: { id: string; resume?: string; environment?: ThreadEnvironment }[] = []
-  let owner: LiveConversations
-  const lasting = restingDriver(() => owner, folder, closed, starts)
-  const brief: ProviderLiveDriver = {
-    ...lasting,
-    provider: "brief-provider",
-    idleWindow: { ms: 400, evidence: "Injected driver fixture" },
-    start: async (cwd, options) => ({ ...(await lasting.start(cwd, options)), harness: "brief-provider" }),
-  }
-  owner = new LiveConversations({
-    appPath: folder, root: join(folder, "journals"), driver: (provider) => (provider === "brief-provider" ? brief : lasting), history: async () => null, emit: () => {},
-    providerWarmLimit: 8,
-    resumeVerdict: async () => ({ kind: "resumable", record: "same" }),
-  })
-  const connection = (id: string) => owner.snapshot(id)?.session.connection
-  const seed = async (provider: string, id: string) => {
-    await owner.start(provider, folder, { conversationId: id, title: "A thread" })
-    const request = randomUUID()
-    owner.submit(id, request, "seed")
-    await until("a seed turn", () => owner.snapshot(id)?.requests.some((asked) => asked.id === request && asked.status === "completed") === true)
-  }
-  const short = randomUUID()
-  const long = randomUUID()
-  try {
-    await seed("test-provider", long)
-    await seed("brief-provider", short)
-    const residency = owner.residency()
-    assert.equal(residency.idleMs, 10 * 60_000, "the host's window is still ten minutes")
-    assert.deepEqual(residency.idleWindows, { "brief-provider": 400 }, "Diagnostics names the harness resting for a window of its own")
-    // Typing for three windows: each signal restarts the window, as the composer's do every half minute.
-    const typingUntil = Date.now() + 1_200
-    while (Date.now() < typingUntil) {
-      assert.equal(owner.prewarm(short), "kept-warm")
-      await pause(150)
-      assert.equal(connection(short), "connected", "a provider the person is writing to doesn't hibernate under the draft")
-    }
-    await until("the brief harness's provider to hibernate on its own window", () => connection(short) === "hibernated", 5_000)
-    assert.deepEqual(closed, [short])
-    assert.equal(connection(long), "connected", "the other harness keeps the host's window")
-    // The first key after it slept wakes it, so its reopen overlaps the typing.
-    assert.equal(owner.prewarm(short), "waking")
-    await until("it to wake", () => connection(short) === "connected")
-    assert.equal(starts.at(-1)?.resume, short, "it resumes its own native session")
-    console.log("idle window: a harness's own window hibernates its provider after it, prewarm holds it while typing and wakes it after, another harness keeps ten minutes")
   } finally {
     await owner.stop()
   }
@@ -914,7 +858,6 @@ try {
   await watchReadsWhilePastFloor()
   await pressureShrinksThePool()
   await wakeReusesLaunchValues()
-  await harnessIdleWindow()
   await heldReadsStayFresh()
   await prewarmBeginsTheAccountCheck()
   await expectRefusesWhatWontGo()

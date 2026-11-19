@@ -1,25 +1,22 @@
 // The patched SDK's transcript writers, cut out of the installed bundle and run
-// as they are on the fs binding a test hands them, for either build. Every name
-// is found by shape, so a release that only renames changes nothing here.
+// as they are on the fs binding a test hands them, for either build.
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import type * as promises from "node:fs/promises"
+import { createRequire } from "node:module"
 import path from "node:path"
 import { runInNewContext } from "node:vm"
-import { findInBuild, installedPatch, readSdk, rename, sdkFiles, throughBlock } from "./cursor-sdk-sites.mjs"
+import { tokenizer, tokTypes } from "acorn"
+import { TRANSCRIPT_BUILDS } from "../patch-cursor-sdk.mjs"
 
 export type Build = "esm" | "cjs"
 export const BUILDS: readonly Build[] = ["esm", "cjs"]
 
-/**
- * What the streamed writer calls, by 1.4.0's ESM names: `$` the tracing context, `BD` reads a summary archive,
- * `qD` visits messages, `jD` keeps one, `UD` merges two leading user messages, `tO` writes one as a line. Each snippet
- * binds them wherever the writer is, in this release's names.
- */
-const HELPER_PROBES = [
-  "r=await BD(e,t,s)}catch{continue}await qD(e,t,r,o,{skipFailedReads:!0,visit:n})",
-  "visit:async e=>{jD(e)&&await n(e)}}),o}((0,$.OA)(e.ctx)",
-  "(UD(u,e)||await l(tO(u)),u=void 0)",
-]
+/** The bundle's own names for what the streamed writer calls, which differ between the two builds. */
+const HELPERS = {
+  esm: { ctx: "$", archive: "BD", visit: "qD", line: "tO", merge: "UD", keep: "jD" },
+  cjs: { ctx: "D", archive: "qD", visit: "VD", line: "oO", merge: "HD", keep: "WD" },
+} as const
 
 export interface Row { role: string; id: string; text: string }
 export interface Writers {
@@ -49,50 +46,53 @@ interface Loaded {
 }
 const LOCK_HOOK = Symbol.for("mako:cursor-transcript-lock")
 
-/** The function or method in `source` starting with `head` (1.4.0's names, in this release's), through its closing brace. */
-function extract(source: string, head: string, names: Map<string, string>): string {
-  const text = rename(head, names)
-  const start = source.indexOf(text)
-  assert.ok(start >= 0 && source.indexOf(text, start + 1) < 0, `one ${text} in the bundle`)
-  return throughBlock(source, start)
+const sdk = path.join(path.dirname(createRequire(import.meta.url).resolve("@cursor/sdk")), "..")
+
+/** The source of the function or method starting at `head`, through its closing brace. */
+function extract(bundle: string, head: string): string {
+  const start = bundle.indexOf(head)
+  assert.ok(start >= 0 && bundle.indexOf(head, start + 1) < 0, `one ${head} in the bundle`)
+  const body = bundle.indexOf("{", bundle.indexOf(")", start))
+  let depth = 0
+  for (const token of tokenizer(bundle.slice(body), { ecmaVersion: "latest" })) {
+    if (token.type === tokTypes.braceL || token.type === tokTypes.dollarBraceL) depth++
+    else if (token.type === tokTypes.braceR && --depth === 0) return bundle.slice(start, body + token.end)
+  }
+  throw new Error(`${head} has no end`)
 }
 
 /** `platform` stands in for `process.platform`, which the folder sync reads. */
 export function loadWriters(build: Build, fs: BundleFs, platform: NodeJS.Platform = process.platform): Writers {
-  const { source: bundle, sites } = installedPatch(readSdk, sdkFiles, "transcripts", build)
-  // The file writer's site binds it (`Pj`), `fs` (`fo`) and `path` (`s`); the streamed writer's head binds its own.
-  const [file, head] = sites
-  const writeName = file.names.get("Pj") ?? assert.fail("the transcript writer's site binds its file writer")
-  const write = extract(bundle, "async function Pj(e,t){", file.names)
-  const lock = extract(bundle, "function makoLock(mako$p,mako$w){", file.names)
-  const syncDir = extract(bundle, "async function makoSyncDir(mako$p){", file.names)
-  const streamed = extract(bundle, "async writeJsonlStreamed(e,t){", head.names)
-  const made = extract(bundle, "async makoWriteJsonlStreamed(e,t){", head.names)
-  const options = /appendFile:(\(mako\$p,mako\$d\)=>makoLock\(mako\$p,.*?\)\)\)),streamFullJsonlWrites/.exec(bundle)
+  const names = TRANSCRIPT_BUILDS[build]
+  const bundle = readFileSync(path.join(sdk, "..", names.target), "utf8")
+  const write = extract(bundle, `async function ${names.write}(e,t){`)
+  const lock = extract(bundle, "function makoLock(p,w){")
+  const syncDir = extract(bundle, "async function makoSyncDir(p){")
+  const streamed = extract(bundle, "async writeJsonlStreamed(e,t){")
+  const made = extract(bundle, "async makoWriteJsonlStreamed(e,t){")
+  const options = /appendFile:(\(p,d\)=>makoLock\(p,.*?\)\)\)),streamFullJsonlWrites/.exec(bundle)
   assert.ok(options?.[1], "the writer is constructed with a locked appendFile")
-  const helpers = new Map<string, string>()
-  for (const probe of HELPER_PROBES) for (const [old, now] of findInBuild(build, probe, "the streamed writer's helpers").names) helpers.set(old, now)
-  const helper = (old: string) => helpers.get(old) ?? assert.fail(`the streamed writer's helpers bind no ${old}`)
+  const names2 = HELPERS[build]
   // The bundle reads the child's lock hook from its own global, which a test's context doesn't share.
   const hook: unknown = Object.getOwnPropertyDescriptor(globalThis, LOCK_HOOK)?.value
   const context = {
-    [file.names.get("fo") ?? assert.fail("the file writer binds fs")]: fs,
-    [file.names.get("s") ?? assert.fail("the file writer binds path")]: path,
+    [names.fs]: fs,
+    s: path,
     process: platform === process.platform ? process : { pid: process.pid, platform },
-    [helper("$")]: { OA: <T>(value: T) => value },
-    [helper("BD")]: async () => [],
-    [helper("qD")]: async (_ctx: never, _store: never, rows: Row[], _stats: never, visit: { visit(row: Row): Promise<void> }) => {
+    [names2.ctx]: { OA: <T>(value: T) => value },
+    [names2.archive]: async () => [],
+    [names2.visit]: async (_ctx: never, _store: never, rows: Row[], _stats: never, visit: { visit(row: Row): Promise<void> }) => {
       for (const row of rows) await visit.visit(row)
     },
-    [helper("tO")]: (row: Row) => JSON.stringify(row),
-    [helper("UD")]: () => false,
-    [helper("jD")]: () => true,
+    [names2.line]: (row: Row) => JSON.stringify(row),
+    [names2.merge]: () => false,
+    [names2.keep]: () => true,
     ...hook !== undefined && { [LOCK_HOOK]: hook },
   }
   // SAFETY: the script's value is the object literal it ends with, built from the bundle's own functions.
   const parts = runInNewContext(
     `(()=>{${write};${lock};${syncDir};const ${"appendFile"}=${options[1]};` +
-      `return {write:${writeName},appendFile,Store:class{constructor(){this.writeFile=${writeName}}${streamed}${made}}}})()`,
+      `return {write:${names.write},appendFile,Store:class{constructor(){this.writeFile=${names.write}}${streamed}${made}}}})()`,
     context,
   ) as Loaded
   return {

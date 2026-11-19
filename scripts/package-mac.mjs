@@ -11,10 +11,10 @@ import {
   readFile,
   writeFile,
 } from "node:fs/promises"
-import { basename, dirname, join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { build, Platform, Arch } from "electron-builder"
-import { extractFile, listPackage } from "@electron/asar"
+import { extractFile } from "@electron/asar"
 import { auditPackage } from "./audit-package.mjs"
 import { readManifest, sourceIdentity } from "./lib/control-media-sources.mjs"
 import { assertPackagedImports } from "./test-packaged-imports.mjs"
@@ -267,12 +267,7 @@ try {
   const app = join(output, "mac-arm64", `${pkg.build.productName}.app`)
   const archive = join(app, "Contents/Resources/app.asar")
   const metadata = JSON.parse(extractFile(archive, "package.json").toString("utf8"))
-  // The SDK's chunks inside the archive: each patch is found by content, in whichever chunk this release puts it.
-  const sdkInArchive = listPackage(archive, { isPack: false }).map((entry) => entry.replaceAll("\\", "/"))
-  assertCursorSdkPatched(
-    (target) => extractFile(archive, `node_modules/@cursor/sdk/${target}`).toString("utf8"),
-    (build) => sdkInArchive.filter((entry) => dirname(entry) === `/node_modules/@cursor/sdk/dist/${build}` && entry.endsWith(".js")).map((entry) => basename(entry)),
-  )
+  assertCursorSdkPatched((target) => extractFile(archive, `node_modules/@cursor/sdk/${target}`).toString("utf8"))
   for (const [key, value] of Object.entries(buildConfig.extraMetadata ?? {}))
     assert.deepEqual(metadata[key], value, `Packaged metadata differs from the frozen configuration: ${key}`)
   const verified = []

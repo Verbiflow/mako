@@ -530,12 +530,6 @@ export interface ProviderLiveDriver extends ProviderCapability {
   defaultMode?: string
   backgroundStop: BackgroundStop
   /**
-   * How long a ready process of this harness stays warm with nothing to do before it hibernates
-   * (`live-hibernation.ts`), where that differs from `PROVIDER_IDLE_MS`: what its idle process holds weighed against
-   * what reopening it costs, which prewarm-on-typing hides. `evidence` says what was measured.
-   */
-  idleWindow?: { ms: number; evidence: string }
-  /**
    * Stops one roster entry the provider can stop alone (one it observed as
    * `stoppable`), leaving the session and the rest of its work running.
    */
