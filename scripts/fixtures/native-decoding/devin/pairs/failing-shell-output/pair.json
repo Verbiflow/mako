@@ -1,18 +1,18 @@
 {
   "harness": "devin",
   "native": {
-    "version": "3000.13.4"
+    "version": "3000.14.30821"
   },
   "about": "Run exactly this shell command once, with nothing added before or after it: `cat notes.md missing.md`. Then tell me what it printed and how it exited. A shell command that prints output and an error, then exits non-zero.",
   "stores": [
     {
       "reader": "devin",
-      "path": ".local/share/devin/cli/sessions.db#exultant-pigeon",
+      "path": ".local/share/devin/cli/sessions.db#olive-throne",
       "known": []
     },
     {
       "reader": "devin-ide",
-      "path": "Library/Application Support/Devin/User/acp-messages/da6fc591-ee9f-4541-8c73-cf2a57e7d95f.db",
+      "path": "Library/Application Support/Devin/User/acp-messages/3bd49556-b5bc-4080-88cd-74cba1ae6819.db",
       "known": []
     }
   ],

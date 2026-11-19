@@ -1,3 +1,4 @@
+import { StdoutPace } from "./stdout-pace.js"
 import type { ProviderFailureEvidence } from "../contracts/provider-failure-evidence.js"
 import { codexPersonCodeRuns } from "./codex/person-code.js"
 import { failureEvidenceOf, providerExitEvidence } from "../contracts/provider-failure.js"
@@ -24,7 +25,7 @@ import type {
   ProviderSteerInput,
   ProviderSteerResult,
 } from "./live-driver.js"
-import { codexLaunch, resolveCodexExecutable } from "./codex/executable.js"
+import { codexLaunch, resolveCodexExecutable, type CodexExecutables } from "./codex/executable.js"
 import { SHUTDOWN_GRACE_MS, type AdmittedStartOptions, type DriverGoalCommand, type DriverSideQuestion } from "./live-driver.js"
 import { codexGoalObservation } from "./codex/goals.js"
 import { reviewDisplayText, type ReviewTarget } from "../contracts/live-reviews.js"
@@ -61,7 +62,9 @@ import {
   endSubagents,
   consumeStdout,
   MAX_STDOUT_BUFFER,
+  DELTA_READ_MS,
   drawRollout,
+  onlyDeltas,
   rpcRequest,
   sendRpc,
   sendRpcError,
@@ -127,6 +130,9 @@ type Live = {
   serverRequests: Map<string, PendingServerRequest>
   decoder: CodexDecoder
   rollout?: CodexRolloutTail
+  /** As the protocol keeps them on its context (`drawRolloutOnce`, `drawRolloutPaced`). */
+  rolloutRead?: boolean
+  rolloutReadAt?: number
   stream: NativeStream<CodexFrame> | null
   background: ProtocolContext["background"]
   subagentTurns: Map<string, Array<() => void>>
@@ -141,6 +147,8 @@ type Live = {
 }
 
 const MAX_STDERR_BUFFER = 16 * 1024
+/** How much of one turn of the loop goes to the processes' output before the rest of it waits for the next turn (`StdoutPace`). */
+const STDOUT_TURN_MS = 30
 const MAX_PROMPT_CHARS = 1_000_000
 
 const permissionCallbacks: PermissionCallbacks<Live> = {
@@ -182,8 +190,8 @@ export async function codexChildLaunch(env: NodeJS.ProcessEnv, command: string):
  * thread is ephemeral and never takes a turn, so Codex keeps nothing of it: a process's first `thread/start` costs it
  * 0.4 s cold and the next process's 0.12 s (2026-10-20).
  */
-export async function codexStartPrefetch(base: NodeJS.ProcessEnv, cwd: string): Promise<PrefetchLaunch | undefined> {
-  const command = await resolveCodexExecutable(base)
+export async function codexStartPrefetch(base: NodeJS.ProcessEnv, cwd: string, executables?: CodexExecutables): Promise<PrefetchLaunch | undefined> {
+  const command = await resolveCodexExecutable(base, executables)
   if (!command) return undefined
   const launch = await codexChildLaunch(base, command)
   const initialize = { jsonrpc: "2.0", id: 0, method: "initialize", params: CODEX_INITIALIZE }
@@ -200,7 +208,7 @@ export async function codexStartPrefetch(base: NodeJS.ProcessEnv, cwd: string): 
 }
 
 /** Codex's sessions, each an app-server this engine started and closes. */
-export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "streams" | "writeHolds">) {
+export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "streams" | "writeHolds">, executables?: CodexExecutables) {
   const engine = createLiveEngine<Live>()
   const sessions = engine.sessions
   const closingSessions = new Map<string, Promise<void>>()
@@ -215,7 +223,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
       env.MAKO_CONVERSATIONS_TOKEN = options.conversationTools.token
     applyControlEnvironment(env, options.conversationTools?.control)
     applyThreadEnvironment(env, options.threadEnvironment)
-    const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env))
+    const executable = await trace.step("runtime-discovery", () => resolveCodexExecutable(env, executables))
     if (!executable) throw new Error("Codex is not installed")
     const launch = await trace.step("runtime-discovery", () => codexChildLaunch(env, executable))
     const child = trace.sync("spawn", () => spawnProviderProcess(launch.command, CODEX_APP_SERVER_ARGS, {
@@ -351,7 +359,10 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
         live.primer = new CodexPrimer(live.instructions, response.thread.path ? await rolloutHoldsPrimer(response.thread.path, live.instructions) : false)
       live.rollout = response.thread.path ? new CodexRolloutTail(response.thread.path) : undefined
       live.rollout?.follow(() => {
-        if (!live.exited) drawRollout(live)
+        // Read off the thread, then drawn: the watcher's word waits on no message.
+        void live.rollout?.load().then(() => {
+          if (!live.exited) drawRollout(live)
+        })
       })
       if (options.resume === response.thread.id && !options.fork)
         live.agents.restore(options.observedAgents ?? [])
@@ -799,9 +810,23 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     return result
   }
 
+  const stdout = new StdoutPace<Live>({
+    turnMs: STDOUT_TURN_MS,
+    take: (live, chunk) => consumeStdout(live, chunk),
+    pause: (live) => live.child.stdout.pause(),
+    resume: (live) => live.child.stdout.resume(),
+    // The rollout is read before a message that isn't a streamed delta is handled (`drawRolloutOnce`), and for
+    // deltas a frame apart (`drawRolloutPaced`): read ahead here, awaited, the handling takes it with no file call.
+    before: (live, chunk) => {
+      if (!live.rollout || live.exited) return undefined
+      if (onlyDeltas(chunk) && performance.now() - (live.rolloutReadAt ?? 0) < DELTA_READ_MS) return undefined
+      return live.rollout.load()
+    },
+  })
+
   function bindProcess(live: Live): void {
     live.child.stdin.on("error", (error) => handleProcessEnd(live, error.message))
-    live.child.stdout.on("data", (chunk: Buffer) => consumeStdout(live, chunk))
+    live.child.stdout.on("data", (chunk: Buffer) => stdout.read(live, chunk))
     live.child.stderr.on("data", (chunk: Buffer) => {
       live.stderrBuffer = tail(
         live.stderrBuffer + live.approvals.stderr(chunk),
@@ -810,11 +835,13 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
     })
     live.child.on("error", (error) => handleProcessEnd(live, error.message))
     live.child.once("close", () => {
+      stdout.flush(live)
       void live.approvals.close()
       // Its output is all read once its pipes close: the launch's stream is finished.
       live.stream?.ended()
     })
     live.child.on("exit", (code, signal) => {
+      stdout.flush(live)
       const detail = lastLine(live.stderrBuffer)
       const suffix = signal ? `signal ${signal}` : `code ${code ?? "unknown"}`
       handleProcessEnd(live, detail || `codex app-server exited with ${suffix}`, providerExitEvidence(detail))

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { controlNote } from "../control/index.js"
-import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
+import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, heldSubmission, TurnInProgressError, type PromptDispatch } from "../harnesses/index.js"
 import { digestAsks } from "../contracts/agents.js"
 import { FRONT_DOOR_GUIDANCE } from "../contracts/agent-tools.js"
 import { foldedSeparator, JOINED_CHARS, JOINED_MAX, type FoldedBy, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
@@ -27,6 +27,8 @@ import type { LiveActions } from "./live-actions.js"
 import type { LiveCheckpoints } from "./live-checkpoints.js"
 import { contextPrompt } from "./live-context.js"
 import type { LiveAccess, Resident } from "./live-runtime.js"
+import { liveStages } from "./live-stages.js"
+import { stagedCall, stagedWait } from "../base/live-steps.js"
 import type { LiveTransfers } from "./live-transfers.js"
 import { baseUnread } from "./base-source.js"
 import { turnStart, usageMark } from "./live-settlement.js"
@@ -314,9 +316,12 @@ export class LiveDispatch {
    */
   private overBudget(resident: Resident, request: LiveRequest): boolean {
     const now = Date.now()
+    // A digest its harness refused before taking it (`not-accepted`) woke nobody: it keeps when it was tried, and isn't
+    // counted, or its own next try would wait out the minute it never spent.
     const recent = resident.snapshot.requests.flatMap((candidate) => {
       const at = candidate.digest?.sentAt
-      return at !== undefined && at > now - MINUTE_MS ? [{ at, asks: digestAsks(candidate.digest!.notices) }] : []
+      const refused = candidate.nativeDelivery?.evidence.kind === "not-accepted"
+      return at !== undefined && at > now - MINUTE_MS && !refused ? [{ at, asks: digestAsks(candidate.digest!.notices) }] : []
     }).sort((left, right) => left.at - right.at)
     if (recent.length < WAKES_PER_MINUTE) return false
     let at = recent[recent.length - WAKES_PER_MINUTE]!.at + MINUTE_MS
@@ -356,6 +361,8 @@ export class LiveDispatch {
       return
     }
     if (actions.blocks(resident)) return
+    // Nor while an access change is on its way to the harness: `setMode` drains again once it answers.
+    if (resident.modeChanging) return
     // Queued work stays queued, not held: cancelling a move starts it again.
     if (!this.access.moves.executes(resident)) return
     // Nor while this Mac checks with its account after it was away: its Session may have continued in the cloud.
@@ -503,6 +510,7 @@ export class LiveDispatch {
       this.access.storageFailed(resident, { error })
       return
     }
+    if (liveStages.heard) liveStages.publish({ stage: "dispatching", conversation: resident.snapshot.session.id, request: request.id })
     const generation = resident.generation
     // Whether this prompt carries an Apex's roster after its harness forgot it (`rosterForgotten`): the handoff clears
     // the flag in the write that records it sent, so a send that goes no further leaves it for the next.
@@ -578,10 +586,16 @@ export class LiveDispatch {
         // carried answer what the Apex has heard, and Fins' news answers nothing.
         for (const each of resident.snapshot.requests) if (each.joinedInto === request.id) agents?.inputDelivered?.(resident.snapshot.session.id, each, "turn")
       }
+      if (liveStages.heard) liveStages.publish({ stage: "delivery", conversation: resident.snapshot.session.id, request: request.id, evidence: next.kind })
     }
     const drewIt = !shown && Boolean(text || request.attachments.length)
     const dispatch: PromptDispatch = { operationId: request.id, attemptId, report, ...text && { shown: text }, ...drewIt && { shownAt: toldAt } }
     const cwd = resident.snapshot.session.cwd
+    // The checkpoint may hold the message up to ten seconds, and its admission reads nothing of the checkpoint: begun
+    // now, those reads are over, or shared, when the message is admitted as it goes. What the message says is put
+    // together only then: its notices are marked as told and its note's cadence written as they are read, and what
+    // moved in the checkout is read as of the send.
+    if (bindingId) driver.admitAhead?.(bindingId)
     void checkpoints
       .prompt(resident, current, async () => {
         const active = this.access.control(resident).activeBindingId
@@ -604,7 +618,8 @@ export class LiveDispatch {
         // A continuation says what moved since the cut, read here too, so nothing crosses the read (`TurnContinuation.since`).
         const since = request.continues?.since
         const moved = since !== undefined ? await cutAccount(cwd, since, request.continues!.reason, Date.now()).catch(() => undefined) : undefined
-        const checkout = told?.since !== undefined ? checkoutAccount(await checkoutSince(cwd, told.since).catch(() => [])) : undefined
+        const toldSince = told?.since
+        const checkout = toldSince !== undefined ? checkoutAccount(await stagedWait(resident.snapshot.session.id, "interruption account", () => checkoutSince(cwd, toldSince)).catch(() => [])) : undefined
         const apex = !asWritten && (dependencies.agents?.()?.isApex(resident.snapshot.session.id) ?? false)
         const instructions = asWritten || !dependencies.controlInstructions ? undefined : await dependencies.controlInstructions(active, resident.snapshot.session.id, { role: apex ? "apex" : "thread" })
         const rules = asWritten ? {} : (dependencies.agents?.()?.ruleLines(resident.snapshot.session.id) ?? {})
@@ -648,7 +663,12 @@ export class LiveDispatch {
           ]),
           current.context.reduce((text, manifest) => contextPrompt(manifest, text, dependencies.harnessLabel), moved ? `${words}\n\n${moved}` : words),
         ].filter(Boolean).join("\n\n")
-        return driver.prompt(active, text, request.attachments, request.tuning, dispatch)
+        if (liveStages.heard) liveStages.publish({ stage: "assembled", conversation: resident.snapshot.session.id, request: request.id, chars: text.length })
+        // Where writes are held the message went ahead of its checkpoint; one whose submission runs the person's
+        // code by itself waits for it here, as it is worded and before it is admitted.
+        const held = heldSubmission(dependencies.writeHolds, driver.firstWrite?.submitRuns, active, text)
+        if (held) await stagedWait(resident.snapshot.session.id, "held submission", () => held)
+        return stagedCall(resident.snapshot.session.id, "driver.prompt", () => driver.prompt(active, text, request.attachments, request.tuning, dispatch))
       })
       .catch(async (error) => {
         // The harness may not have heard the note: the next prompt carries what the transcript is known to lack (the

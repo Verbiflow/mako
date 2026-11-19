@@ -27,7 +27,12 @@ const SPAWN_WATCH_MS = 5_000
 const CLOSE_WATCH_MS = 8_000
 const FolderSchema = z.string()
 
-/** A watch that fires later than this past its time fired after the host's own loop was held, not the helper. */
+/**
+ * How often a watch looks for the helper's word. Each look counts this much of the watch's time and no more, however
+ * late it ran, so the time a watch measures is time the host's own loop was turning.
+ */
+const WATCH_TICK_MS = 250
+/** A look that ran later than this past its time ran after the host's own loop was held: said once a watch, for the log. */
 const WATCH_LATE_MS = 1_000
 /** A `git` the helper started, lost with it, is waited for this long before its result is said unknown. */
 const ORPHAN_WAIT_MS = 60_000
@@ -309,20 +314,41 @@ export class GitHelper {
     helper.channel?.ref()
   }
 
-  /** Waits `ms` for the helper to say `what` of `child`; a helper that doesn't is wedged. */
-  #watch(child: HelperChild, what: string, ms: number, again = true): void {
+  /**
+   * Waits `ms` for the helper to say `what` of `child`; a helper that doesn't is wedged. The wait is counted in looks
+   * of `WATCH_TICK_MS`, each after a turn of the host's loop: a timer runs before the messages that arrived while the
+   * loop was held are read, so each look lets them be read first (`setImmediate`, held: an unreferenced one never
+   * runs while the loop waits on the silent helper alone) and then sees whether the word came (the message clears the
+   * watch). A look that ran late, the loop having been held, counts one look's time, not the
+   * time it was held. So a stalled host is never read as a stalled helper: only a helper silent through `ms` of looks
+   * the host was awake for is wedged. One excused lateness and no look at the messages killed a healthy helper eight
+   * times in two of the person's logs, with an `update-ref` and a `pack-objects` among the commands left unknown.
+   */
+  #watch(child: HelperChild, what: string, ms: number): void {
     clearTimeout(child.watch)
-    const due = performance.now() + ms
-    child.watch = setTimeout(() => {
-      // A watch that fires late fired after a held loop: the helper's word may be waiting, unread, behind it. It's given
-      // the same time again, once, so a healthy helper is never taken for wedged because the host's own loop stalled.
-      if (again && performance.now() - due > WATCH_LATE_MS) {
-        hostLog("git", "a helper watch fired late; it waits once more", { command: child.command, lateMs: Math.round(performance.now() - due) })
-        return this.#watch(child, what, ms, false)
-      }
-      this.#wedged(`it didn't say ${what} of git ${child.command} within ${ms} ms`)
-    }, ms)
-    child.watch.unref?.()
+    const tick = Math.min(WATCH_TICK_MS, ms)
+    let silentMs = 0
+    let heldMs = 0
+    const look = () => {
+      const due = performance.now() + tick
+      const timer = setTimeout(() => {
+        setImmediate(() => {
+          // Its word came, or another watch took over (a stop asked while it started).
+          if (child.watch !== timer) return
+          const lateMs = performance.now() - due
+          if (lateMs > WATCH_LATE_MS) {
+            if (!heldMs) hostLog("git", "a helper watch looked late; the time the host's loop was held isn't counted", { command: child.command, lateMs: Math.round(lateMs) })
+            heldMs += lateMs
+          }
+          silentMs += tick
+          if (silentMs < ms) return look()
+          this.#wedged(`it didn't say ${what} of git ${child.command} within ${ms} ms${heldMs ? `, not counting ${Math.round(heldMs)} ms the host's own loop was held` : ""}`)
+        })
+      }, tick)
+      timer.unref?.()
+      child.watch = timer
+    }
+    look()
   }
 
   /**

@@ -2,7 +2,7 @@ import { z } from "zod"
 import { useAssetPreview } from "@/components/viewer/asset-preview-context"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { ImageOffIcon, RotateCwIcon } from "lucide-react"
-import { readTranscriptMedia } from "@/state/transcript-media"
+import { heldTranscriptMedia, readTranscriptMedia, type TranscriptMedia } from "@/state/transcript-media"
 import { viewer } from "@/state/viewer"
 import { useTranscriptSource } from "./source-context"
 import type { AttachmentContent } from "@mako/sessions"
@@ -11,7 +11,8 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { InlineFilePreview } from "./file-preview"
 
 type Preview =
-  | { kind: "ready"; url: string; mimeType: string }
+  /** `file`: the host's read of it, with its pixels and smaller renditions; absent for a picture drawn from its own URL. */
+  | { kind: "ready"; url: string; mimeType: string; file?: TranscriptMedia }
   | { kind: "error"; message: string }
   | { kind: "loading" }
 
@@ -41,18 +42,24 @@ export function MediaPreview({
   const key = JSON.stringify([path, threadPath, liveId, attempt])
   const [resolved, setResolved] = useState<{ key: string; preview: Preview }>()
   const [failedUrl, setFailedUrl] = useState<string>()
+  // An attachment's file is Mako's own copy, so a read this window holds is drawn at once: a row scrolled back, a
+  // Thread opened again. A retry asks the host again.
+  const held = useMemo(
+    () => (path && attempt === 0 ? heldTranscriptMedia({ path, threadPath, liveId, settled: true }) : undefined),
+    [path, threadPath, liveId, attempt]
+  )
   useEffect(() => {
     const element = container.current
-    if (!path || !element) return
+    if (!path || !element || held) return
     let canceled = false
     const observer = new IntersectionObserver(
       (entries) => {
         if (!entries.some((entry) => entry.isIntersecting)) return
         observer.disconnect()
-        void readTranscriptMedia({ path, threadPath, liveId }).then(
+        void readTranscriptMedia({ path, threadPath, liveId, settled: true }, { fresh: attempt > 0 }).then(
           (media) => {
             if (!canceled)
-              setResolved({ key, preview: { kind: "ready", ...media } })
+              setResolved({ key, preview: { kind: "ready", url: media.previewUrl, mimeType: media.mimeType, file: media } })
           },
           (error) => {
             if (!canceled)
@@ -76,14 +83,16 @@ export function MediaPreview({
       canceled = true
       observer.disconnect()
     }
-  }, [path, threadPath, liveId, key])
+  }, [path, threadPath, liveId, key, held, attempt])
   const preview: Preview = direct
     ? previewableMediaUrl(direct)
       ? { kind: "ready", url: direct, mimeType: attachment.mimeType }
       : { kind: "error", message: "This link type can't be previewed" }
     : resolved?.key === key
       ? resolved.preview
-      : { kind: "loading" }
+      : held
+        ? { kind: "ready", url: held.previewUrl, mimeType: held.mimeType, file: held }
+        : { kind: "loading" }
   const retry = path
     ? () => {
         setFailedUrl(undefined)
@@ -117,6 +126,7 @@ export function MediaPreview({
           name={attachment.name}
           url={preview.url}
           mimeType={preview.mimeType}
+          read={preview.file}
           onError={() => {
             if (path && attempt < AUTOMATIC_RETRIES) setAttempt(attempt + 1)
             else setFailedUrl(preview.url)
@@ -196,13 +206,19 @@ export function MediaContent({
   name,
   url,
   mimeType,
+  read,
   onError,
 }: {
   name: string
   url: string
   mimeType: string
+  /** The host's read of the file: its pixels hold the box's shape before it loads, and its renditions are what's drawn small. */
+  read?: TranscriptMedia
   onError: () => void
 }) {
-  const file = useMemo(() => ({ path: name, contents: "", previewUrl: url, mimeType, binary: true, truncated: false, size: 0 }), [name, url, mimeType])
+  const file = useMemo(() => ({
+    path: name, contents: "", previewUrl: url, mimeType, binary: true, truncated: false, size: 0,
+    ...(read && { width: read.width, height: read.height, thumbnailUrl: read.thumbnailUrl, posterUrl: read.posterUrl }),
+  }), [read, name, url, mimeType])
   return <InlineFilePreview path={name} name={name} mimeType={mimeType} initiallyOpen sizeKnown={false} onPreviewError={onError} resolvedFile={file} />
 }

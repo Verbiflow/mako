@@ -1,4 +1,5 @@
 import { decodeControlVideoBatch } from "@mako/control-runtime/contracts"
+import { onWindowShown, windowShown } from "@/lib/window-shown"
 import type { ListedSimulator, SimulatorAction, SimulatorOrientation, SimulatorPoint, SimulatorsListed } from "@mako/host/contracts/simulators"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
@@ -191,8 +192,13 @@ export function watchSimulatorVideo(
   const read = async () => {
     timer = undefined
     if (closed) return
-    if (document.hidden) {
-      timer = setTimeout(read, 500)
+    if (!windowShown()) {
+      // Parked, with no timer of its own, until someone can see the picture again.
+      const back = onWindowShown((shown) => {
+        if (!shown) return
+        back()
+        void read()
+      })
       return
     }
     let live: boolean

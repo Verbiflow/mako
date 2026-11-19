@@ -17,6 +17,7 @@ export { WorkspaceGit, previewDiffs, treeDiff, treeFiles } from "./workspace-git
 export { hostGit } from "./host-git.js"
 export { GitHubRateLimitError } from "./github-reads.js"
 export { discoverRepositories, projectRepositories } from "./repository-discovery.js"
+export { checkoutStatuses, type CheckoutStatuses } from "./checkout-status.js"
 export { forgetGitHubReads, githubApi, githubStatus, listBranchPulls, listPullHeads, readPull, PullReadError, RequiredChecks, type GitHubRunner, type PullTarget } from "./github.js"
 export { machinePullRequestsAs, pullRequestTools, registerPullRequestTools, type PullRequestTools, type ReachableRepository, type RepositoryPlace } from "./pull-request-tools.js"
 

@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto"
-import { mkdir, mkdtemp, readdir, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import type { Git } from "@mako/git"
@@ -116,6 +116,9 @@ const CARRIED_FILE_BYTES = 20 * 1024 * 1024
 async function inlined(attachments: readonly PromptAttachment[]): Promise<PromptAttachment[]> {
   return Promise.all(attachments.map(async (attachment) => {
     if (attachment.data !== undefined || !attachment.path) return attachment
+    // Sized before it's read: a recording too large to carry is never read into memory to find that out.
+    const size = await stat(attachment.path).then((info) => info.size, () => undefined)
+    if (size === undefined || size > CARRIED_FILE_BYTES) return attachment
     const bytes = await readFile(attachment.path).catch(() => undefined)
     if (!bytes || bytes.length > CARRIED_FILE_BYTES) return attachment
     return { ...attachment, data: bytes.toString("base64"), size: bytes.length }

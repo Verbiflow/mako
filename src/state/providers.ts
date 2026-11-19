@@ -48,7 +48,10 @@ export function providerProfileKey(provider: string, cwd: string): string {
   return JSON.stringify([provider, cwd])
 }
 
-const requests = new Map<string, Promise<void>>()
+const requests = new Map<string, { settled: Promise<void>; forced: boolean }>()
+/** The order each key's reads were sent in, and the latest one admitted: an older reply never lands over a newer. */
+const sent = new Map<string, number>()
+const admitted = new Map<string, number>()
 const loadedAt = new Map<string, number>()
 const generations = new Map<string, number>()
 const scopes = new Map<string, { provider: string; cwd: string }>()
@@ -62,8 +65,24 @@ interface DiscoveryRetry {
 }
 const retries = new Map<string, DiscoveryRetry>()
 let readers: ViewRefetch | undefined
-/** Backoff for asking again after a failed discovery; tests shorten it. */
-export const discoveryRetry = { firstMs: 10_000, maxMs: 120_000 }
+/**
+ * Backoff for asking again after a failed discovery; tests shorten it. It reaches the host's own longest hold: a
+ * retry every two minutes at most kept a Claude discovery that timed out at 30 s running a quarter of the time.
+ */
+export const discoveryRetry = { firstMs: 10_000, maxMs: 600_000 }
+/**
+ * How long a profile the host answered is reused before a composer that mounts asks again. The ask is a read of what
+ * the host holds, never a discovery by itself, and the host says what changed as `harness-profile` events.
+ */
+const PROFILE_REUSE_MS = 300_000
+
+/**
+ * Whether there is nothing of `profile` to show yet. A profile with models is shown whatever else it says: one held
+ * from an earlier discovery lists the account's models while the harness is asked again.
+ */
+export function profileUnread(profile: HarnessProfile | undefined): boolean {
+  return !profile || (profile.pending === true && profile.models.length === 0)
+}
 
 function providerReads(): ViewRefetch {
   if (readers) return readers
@@ -86,23 +105,10 @@ function armRetry(key: string, retry: DiscoveryRetry): void {
     retry.timer = undefined
     if (retries.get(key) !== retry || !reads.visible || !reads.connected(DESK_SCOPE)) return
     retry.started = true
-    void providers.load(retry.provider, true, retry.cwd).catch(() => {})
+    // A read, not an ask: the host retries the discovery on its own hold and this reads what came of it. Forced, each
+    // retry started a CLI however recently the last one had failed.
+    void providers.load(retry.provider, false, retry.cwd).catch(() => {})
   }, Math.max(0, retry.due - Date.now()))
-}
-
-/** Composer and picker interests share the page's visibility, focus catch-up and five-minute reconcile. */
-export function watchProviderProfile(provider: string, cwd: string): () => void {
-  if (!hasBridge()) return () => {}
-  const key = providerProfileKey(provider, cwd)
-  const lease = providerReads().watch(JSON.stringify(["provider", provider, cwd]), {
-    scope: DESK_SCOPE, domain: "providers", key, fields: ["all"], every: () => 300_000,
-    read: async () => {
-      // The failed discovery already owns its deadline. A focus or periodic read must not defeat its backoff.
-      const retry = retries.get(key)
-      if (!retry || retry.started) await providers.load(provider, false, cwd).catch(() => {})
-    },
-  })
-  return () => lease.release()
 }
 
 /**
@@ -193,6 +199,10 @@ export const providers = {
     )
   },
 
+  /**
+   * Every harness as the host holds it. A window's start reads snapshots and starts no discovery; `force` is the
+   * person asking Settings to read every harness again.
+   */
   async loadAll(force = false): Promise<void> {
     if (!hasBridge() || (loaded && !force)) return
     if (loading) return loading
@@ -222,24 +232,59 @@ export const providers = {
     return loading
   },
 
+  /**
+   * The picker opened in `cwd`: every harness it lists is asked for its models now. This is the one place a person
+   * asks, so a model a harness released since its last discovery appears here.
+   */
+  async askShown(cwd: string): Promise<void> {
+    await providers.loadAll()
+    await Promise.all(Object.keys(providerStore.get().profiles).map((provider) => providers.load(provider, true, cwd).catch(() => {})))
+  },
+
+  /**
+   * Every harness, for a page that lists each one's models: what is held, then a read of each harness nothing is
+   * held for, which is the only case the host discovers for a read.
+   */
+  async loadListed(): Promise<void> {
+    await providers.loadAll()
+    await Promise.all(Object.values(providerStore.get().profiles)
+      .filter((profile) => profileUnread(profile))
+      .map((profile) => providers.load(profile.id, false, "").catch(() => {})))
+  },
+
+  /**
+   * One harness in `cwd`. Unforced, it reads what the host holds (the host refreshes behind its answer when that is
+   * due); `force` asks the harness itself.
+   */
   async load(provider: string, force = false, cwd = ""): Promise<void> {
     if (!hasBridge()) return
     const key = providerProfileKey(provider, cwd)
     scopes.set(key, { provider, cwd })
     const active = requests.get(key)
-    if (active) return active
-    if (!force && Date.now() - (loadedAt.get(key) ?? 0) < 30_000) return
+    // A read in flight answers another read. It does not answer an ask: the picker's rows read as they mount, and
+    // the ask made by opening it must still reach the harness.
+    if (active && (active.forced || !force)) return active.settled
+    const reusedFrom = loadedAt.get(key)
+    if (!force && reusedFrom !== undefined && Date.now() - reusedFrom < PROFILE_REUSE_MS) return
     const generation = generations.get(provider) ?? 0
+    const turn = (sent.get(key) ?? 0) + 1
+    sent.set(key, turn)
     const request = getMako()
       .harnessTuning(provider, cwd || undefined, force)
       .then((profile) => {
         if ((generations.get(provider) ?? 0) !== generation) return
+        if (turn < (admitted.get(key) ?? 0)) return
+        admitted.set(key, turn)
         admit(profile, cwd)
         if (profile.pending) return
         if (profile.available && !profile.configurationError) {
           loadedAt.set(key, Date.now())
           clearRetry(key)
-        } else scheduleRetry(key, provider, cwd)
+        } else {
+          // What was reused is no longer what the host holds: the retry's read must reach it.
+          loadedAt.delete(key)
+          scheduleRetry(key, provider, cwd)
+        }
       })
       .catch((error) => {
         if ((generations.get(provider) ?? 0) !== generation) return
@@ -256,9 +301,9 @@ export const providers = {
         throw error
       })
       .finally(() => {
-        if (requests.get(key) === request) requests.delete(key)
+        if (requests.get(key)?.settled === request) requests.delete(key)
       })
-    requests.set(key, request)
+    requests.set(key, { settled: request, forced: force })
     return request
   },
 

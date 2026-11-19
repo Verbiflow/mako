@@ -40,6 +40,11 @@ const cases = [
 ]
 for (const { label, before, after } of cases) {
   assert.equal(before.observedAt, after.observedAt, `${label}: the two say the same time`)
+  // One list per roster: whoever compares a batch's Fins tells none moved by the list being the one it had.
+  const roster = [before]
+  assert.equal(listedFins(roster), listedFins(roster), `${label}: a roster's Fins are listed once`)
+  assert.notEqual(listedFins([before]), listedFins(roster), `${label}: another roster's are another list`)
+  assert.deepEqual(listedFins([before]), listedFins(roster), `${label}: saying the same`)
   const row = (session: string, conversation: string, agent: typeof before) => ReportedSessionSchema.parse({
     session, thread, conversation, harness: "claude",
     ...conversationShown({ session: { id: conversation, status: "ready" }, working: undefined, waitingOn: () => undefined, fins: () => listedFins([agent]) }),

@@ -18,6 +18,7 @@ import { JournalWriteError } from "./live-journal.js"
 import { releaseExited } from "./live-launches.js"
 import type { LiveQuestions } from "./live-questions.js"
 import { revokeTools, type LiveAccess, type Resident } from "./live-runtime.js"
+import { observedDriverEvents } from "./live-stages.js"
 import { requestTurnEnd, sessionTurnEnd, settleRequest, turnSpendAt, usageMark } from "./live-settlement.js"
 import { updateBinding } from "./live-sources.js"
 import { noteHeard, sameNoteHeard } from "./control-cadence.js"
@@ -99,6 +100,7 @@ export class LiveEvents {
    * stopping it would cost the person the agent's work for a fault of Mako's, and the next event is saved as usual.
    */
   observe(event: LiveDriverEvent): void {
+    observedDriverEvents.publish(event)
     try {
       this.accept(event)
     } catch (error) {

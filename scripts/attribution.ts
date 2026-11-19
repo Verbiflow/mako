@@ -25,7 +25,6 @@ import { JournalStore } from "@mako/host/attribution/journal-store"
 import { decodeText } from "@mako/host/attribution/content"
 import { splitLines } from "@mako/host/attribution/line-diff"
 import { presentRuns } from "@mako/host/attribution/line-map"
-import { NoiseBaseline } from "@mako/host/attribution/noise-baseline"
 import { within } from "@mako/host/attribution/paths"
 import type { FootprintBasis } from "@mako/protocol"
 import { changes, partition, restorable, shares, storedView, writerOf } from "@mako/host/attribution/queries"
@@ -70,7 +69,7 @@ const FOOTPRINT_BASES = {
   folder: "in a folder one of its calls named",
   output: "a command's output mentioned it",
   cwd: "in a folder the turn ran in",
-  window: "changed while the turn ran and no rule explains it",
+  window: "changed while the turn ran and no rule explains it (rows from before these stopped being kept)",
 } satisfies Record<FootprintBasis, string>
 
 function who(author: Attribution | null): string {
@@ -287,18 +286,15 @@ switch (command) {
     for (const turn of store.footprintTurns(thread, Number(turnsOption ?? 5))) {
       const own = entries.filter((entry) => entry.session === turn.session && (entry.turn ?? undefined) === turn.turn)
       console.log(`turn ${turn.turn ?? "?"} of session ${turn.session}, ${time(turn.start)} to ${time(turn.end)}${turn.complete ? "" : " (the history may be incomplete)"}`)
-      console.log(`  the history read ${turn.read} paths and left ${turn.ignored} out under rule folders in ${turn.ms.read} ms; the rules took ${turn.ms.classify} ms`)
+      console.log(`  the history read ${turn.read} paths under the turn's claims and left ${turn.ignored} out under checkouts and stores in ${turn.ms.read} ms; the rules took ${turn.ms.classify} ms`)
       console.log(`  kept ${turn.kept.strong} strong, ${turn.kept.weak} weak; left out ${Object.entries(turn.excluded).map(([rule, count]) => `${rule} ${count}`).join(", ") || "nothing"}`)
       for (const group of turn.groups.slice(0, 12)) console.log(`    left out ${String(group.count).padStart(6)}  ${group.rule.padEnd(13)} ${short(group.folder)}${group.why ? `  (${group.why})` : ""}`)
       for (const entry of own.filter((item) => item.evidence === "strong")) console.log(`    kept ${entry.access.padEnd(5)} ${short(entry.path)}  (${FOOTPRINT_BASES[entry.basis ?? "named"]}${entry.secret ? "; looks like a secret, never carried" : ""})`)
+      // Weak rows are no longer written; a turn read before that still has its own.
       const weak = own.filter((item) => item.evidence === "weak")
       for (const entry of weak.slice(0, 10)) console.log(`    weak ${short(entry.path)}  (${FOOTPRINT_BASES.window})`)
       if (weak.length > 10) console.log(`    and ${weak.length - 10} more weak`)
     }
-    const baseline = new NoiseBaseline(store, { roots: [home, "/private/tmp"], now: () => Date.now() })
-    console.log(`\nlearned noise: ${baseline.size} keys, ${baseline.folders().length} folders a history read leaves out; strongest:`)
-    for (const row of baseline.list(20)) console.log(`  ${row.score.toFixed(2).padStart(6)}  ${row.kind.padEnd(8)} idle ${row.idle.toFixed(1)}, weak ${row.weak.toFixed(1)} in ${row.threads.length} Threads  ${short(row.key)}`)
-    for (const broad of baseline.broadFolders()) console.log(`  churn as a whole: ${short(broad.folder)} (${broad.folders} of its folders changed while no Thread ran, score ${broad.score.toFixed(1)})`)
     break
   }
   default:

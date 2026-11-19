@@ -9,4 +9,5 @@ export const DEVIN_LAYER: LayerCapabilities = {
   subagents: { kind: "fallback", via: "words", loses: "Devin declares no agents Mako can define; the instructions say when to start a Fin" },
   hooks: { kind: "native", via: "config-hooks", how: "hooks in the launch's own config folder", inUse: true },
   personSetup: "kept",
+  serverInstructions: { kind: "unread", reason: "`mcp_list_servers` gives the model each server's name only: in 29 stored Devin CLI 3000.10.23 rows the `mako` instructions never reached it (2026-11-17 audit)" },
 }

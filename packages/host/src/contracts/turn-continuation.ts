@@ -220,6 +220,28 @@ export function crashedChildTurn(requests: readonly LiveRequest[], now = Date.no
   return ran
 }
 
+/** What `cutLast` reads of a request: how it stands, and why it was cut short. */
+export interface CutFacts {
+  status: LiveRequest["status"]
+  interruption?: { reason: InterruptionReason } | undefined
+}
+
+/**
+ * Whether the last request that ran (not queued, held or canceled) was cut short in a way its turn may be stranded by
+ * (`strandedTurn`'s first test): interrupted or uncertain, for a reason that isn't a Stop or a steer. What a host
+ * watches a Fin's conversation for as it starts, read from its journal's summary when it isn't in memory
+ * (`LiveRecords.turnCut`), so starting never reads a journal in to learn it.
+ */
+export function cutLast(requests: readonly CutFacts[]): boolean {
+  let ran: CutFacts | undefined
+  for (let index = requests.length - 1; index >= 0 && !ran; index -= 1) {
+    const request = requests[index]!
+    if (request.status !== "canceled" && request.status !== "queued" && request.status !== "held") ran = request
+  }
+  const reason = ran?.interruption?.reason
+  return (ran?.status === "interrupted" || ran?.status === "uncertain") && reason !== undefined && reason !== "stopped" && reason !== "steered"
+}
+
 /**
  * A Fin's or an Apex's turn cut short that nothing will pick up: the newest
  * request that ran, cut for a reason other than a Stop, with no continuation
@@ -228,6 +250,7 @@ export function crashedChildTurn(requests: readonly LiveRequest[], now = Date.no
  * scheduled. Its Apex hears of it, since nobody else is watching.
  */
 export function strandedTurn(requests: readonly LiveRequest[]): LiveRequest | undefined {
+  if (!cutLast(requests)) return undefined
   let ran: LiveRequest | undefined
   for (let index = requests.length - 1; index >= 0 && !ran; index -= 1) {
     const request = requests[index]!

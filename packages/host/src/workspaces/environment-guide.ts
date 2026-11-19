@@ -51,7 +51,7 @@ Search the code. Don't guess.
 
 A new worktree has only what Git checks out. Everything Git ignores stays in the main checkout unless the recipe brings it, and the app usually needs some of it: env and key files, local settings, installed packages, downloaded models or fixtures. Without them a new worktree's app won't start, or its agent copies files by hand. Most projects need carry or prepare, or both.
 
-1. Call worktree_status. It lists the main checkout's ignored paths, folding big folders into folder/**, without reading any of them.
+1. Call worktree_status with ignored: true. It lists the main checkout's ignored paths, folding big folders into folder/**, without reading any of them.
 2. Give each one a place:
    - The app, its checks or an agent reads it, and a Thread may change it, such as an env file or a local settings file: carry, copied.
    - The project's install makes it, such as node_modules, vendor or Pods: a prepare step running that install, with the lockfiles as inputs and the folder in outputs. A new worktree then links the main checkout's packages instead of installing.
@@ -130,7 +130,7 @@ The fields:
 - secretNames: the secrets the app reads from its environment, by name, such as ["E2B_API_KEY"], never their values. On this computer the files in carry meet them; a cloud machine gets them from the account it works for, and a cloud start that would lack one says which before it starts.
 - cleanup: a command that undoes what a Thread's app leaves outside its checkout, run in the worktree when the worktree is removed, with the Thread's values and its processes' own (a name two processes set differently is left out): its containers' volumes (docker compose down -v, with COMPOSE_PROJECT_NAME set to {thread}), its own database (dropdb), its simulator device. Only what's the Thread's own; never anything shared. A stop needs no cleanup: Mako stops every process the app started.
 - Nothing else comes from the main checkout: without carry and outputs, a new worktree has only what Git checks out.
-- worktree_status lists ignored paths in the originating main checkout, without reading their values. worktree_bring brings the recipe's carry into this Thread's existing worktree now, or takes entries such as [{"path":"config/dev.local.json"}] for a one-off need without changing the recipe; "link": true shares one with the main checkout instead. Bringing an entry that's linked here without link makes it this worktree's own, so you can change it here alone; other existing files stay untouched. Use prepare outputs for dependency folders that need matching inputs.
+- worktree_status with ignored: true lists ignored paths in the originating main checkout, without reading their values. worktree_bring brings the recipe's carry into this Thread's existing worktree now, or takes entries such as [{"path":"config/dev.local.json"}] for a one-off need without changing the recipe; "link": true shares one with the main checkout instead. Bringing an entry that's linked here without link makes it this worktree's own, so you can change it here alone; other existing files stay untouched. Use prepare outputs for dependency folders that need matching inputs.
 
 Keep it small, and name the project's own scripts. Add a script to the project only when none exists. Nothing Mako-specific goes inside a command, so every command still works without Mako.
 
@@ -221,3 +221,48 @@ Never write to production data, delete data, or stop a process you didn't start.
 
 If something needs human eyes, such as a sign-in flow you can't complete or a visual change, you may ask the user to try it on the running app. That's optional, never a gate.
 `
+
+/** What recipe_guide's section takes: each section's name, in order, or "all". */
+export const GUIDE_CHOICES = ["thread", "existing", "learn", "collisions", "fixes", "save", "try", "services", "ask", "finish", "all"] as const
+
+export type GuideSection = Exclude<(typeof GUIDE_CHOICES)[number], "all">
+
+/** The guide's sections in order: the name recipe_guide takes, the heading it opens with, and one line on what it holds. */
+export const GUIDE_SECTIONS: readonly { name: GuideSection; heading: string; about: string }[] = [
+  { name: "thread", heading: "## What each Thread already has", about: "the ports, host, data folders and app_* tools every Thread gets" },
+  { name: "existing", heading: "## 0. Is there a recipe already?", about: "start from app_status; keep a recipe that works, repair one that doesn't" },
+  { name: "learn", heading: "## 1. Learn how the project runs", about: "where to find the install, start and check commands" },
+  { name: "collisions", heading: "## 2. Find what two copies would fight over", about: "ports, databases, files, services; and what a new worktree lacks (carry, prepare, leave)" },
+  { name: "fixes", heading: "## 3. Fix each collision on the lowest rung", about: "the ladder of fixes, from values to oneAtATime" },
+  { name: "save", heading: "## 4. Save the recipe", about: "an example recipe and every field: values, processes, targets, checks, prepare, carry, leave, verify, places, cleanup" },
+  { name: "try", heading: "## 5. Try it with the tools", about: "app_start, app_check, recipe_publish and what verify is for" },
+  { name: "services", heading: "## 6. Outside services", about: "a database per Thread, and credentials, which nobody opens" },
+  { name: "ask", heading: "## 7. Stop and ask", about: "what needs the user first" },
+  { name: "finish", heading: "## 8. Finish", about: "what to tell the user once it's published" },
+]
+
+/**
+ * What recipe_guide returns: with no section, the guide's opening and an
+ * index of its sections; with one, that section whole; with "all", the
+ * whole guide.
+ */
+export function guideText(section?: GuideSection | "all"): string {
+  if (section === "all") return ENVIRONMENT_GUIDE
+  const starts = GUIDE_SECTIONS.map(({ heading }) => {
+    const at = ENVIRONMENT_GUIDE.indexOf(`\n${heading}`)
+    if (at < 0) throw new Error(`The recipe guide has no section "${heading}".`)
+    return at + 1
+  })
+  if (section) {
+    const index = GUIDE_SECTIONS.findIndex(({ name }) => name === section)
+    return ENVIRONMENT_GUIDE.slice(starts[index], starts[index + 1] ?? ENVIRONMENT_GUIDE.length).trimEnd()
+  }
+  // `about` as written: it may open with a tool's name (app_start), which a capital would misname.
+  const index = GUIDE_SECTIONS.map(({ name, heading, about }) => `- ${name}: ${heading.replace(/^#+ /, "")} (${about})`)
+  return [
+    ENVIRONMENT_GUIDE.slice(0, starts[0]).trimEnd(),
+    "## Sections",
+    `Call recipe_guide with section set to a name below for its text, in order when setting up from nothing, or section "all" for the whole guide. A small change to a working recipe needs only "existing" and "save".`,
+    index.join("\n"),
+  ].join("\n\n")
+}

@@ -72,7 +72,7 @@ const go: LiveUpdate = { kind: "user", text: "Fix the redirect", at: at(0) }
   assert.deepEqual(sweeps(html), ["Running npm test"], "the running call's verb and what it runs sweep as one")
   assert.doesNotMatch(liveStepOf(html), /activity-orb|activity-mark|<canvas| running</, "the sweep is the row's only running signal: no mark at its end, no count")
   assert.doesNotMatch(html, /class="[^"]*(changing-label|animate-)[^"]*shimmer-text|class="[^"]*shimmer-text[^"]*(changing-label|animate-)/, "nothing else animates a sweeping element, so nothing replaces its sweep")
-  assert.match(html, /data-work-summary[^>]*>[^]*Made an edit, read a file and searched once/, "what finished reads as today's summary")
+  assert.match(html, /data-work-summary[^>]*>[^]*Made an edit · read a file · searched once/, "what finished reads as the summary's phrases, one a kind of work")
   assert.equal(html.match(/data-transcript-tool=/g)?.length, 1, "the finished rows stay unmounted until the list opens")
   assert.match(liveStepOf(html), /data-transcript-tool="[^"]*test"[^>]*>[^]*data-pending="true"/, "the running call is the transcript's own row for it, so nothing is swapped when it returns")
   assert.match(html, /data-turn-clock/, "the turn's head carries its clock")
@@ -253,7 +253,7 @@ assert.equal(relativeTo(undefined, "/work/app/x"), "/work/app/x")
   assert.equal(turnFolds(responseSections(words.response)).length, 0)
 }
 
-// A fold keeps boundaries and attention in view; a steer starts a stretch of its own.
+// A fold keeps attention in view and words boundaries in its line; a steer starts a stretch of its own.
 {
   const updates: LiveUpdate[] = [
     go,
@@ -266,12 +266,16 @@ assert.equal(relativeTo(undefined, "/work/app/x"), "/work/app/x")
   const exchange = exchangesOf(updates, false).at(-1)!
   const sections = responseSections(exchange.response, exchange.system)
   const folds = turnFolds(sections)
-  const kept = folds.flatMap((fold) => fold.kept.map((index) => sections[index]!))
-  assert.ok(kept.some((section) => section.kind === "note" && section.message.note?.label === "Context compacted"), "a compaction stays in view")
-  assert.ok(!kept.some((section) => section.kind === "note" && section.message.note?.label === "Hook"), "an ambient note folds")
+  // A compaction is a phrase of the turn's one line, and its own divider once that line is opened; nothing ambient stays out.
+  const hidden = folds.flatMap((fold) => sections.slice(fold.start, fold.end))
+  assert.ok(hidden.some((section) => section.kind === "note" && section.message.note?.label === "Context compacted"), "a compaction folds into the line")
+  assert.deepEqual(folds.flatMap((fold) => fold.kept), [], "and neither it nor an ambient note is kept out")
   const html = draw(exchange)
-  assert.match(html, /data-event-divider[^]*Context compacted[^]*182K → 24K tokens/, "a compaction is a divider with its tokens, in view while the turn is folded")
+  assert.match(html, /data-fold-title[^>]*>Context compacted · Hook/, "the line says the compaction")
   assert.doesNotMatch(html, /formatted 2 files/)
+  setTurnFoldOpen(turnFoldKey(LIVE, exchange.id, 0), true)
+  assert.match(draw(exchange), /data-event-divider[^]*Context compacted[^]*182K → 24K tokens/, "opened, a compaction is a divider with its tokens")
+  setTurnFoldOpen(turnFoldKey(LIVE, exchange.id, 0), false)
   assert.match(draw(exchangesOf([go, { kind: "event", ...modelChangedEvent("a", "b") }, text("x", "ok")], false).at(-1)!), /data-event-divider/, "so is a model change")
   // A steer splits the turn: each stretch folds on its own, the second "continued".
   const work = sections.find((section) => section.kind === "work")!

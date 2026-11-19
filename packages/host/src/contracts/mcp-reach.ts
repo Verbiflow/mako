@@ -10,6 +10,13 @@ import type { HarnessProfile } from "./providers-acp.js"
 export const MAKO_COMPUTER_SERVER = "mako-computer"
 /** The per-conversation server for the Thread's worktree, app and recipe. */
 export const MAKO_THREAD_SERVER = "mako"
+/** The query parameter of the `mako` server's URL that, as `0`, serves it without instructions (`withoutInstructions`). */
+export const INSTRUCTIONS_PARAM = "instructions"
+
+/** `url` asking for the `mako` server without its instructions, for a harness that hears them in Mako's own blocks. */
+export function withoutInstructions(url: string): string {
+  return `${url}${url.includes("?") ? "&" : "?"}${INSTRUCTIONS_PARAM}=0`
+}
 
 const ALL_TRANSPORTS: readonly McpTransport[] = ["stdio", "http", "sse"]
 const LOCAL_AND_HTTP: readonly McpTransport[] = ["stdio", "http"]

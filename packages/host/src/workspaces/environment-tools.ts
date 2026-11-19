@@ -13,7 +13,7 @@ import type { AppActionOutcome, AppCheckStepView, AppCheckView, AppMark, AppOutp
 import type { ProjectAppSetup, ProjectRecipeState, RecipeProcessView, RecipeProofSummary, RecipeVersionView } from "../contracts/project-app.js"
 import { applyThreadEnvironment, type FolderApp } from "./thread-environment.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
-import { ENVIRONMENT_GUIDE } from "./environment-guide.js"
+import { GUIDE_CHOICES, guideText, type GuideSection } from "./environment-guide.js"
 import { carryReport, holdsCredentials, isSpareCheckout, linkedCarry, linkedEntries, linkReach, ownPackages, reachRoots, throughLinks, type LinkReach } from "./worktree-carry.js"
 import { ago, toolText, when } from "../base/tool-text.js"
 import { cleanOutput, OUTPUT_BUDGET, presentOutput } from "./run-output.js"
@@ -183,7 +183,7 @@ export interface AppsLook {
 }
 
 export interface EnvironmentTools {
-  status(conversationId: string): Promise<string>
+  status(conversationId: string, options?: { versions?: boolean }): Promise<string>
   start(conversationId: string, names?: string[], target?: string): Promise<string>
   stop(conversationId: string, names?: string[]): Promise<string>
   restart(conversationId: string, names?: string[], target?: string): Promise<string>
@@ -222,7 +222,7 @@ export interface EnvironmentTools {
    */
   look(): Promise<AppsLook>
   /** How to set up the recipe; the project shows as being set up by this conversation until its checks pass or its turn ends with one saved. */
-  guide(conversationId: string): Promise<string>
+  guide(conversationId: string, section?: GuideSection | "all"): Promise<string>
   /** The same app, for a person at the desk, by folder. */
   desk: DeskApp
 }
@@ -1798,7 +1798,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     desk,
     traceApps,
     look,
-    async guide(conversationId) {
+    async guide(conversationId, section) {
       const cwd = deps.cwd(conversationId)
       const environment = cwd ? await deps.environment(conversationId, cwd).catch(() => undefined) : undefined
       if (cwd && environment) {
@@ -1810,9 +1810,9 @@ export function environmentTools(deps: Deps): EnvironmentTools {
           setups.set(root, { conversation: conversationId, since: (deps.now ?? Date.now)(), appStarted: false })
         if (!working) stoppedSetups.delete(root)
       }
-      return ENVIRONMENT_GUIDE
+      return guideText(section)
     },
-    async status(conversationId) {
+    async status(conversationId, options = {}) {
       const { environment, checkout, read } = await context(conversationId)
       const runs = await deps.processes.status(environment.app)
       const launched = deps.launchedWith(conversationId)
@@ -1835,7 +1835,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         app: read.kind === "ready" ? appAddress(read.recipe, environment, runs) : `http://${environment.host}:${environment.port}`,
         ports: `${environment.port}-${environment.port + environment.ports - 1}`,
         dataFolder: environment.dataDir,
-        recipe: recipeSummary(read, read.saved ? await versionHistory(read.saved, environment.app, HISTORY_LISTED) : undefined, now),
+        recipe: recipeSummary(read, read.saved ? await versionHistory(read.saved, environment.app, HISTORY_LISTED) : undefined, now, options.versions === true),
         values: Object.keys(values).length ? values : undefined,
         yourShell: launched === undefined
           ? "Mako didn't start this agent process with this Thread's values."
@@ -1932,7 +1932,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         const kept = await versionNumbers(file)
         throw new Error(kept.includes(version)
           ? `Not saved: this Mako can't read version ${version}'s recipe (a newer Mako may have saved it), so it can't bring it back.`
-          : `Not saved: the project has no version ${version}${kept.length ? `; it keeps ${numberList(kept)}, and app_status lists the newest` : ""}.`)
+          : `Not saved: the project has no version ${version}${kept.length ? `; it keeps ${numberList(kept)}, and app_status with versions: true lists the newest` : ""}.`)
       }
       const now = (deps.now ?? Date.now)()
       if (version === (await publishedVersion(file, now)))
@@ -2076,7 +2076,7 @@ function checkView(tier: CheckTier, command: string, status: RunStatus | undefin
 interface RecipeSummary {
   /** Which version this app runs, and whether it's published. */
   version?: string
-  /** This Thread's draft and the newest published versions, one line each, newest first. */
+  /** This Thread's draft and the newest published versions, one line each, newest first; only when asked. */
   versions?: string[]
   /** How to go back to one of them. */
   goBack?: string
@@ -2090,7 +2090,7 @@ interface RecipeSummary {
   contents?: Recipe
 }
 
-function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>, history: VersionHistory | undefined, now: number): RecipeSummary | string {
+function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>, history: VersionHistory | undefined, now: number, listed: boolean): RecipeSummary | string {
   if (read.kind === "none") return "none: agents run things themselves on this Thread's ports; recipe_guide says how to set one up"
   const summary: RecipeSummary = {}
   if (read.kind === "invalid") summary.broken = read.message
@@ -2103,10 +2103,12 @@ function recipeSummary(read: Awaited<ReturnType<typeof readRecipe>>, history: Ve
         ? `${read.version}, which this app's processes started with; version ${read.newer} is published, and app_restart of the whole app runs it`
         : `${read.version}, published`
   if (history && history.kept.length > 1) {
-    summary.versions = history.entries.map((entry) => versionLine(entry, now))
     const draft = history.entries.some((entry) => entry.state === "draft")
-    const unlisted = history.kept.length > history.entries.length ? `; listed are ${draft ? "this Thread's draft and " : ""}the newest published` : ""
-    summary.goBack = `${history.kept.length} versions kept${unlisted}. recipe_save with a version number instead of a recipe saves that version's recipe as this Thread's draft; recipe_publish proves it again before every Thread gets it.`
+    const newest = `${draft ? "this Thread's draft and " : ""}the newest published`
+    if (listed) summary.versions = history.entries.map((entry) => versionLine(entry, now))
+    const kept = !listed ? `${history.kept.length} versions kept; app_status with versions: true lists ${newest}`
+      : `${history.kept.length} versions kept${history.kept.length > history.entries.length ? `; listed are ${newest}` : ""}`
+    summary.goBack = `${kept}. recipe_save with a version number instead of a recipe saves that version's recipe as this Thread's draft; recipe_publish proves it again before every Thread gets it.`
   }
   if (read.kind === "ready") {
     if (read.ignored) summary.ignored = `${read.ignored}: committed with the project, but the recipe saved in Mako comes first`
@@ -2492,11 +2494,11 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_status",
     {
       description:
-        "Call first when you need this Thread's app running or checked, when a start or check went wrong, or before changing the recipe. Returns this Thread's address, ports and data folder; the project's recipe (where it's kept, its recent versions, all of it, the values it sets for this Thread and whether your shell has them); each process's state (running, starting, stopped, or crashed with its exit code); and the last quick and full check results.",
-      inputSchema: z.object({}).strict(),
+        "Call first when you need this Thread's app running or checked, when a start or check went wrong, or before changing the recipe. Returns this Thread's address, ports and data folder; the project's recipe (where it's kept, its version, all of it, the values it sets and whether your shell has them; versions: true adds recent versions); each process's state (running, starting, stopped, or crashed with its exit code); and the last check results.",
+      inputSchema: z.object({ versions: z.boolean().optional() }).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    () => reply(() => tools.status(conversationId()))
+    ({ versions }) => reply(() => tools.status(conversationId(), { versions: versions === true }))
   )
   server.registerTool(
     "app_start",
@@ -2580,17 +2582,17 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "recipe_guide",
     {
       description:
-        "Read before setting up or repairing this project's recipe: when the user asks for every Thread to run or test its own copy of the app, when app_status says there's no recipe or it's broken, or when a change of yours needs a recipe field you don't know yet. Explains where to learn how the project runs, what two copies of the app fight over, every recipe field, and how to prove the result with the app tools. A small edit to a working recipe needs only app_status and recipe_save.",
-      inputSchema: z.object({}).strict(),
+        "Read before setting up or repairing this project's recipe: when the user asks for every Thread to run its own copy of the app, when app_status says there's no recipe or it's broken, or when you need a recipe field you don't know. Returns an index of sections (where to learn how the project runs, what two copies fight over, every recipe field, proving it with the app tools); pass section for one, or all. A small edit to a working recipe needs only app_status and recipe_save.",
+      inputSchema: z.object({ section: z.enum(GUIDE_CHOICES).optional() }).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
-    () => reply(() => tools.guide(conversationId()))
+    ({ section }) => reply(() => tools.guide(conversationId(), section))
   )
   server.registerTool(
     "recipe_save",
     {
       description:
-        "Save a new version of this project's recipe, which says how every Thread installs, starts and checks the app. Call it when setting one up, when repairing a broken one, and in the same turn as any change of yours that alters how the project installs, starts or is checked: a new install step, a renamed script, a new port, value or service. Pass the whole recipe; app_status shows the current one to edit. Mako checks it against this Thread's ports and this checkout's folders and refuses it with the reason if it can't run. It's saved as a draft only this Thread runs, so you can iterate with app_restart and app_check; recipe_publish then proves it and publishes it to every Thread. Returns what changed. To go back to an earlier version, pass its number as version instead of a recipe (app_status lists the recent ones): its recipe becomes a new draft, proved again by recipe_publish like any other. Every Thread waits on its start and checks many times a day, so keep them fast unless the user asked for more.",
+        "Save a new version of this project's recipe, which says how every Thread installs, starts and checks the app. Call it when setting one up, when repairing a broken one, and in the same turn as any change of yours that alters how the project installs, starts or is checked: a new install step, a renamed script, a new port, value or service. Pass the whole recipe; app_status shows the current one to edit. Mako checks it against this Thread's ports and this checkout's folders and refuses it with the reason if it can't run. It's saved as a draft only this Thread runs, so you can iterate with app_restart and app_check; recipe_publish then proves it and publishes it to every Thread. Returns what changed. To go back to an earlier version, pass its number as version instead of a recipe (app_status versions lists them): its recipe becomes a new draft, proved again by recipe_publish like any other. Every Thread waits on its start and checks many times a day, so keep them fast unless the user asked for more.",
       inputSchema: z.object({
         recipe: z.record(z.string(), z.unknown()).optional().describe("The whole recipe: values, processes, checks, prepare, and targets, verify, carry, cleanup and oneAtATime when it needs them."),
         version: z.number().int().positive().optional().describe("Instead of recipe: an earlier version's number, to save its recipe as a new draft."),

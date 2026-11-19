@@ -21,6 +21,7 @@ import {
 import { ConversationRelations } from "@/components/viewer/conversation-relations"
 import { acp, useAcp } from "@/state/acp"
 import { scopedLiveAcp, useConversationScope } from "@/state/conversation-scope"
+import { useSwitching } from "@/state/live-mode"
 
 /**
  * What the composer bar carries for a live conversation: its access, its Fins, and the conversations it relates to.
@@ -116,7 +117,10 @@ export function AccessModeList({
 function ModePicker() {
   const scope = useConversationScope()
   const modes = useAcp((state) => scopedLiveAcp(state, scope)?.session.modes)
-  const current = useAcp((state) => scopedLiveAcp(state, scope)?.session.currentMode)
+  const key = useAcp((state) => scopedLiveAcp(state, scope)?.key)
+  const session = useAcp((state) => scopedLiveAcp(state, scope)?.session.currentMode)
+  // The person's pick shows from the click; the session's own word of it follows (`live-mode.ts`).
+  const current = useSwitching((state) => (key ? state.pending.get(key)?.mode : undefined)) ?? session
   const harness = useAcp((state) => scopedLiveAcp(state, scope)?.harness ?? "")
   if (!modes?.length) return null
   return (

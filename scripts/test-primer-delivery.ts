@@ -19,7 +19,8 @@ import { processRunner } from "@mako/git/process-runner"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { makoNote } from "@mako/host/conversations/mako-note"
 import { heardBy, standingLines } from "@mako/host/conversations/control-cadence"
-import { primerBlocks } from "@mako/host/contracts/primer"
+import { MAKO_SERVER_INSTRUCTIONS, primerBlocks } from "@mako/host/contracts/primer"
+import { withoutInstructions } from "@mako/host/contracts/mcp-reach"
 import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
 import { configureOpenCodePrimer } from "@mako/host/harnesses/opencode/primer-file"
 import { createCodexEngine } from "@mako/host/harnesses/codex-app"
@@ -32,6 +33,8 @@ import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
 
 const FIXTURE = "Injected driver fixture"
+/** What Codex's thread/start and thread/resume carry of Mako's `mako` server. */
+const OpenedSchema = z.object({ config: z.object({ mcp_servers: z.object({ mako: z.object({ url: z.string() }) }) }) })
 const BLOCKS = primerBlocks({ role: "thread", noRecipe: false, computer: true }).map((block) => block.text)
 const FILE_LINK = "Link files with ordinary Markdown links to their absolute path, optionally followed by :line, so the person can open them."
 const carries = (text: string) => BLOCKS.every((block) => text.includes(block))
@@ -267,11 +270,17 @@ cases.push(["native instruction slots", async () => {
       const [text, primer] = expected[index]!
       const params = z.object({ additionalContext: z.object({ mako: z.object({ kind: z.literal("application"), value: z.string() }) }).optional(), input: z.array(z.object({ text: z.string() })) }).parse(frame.params)
       assert.equal(params.input.map(item => item.text).join(""), text)
-      if (primer) assert.equal(params.additionalContext?.mako.value, instructions, `Codex "${text}" carries the primer as the turn's developer application context`)
+      if (primer) assert.equal(params.additionalContext?.mako.value, `${instructions}\n\n${MAKO_SERVER_INSTRUCTIONS}`, `Codex "${text}" carries the primer, with the server's instructions, as the turn's developer application context`)
       else assert.equal(params.additionalContext, undefined, `Codex "${text}": the transcript holds the primer, so the turn leaves it out`)
       assert.equal(params.input.some(item => item.text.includes(FILE_LINK)), false, "the primer never replaces the person's words")
     }
     assert.ok(frames.some(frame => frame.method === "thread/resume"))
+    const opened = frames.filter(frame => frame.method === "thread/start" || frame.method === "thread/resume")
+    assert.ok(opened.length >= 2)
+    for (const frame of opened) {
+      const params = OpenedSchema.parse(frame.params)
+      assert.equal(params.config.mcp_servers.mako.url, withoutInstructions(tools.makoUrl), `Codex's ${frame.method} reaches mako without its instructions`)
+    }
     assert.ok(frames.some(frame => frame.method === "thread/compact/start"))
   } catch (error) {
     throw new Error(`${error instanceof Error ? error.message : String(error)}\nfixture spawns=${spawn.mock.callCount()}\n${fixtureStderr}`, { cause: error })

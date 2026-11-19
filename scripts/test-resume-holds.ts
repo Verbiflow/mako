@@ -3,9 +3,10 @@ import { randomUUID } from "node:crypto"
 import { cpSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { mock } from "node:test"
-import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { closedFinished, type ThreadParent } from "@mako/host/contracts/agents"
+import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import type { Entry } from "@mako/sessions/entries"
-import { Agents } from "@mako/host/conversations/agents"
+import { Agents, FINISHED_CLOSE_MS } from "@mako/host/conversations/agents"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { LiveRecords } from "@mako/host/conversations/live-records"
@@ -34,6 +35,10 @@ import { longestHold, type LoopHold } from "./lib/loop-hold.ts"
  *
  * A host told to stop while it reads them ends at its next step: under a `TIMES`th of the whole sliced resume's time
  * (the yardstick, in this run), resuming nothing, and the next host takes it all up as if it hadn't started.
+ *
+ * And a tree whose Fins all finished and were closed for it (`Agents.closeFinished`) costs a start nothing: none of
+ * their journals is read in, sliced or whole, nor their Apex's, nor the Apex's of a harness's own reviewer runs. On
+ * 2026-11-17 the person's host read 107 journals, 608 MB, at every start, 98 of them of Fins long done.
  */
 const FINS = 8
 /** Blocks added to each Fin's journal, and their size: about 18 MB a journal. */
@@ -174,7 +179,13 @@ async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: b
   })
   assert.ok(world)
   if (inSlices) assert.deepEqual(whole, [], "resuming in slices reads nothing whole")
-  else assert.ok(whole.length >= FINS, `resuming at once reads every Fin whole: ${whole.length}`)
+  else {
+    // At once, the resume reads whole the Fins it takes up (those the exit cut), and no finished one: whether a Fin's
+    // turn was cut comes from its journal's summary (`LiveRecords.turnCut`). Read whole to learn it, a host starting with
+    // 139 Fins on disk reloaded 81 of them on its loop, 11.5 s, after the residency budget let them go.
+    assert.ok(whole.length >= FINS / 2, `resuming at once reads whole the Fins it takes up: ${whole.length}`)
+    assert.ok(whole.length < FINS, `a finished Fin isn't read whole to learn whether its turn was cut: ${whole.length} of ${FINS}`)
+  }
   await world.settle()
   const sent: Record<string, string[]> = {}
   const requests: Record<string, string[][]> = {}
@@ -238,8 +249,78 @@ async function unheardReport(): Promise<void> {
   console.log("an unheard report's settled Apex: read in first")
 }
 
+/**
+ * An Apex whose `CLOSED_FINS` Fins all finished and closed, and another that only ever held its harness's own reviewer
+ * runs: the next host, starting at once or in slices, reads none of their journals in.
+ */
+const CLOSED_FINS = 12
+async function closedFinsUnread(): Promise<void> {
+  const at = join(root, "closed")
+  let offset = 0
+  const world = new AgentsWorld({ root: at, script: (turn) => (turn.text.includes("You're fin:") ? "Finished." : "ok"), finLimit: () => CLOSED_FINS * 2, now: () => Date.now() + offset })
+  const apex = await world.apex("claude", "full")
+  const journals = new Set<string>([apex.conversation])
+  for (let index = 0; index < CLOSED_FINS; index++) {
+    const started = await world.agents.start(apex.caller, { brief: { objective: `Work c${index}` }, harness: "claude", name: `c${index}`, clientKey: `c${index}`, cwd: at })
+    assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+    journals.add(started.conversation)
+  }
+  await world.settle()
+  // Another Apex, which only ever held reviewer runs of its harness's own: closed as they were known for it.
+  const reviewed = await world.apex("codex", "full")
+  journals.add(reviewed.conversation)
+  await world.settle()
+  const session = SessionIdSchema.parse(world.store.journalPlacement(reviewed.conversation)!.session)
+  const thread = ThreadIdSchema.parse(world.store.journalPlacement(reviewed.conversation)!.thread)
+  for (let index = 0; index < 3; index++) {
+    const placed = world.store.place({ harness: "codex", nativeId: `review-${index}`, path: join(at, `review-${index}.jsonl`) }, { kind: "service", name: "catalog" })
+    const review: ThreadParent = {
+      child: ThreadIdSchema.parse(placed.thread), parent: thread, parentSession: session, name: `review-${index}`, role: "worker", origin: "discovered",
+      asked: { brief: { objective: "Review" } }, op: `discovered:review-${index}`, startedBy: { kind: "agent", session }, createdAt: Date.now(),
+      run: { harness: "codex", nativeId: `review-${index}`, device: world.store.deviceId, startedAt: Date.now(), ended: { at: Date.now(), kind: "done" }, nativeAgent: { kind: "internal-review", role: "guardian", source: "guardian_review" } },
+    }
+    world.store.keepEdge(review)
+  }
+  assert.equal(world.store.edges().internalRuns.filter((edge) => edge.closedAt !== undefined).length, 3, "reviewer runs' edges are closed")
+  offset = FINISHED_CLOSE_MS + 60_000
+  const closed = await world.agents.closeFinished()
+  assert.equal(closed.length, CLOSED_FINS, `every finished Fin closed: ${closed.length}`)
+  assert.ok(world.store.edges().all.every((edge) => closedFinished(edge)))
+  await world.close()
+  for (const inSlices of [true, false]) {
+    const read: string[] = []
+    const load = LiveRecords.prototype.load
+    const loadSliced = LiveRecords.prototype.loadSliced
+    const mocks = [
+      mock.method(LiveRecords.prototype, "load", function (this: LiveRecords, id: string) {
+        if (!this.has(id)) read.push(id)
+        return load.call(this, id)
+      }),
+      mock.method(LiveRecords.prototype, "loadSliced", function (this: LiveRecords, id: string) {
+        if (!this.has(id)) read.push(id)
+        return loadSliced.call(this, id)
+      }),
+    ]
+    let next: AgentsWorld | undefined
+    try {
+      next = new AgentsWorld({ root: at, script: () => "ok", finLimit: () => CLOSED_FINS * 2, now: () => Date.now() + offset, ...(inSlices && { resumeInSlices: true }) })
+      await next.resumed
+      await next.settle()
+      // The pass a starting host makes over finished Fins finds them closed, and reads nothing either.
+      assert.deepEqual(await next.agents.closeFinished(), [])
+    } finally {
+      for (const each of mocks) each.mock.restore()
+    }
+    assert.deepEqual(read.filter((id) => journals.has(id)), [], `a start ${inSlices ? "in slices" : "at once"} reads no journal of a closed tree`)
+    assert.equal(next.prompts.length, 0, "and sends nothing")
+    await next.close()
+  }
+  console.log(`${CLOSED_FINS} finished and closed Fins, and an Apex of reviewer runs: a start read none of their journals`)
+}
+
 try {
   await unheardReport()
+  await closedFinsUnread()
   const left = join(root, "left")
   const { fins } = await leftByTheLastHost(left)
   cpSync(left, join(root, "stopped"), { recursive: true })

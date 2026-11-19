@@ -17,6 +17,7 @@ import { hostCallSchema } from "@mako/host/contracts/host-call-inputs"
 import { hostCallReplay } from "@mako/host/contracts/host-call-policy"
 import { decodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { AgentAnswerSchema, declareAgentMethods, registerAgentTools, type AgentAnswer } from "@mako/host/conversations/agent-tools"
+import { compactAnswer } from "@mako/host/conversations/agent-tool-compact"
 import { HostMethods } from "@mako/host/transport/methods"
 import { startWebHost } from "@mako/host/transport/server"
 import { z } from "zod"
@@ -62,7 +63,7 @@ function generatedFields(tool: (typeof AGENT_TOOLS)[number]) {
 const ToolResultSchema = z.object({ content: z.array(z.object({ type: z.literal("text"), text: z.string() })), isError: z.boolean().optional() })
 const StartedSchema = AgentAnswerSchema.extend({ child: z.string(), name: z.string(), conversation: z.string(), deduped: z.literal(true).optional() })
 const ReadSchema = AgentAnswerSchema.extend({ text: z.string() })
-const ListedSchema = AgentAnswerSchema.extend({ children: z.array(z.looseObject({ name: z.string(), idleFor: z.number().optional() })) })
+const ListedSchema = AgentAnswerSchema.extend({ children: z.array(z.looseObject({ name: z.string(), idle: z.string().optional() })) })
 
 async function call(client: Client, name: string, args: Parameters<Client["callTool"]>[0]["arguments"]): Promise<AgentAnswer> {
   const result = ToolResultSchema.parse(await client.callTool({ name, arguments: args }))
@@ -112,8 +113,9 @@ try {
   const doors = { "in-thread": thread, "mako mcp": stdio }
   const listed: Record<string, Awaited<ReturnType<Client["listTools"]>>["tools"]> = {}
   for (const [door, client] of Object.entries(doors)) {
-    assert.ok(client.getInstructions()?.includes(REPORT_FOLLOW_UP_INSTRUCTIONS), `${door} carries the common actionable-report directive`)
     listed[door] = (await client.listTools()).tools
+    // Said once where a Fin reads it as it reports (and in its brief), not again in the server's instructions.
+    assert.ok(listed[door]!.find((tool) => tool.name === "agents_report")?.description?.includes(REPORT_FOLLOW_UP_INSTRUCTIONS), `${door}'s agents_report carries the common actionable-report directive`)
     assert.deepEqual(listed[door]!.map((tool) => tool.name).filter((name) => name.startsWith("agents_")).sort(), AGENT_TOOLS.map((tool) => tool.mcp.name).sort(), `${door} lists every tool`)
     for (const tool of AGENT_TOOLS) {
       const schema = listed[door]!.find((listedTool) => listedTool.name === tool.mcp.name)!.inputSchema
@@ -150,11 +152,14 @@ try {
 
   world.release(first.conversation)
   await world.settle()
-  // A strip's `idleFor` and the list's `mark` read the clock as each door answers, so they can tick between them: the
-  // rest is the same list.
-  const lists = [await call(thread, "agents_list", {}), await call(stdio, "agents_list", {}), await command("list")].map((list) => ListedSchema.parse(list))
-  assert.ok(lists[0]!.children.every((strip) => Number.isInteger(strip.idleFor)), "a finished Fin's strip says how long it's been idle")
-  const unclocked = (list: z.infer<typeof ListedSchema>) => ({ ...Object.fromEntries(Object.entries(list).filter(([key]) => key !== "mark")), children: list.children.map((strip) => Object.fromEntries(Object.entries(strip).filter(([key]) => key !== "idleFor"))) })
+  // A strip's idle time, its report's age and the list's `mark` read the clock as each door answers, so they can tick
+  // between them: the rest is the same list. The model doors read it compacted; `mako agents list --json` whole.
+  const raw = await command("list")
+  assert.ok(z.object({ children: z.array(z.object({ idleFor: z.number().int(), startedAt: z.number() })) }).safeParse(raw).success, "the whole list keeps its clock readings")
+  const lists = [await call(thread, "agents_list", {}), await call(stdio, "agents_list", {}), compactAnswer("agents_list", raw)].map((list) => ListedSchema.parse(list))
+  assert.ok(lists[0]!.children.every((strip) => /^\d+[smhd]$/.test(strip.idle ?? "")), "a finished Fin's row says how long it's been idle, in words")
+  assert.ok(lists[0]!.children.every((strip) => !("idleFor" in strip) && !("startedAt" in strip) && !("changedAt" in strip)), "and no raw clock readings")
+  const unclocked = (list: z.infer<typeof ListedSchema>) => ({ ...Object.fromEntries(Object.entries(list).filter(([key]) => key !== "mark")), children: list.children.map((strip) => Object.fromEntries(Object.entries(strip).filter(([key]) => key !== "idle" && key !== "report"))) })
   assert.deepEqual(unclocked(lists[1]!), unclocked(lists[0]!))
   assert.deepEqual(unclocked(lists[2]!), unclocked(lists[0]!), "the same list through all three")
   const reads = [await call(thread, "agents_read", { child: "sidebar" }), await call(stdio, "agents_read", { child: "sidebar" }), await command("read", "sidebar")]

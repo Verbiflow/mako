@@ -38,8 +38,16 @@ export interface GitRuntime {
   /** Runs a background command below foreground work, such as `nice -n 19`. */
   background?: (command: string, args: readonly string[]) => [string, string[]]
   trace?: (trace: GitTrace) => void
-  /** How long a write waits for its repository's earlier writes; `WRITE_TURN_WAIT_MS` unless a test shortens it. */
-  writeTurnWaitMs?: number
+  /**
+   * Calls `waited` once a write has waited `ms` (`WRITE_TURN_WAIT_MS`) for its repository's earlier writes, and returns
+   * what calls the wait off: a timer, unless a test says itself when the wait has run out.
+   */
+  writeTurnWait?: (ms: number, waited: () => void) => () => void
+  /**
+   * Calls `overdue` once an idle read has waited `ms` (`IDLE_READ_WAIT_MS`), and returns what calls the wait off: a
+   * timer, unless a test says itself when the wait has run out.
+   */
+  idleReadWait?: (ms: number, overdue: () => void) => () => void
 }
 
 export interface RunOptions {
@@ -58,13 +66,16 @@ export interface RunOptions {
   /** Below foreground work, through the runtime's `background` hook. */
   background?: boolean
   /**
-   * Reads take no locks, so Git never refreshes the index under an agent's
-   * own `git add`, and they share a bounded pool.
+   * Reads take no optional locks, so Git never refreshes the index under an
+   * agent's own `git add`, and they share a bounded pool. `git diff` of the
+   * working tree is the exception: it refreshes the index whatever it is
+   * told, unless given `NO_INDEX_REFRESH`.
    */
   read?: boolean
   /**
    * A read nobody waits on as it's made (a summary a window polls): it takes a slot only while no other read waits,
    * and leaves `FOREGROUND_SLOTS` for them, so a send's checkpoint never queues behind a pass of a hundred worktrees.
+   * One that has waited `IDLE_READ_WAIT_MS` may take one of those slots, so it can't wait for good.
    */
   idle?: boolean
 }
@@ -100,8 +111,15 @@ const DEFAULT_MAX_BYTES = 64 * 1024 * 1024
 const STDERR_BYTES = 64 * 1024
 /** Reads at once, across every repository; more only queue behind the disk. */
 const READ_SLOTS = 6
-/** Of `READ_SLOTS`, those an idle read never takes: a read someone waits on starts at once. */
+/** Of `READ_SLOTS`, those an idle read leaves free: a read someone waits on starts at once. */
 const FOREGROUND_SLOTS = 2
+/**
+ * An idle read that has waited this long may take one of the `FOREGROUND_SLOTS`: while reads someone waits on kept
+ * four slots full, a slot coming free never left room for an idle one, and a pass of summaries waited for as long as
+ * that lasted. One such read runs at a time, so a slot is always left for a read someone waits on, and none ever goes
+ * ahead of one that is waiting.
+ */
+export const IDLE_READ_WAIT_MS = 5_000
 
 /**
  * Git's parallel checkout. APFS spends extra workers on contention past four;
@@ -123,13 +141,19 @@ export class Git {
   readonly #runtime: GitRuntime
   readonly #repositories: Repositories
   readonly #readsWaiting: Array<() => void> = []
-  /** Idle reads waiting: each starts once no other read waits and a slot past `FOREGROUND_SLOTS` is free. */
-  readonly #idleWaiting: Array<() => void> = []
+  /**
+   * Idle reads waiting, oldest first: each starts once no other read waits and a slot past `FOREGROUND_SLOTS` is free,
+   * or, having waited `IDLE_READ_WAIT_MS`, in one of those (`borrowed`).
+   */
+  readonly #idleWaiting: Array<{ overdue: boolean; cancel: () => void; start: (borrowed: boolean) => void }> = []
+  /** Idle reads running in a slot kept for the others, having waited too long: one at most. */
+  #idleBorrowed = 0
+  readonly #idleReadWait: (ms: number, overdue: () => void) => () => void
   readonly #running = new Set<{ command: string; cwd: string; started: number; repository?: string }>()
   /** Each repository's last write asked for, by the folder its checkouts share: the next one starts once it ends. */
   readonly #writes = new Map<string, Promise<void>>()
   #writesWaiting = 0
-  readonly #writeTurnWaitMs: number
+  readonly #writeTurnWait: (ms: number, waited: () => void) => () => void
   #readsRunning = 0
   #executable: string | undefined
   #environment: NodeJS.ProcessEnv | undefined
@@ -137,7 +161,8 @@ export class Git {
 
   constructor(runtime: GitRuntime = {}) {
     this.#runtime = runtime
-    this.#writeTurnWaitMs = runtime.writeTurnWaitMs ?? WRITE_TURN_WAIT_MS
+    this.#writeTurnWait = runtime.writeTurnWait ?? timedWait
+    this.#idleReadWait = runtime.idleReadWait ?? timedWait
     this.processes = trackProcesses(runtime.processes ?? processRunner, runtime.signal, this.#children)
     this.#repositories = new Repositories(this)
   }
@@ -286,14 +311,29 @@ export class Git {
   }
 
   async #readSlot(idle: boolean): Promise<() => void> {
-    if (idle ? this.#readsRunning >= READ_SLOTS - FOREGROUND_SLOTS || this.#readsWaiting.length > 0 || this.#idleWaiting.length > 0 : this.#readsRunning >= READ_SLOTS)
-      await new Promise<void>((resolve) => (idle ? this.#idleWaiting : this.#readsWaiting).push(resolve))
+    let borrowed = false
+    if (!idle) {
+      if (this.#readsRunning >= READ_SLOTS) await new Promise<void>((resolve) => this.#readsWaiting.push(resolve))
+    } else if (this.#readsRunning >= READ_SLOTS - FOREGROUND_SLOTS || this.#readsWaiting.length > 0 || this.#idleWaiting.length > 0) {
+      borrowed = await new Promise<boolean>((start) => {
+        // A slot coming free asks who is next; so does this read's own wait running out, when none has. The wait
+        // says itself that it ran out: compared with a clock again, a timer that fired a fraction of a millisecond
+        // early by that clock was told "not yet", and nothing asked again until some other read ended.
+        const waiting = { overdue: false, cancel: () => {}, start }
+        this.#idleWaiting.push(waiting)
+        waiting.cancel = this.#idleReadWait(IDLE_READ_WAIT_MS, () => {
+          waiting.overdue = true
+          this.#nextIdle()
+        })
+      })
+    }
     this.#readsRunning += 1
     let released = false
     return () => {
       if (released) return
       released = true
       this.#readsRunning -= 1
+      if (borrowed) this.#idleBorrowed -= 1
       this.#nextRead()
     }
   }
@@ -315,8 +355,8 @@ export class Git {
     }
     if (!before) return done
     this.#writesWaiting += 1
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const waited = new Promise<"waited">((resolve) => { timer = setTimeout(() => resolve("waited"), this.#writeTurnWaitMs) })
+    let cancel = () => {}
+    const waited = new Promise<"waited">((resolve) => { cancel = this.#writeTurnWait(WRITE_TURN_WAIT_MS, () => resolve("waited")) })
     try {
       if ((await Promise.race([before.then(() => "turn" as const), waited])) === "waited") {
         done()
@@ -324,21 +364,37 @@ export class Git {
         throw new GitError({
           kind: "timeout",
           command: subcommandOf(options.args).command,
-          message: `git ${subcommandOf(options.args).command} waited ${(this.#writeTurnWaitMs / 1000).toFixed(this.#writeTurnWaitMs < 10_000 ? 1 : 0)} s for the repository's earlier writes${holding ? `, behind git ${holding.command} in ${holding.cwd}` : ""}.`,
+          message: `git ${subcommandOf(options.args).command} waited ${WRITE_TURN_WAIT_MS / 1000} s for the repository's earlier writes${holding ? `, behind git ${holding.command} in ${holding.cwd}` : ""}.`,
         })
       }
       return done
     } finally {
-      clearTimeout(timer)
+      cancel()
       this.#writesWaiting -= 1
     }
   }
 
-  /** A slot came free: the oldest read someone waits on takes it, else the oldest idle one if it leaves the reserve. */
+  /** A slot came free: the oldest read someone waits on takes it, else the oldest idle one that may (`#nextIdle`). */
   #nextRead(): void {
     const next = this.#readsWaiting.shift()
     if (next) return next()
-    if (this.#readsRunning < READ_SLOTS - FOREGROUND_SLOTS) this.#idleWaiting.shift()?.()
+    this.#nextIdle()
+  }
+
+  /**
+   * Starts the oldest idle read waiting, if it may start: never while a read someone waits on is waiting; in a slot
+   * past the reserve when one is free; else, once it has waited `IDLE_READ_WAIT_MS`, in a reserved slot that is free
+   * while no other idle read is running in one.
+   */
+  #nextIdle(): void {
+    const oldest = this.#idleWaiting[0]
+    if (!oldest || this.#readsWaiting.length > 0) return
+    const borrowed = this.#readsRunning >= READ_SLOTS - FOREGROUND_SLOTS
+    if (borrowed && (this.#readsRunning >= READ_SLOTS || this.#idleBorrowed > 0 || !oldest.overdue)) return
+    this.#idleWaiting.shift()
+    oldest.cancel()
+    if (borrowed) this.#idleBorrowed += 1
+    oldest.start(borrowed)
   }
 
   #execute(options: RunOptions, queuedMs: number, repository: string | undefined): Promise<RunResult> {
@@ -447,6 +503,13 @@ export class Git {
       }, (error: Error) => fail(error, "failed", code)) })
     })
   }
+}
+
+/** `overdue` after `ms`, on a timer that keeps no process alive; the returned call cancels it. */
+function timedWait(ms: number, overdue: () => void): () => void {
+  const timer = setTimeout(overdue, ms)
+  timer.unref()
+  return () => clearTimeout(timer)
 }
 
 function trackProcesses(runner: Pick<ProcessRunner, "spawn" | "close">, signal: AbortSignal | undefined, children: Set<ChildProcess>): Pick<ProcessRunner, "spawn" | "close"> {

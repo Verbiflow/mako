@@ -92,6 +92,7 @@ import {
   type DraftView,
 } from "@/lib/draft-view"
 import type { PromptAttachment } from "@/lib/types"
+import { promptAttachment } from "@/lib/attachment-staging"
 import { cn } from "@/lib/utils"
 import { acp, acpStore, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
 import { noteComposing } from "@/state/prewarm"
@@ -190,17 +191,6 @@ function mentionIn(draft: string, view: DraftView, caret: number): ActiveMention
   if (view.spans.some((span) => span.viewStart < caret && caret <= span.viewEnd)) return null
   return mentionAt(draft, toDraftOffset(view, caret))
 }
-
-function toAcpPromptAttachment(item: Attachment): PromptAttachment {
-  return {
-    name: item.name,
-    mimeType: item.mimeType,
-    size: item.size,
-    data: item.kind === "image" ? item.data : undefined,
-    path: item.stagedPath,
-  }
-}
-
 
 /** One notice for a send that can't go yet, so pressing again replaces it instead of stacking another. */
 const SEND_HELD_TOAST = "composer-send-held"
@@ -760,7 +750,7 @@ export function Composer() {
       })
       const full = written.text
       if (!full.trim()) return
-      const acpAttachments = written.files.map(toAcpPromptAttachment)
+      const acpAttachments = written.files.map(promptAttachment)
       const recoveryId = preserveSendingDraft({
         key: submittedDraftKey,
         text: draft,
