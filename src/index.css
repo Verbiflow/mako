@@ -1474,7 +1474,7 @@ diffs-container {
 }
 
 /*
- * An Apex's crew (`FinPips`): a 6 px pip per Fin. The working stretch moves as
+ * An Apex's Shiver (`FinPips`): a 6 px pip per Fin. The working stretch moves as
  * one: a veil in the row's own paint (`--pips-under`, and `--pips-over` for a
  * translucent hover fill over it) dims the pips under it and has a clear hole
  * that sweeps across them on `transform` alone, so a row's wave is one
@@ -1558,38 +1558,38 @@ diffs-container {
 }
 
 /*
- * The crew card's header bar: a thin strip split by group, the working
+ * The Shiver card's header bar: a thin strip split by group, the working
  * stretch alone in motion. A crest of light slides across it, transform
  * only, so the compositor moves it and the gate
  * (`src/lib/visible-animation.ts`) can stop it off screen or under reduced
  * motion without ever touching layout or paint.
  */
-.crew-bar-working {
+.shiver-bar-working {
   position: relative;
   overflow: hidden;
 }
 @media (prefers-reduced-motion: no-preference) and (forced-colors: none) {
-  .crew-bar-working::after {
+  .shiver-bar-working::after {
     content: "";
     position: absolute;
     inset: 0;
     width: 50%;
     background: linear-gradient(to right, transparent, color-mix(in oklab, var(--foreground) 35%, transparent), transparent);
     transform: translateX(-180%);
-    animation: crew-bar-sweep 1.8s linear infinite;
+    animation: shiver-bar-sweep 1.8s linear infinite;
     animation-play-state: var(--visible-animation-state, running);
     will-change: var(--visible-animation-will-change, auto);
   }
 }
-@keyframes crew-bar-sweep {
+@keyframes shiver-bar-sweep {
   to {
     transform: translateX(280%);
   }
 }
 
 /* The phone's card, and the phone's line back to it, size marks the way a phone row does: 28px, inherited. */
-[data-crew][data-compact],
-[data-crew-away][data-compact] {
+[data-shiver][data-compact],
+[data-shiver-away][data-compact] {
   --live-mark-size: 28px;
 }
 

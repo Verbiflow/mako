@@ -9,7 +9,7 @@ import { atSize, withMotion } from "./lib/test-window.mjs"
 /**
  * An Apex's Fins are current the moment the person comes back to its Thread (`npm run test:fins-fresh-on-return-ui`):
  * the person opens the Apex, leaves for another Thread, its Fins move while it's off screen (some finish, one is
- * stopped, one asks), and the person comes back. Sampled every frame from the click, the crew card never draws the
+ * stopped, one asks), and the person comes back. Sampled every frame from the click, the Shiver card never draws the
  * roster from before, and draws the one the host said last from its first frame, without the composer being touched.
  */
 if (process.versions.electron) {
@@ -41,7 +41,7 @@ if (process.versions.electron) {
   }
 }
 
-/** The asks of Fins drawn on screen, by what each asks: in the crew card, or over the composer. */
+/** The asks of Fins drawn on screen, by what each asks: in the Shiver card, or over the composer. */
 const ASKS = `[...document.querySelectorAll("[data-fin-ask]")].map((ask) => ask.innerText.replace(/\\s+/g, " ").trim())`
 
 /** Every frame from now: the asks drawn. */

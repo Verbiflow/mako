@@ -376,11 +376,19 @@ conflation; Settings > Diagnostics lists each session's background work with
 its sources.
 
 Glossary: a Thread that starts others is an **Apex**, and each one it
-started or took is a **Fin** (`APEX_WORD`, `FIN_WORD`); there is no word for
-the group. Data structures still say parent and child (`thread_parents`,
-`ChildState`), and the wire keeps `"lead"` for the role and for a question
-the Apex answers (`APEX_ROLE`, `blocked.on`), so builds on either side of the
-names read each other.
+started or took is a **Fin** (`APEX_WORD`, `FIN_WORD`); an Apex and its Fins
+together are its **Shiver** (`SHIVER_WORD`), as a group of sharks is. Data
+structures still say parent and child (`thread_parents`, `ChildState`), and
+the wire keeps `"lead"` for the role and for a question the Apex answers
+(`APEX_ROLE`, `blocked.on`), so builds on either side of the names read each
+other. The group's word before the Shiver, `crew`, stays only where an older
+build or a stored record still says it: `agents_list` takes `scope: crew` as
+`scope: shiver` (`LEGACY_SHIVER_SCOPE`, never advertised in its schema), the
+CLI takes `--crew`, a kept brief's intro still reads as one
+(`CREW_INTRO_TAIL`), a kept transcript's `agents_list` row still reads as
+the Shiver (`makoToolWords`), and a turn wait keeps its stored `crewStep` key
+and ID seed (`SHIVER_WAIT_KEY`); a check-in stored as "Waiting for the crew"
+reads as "Waiting for the Shiver" (`turnWaitDescription`).
 
 A Fin's edge is the record (`thread_parents`, `contracts/agents.ts`), on its
 `ThreadRef.parent`, so `threadList` lists it under its Apex and never as a
@@ -528,7 +536,7 @@ Apex is, is left alone. Closing is bookkeeping: its reason is
 `FINISHED_CLOSE`, a stop's reason on the wire, so an older build shows it
 as any closed edge and opens it as it opens a stopped one; this build reads
 it as done or failed (`childState`), never stopped. Nothing is cancelled,
-stopped or reported, and it leaves the front door's note, the crew view,
+stopped or reported, and it leaves the front door's note, the Shiver view,
 the `apexes` digest, `personAsk`'s walk and the list (counted in `folded`).
 It never cuts a Fin off: whatever reaches it opens it again in the same
 Session (`reopen`), and the Fin above it with it when that one is closed
@@ -657,7 +665,7 @@ or `other` in a few words), carried on the blocked state and the open
 decision and said as "waiting on #412 checks" (`waitingWords`) in the digest,
 the front door and the strip. A progress report that names it, with the
 Fin's turn ended, reads as idle waiting since the report (`ChildState`'s
-`idle.waitingOn`, `since`), in the crew row, the strip and the front door
+`idle.waitingOn`, `since`), in the Shiver row, the strip and the front door
 as "Waiting on acme/app#371 checks · 12m" (`waitingStateWords`); the
 orchestration text tells a Fin to report so and end its turn rather than
 poll checks. The report result's `subscriptions` distinguishes a registered
@@ -718,7 +726,7 @@ next host sends it on through that same handoff, keeping a Stop's mark. "Newest
 report" means the store's order of taking them (`rowid`), since `at` can tie.
 `test:fin-pull-waits` covers it with a stub reader and a fake clock, and a real
 SIGKILL with the note prepared on each harness (`test-fin-pull-wake-crash.ts`).
-A Fin's strip, its crew
+A Fin's strip, its Shiver
 mates' view and the `apexes` digest say how long it has been idle
 (`idleFor`, seconds, only while it isn't working) and its open pull requests
 (`openPRs`, `finPullRequests`): its worktree branch's as the worktree
@@ -1106,13 +1114,13 @@ check-in). A finished Fin's digest line
 line, at most `FINISHED_CHARS`, with how many more characters the
 report holds (`agents_read` gives them), and every artifact by its ref with
 its label beside it.
-A Fin reads its Apex and the other open Fins it started with `agents_list`
-`scope: crew` (`AgentsCrew`): the Apex's title, harness, whether it works and
+A Fin reads its Shiver, its Apex and the other open Fins it started, with `agents_list`
+`scope: shiver` (`AgentsShiver`): the Apex's title, harness, whether it works and
 its last step, what it was asked when it is a Fin too, and each other Fin as
 the front door's note names it (name, harness, state, what it was asked, its
 branch and last report). The person's direct words to a Fin stay out. It
 reads typed state, never a transcript, and its brief's first line says it's
-there. Crew discovery grants no sibling-send authority. A sibling send is
+there. Reading the Shiver grants no sibling-send authority. A sibling send is
 refused as `relayed`: nothing reaches the sibling, and its words go to the
 Apex instead as a handoff (`Report.handoff`, a progress report that wakes it),
 which the digest lists under "hands work to another Fin" for the Apex to pass
@@ -2156,7 +2164,7 @@ later turn streams.
 An Apex's transcript ends, once its turn has, on what it waits on by name
 (`WaitingLine`: "Waiting on Docs pass, Token sweep, and 4 other Fins", the
 first two past three, each opening its Fin; "Queued since 3:42 PM" for a
-message a minute unsent), above the crew card; a Thread with no Fins says its
+message a minute unsent), above the Shiver card; a Thread with no Fins says its
 background work on `BackgroundWorkLine` and a turn's own wait on
 `TurnWaitLineView`. Beside "Jump to latest", which counts what arrived below
 a reader who left the end ("· 3 new"), a pill counts what is at work and
@@ -2370,7 +2378,7 @@ Four rules hold this together, and each has a specific failure it prevents:
   a trackpad's rest jitter never lets go while a flick up does at once, and a
   wheel up then as far back down follows the end again (its net was nothing,
   which read as rest, and the end went unfollowed). A wheel taken by a
-  scroller inside the transcript (the crew card's list, a code block) stays
+  scroller inside the transcript (the Shiver card's list, a code block) stays
   with it until it settles, as the browser's own gesture does. Input ends when
   it settles (`INPUT_SETTLE_MS`), for input that moved nothing and a browser
   with no `scrollend`: left standing, the next layout shift would read as the
@@ -2546,7 +2554,7 @@ another surface while that Thread is on screen; the pick is that Thread's
 (`apexCompanions` in the prefs, `shownCompanion` in `state/stage.ts`), and a
 Thread with no Fins keeps the tab's own surface. The Overview's sections draw
 only while they hold something, in this order: Needs you (each ask in a line,
-with the crew card's own answer buttons), Working, Waiting (the idle and the
+with the Shiver card's own answer buttons), Working, Waiting (the idle and the
 queued, what a Fin waits on first), Failed, Done (newest first), Pull requests
 (each Thread of the tree's worktree branch's, from the worktree summaries the
 rail keeps, and any a Fin says it waits on: nothing is read for it), then
@@ -3584,10 +3592,10 @@ deliberate action and never rides along with a commit.
   `useOffered` keeps a row away while nothing stands behind it. A reading
   selects its own fact, so a token repaints no row. Changes is a list and a
   diff opens as a tab (`changesView` keeps Review, every diff in one scroll,
-  in Settings). No Fin has a tab for starting: the crew card and the rail hold
+  in Settings). No Fin has a tab for starting: the Shiver card and the rail hold
   them, and `OpenFinTab` is the one tab of the Fin opened in place, whose close
   is the Apex again. The phone has a count in the bar (`PhoneFinCount`) and the
-  crew card, whose rows open a Fin through `RoutedOpenContext` on the web, as
+  Shiver card, whose rows open a Fin through `RoutedOpenContext` on the web, as
   `openFinInApex` does on the desk; a laptop's browser draws the same rail
   (`WebSideRail`: Changes, Files and Agents, at the desktop's width) and one Fin tab. Open Fins hold no state that can
   outlive them: `openFinInApex` is the one way in, routed by `windowRoutes.fin` where a Thread's page holds the Fin; the
@@ -3595,7 +3603,7 @@ deliberate action and never rides along with a commit.
   on screen, and `watchApexView` ends the desk's view once anything else shows. `npm run test:side-rail-ui` holds the
   rail, and `test:fin-transitions-ui` each way in through closing, another Thread, a reload and the rail on every form.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
-  composer's chip, the crew card, the rail's pips, the Overview, the stop
+  composer's chip, the Shiver card, the rail's pips, the Overview, the stop
   card, the phone's row) counts from the Thread's one roster
   (`threadChildren` / `threadRollup` in `src/state/apex-fins.ts`) through
   `rollup`, and words it with `rollupLine`, `rollupChip` or `rollupLabel`
@@ -3613,7 +3621,7 @@ deliberate action and never rides along with a commit.
   from when it got there. A working Fin with no known turn says no time. Its line always says something (`At work`
   with nothing else known), and "answered" only for an answer to this turn, in plain words: a plain message from its
   Apex may close a question (rule 13), and it's still the next job and not an answer. `npm run test:fin-row-time` holds the rule, and
-  `test:orch-deliver` and `test:crew-card-ui` the real turn and every form.
+  `test:orch-deliver` and `test:shiver-card-ui` the real turn and every form.
 - **The notice above the composer speaks for what the person did.** A steer Mako sent by itself (a Fin's digest, an
   Apex's message) raises nothing, whatever became of it, and hides nothing of theirs: what the harness didn't take goes
   as the next turn, which is Mako's to handle. `actionNotice` picks the person's newest, and `sentByMako` tells them
@@ -3654,7 +3662,7 @@ deliberate action and never rides along with a commit.
   asking its Apex it drifts, failed it lists over in negative; queued, idle
   and open elsewhere are still and dimmed, and an answer to read wears the
   unread sphere. The open Thread's face takes the sea, the pane's one accent.
-  The rail, the tabs, the Agents panel, the crew card, the Inbox, the folder
+  The rail, the tabs, the Agents panel, the Shiver card, the Inbox, the folder
   chip, the asks and the phone draw this one mark, and avatars draw it still.
   Its motion is `transform` and `opacity` on HTML boxes only (an SVG
   element's own transform runs on the main thread), every moving layer runs

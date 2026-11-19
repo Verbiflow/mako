@@ -14,7 +14,7 @@ const noTyped = () => undefined
 
 /**
  * The phone's Inbox: every Fin asking the person, its answers in reach of a thumb and sent through its Apex's host, so
- * the answer leaves the dock, the crew and the desk at once; then the Threads waiting on the person, opened to answer;
+ * the answer leaves the dock, the Shiver and the desk at once; then the Threads waiting on the person, opened to answer;
  * then what's to read, the unread answers and the failures. Back returns to the list; wide, it's the pane beside it.
  */
 export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefined; onOpen: (thread: WebThread) => void }) {
@@ -29,7 +29,7 @@ export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefin
   const toRead = threads.filter((thread) => thread.standing === "failed" || (thread.standing === "idle" && isUnread(read, thread)))
   const count = fins.length + waiting.length
   const empty = !count && !toRead.length
-  // A Fin's ask opens its Apex's Thread, where its crew card holds it.
+  // A Fin's ask opens its Apex's Thread, where its Shiver card holds it.
   const openApex = (id: string) => {
     const thread = threads.find((each) => each.id === id)
     return thread ? () => onOpen(thread) : undefined

@@ -11,7 +11,7 @@ import { fileURLToPath } from "node:url"
  *
  * - Churn: `window.apexScene.churn(20, 100)` moves one of "Mobile polish"'s twenty Fins every 100 ms, as its host's
  *   batches would. Over five seconds it counts React's commits and which components rendered in them (a stand-in for
- *   the devtools hook walks each commit's fibers), so a Fin's move costs its Apex's row (`ApexCrewLine`, `ApexAsks`),
+ *   the devtools hook walks each commit's fibers), so a Fin's move costs its Apex's row (`ApexShiverLine`, `ApexAsks`),
  *   never the rail (`AgentThreads`) or another row (`ThreadRow`, `LiveAgentRow`).
  * - Still: no churn, five seconds of the waves moving, against the same desk with them paused, from the renderer's
  *   own counters (`Performance.getMetrics`: style recalculations, layouts): the waves add no style or layout per frame.
@@ -148,7 +148,7 @@ async function bench() {
       layoutsStill: still.layouts,
       finMoves: moves,
       commitsPerMove: per(tally.commits),
-      apexCrewLinePerMove: per(rendered.ApexCrewLine),
+      apexShiverLinePerMove: per(rendered.ApexShiverLine),
       apexAsksPerMove: per(rendered.ApexAsks),
       railPerMove: per(rendered.AgentThreads),
       threadRowsPerMove: per((rendered.ThreadRow ?? 0) + (rendered.LiveAgentRow ?? 0)),
@@ -168,7 +168,7 @@ async function bench() {
     assert.ok(result.layoutsMoving - result.layoutsStill <= 2, `${result.apexes}: the waves cause no layout (${result.layoutsMoving} moving, ${result.layoutsStill} still)`)
     assert.equal(result.railPerMove, 0, `${result.apexes}: a Fin's move never renders the rail`)
     assert.equal(result.threadRowsPerMove, 0, `${result.apexes}: a Fin's move renders no Thread row`)
-    assert.ok(result.apexCrewLinePerMove > 0 && result.apexCrewLinePerMove <= 1, `${result.apexes}: a Fin's move renders its Apex's pips once at most (${result.apexCrewLinePerMove})`)
+    assert.ok(result.apexShiverLinePerMove > 0 && result.apexShiverLinePerMove <= 1, `${result.apexes}: a Fin's move renders its Apex's pips once at most (${result.apexShiverLinePerMove})`)
   }
   console.log(JSON.stringify(results))
   app.exit(0)

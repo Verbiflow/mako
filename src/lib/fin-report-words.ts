@@ -17,7 +17,7 @@ export function said(card: FinReportCard): Said {
       return { word: card.forPerson ? "waits on you" : "is blocked", tone: "text-attention" }
     case "done":
       if (card.decides === "person") return { word: "finished · needs you", tone: "text-attention" }
-      // Its Apex's to decide, so quiet, as the crew card's "Asking its Apex": the attention hue is for what waits on the person.
+      // Its Apex's to decide, so quiet, as the Shiver card's "Asking its Apex": the attention hue is for what waits on the person.
       return card.decides === "lead" ? { word: "finished · asks its Apex", tone: "text-muted-foreground" } : { word: "finished", tone: "text-positive" }
     case "failed":
       // Not a failure: its Apex sends it on or takes its reply, so quiet, as one its Apex decides.

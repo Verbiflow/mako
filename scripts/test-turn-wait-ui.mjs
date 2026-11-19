@@ -119,7 +119,7 @@ async function check() {
     // With no wait armed, no line.
     const none = await open(`${base}?mock&app=apex&idle=1`, 1352, 847)
     await openApex(none)
-    await none.until("Boolean(document.querySelector('[data-background-work], [data-crew-card], [data-prompt-actions]'))", "the Apex's conversation")
+    await none.until("Boolean(document.querySelector('[data-background-work], [data-shiver-card], [data-prompt-actions]'))", "the Apex's conversation")
     await new Promise((done) => setTimeout(done, 500))
     assert.equal(await none.evaluate("document.querySelectorAll('[data-turn-wait-line]').length"), 0, "no wait, no line")
     none.window.close()
