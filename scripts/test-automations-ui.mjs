@@ -9,6 +9,10 @@ import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
 import { atSize, withMotion } from "./lib/test-window.mjs"
 
+/** A value as a JavaScript literal safe to put in page code: JSON, with the characters JSON leaves bare that a script can't hold escaped too. */
+const UNSAFE = { "<": "\\u003C", ">": "\\u003E", "/": "\\u002F", "\\": "\\\\", "\b": "\\b", "\f": "\\f", "\n": "\\n", "\r": "\\r", "\t": "\\t", "\0": "\\0", "\u2028": "\\u2028", "\u2029": "\\u2029" }
+const jsString = (value) => JSON.stringify(value).replace(/[<>\b\f\n\r\t\0\u2028\u2029]/g, (char) => UNSAFE[char])
+
 /**
  * Automations, against the production components on the mock desk's automations scene (`?mock&app=automations`):
  * the rail's row opening the view over the conversation, the list by project with its filters, search and keys, each
@@ -90,7 +94,7 @@ async function checkWindow() {
       await new Promise((resolveWait) => setTimeout(resolveWait, 30))
     }
   }
-  const point = (selector) => evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing target ' + ${JSON.stringify(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
+  const point = (selector) => evaluate(`(() => { const node = document.querySelector(${jsString(selector)}); if (!node) throw new Error('Missing target ' + ${jsString(selector)}); node.scrollIntoView({ block: 'nearest' }); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
   const click = async (selector, button = "left") => {
     const at = await point(selector)
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", ...at })
@@ -108,8 +112,8 @@ async function checkWindow() {
   const MOD = process.platform === "darwin" ? 4 : 2
   /** Sets a form control's value as the person would, so React hears it. */
   const fill = (selector, value) =>
-    evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing field ' + ${JSON.stringify(selector)}); const proto = node instanceof HTMLSelectElement ? HTMLSelectElement.prototype : node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(node, ${JSON.stringify(value)}); node.dispatchEvent(new Event(node instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true })); node.dispatchEvent(new Event('change', { bubbles: true })); return true })()`)
-  const text = (selector) => evaluate(`document.querySelector(${JSON.stringify(selector)})?.innerText ?? null`)
+    evaluate(`(() => { const node = document.querySelector(${jsString(selector)}); if (!node) throw new Error('Missing field ' + ${jsString(selector)}); const proto = node instanceof HTMLSelectElement ? HTMLSelectElement.prototype : node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype; Object.getOwnPropertyDescriptor(proto, 'value').set.call(node, ${jsString(value)}); node.dispatchEvent(new Event(node instanceof HTMLSelectElement ? 'change' : 'input', { bubbles: true })); node.dispatchEvent(new Event('change', { bubbles: true })); return true })()`)
+  const text = (selector) => evaluate(`document.querySelector(${jsString(selector)})?.innerText ?? null`)
   const store = (expression) => evaluate(`import('/src/state/automations.ts').then(({ automationsStore }) => { const state = automationsStore.get(); return ${expression} })`)
   const open = async (url) => {
     await window.loadURL(url)
@@ -131,7 +135,7 @@ async function checkWindow() {
   await until(`document.querySelector('[data-automations="list"] [data-automation-row]') !== null`, "the list")
   assert.equal(await evaluate(`Boolean(document.querySelector('[aria-label="Search settings"]'))`), false, "not Settings")
   const groups = await evaluate(`[...document.querySelectorAll('[data-automations-project]')].map((node) => ({ project: node.dataset.automationsProject, rows: node.querySelectorAll('[data-automation-row]').length }))`)
-  assert.deepEqual(groups.map((group) => group.rows), [6, 3, 3], `rows by project: ${JSON.stringify(groups)}`)
+  assert.deepEqual(groups.map((group) => group.rows), [6, 3, 3], `rows by project: ${jsString(groups)}`)
   const standings = await evaluate(`[...new Set([...document.querySelectorAll('[data-automation-standing]')].map((node) => node.dataset.automationStanding))].sort()`)
   assert.deepEqual(standings, ["off", "on", "paused", "running", "unsupported"], "every standing drawn")
   assert.match(await text(`[data-automation-key$="#nightly-ci-triage"]`), /Every weekday at 7:00 in Europe\/London/)
@@ -405,7 +409,7 @@ async function checkWindow() {
   await click("[data-webhook-rotate]")
   await until(`document.querySelector('[data-confirm-action]') !== null`, "rotating asks first")
   await click("[data-confirm-action]")
-  await until(`document.querySelector('[data-webhook-secret]')?.innerText !== ${JSON.stringify(firstSecret)}`, "a new secret")
+  await until(`document.querySelector('[data-webhook-secret]')?.innerText !== ${jsString(firstSecret)}`, "a new secret")
   await until(`document.querySelector('[data-confirm-dialog]') === null`, "the confirmation gone")
   await capture("editor-webhook-rotated.png")
   console.log("PASS: a webhook's address, its secret shown once, and Rotate")

@@ -77,11 +77,20 @@ export interface AutomationCloudDeps {
 export const PROPOSALS_AFTER_RUN_MS = 60 * 60_000
 const ForwardedSchema = z.array(AutomationProposalSchema).max(200)
 
+/** `text` without its leading and trailing slashes, in one pass (a regular expression here backtracks on long runs of `/`). */
+function trimSlashes(text: string): string {
+  let start = 0
+  let end = text.length
+  while (start < end && text[start] === "/") start++
+  while (end > start && text[end - 1] === "/") end--
+  return text.slice(start, end)
+}
+
 /** A project's stable key: `github.com/<owner>/<name>` lowercased, then the folder in the repository, if any. */
 export function projectKey(githubUrl: string, prefix: string): string | undefined {
   const match = /^https:\/\/github\.com\/([\w.-]+)\/([\w.-]+?)(?:\.git)?\/?$/.exec(githubUrl.trim())
   if (!match) return undefined
-  const folder = prefix.trim().replace(/^\/+|\/+$/g, "")
+  const folder = trimSlashes(prefix.trim())
   return `github.com/${match[1]!.toLowerCase()}/${match[2]!.toLowerCase()}${folder ? `/${folder}` : ""}`
 }
 
