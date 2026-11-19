@@ -1832,7 +1832,11 @@ names a span of its first (`BaseSource.span`: its record entries' count, a
 hash of their ids, when the store held them), proven at the hold to merge to
 the same turns (`sameTurns`), and read back from the session while it still
 begins so, else from the record store as it was then
-(`RecordStore.restoreAsOf`, `ThreadPageOptions.asOf`). A native fork's
+(`RecordStore.restoreAsOf`, `ThreadPageOptions.asOf`). Read back through an
+earlier build's view (`staleHistory`), that span is read again by this
+build in the background once the session's current view names another
+decoder of its harness (`LiveSources.refreshSpan`); a span its harness's
+current decoder read is not (`scripts/test-multi-harness-views.ts`). A native fork's
 inherited turns merge with its parent's history as the parent shows it
 (`forkHistory`, `mergedBase`'s `inherited`): the copy it began from, then the
 reading it holds, or the parent's journal when read back from its session;

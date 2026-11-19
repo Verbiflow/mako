@@ -93,12 +93,19 @@ try {
   const viewsPath = join(root, "views")
   const conversations = join(root, "conversations")
   /** A host after an update: a catalog of this build's fingerprints over the views earlier builds left, and its conversations. */
-  const opened = async () => {
+  /** Pages asked for at this build's decode (`history`), by record: a view found current is asked for its newest page alone. */
+  const asked = { claude: 0, cursor: 0 }
+  /** `stale`: as the app's host reads, an earlier build's view of an unchanged record first (`staleHistory`). */
+  const opened = async (stale = false) => {
     const catalog = new SessionCatalog([counted(new ClaudeProvider(home, stores), "claude"), counted(new CursorProvider(stores, home), "cursor")], { viewsPath, translator: fingerprints() })
     await catalog.scan()
     const live = new LiveConversations({
       appPath: root, root: conversations, driver: () => undefined, emit: () => {},
-      history: (path: string, before?: number) => catalog.page(path, before),
+      history: (path: string, before?: number) => {
+        asked[path === claudePath ? "claude" : "cursor"] += 1
+        return catalog.page(path, before)
+      },
+      ...stale && { staleHistory: (path: string, before?: number) => catalog.page(path, before, undefined, { stale: true }) },
       nativePath: (identity) => (identity.harness === "claude" ? claudePath : identity.harness === "cursor" ? cursorPath : undefined),
     })
     hosts.push(live)
@@ -179,6 +186,53 @@ try {
   await check("only Claude's decoder changed", { claude: 1, cursor: 0 })
   update("entry-sink.js")
   await check("a module both decode with changed", { claude: 1, cursor: 1 })
+
+  // As the app's host reads: an earlier build's view of each unchanged record answers first (`staleHistory`), so a
+  // window isn't kept waiting on a decode. A refresh reads a session again only while one session holds every live
+  // block, so a Thread that went on in two kept the earlier build's reading of its first record until it was read in
+  // again. Now each span whose record's current view names another decoder is read again in the background, and one
+  // whose record is current isn't: only its newest page is asked for.
+  const waitFor = async (predicate: () => boolean, message: string) => {
+    const until = Date.now() + 30_000
+    while (!predicate()) {
+      if (Date.now() > until) throw new Error(message)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+  }
+  const checkStale = async (label: string, decoded: { claude: number; cursor: number }) => {
+    const before = { ...decodes }
+    const pages = { ...asked }
+    const host = await opened(true)
+    const now = fingerprints()
+    // Answered at once, from what's at hand: the window doesn't wait for the decode.
+    const firstShown = { claude: (await host.live.windowSnapshot(claudeThenCursor))!, cursor: (await host.live.windowSnapshot(cursorThenClaude))! }
+    for (const harness of ["claude", "cursor"] as const) {
+      assert.ok(firstShown[harness].base, `${label}: the ${harness}-first Thread shows its history at once`)
+      if (decoded[harness]) assert.notEqual(firstShown[harness].base.translator, now(harness), `${label}: as the earlier build read ${harness}'s record`)
+    }
+    const current = (id: string, harness: "claude" | "cursor") => host.live.held(id)?.base?.translator === now(harness)
+    await waitFor(() => current(claudeThenCursor, "claude") && current(cursorThenClaude, "cursor"), `${label}: each span is read again by this build`)
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.deepEqual({ claude: decodes.claude - before.claude, cursor: decodes.cursor - before.cursor }, decoded, `${label}: decoded again ${JSON.stringify(decoded)}`)
+    for (const harness of ["claude", "cursor"] as const) {
+      if (decoded[harness]) continue
+      assert.ok(asked[harness] - pages[harness] <= 1, `${label}: ${harness}'s record, current, is asked for its newest page at most, never read whole again`)
+    }
+    const claudeFirst = await shown(host.live, claudeThenCursor)
+    const cursorFirst = await shown(host.live, cursorThenClaude)
+    assert.deepEqual(claudeFirst.said, expected("Claude", "Cursor"), `${label}: Claude's turns, then Cursor's, in order`)
+    assert.deepEqual(cursorFirst.said, expected("Cursor", "Claude"), `${label}: Cursor's turns, then Claude's, in order`)
+    await host.live.stop()
+    await host.catalog.stop()
+    console.log(`PASS: through staleHistory, ${label}: shown at once, then decoded again claude ${decoded.claude}, cursor ${decoded.cursor}`)
+  }
+  await checkStale("nothing changed", { claude: 0, cursor: 0 })
+  update("providers/cursor-records.js")
+  await checkStale("only Cursor's decoder changed", { claude: 0, cursor: 1 })
+  update("claude-projection.js")
+  await checkStale("only Claude's decoder changed", { claude: 1, cursor: 0 })
+  update("entry-sink.js")
+  await checkStale("a module both decode with changed", { claude: 1, cursor: 1 })
 } finally {
   for (const live of hosts) await live.stop().catch(() => undefined)
   rmSync(root, { recursive: true, force: true })
