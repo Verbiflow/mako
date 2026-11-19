@@ -27,6 +27,12 @@ export interface LoopSlice {
   ms: number
   /** The host's functions on the slice's stacks, with the milliseconds each was on them, most first. */
   frames: { frame: string; ms: number }[]
+  /**
+   * What ran with none of the host's functions on its stack, by the innermost frame, most first: garbage collection
+   * (`(gc)`), V8's own work (`(program)`), a native call (`name (native)`), Node's (`name node:module`) or a
+   * dependency's (`name package`). Slices the person's host held for 7 s at a time named no frame at all.
+   */
+  outside: { frame: string; ms: number }[]
 }
 
 /** `function package/file:line` for a frame of Mako's own packages; undefined for a dependency's, Node's or V8's. */
@@ -40,6 +46,17 @@ export function ownFrame(frame: CpuProfile["nodes"][number]["callFrame"]): strin
   const own = /\/(?:packages|node_modules\/@mako)\/([^/]+)\/(?:(?:dist|src)\/)?(.+)$/.exec(frame.url)
   if (!own || /\/node_modules\/(?!@mako\/)/.test(frame.url.slice(own.index))) return undefined
   return `${frame.functionName || "(anonymous)"} ${own[1]}/${own[2]}:${frame.lineNumber + 1}`
+}
+
+/** The innermost frame of a stack with none of the host's on it, as `LoopSlice.outside` names it. */
+function outsideFrame(frame: CpuProfile["nodes"][number]["callFrame"]): string {
+  const name = frame.functionName || "(anonymous)"
+  if (name === "(garbage collector)") return "(gc)"
+  if (name === "(program)" || name === "(root)") return name
+  if (!frame.url) return `${name} (native)`
+  if (frame.url.startsWith("node:")) return `${name} ${frame.url}`
+  const dependency = /\/node_modules\/((?:@[^/]+\/)?[^/]+)\/(?!.*\/node_modules\/)/.exec(frame.url)
+  return `${name} ${dependency?.[1] ?? frame.url.split("/").slice(-2).join("/")}`
 }
 
 /** Every slice of at least `minMs`, in order, each with its `frames` busiest frames. */
@@ -64,10 +81,12 @@ export function loopSlices(profile: CpuProfile, minMs: number, frames = 8): Loop
   const deltas = profile.timeDeltas ?? []
   const found: LoopSlice[] = []
   let time = 0
-  let open: { at: number; ms: number; frames: Map<string, number> } | undefined
+  let open: { at: number; ms: number; frames: Map<string, number>; outside: Map<string, number> } | undefined
+  const busiest = (counted: Map<string, number>, top: number) =>
+    [...counted].sort((a, b) => b[1] - a[1]).slice(0, top).map(([frame, ms]) => ({ frame, ms: Math.round(ms) }))
   const close = () => {
     if (open && open.ms >= minMs)
-      found.push({ at: Math.round(open.at), ms: Math.round(open.ms), frames: [...open.frames].sort((a, b) => b[1] - a[1]).slice(0, frames).map(([frame, ms]) => ({ frame, ms: Math.round(ms) })) })
+      found.push({ at: Math.round(open.at), ms: Math.round(open.ms), frames: busiest(open.frames, frames), outside: busiest(open.outside, 4) })
     open = undefined
   }
   for (let index = 0; index < samples.length; index += 1) {
@@ -77,9 +96,14 @@ export function loopSlices(profile: CpuProfile, minMs: number, frames = 8): Loop
     if (node.callFrame.functionName === "(idle)") {
       close()
     } else {
-      open ??= { at: time, ms: 0, frames: new Map() }
+      open ??= { at: time, ms: 0, frames: new Map(), outside: new Map() }
       open.ms += ms
-      for (const frame of stackOf(node.id)) open.frames.set(frame, (open.frames.get(frame) ?? 0) + ms)
+      const own = stackOf(node.id)
+      for (const frame of own) open.frames.set(frame, (open.frames.get(frame) ?? 0) + ms)
+      if (!own.length) {
+        const outside = outsideFrame(node.callFrame)
+        open.outside.set(outside, (open.outside.get(outside) ?? 0) + ms)
+      }
     }
     time += ms
   }
