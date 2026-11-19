@@ -109,7 +109,8 @@ await test("an urgent read (a turn's checkpoint) takes the next free slot ahead 
   urgent[0].end()
   urgent[1].end()
   await Promise.all(urgent.map((read) => read.done))
-  assert.deepEqual(order, ["urgent0", "urgent1"], "the urgent reads ran before every read that waited longer")
+  // The two run side by side, so either may finish first; what matters is that both finished before any read that waited.
+  assert.deepEqual([...order].sort(), ["urgent0", "urgent1"], "the urgent reads ran before every read that waited longer")
   for (const read of [...full.slice(2), ...waiting, later]) read.end()
   await Promise.all([...full, ...waiting, later].map((read) => read.done))
   assert.equal(reads.activity().queued, 0)
