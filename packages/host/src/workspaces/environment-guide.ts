@@ -14,7 +14,8 @@ The recipe is how every agent starts the app and checks a change, many times a d
 
 - Ten ports of its own: MAKO_THREAD_PORT is the first, MAKO_THREAD_PORTS says how many.
 - A hostname of its own, such as fix-login.thread.localhost, with its own cookies. MAKO_THREAD_URL is http://<host>:<first port>.
-- An agent artifact folder outside the checkout: MAKO_THREAD_DATA_DIR. Proofs, test homes, clones and builds go here; after the Thread finishes it appears in the cleanup preview. A .keep file retains it.
+- A scratch folder outside the checkout: MAKO_THREAD_SCRATCH_DIR. Clones, builds, packaged apps, test homes and benchmark worlds go here. Mako removes it once the Thread is archived, a Fin finishes, or the Thread has been quiet for a few days; a .keep file in it retains it.
+- A small artifact folder: MAKO_THREAD_DATA_DIR, for what someone reads afterwards (screenshots, reports, proofs). Never a copy of the checkout or a build.
 - App state stays in MAKO_APP_DATA_DIR and recipe {data}, shared by Threads using the same app. Changing the agent artifact path does not move existing app data.
 - The app_* tools on Mako's mako server. Mako runs the recipe's processes outside your shell, so they survive your turn and a Mako restart, and it stops their whole process tree.
 

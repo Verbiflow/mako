@@ -29,7 +29,7 @@ const { values: options } = parseArgs({
     "per-session": { type: "string", default: "0" },
   },
 })
-const base = process.env.MAKO_THREAD_DATA_DIR ?? join(homedir(), ".mako", "tmp")
+const base = process.env.MAKO_THREAD_SCRATCH_DIR ?? process.env.MAKO_THREAD_DATA_DIR ?? join(homedir(), ".mako", "tmp")
 const scratch = join(base, `bench-unread-${process.pid}`)
 mkdirSync(scratch, { recursive: true })
 const views = join(scratch, "views")

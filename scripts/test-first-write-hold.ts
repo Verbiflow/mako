@@ -420,7 +420,7 @@ try {
     console.log("PASS: on a holding launch a plain message goes at once; a server's prompt command, a resource mention and a steer with one wait for the checkpoint")
   }
 
-  // A launch whose writes aren't held (the person's own hooks run beside the harness's): the message waits as ever.
+  // A launch whose writes aren't held (a harness that can't hold them): the message waits as ever.
   {
     await owner.stop()
     owner = new LiveConversations(dependencies)
@@ -468,21 +468,21 @@ try {
     ]
     for (const [why, settings] of cases) assert.equal(settingsRunCode(resolved(settings)), true, why)
     assert.equal(settingsRunCode(resolved({ model: "opus" }, ["profile"])), true, "a machine policy source that didn't load may hold anything")
-    // A check that can't be answered (here, a worker that can't load) says the person's code runs: the launch holds nothing.
+    // A check that can't be answered (here, a worker that can't load) says the person's code runs: the launch holds every tool.
     const broken = new ClaudeSettingsReader(new URL("file:///nonexistent/mako-settings-worker.js"))
     try {
       assert.equal(await broken.personCodeRuns({ cwd: root, env: {}, settingSources: ["user"] }), true, "a check that fails counts the person's code as running")
     } finally {
       broken.close()
     }
-    console.log("PASS: a Claude launch holds writes only where Claude Code's own settings run none of the person's code, and fails closed")
+    console.log("PASS: a Claude launch holds every tool where Claude Code's own settings run the person's code, failing closed")
   }
 
   // Claude's hook: a tool that may write waits on the hold; one that only reads, or an unheld binding, goes at once.
   {
     const gate = Promise.withResolvers<void>()
     // As the driver hands it: the hold, or the tool's cancellation, whichever comes first.
-    const hooks = claudeCallHooks(new CallBounds("claude-binding"), undefined, (signal) => Promise.race([gate.promise, new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }))]))
+    const hooks = claudeCallHooks(new CallBounds("claude-binding"), undefined, (signal, mayWrite) => mayWrite ? Promise.race([gate.promise, new Promise<void>((resolve) => signal.addEventListener("abort", () => resolve(), { once: true }))]) : undefined)
     /** The inputs these calls carry, as Claude's tools name them. */
     type ToolInput = { file_path?: string; old_string?: string; new_string?: string; command?: string; pattern?: string }
     const preToolUse = (tool_name: string, tool_input: ToolInput): PreToolUseHookInput => ({
@@ -519,6 +519,34 @@ try {
     const unheld = claudeCallHooks(new CallBounds("claude-binding"), undefined, () => new WriteHolds().beforeWrite("claude-binding"))
     assert.equal(await settlesWithin(unheld.pre(preToolUse("Write", { file_path: file }), undefined, { signal: new AbortController().signal }), 50), true, "a binding with no hold writes at once")
     console.log("PASS: Claude's PreToolUse hook holds tools that may write, never reads")
+
+    // Where the person's own code runs beside Mako's hook, every tool waits, as the driver wires it; a read let go
+    // before the checkpoint held the workspace leaves it on time, a write makes it late.
+    const every = new WriteHolds()
+    every.attend("person-code", true, { everyTool: true })
+    assert.ok(every.attends("person-code"), "a launch beside the person's code still holds, so its message goes at once")
+    const released = Promise.withResolvers<void>()
+    let late = 0
+    every.hold("person-code", { until: released.promise, frozen: () => false, wrote: () => { late += 1 } })
+    const wired = claudeCallHooks(new CallBounds("person-code"), undefined, (signal, mayWrite) => mayWrite ? every.beforeWrite("person-code", signal) : every.beforeTool("person-code", signal))
+    const fire = (tool_name: string, tool_input: ToolInput) => wired.pre(preToolUse(tool_name, tool_input), undefined, { signal: new AbortController().signal })
+    const read = fire("Read", { file_path: file }), grep = fire("Grep", { pattern: "x" })
+    assert.equal(await settlesWithin(Promise.race([read, grep]), 50), false, "a read and a search wait too")
+    released.resolve()
+    assert.equal(await settlesWithin(Promise.all([read, grep]), 1_000), true, "and go when the hold lets go")
+    assert.equal(late, 0, "a read let go before the checkpoint held the workspace doesn't make it late")
+    assert.equal(await settlesWithin(fire("Edit", { file_path: file, old_string: "a", new_string: "b" }), 1_000), true)
+    assert.equal(late, 1, "a write let go before it does")
+    every.attend("person-code", true)
+    const plain = Promise.withResolvers<void>()
+    every.hold("person-code", { until: plain.promise, frozen: () => false, wrote: () => {} })
+    assert.equal(await settlesWithin(fire("Read", { file_path: file }), 50), true, "attended again without the person's code, a read goes at once")
+    plain.resolve()
+    every.attend("person-code", true, { everyTool: true })
+    every.forget("person-code")
+    every.hold("person-code", { until: new Promise(() => {}), frozen: () => false, wrote: () => {} })
+    assert.equal(await settlesWithin(fire("Read", { file_path: file }), 50), true, "a forgotten launch holds no read")
+    console.log("PASS: beside the person's own code, Claude's hook holds every tool, and only a write goes late")
   }
 } finally {
   await owner.stop()

@@ -1,10 +1,11 @@
 import { readFile, readdir, rename, rm, writeFile } from "node:fs/promises"
-import { join } from "node:path"
+import { basename, join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { hostWarn } from "../base/host-log.js"
 import { SnapshotBudgetSettingsSchema, type SnapshotBudgetEntry, type SnapshotBudgetReport, type SnapshotBudgetSettings, type SnapshotSettlement } from "../contracts/snapshot-budget.js"
 import { snapshotPayloadBytes } from "./snapshot-git.js"
 import type { SnapshotRecord } from "./snapshot-retention.js"
+import type { ReclaimClass, ReclaimItem } from "../contracts/storage.js"
 
 interface Deps {
   root: string
@@ -16,10 +17,15 @@ interface Deps {
   /** Revalidates the same record, live holds and journal evidence under its existing repository lock. */
   remove(record: SnapshotRecord, authorised: () => Promise<boolean>, enabled: () => boolean): Promise<boolean>
 }
-const defaults: SnapshotBudgetSettings = { mode: "preview", maxBytes: 8 * 1024 ** 3 }
+/**
+ * Evicting by default: Rewind reaches a turn only while its checkpoint is kept, and the newest 8 GiB keep every recent
+ * turn of every conversation; preview-only, one Mac's checkpoints reached 20.6 GB, mostly of turns weeks old.
+ */
+const defaults: SnapshotBudgetSettings = { mode: "evict", maxBytes: 8 * 1024 ** 3 }
 
 /** One payload budget over all conversations/repositories in this host profile. */
 export class SnapshotBudget {
+  readonly store = "snapshots"
   readonly #deps: Deps
   #settings: SnapshotBudgetSettings = { ...defaults }
   #load: Promise<void> | undefined
@@ -88,6 +94,50 @@ export class SnapshotBudget {
     return undefined
   }
   preview(): Promise<SnapshotBudgetReport> { return this.#plan(0) }
+  /**
+   * Settings › Storage's rows, one per workspace and class: `now` the oldest settled checkpoints over the budget,
+   * `approve` the other settled ones (Rewind no longer reaches their turns once they go), `keep` what a running turn,
+   * a rewind or unproven settlement holds.
+   */
+  async items(): Promise<ReclaimItem[]> {
+    const report = await this.preview()
+    const groups = new Map<string, ReclaimItem>()
+    for (const entry of report.entries) {
+      const verdict: ReclaimClass = entry.selected ? "now" : entry.eligible ? "approve" : "keep"
+      const key = `${entry.scope}\0${verdict}`
+      const item = groups.get(key) ?? {
+        id: `snapshots:${verdict}:${entry.scope}`, store: "snapshots" as const, path: entry.scope, label: `Rewind checkpoints in ${basename(entry.scope) || entry.scope}`,
+        project: basename(entry.scope), parts: [], bytes: 0, class: verdict,
+        reason: verdict === "now" ? "Settled turns past the rewind budget, oldest first." : verdict === "approve" ? "Settled turns; Rewind no longer reaches them once they go." : entry.reason,
+      }
+      item.parts!.push(join(this.#deps.root, entry.id))
+      item.bytes = (item.bytes ?? 0) + entry.bytes
+      item.usedAt = Math.max(item.usedAt ?? 0, entry.createdAt)
+      groups.set(key, item)
+    }
+    return [...groups.values()].filter((item) => (item.bytes ?? 0) > 0)
+  }
+  /** Evicts the checkpoints of the items asked for, each only while it is still settled and nothing holds it. */
+  async reclaim(items: readonly ReclaimItem[], consent: "now" | "approve"): Promise<Map<string, true | string>> {
+    const outcome = new Map<string, true | string>()
+    for (const item of items) {
+      if (item.class === "keep" || (item.class === "approve" && consent === "now")) { outcome.set(item.id, item.reason); continue }
+      let removed = 0
+      for (const part of item.parts ?? []) {
+        const record = this.#deps.records().find((row) => join(this.#deps.root, row.id) === part)
+        if (!record) continue
+        const authorised = async () => {
+          const proof = await this.#deps.settlement()
+          return !this.#eligible(record, proof, this.#deps.expand(proof.settledIds), this.#deps.protectedIds())
+        }
+        try {
+          if (await this.#deps.remove(record, authorised, () => !this.#closed && !this.#configuring)) removed++
+        } catch (error) { hostWarn("checkpoints", "A checkpoint asked to be freed was kept.", { error: error instanceof Error ? error.message : String(error) }) }
+      }
+      outcome.set(item.id, removed ? true : "A running turn, a rewind or unproven settlement holds these checkpoints.")
+    }
+    return outcome
+  }
   async #plan(reservedBytes: number): Promise<SnapshotBudgetReport> {
     const settings = await this.settings()
     await this.#inventory()
