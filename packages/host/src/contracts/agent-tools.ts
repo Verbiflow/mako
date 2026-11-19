@@ -1,7 +1,7 @@
 import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "./report-actions.js"
 import type { ReportAction, ReportActionTarget, ReportActionsPage, ReportDisposition } from "./report-actions.js"
 import type { AccessTier } from "./access.js"
-import { type AgentsCancelInput, type AgentsCancelled, type AgentsCapabilities, type AgentsNoticed, type AgentsNoticeInput, type AgentsPlaced, type AgentsPlaceInput, APEX_WORD, decisionWords, UNFINISHED_WORDS, FIN_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import { type AgentsCancelInput, type AgentsCancelled, type AgentsCapabilities, type AgentsNoticed, type AgentsNoticeInput, type AgentsPlaced, type AgentsPlaceInput, APEX_WORD, decisionWords, UNFINISHED_WORDS, FIN_WORD, SHIVER_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
@@ -136,11 +136,11 @@ export interface AgentsListInput {
   /** Full by default at every door. Summary explicitly opts into PR details lost after expiry or host restart. */
   presentation?: "summary" | "full"
   /**
-   * `tree` adds every descendant, each under its parent; `crew`, from a Fin, is its Apex and the other Fins it started
-   * (`AgentsCrew`); `apexes`, the person's other Apexes on this host (`AgentsApexes`); `threads`, the conversations
+   * `tree` adds every descendant, each under its parent; `shiver`, from a Fin, is its Apex and the other Fins it started
+   * (`AgentsShiver`); `apexes`, the person's other Apexes on this host (`AgentsApexes`); `threads`, the conversations
    * on this device an `@` picker offers, newest first (`AgentsThreads`).
    */
-  scope?: "children" | "tree" | "all" | "crew" | "apexes" | "threads"
+  scope?: "children" | "tree" | "all" | "shiver" | "apexes" | "threads" | typeof LEGACY_SHIVER_SCOPE
   /** With `threads`: words of a title, a Thread ID or a Fin's name. */
   query?: string
   /**
@@ -210,12 +210,12 @@ export interface AgentStrip {
   changedAt?: number
 }
 /**
- * A Fin's view of the work it's part of (`agents_list` with `scope: crew`):
+ * A Fin's view of the work it's part of (`agents_list` with `scope: shiver`):
  * its Apex as it stands now, and the other Fins that Apex started, each as
  * the front door's note names it. Typed facts the host holds, never a
  * transcript, so it costs no read of one.
  */
-export interface AgentsCrew {
+export interface AgentsShiver {
   /** The caller's own name among them. */
   you: string
   apex: {
@@ -227,9 +227,9 @@ export interface AgentsCrew {
     /** What it was asked, its first sentence, when it is a Fin too. */
     asked?: string
   }
-  crew: CrewMate[]
+  shiver: ShiverMate[]
 }
-export type CrewMate = Omit<FrontDoorChild, "direct">
+export type ShiverMate = Omit<FrontDoorChild, "direct">
 
 /**
  * The person's other Apexes on this host (`agents_list` with `scope: apexes`),
@@ -273,7 +273,7 @@ export interface AgentsListed {
   mark?: string
   unchanged?: number
 }
-export type AgentsListResult = AgentsListed | AgentsCrew | AgentsApexes | AgentsThreads | AgentRefused
+export type AgentsListResult = AgentsListed | AgentsShiver | AgentsApexes | AgentsThreads | AgentRefused
 
 /** Explicit summary's short-lived PR details; the engine, UI and default tool output keep full facts. */
 export interface AgentPullsSummary {
@@ -388,7 +388,7 @@ export interface AgentsSettleInput {
 export type AgentsSettleResult = { action: ReportAction; deduped?: true } | AgentRefused
 
 export interface AgentsSendInput {
-  /** Your own Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. Crew siblings need a parent relay through agents_report; discovery grants no send authority. */
+  /** Your own Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. Shiver siblings need a parent relay through agents_report; discovery grants no send authority. */
   to: string
   /** Pass on the person's message this turn answers, word for word, as theirs: the host fills it in, so the call stays short. */
   forward?: boolean
@@ -552,7 +552,15 @@ export interface AgentToolDefinition {
   /** Inputs the door fills in; the MCP schema leaves them out. */
   filled: readonly (keyof AgentToolFilled)[]
   mcp: AgentToolProjection
+  /** Values a field still takes from older builds' agents, each to the value it means: accepted, never advertised. */
+  aliases?: Readonly<Record<string, Readonly<Record<string, string>>>>
 }
+
+/**
+ * `agents_list`'s `scope: crew`, as builds before the Shiver named it: briefs and agents of those builds still send it,
+ * so the host takes it as `shiver` (wire compatibility; the MCP schema leaves it out).
+ */
+export const LEGACY_SHIVER_SCOPE = "crew"
 
 /** What a door knows of its caller and fills in for it. */
 export interface AgentToolFilled {
@@ -623,9 +631,9 @@ export interface FrontDoorChild {
   report?: { status: ReportStatus; unfinished?: true; line: string; at: number }
   /** The person's newest words to it directly: in its own Thread, or from its Apex's composer. */
   direct?: { line: string; at: number }
-  /** Seconds since its last activity, while it isn't working (`idleFor`): the crew view carries it, the note doesn't. */
+  /** Seconds since its last activity, while it isn't working (`idleFor`): the Shiver view carries it, the note doesn't. */
   idleFor?: number
-  /** Its open pull requests (`finPullRequests`): the crew view carries them, the note doesn't. */
+  /** Its open pull requests (`finPullRequests`): the Shiver view carries them, the note doesn't. */
   openPRs?: FinPullRequest[]
   /** When its state, report, open questions or pull requests last changed, as the host saw them (`FinChanges`). */
   changedAt?: number
@@ -774,10 +782,11 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     channel: "mako:agents-list",
     replay: "read",
     filled: [],
+    aliases: { scope: { [LEGACY_SHIVER_SCOPE]: "shiver" } },
     mcp: {
       name: "agents_list",
-      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Every PR fact stays inline by default. Explicit presentation summary replaces large PR arrays with counts: open and draft are known open; reported means its current state is unknown. Pass each read object to agents_read, then follow pulls.next as offset. These details expire at expiresAt, at most 30 minutes from capture, or on host restart; they require the same caller Session and current access. After that the original facts cannot be recovered; a new list gives current facts. Use full for lasting evidence. Reports wake you on their own, so read this when you need the whole picture, not to wait. Each answer carries a mark: pass it as since next time to list only the ${FIN_WORD}s that changed. A ${FIN_WORD} reads its ${APEX_WORD} and the other ${FIN_WORD}s it started with scope crew, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
-      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting, idle or need a decision, and those that ended in the last day; what needs you is always listed, and other idle or ended ones may be counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, crew: your ${APEX_WORD} and the other ${FIN_WORD}s it started, what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, since: "The mark an earlier list answered: only the Fins that changed since (state, report, open questions or pull requests) are listed, the rest counted in unchanged. A Fin waiting on you is always listed. A mark from another host or an earlier host life lists every Fin.", presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
+      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Every PR fact stays inline by default. Explicit presentation summary replaces large PR arrays with counts: open and draft are known open; reported means its current state is unknown. Pass each read object to agents_read, then follow pulls.next as offset. These details expire at expiresAt, at most 30 minutes from capture, or on host restart; they require the same caller Session and current access. After that the original facts cannot be recovered; a new list gives current facts. Use full for lasting evidence. Reports wake you on their own, so read this when you need the whole picture, not to wait. Each answer carries a mark: pass it as since next time to list only the ${FIN_WORD}s that changed. A ${FIN_WORD} reads its ${SHIVER_WORD} (its ${APEX_WORD} and the other ${FIN_WORD}s it started) with scope shiver, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
+      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting, idle or need a decision, and those that ended in the last day; what needs you is always listed, and other idle or ended ones may be counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, shiver: your ${SHIVER_WORD} (your ${APEX_WORD} and the other ${FIN_WORD}s it started), what each was asked and last reported; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, since: "The mark an earlier list answered: only the Fins that changed since (state, report, open questions or pull requests) are listed, the rest counted in unchanged. A Fin waiting on you is always listed. A mark from another host or an earlier host life lists every Fin.", presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },

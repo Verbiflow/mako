@@ -76,7 +76,7 @@ export const FinReport = memo(function FinReport({ card, timestamp, block }: { c
   const children = useThreadChildren(card.apex ? undefined : thread)
   const asks = useThreadAsks(card.apex ? undefined : thread)
   const fin = children.find((agent) => agent.child?.thread === card.fin)
-  // Its options answer the Fin while its ask is the person's and still open, through the crew card's own path.
+  // Its options answer the Fin while its ask is the person's and still open, through the Shiver card's own path.
   const open = asks.find((ask) => ask.fin === card.fin && ask.ask.kind === "report" && ask.ask.id === card.report)
   const [sent, setSent] = useState<number>()
   const [whole, setWhole] = useState(false)

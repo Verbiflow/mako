@@ -204,7 +204,8 @@ const TOOLS: ReadonlyMap<string, MakoTool> = new Map<string, MakoTool>([
     group: "agents",
     say: ({ args, answer }) => {
       const scope = text(args["scope"])
-      if (scope === "crew") return { verb: READ, what: "the crew" }
+      // "crew": the scope's name before the Shiver, as transcripts kept from those builds still hold it.
+      if (scope === "shiver" || scope === "crew") return { verb: READ, what: "the Shiver" }
       if (scope === "apexes") return { verb: READ, what: "other Apexes" }
       const children = answer?.["children"]
       return { verb: READ, what: "Fins", ...Array.isArray(children) && { done: count(children.length, "Fin", "Fins") } }

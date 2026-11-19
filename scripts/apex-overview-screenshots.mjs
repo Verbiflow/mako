@@ -76,7 +76,7 @@ async function shoot() {
   // The desk boots on whichever conversation was last on screen: the Apex's row brings its Thread.
   const toApex = async () => {
     await evaluate("[...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
-    await until("Boolean(document.querySelector('[data-crew]'))", "the Apex's Thread")
+    await until("Boolean(document.querySelector('[data-shiver]'))", "the Apex's Thread")
   }
   const headings = () => evaluate("[...document.querySelectorAll('[data-apex-fins] [data-child-group], [data-overview-section=background] [data-child-group]')].map((node) => node.innerText.replace(/\\s+/g, ' ').trim())")
   const rows = (section) => evaluate(`document.querySelectorAll('[data-overview-section=${section}] [data-child-row]').length`)

@@ -39,8 +39,8 @@ export function FinOfApexNote({ conversation }: { conversation: string }) {
 
 /**
  * In an Apex's bar on the phone: how many Fins it has, which opens them in Agents. The Fins themselves stand in the
- * crew card and the list; a chip each repeated them over the card as they spawned. It counts the roster this window
- * holds rather than the host's listed count, so it stands once the Agents it opens and the crew card can be drawn.
+ * Shiver card and the list; a chip each repeated them over the card as they spawned. It counts the roster this window
+ * holds rather than the host's listed count, so it stands once the Agents it opens and the Shiver card can be drawn.
  */
 export function PhoneFinCount({ thread, conversation }: { thread: string; conversation: string }) {
   const total = useThreadChildren(thread).length

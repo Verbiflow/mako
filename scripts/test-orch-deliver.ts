@@ -579,14 +579,14 @@ async function oldQueuedKeepsNewerInstructions(): Promise<void> {
   }
 }
 
-/** Crew discovery gives no peer-send authority; a refusal names the relation and the existing parent relay. */
+/** Shiver discovery gives no peer-send authority; a refusal names the relation and the existing parent relay. */
 async function siblingRefusalNamesRelay(): Promise<void> {
   const { world, apex, fin } = await team("sibling-relay", "codex", ["claude", "cursor"])
   try {
     const caller = world.caller(fin.claude!)
     const sibling = world.store.edges().all.find((edge) => edge.name === "cursor")!
-    const crew = await world.agents.list(caller, { scope: "crew" })
-    assert.ok("crew" in crew && crew.crew.some((mate) => mate.name === "cursor"))
+    const shiver = await world.agents.list(caller, { scope: "shiver" })
+    assert.ok("shiver" in shiver && shiver.shiver.some((mate) => mate.name === "cursor"))
     const before = world.live.snapshot(fin.cursor!)!.requests.length
     for (const to of ["cursor", "fin:cursor", sibling.child]) {
       const receipt = await world.agents.send(caller, { to, text: "Coordinate this change.", clientKey: to })

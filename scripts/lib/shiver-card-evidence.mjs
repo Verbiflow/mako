@@ -3,7 +3,7 @@ import { writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 
-const EVENT = "mako:test-crew-evidence"
+const EVENT = "mako:test-shiver-evidence"
 const LIMIT = 128
 const Trace = z.object({
   version: z.literal(1),
@@ -42,18 +42,18 @@ const Trace = z.object({
 })
 
 /** Test-only source markers; extra dispatch and observer wrappers perturb scheduling. No production file is written. */
-export function crewEvidencePlugin() {
+export function shiverEvidencePlugin() {
   return {
-    name: "crew-card-test-evidence",
+    name: "shiver-card-test-evidence",
     enforce: "pre",
     transform(code, id) {
-      if (!id.split("?")[0].replaceAll("\\", "/").endsWith("/src/state/crew-card-view.ts")) return null
-      if (createHash("sha256").update(code).digest("hex") !== "772292b1594aff8829fa3f7e3f2240761d8df89a243015d855f8cf2077b5c2f1")
-        throw new Error("Crew evidence requires exact 40b8 controller source")
+      if (!id.split("?")[0].replaceAll("\\", "/").endsWith("/src/state/shiver-card-view.ts")) return null
+      if (createHash("sha256").update(code).digest("hex") !== "0596da26c2f390f754d13c5ded2ca9566f7bad7e6280b6ec6fdab02a92c4b8b6")
+        throw new Error("Shiver evidence requires exact 40b8 controller source")
       const marker = (stage, extra = "") =>
         `try { globalThis.dispatchEvent(new CustomEvent(${JSON.stringify(EVENT)}, { detail: { stage: ${JSON.stringify(stage)}${extra} } })) } catch { /* Evidence must not replace the original action. */ }`
       const once = (text, before, after) => {
-        if (text.split(before).length !== 2) throw new Error("Crew evidence source marker is ambiguous")
+        if (text.split(before).length !== 2) throw new Error("Shiver evidence source marker is ambiguous")
         return text.replace(before, after)
       }
       let next = once(
@@ -63,8 +63,8 @@ export function crewEvidencePlugin() {
       )
       next = once(
         next,
-        "export function scrollCrewNeedsIntoView() {\n",
-        "export function scrollCrewNeedsIntoView() {\n  " + marker("handler") + "\n",
+        "export function scrollShiverNeedsIntoView() {\n",
+        "export function scrollShiverNeedsIntoView() {\n  " + marker("handler") + "\n",
       )
       return { code: marker("source") + "\n" + next, map: null }
     },
@@ -72,11 +72,11 @@ export function crewEvidencePlugin() {
 }
 
 /** Runs before the mock renderer. Identity is local ordinal only; no text, paths, URLs, raw Thread IDs or errors are recorded. */
-export function installCrewEvidence() {
+export function installShiverEvidence() {
   const root = window
   const query = new URL(root.location.href).searchParams
   if (!query.has("mock") || query.get("app") !== "apex") return
-  const previous = Object.getOwnPropertyDescriptor(root, "__crewEvidence")
+  const previous = Object.getOwnPropertyDescriptor(root, "__shiverEvidence")
   if (previous && !previous.configurable) return
   const events = [],
     ids = new WeakMap(),
@@ -144,14 +144,14 @@ export function installCrewEvidence() {
   const snapshot = (kind) =>
     safe(() => {
       record(kind)
-      const cards = root.document.querySelectorAll("[data-crew]"),
-        lines = root.document.querySelectorAll("[data-crew-away]")
-      record("counts", { values: [cards.length, lines.length, root.document.querySelectorAll("[data-crew-needs]").length] })
+      const cards = root.document.querySelectorAll("[data-shiver]"),
+        lines = root.document.querySelectorAll("[data-shiver-away]")
+      record("counts", { values: [cards.length, lines.length, root.document.querySelectorAll("[data-shiver-needs]").length] })
       dropped += Math.max(0, cards.length - 8) + Math.max(0, lines.length - 8)
       record("viewport", { values: [root.innerWidth, root.innerHeight, root.devicePixelRatio].map(number) })
       for (const card of [...cards].slice(0, 8)) {
         geometry(card, "card")
-        geometry(card.querySelector("[data-crew-scroller]"), "inner")
+        geometry(card.querySelector("[data-shiver-scroller]"), "inner")
       }
       for (const line of [...lines].slice(0, 8)) geometry(line, "line")
       let parent = cards[0]?.parentElement
@@ -178,12 +178,12 @@ export function installCrewEvidence() {
     active = false
     for (const [name, callback] of listeners.splice(0)) safe(() => root.removeEventListener(name, callback, true))
     for (const [owner, name, descriptor] of descriptors.splice(0).reverse()) safe(() => Object.defineProperty(owner, name, descriptor))
-    safe(() => (previous ? Object.defineProperty(root, "__crewEvidence", previous) : delete root.__crewEvidence))
+    safe(() => (previous ? Object.defineProperty(root, "__shiverEvidence", previous) : delete root.__shiverEvidence))
     threads.clear()
     events.length = 0
   }
   try {
-    listen("mako:test-crew-evidence", (event) =>
+    listen("mako:test-shiver-evidence", (event) =>
       safe(() => {
         const detail = event.detail
         if (detail?.stage === "source") sourceMarkers = true
@@ -197,7 +197,7 @@ export function installCrewEvidence() {
     )
     listen("click", (event) =>
       safe(() => {
-        const line = event.target?.closest?.("[data-crew-away]")
+        const line = event.target?.closest?.("[data-shiver-away]")
         if (line) record("click", { id: id(line), value: event.isTrusted })
       }),
     )
@@ -212,7 +212,7 @@ export function installCrewEvidence() {
               if (active && !disposed) safe(() => {
                 dropped += Math.max(0, entries.length - 8)
                 for (const entry of entries.slice(0, 8))
-                  if (entry.target?.hasAttribute("data-crew")) {
+                  if (entry.target?.hasAttribute("data-shiver")) {
                     record("observer", {
                       id: id(entry.target),
                       value: entry.isIntersecting,
@@ -242,11 +242,11 @@ export function installCrewEvidence() {
     if (scroll)
       scrollWrapped = replace(root.Element.prototype, "scrollIntoView", function (...args) {
         safe(() => {
-          if (this.hasAttribute("data-crew")) record("scroll", { id: id(this), values: rect(this) })
+          if (this.hasAttribute("data-shiver")) record("scroll", { id: id(this), values: rect(this) })
         })
         return scroll.apply(this, args)
       })
-    Object.defineProperty(root, "__crewEvidence", {
+    Object.defineProperty(root, "__shiverEvidence", {
       configurable: true,
       value: {
         begin() {
@@ -288,8 +288,8 @@ export function installCrewEvidence() {
   }
 }
 
-export const CREW_EVIDENCE_PRELOAD = `\n;try { (${installCrewEvidence.toString()})(); } catch { /* Fixture evidence unavailable; original page must still run. */ }\n`
-export const CREW_EVIDENCE_CLEANUP = "window.__crewEvidence?.dispose(); true"
+export const SHIVER_EVIDENCE_PRELOAD = `\n;try { (${installShiverEvidence.toString()})(); } catch { /* Fixture evidence unavailable; original page must still run. */ }\n`
+export const SHIVER_EVIDENCE_CLEANUP = "window.__shiverEvidence?.dispose(); true"
 
 /** Artifact I/O alone is bounded; it never changes the test's 20s condition deadline or replaces a thrown value. */
 async function attempt(work) {
@@ -311,8 +311,8 @@ async function attempt(work) {
 async function writeTrace(page, shots, name, write, failure) {
   try {
     const code = failure
-      ? "window.__crewEvidence?.failure(); window.__crewEvidence?.dump() ?? null"
-      : "window.__crewEvidence?.dump() ?? null"
+      ? "window.__shiverEvidence?.failure(); window.__shiverEvidence?.dump() ?? null"
+      : "window.__shiverEvidence?.dump() ?? null"
     const raw = await attempt(() => page.executeJavaScript(code))
     const parsed = Trace.safeParse(raw)
     const report = parsed.success ? parsed.data : { version: 1, unavailable: true }
@@ -338,33 +338,33 @@ async function writeTrace(page, shots, name, write, failure) {
 }
 
 /** A success is evidence of this execution only; retain its bounded markers before later navigation discards the page. */
-export async function saveCrewInteraction({ page, shots, write = writeFile }) {
+export async function saveShiverInteraction({ page, shots, write = writeFile }) {
   try {
-    await writeTrace(page, shots, "crew-card-ui-interaction.json", write, false)
+    await writeTrace(page, shots, "shiver-card-ui-interaction.json", write, false)
   } finally {
-    await attempt(() => page.executeJavaScript("window.__crewEvidence?.end(); true"))
+    await attempt(() => page.executeJavaScript("window.__shiverEvidence?.end(); true"))
   }
 }
 
-export async function withCrewFailureEvidence({ page, shots, write = writeFile }, work) {
+export async function withShiverFailureEvidence({ page, shots, write = writeFile }, work) {
   try {
     return await work()
   } catch (primary) {
     try {
-      const mockSource = await writeTrace(page, shots, "crew-card-ui-failure.json", write, true)
+      const mockSource = await writeTrace(page, shots, "shiver-card-ui-failure.json", write, true)
       // No new screenshot unless the exact mock module markers were observed.
       if (mockSource) {
         const image = await attempt(() => page.capturePage())
         const bytes = await attempt(() => image?.toPNG())
         const png = z.instanceof(Uint8Array).safeParse(bytes)
         if (png.success && png.data.byteLength <= 8 * 1024 * 1024)
-          await attempt(() => write(join(shots, "crew-card-ui-failure.png"), png.data))
+          await attempt(() => write(join(shots, "shiver-card-ui-failure.png"), png.data))
       }
     } catch {
       /* Diagnostic failure must not replace any original thrown value. */
     }
     throw primary
   } finally {
-    await attempt(() => page.executeJavaScript(CREW_EVIDENCE_CLEANUP))
+    await attempt(() => page.executeJavaScript(SHIVER_EVIDENCE_CLEANUP))
   }
 }
