@@ -392,6 +392,9 @@ export class LiveClosing {
     const closed = (async () => {
       const settled: Promise<void>[] = []
       const failed: Error[] = []
+      // What the writer still holds of them is written first, awaited, and its side of each closed: a journal's
+      // close then waits for nothing of the writer's on this thread.
+      await records.closeWrites().catch((error) => hostWarn("live", "the journal writer didn't close its writes; each journal waits for its own", { error: errorMessage({ error }) }))
       let since = performance.now()
       for (const journal of journals) {
         // Open questions keep a conversation loaded until the host stops, so its dropped copy's space is reclaimed here.

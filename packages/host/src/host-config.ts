@@ -42,6 +42,12 @@ export interface HostConfig {
   launchProfile?: boolean
   /** On a cloud machine, the agent's channel (`contracts/machine-agent.ts`): the host serves as the machine's runtime. */
   machineAgentFd?: number | undefined
+  /**
+   * Cloud Fins open on this host for a proof run (`MAKO_CLOUD_FIN_PROOF=open`), only on a host isolated from the
+   * person's own (`HostEnvironment.isolated`): no shipping build or profile opens them, and a cloud whose starts are
+   * closed still refuses each one.
+   */
+  cloudFinProof?: boolean
 }
 
 /** The host this process was started as, or why it can't be one. */
@@ -52,6 +58,12 @@ export function processHostConfig(env: NodeJS.ProcessEnv = process.env): HostCon
   const fixtureDesk = env.MAKO_FIXTURE_DESK === "1"
   if (fixtureDesk && !/(^|-)fixture-/.test(basename(environment.dataRoot)))
     return { refused: "A fixture desk host needs a fixture profile of its own", code: 78 }
+  const cloudFinProof = env.MAKO_CLOUD_FIN_PROOF === "open"
+  if (cloudFinProof && (!environment.isolated || environment.packaged))
+    return { refused: "MAKO_CLOUD_FIN_PROOF opens cloud Fins only on a proof's host, one isolated from the person's own; leave it unset here", code: 78 }
+  // A proof names the cloud it runs against; the one a build was stamped with is the person's, never a proof's.
+  if (cloudFinProof && (!env.MAKO_CLOUD_URL || env.MAKO_CLOUD_URL === environment.build.makoCloud))
+    return { refused: "MAKO_CLOUD_FIN_PROOF needs MAKO_CLOUD_URL naming the proof's own cloud, not this build's", code: 78 }
   const executable = env.MAKO_HOST_EXECUTABLE ?? process.execPath
   const agentFd = env[MACHINE_AGENT_FD_ENV]
   if (agentFd !== undefined && !/^[3-9]$/.test(agentFd)) return { refused: `${MACHINE_AGENT_FD_ENV} names the agent's channel, a descriptor from 3 to 9`, code: 64 }
@@ -67,6 +79,7 @@ export function processHostConfig(env: NodeJS.ProcessEnv = process.env): HostCon
     gitTrace: env.MAKO_GIT_TRACE === "1",
     launchProfile: env.MAKO_LAUNCH_PROFILE === "1",
     machineAgentFd: agentFd === undefined ? undefined : Number(agentFd),
+    cloudFinProof,
   }
 }
 

@@ -35,7 +35,8 @@ import { ToolGrowthSchema, changedEntryStart, continues, growTool, type ToolGrow
 import { RunSnapshotsSchema } from "../contracts/workspace-snapshots.js"
 import { RequestChangesSchema } from "../contracts/turn-changes.js"
 import { TurnUndoneSchema } from "../contracts/turn-review.js"
-import { ACCOUNT_SWITCH_WAITS, JOINED_MAX, MAX_INTERRUPTED_CALLS, savedReason, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
+import { ACCOUNT_SWITCH_WAITS, INTERRUPTION_REASONS, JOINED_MAX, MAX_INTERRUPTED_CALLS, savedReason, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
+import { cutLast, type CutFacts } from "../contracts/turn-continuation.js"
 import { ActorSchema } from "../contracts/thread-identity.js"
 import { laterPrompt, personPromptedAt, type PromptedRequest } from "../contracts/worked-at.js"
 import { ACCESS_TIER_NAMES } from "../contracts/access.js"
@@ -45,6 +46,7 @@ import { foldMakoLog, MAKO_LOG_SCHEMA, makoFacts, makoLogDifference, type MakoLo
 import { baseKeptBecause, baseKeptOnceHeld, refreshedFacts, sourceOfPage, storedBase } from "./base-source.js"
 import { RECLAIM_MIN_BYTES, journalOpened, type Reclaimed } from "./journal-reclaim.js"
 import { topic } from "../base/topic.js"
+import type { JournalWriteOp, JournalWriter, JournalWrites } from "./journal-writer.js"
 import { cutOffRequests, mergedBaseSteps } from "./stream-merging.js"
 import { errorMessage } from "../base/error-message.js"
 import { EntrySchema, type Entry } from "@mako/sessions/entries"
@@ -550,6 +552,9 @@ const RowSchema = z.object({ value: z.string() })
 const BlockRowSchema = z.object({ id: z.number().int(), value: z.string() })
 const RowAtSchema = z.object({ at: z.number().int(), value: z.string() })
 const RowKeysSchema = z.object({ keys: z.string() })
+/** A request's status and why it was cut short, as `LiveJournal.cut` reads them. */
+type CutRow = z.infer<typeof CutRowSchema>
+const CutRowSchema = z.object({ status: z.enum(["queued", "held", "canceled", "dispatching", "completed", "failed", "uncertain", "interrupted"]), reason: z.enum(INTERRUPTION_REASONS).nullable() })
 
 /**
  * Whether `next` is `previous` with requests added after it and none moved: the rows' insertion order still says the
@@ -748,7 +753,21 @@ export const journalCommits = topic<{ conversation: string; running: boolean; be
  * times a second per running conversation.
  */
 export class LiveJournal {
-  private readonly db: DatabaseSync
+  /** The journal's own connection, read through `db`. */
+  private readonly connection: DatabaseSync
+  /**
+   * A running turn's streamed rows go to a writer thread (`writeWith`) through these, opened at its first streamed flush
+   * and let go at rest, and what they have queued since this connection last wrote. Opened for every conversation in
+   * memory, the writer held a connection to each of a few hundred journals that hadn't streamed since they were read.
+   */
+  private writer?: JournalWriter
+  private writes?: JournalWrites
+  private queued?: { from: number; blocks: Entry[]; revision: number }
+  private settling = false
+  /** Whether the turn index holds every block (`turnIndexed`): then each commit says so again at its revision. */
+  private indexed = false
+  /** Log events `streamed` found while it looked whether a flush could go to the writer: the commit that follows writes them. */
+  private carried?: readonly MakoLogEvent[]
   private readonly path: string
   private readonly appends = new Map<number, number>()
   /** Mako's log folded, once read; a failed commit drops it so the next reads it again. */
@@ -811,11 +830,15 @@ export class LiveJournal {
     journalOpened.publish(this.releaseKey)
     // A different LiveRecords owner, or an independent opener, takes the same file too. Even a failed open keeps
     // its data: an old close must not tidy a file another owner may already have begun opening.
-    this.db = new DatabaseSync(this.path)
+    this.connection = new DatabaseSync(this.path)
     try {
       // The checkpoint owner's final close may still hold the WAL lock. Install the existing wait before opening it.
       this.db
+        // The tables in one transaction: each statement by itself is a commit of its own, thirteen writes of a new
+        // journal's file where one does, and thirty Fins started together waited on them 40 to 85 ms each. For a
+        // journal that has them the transaction writes nothing and takes no lock.
         .exec(`PRAGMA busy_timeout=5000; PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA journal_size_limit=${WAL_KEPT_BYTES};
+      BEGIN;
       CREATE TABLE IF NOT EXISTS metadata (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS options (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS progress (id INTEGER PRIMARY KEY, revision INTEGER NOT NULL);
@@ -827,7 +850,10 @@ export class LiveJournal {
       CREATE TABLE IF NOT EXISTS prompted (id INTEGER PRIMARY KEY, at INTEGER, requests INTEGER NOT NULL);
       CREATE TABLE IF NOT EXISTS harness_turns (id TEXT PRIMARY KEY, value TEXT NOT NULL);
       CREATE TABLE IF NOT EXISTS block_appends (block_id INTEGER NOT NULL, sequence INTEGER NOT NULL, value TEXT NOT NULL, PRIMARY KEY (block_id, sequence));
-      ${MAKO_LOG_TABLE}`)
+      ${TURN_INDEX_TABLE};
+      ${MAKO_LOG_TABLE};
+      COMMIT`)
+      this.indexed = turnIndexed(this.connection)
       for (const value of this.db
         .prepare(
           "SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id"
@@ -844,12 +870,187 @@ export class LiveJournal {
       this.db.close()
       throw error
     }
-    this.pager = new EntryPager(journalRows(this.db, () => this.appends))
+    this.pager = new EntryPager(journalRows(() => this.db, () => this.appends))
+  }
+
+  /**
+   * The journal's own connection, once what its writer still holds is written (`settleWrites`): every read of its rows
+   * and every write made here comes through this, so neither goes ahead of a streamed row given before it.
+   */
+  private get db(): DatabaseSync {
+    if (this.writes) this.settleWrites()
+    return this.connection
+  }
+
+  /**
+   * Live resident only: a running turn's streamed flushes are written by `writer`, off this thread (`streamed`).
+   * Everything else this journal writes, it writes itself as before.
+   */
+  writeWith(writer: JournalWriter): void {
+    if (this.closed) return
+    this.writer = writer
+  }
+
+  /**
+   * Waits for the writer to have written what it was given. A write that failed there is made good here, at once: each
+   * block the writer was given since this connection last wrote is written whole from what memory holds, so the rows
+   * say what a commit of the same flushes would have, and the writer is let go of. Failing that too, the journal
+   * couldn't be written, as any commit that can't be (`JournalWriteError`).
+   */
+  private settleWrites(): void {
+    const writes = this.writes
+    if (!writes || this.settling) return
+    if (!writes.pending() && !this.queued) return
+    this.settling = true
+    try {
+      const failure = writes.settle()
+      const queued = this.queued
+      this.queued = undefined
+      if (failure === undefined) return
+      this.writes = undefined
+      writes.close()
+      hostWarn("journal", "a journal's writer couldn't write its streamed rows; the journal writes them itself", { path: this.path, error: failure })
+      if (!queued) return
+      const db = this.connection
+      try {
+        db.exec("BEGIN IMMEDIATE")
+        db.prepare("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(queued.revision)
+        if (this.indexed) db.prepare(TURN_INDEX_THROUGH).run(queued.revision)
+        const upsert = db.prepare("INSERT OR REPLACE INTO blocks VALUES (?, ?)")
+        const clear = db.prepare("DELETE FROM block_appends WHERE block_id=?")
+        for (let index = queued.from; index < queued.blocks.length; index += 1) {
+          upsert.run(index, JSON.stringify(queued.blocks[index]))
+          clear.run(index)
+          this.appends.delete(index)
+          const turn = turnRowOf(queued.blocks[index]!)
+          if (turn) db.prepare(TURN_INDEX_PUT).run(index, ...turn)
+          else db.prepare(TURN_INDEX_DROP).run(index)
+        }
+        db.exec("COMMIT")
+      } catch (error) {
+        if (db.isTransaction) db.exec("ROLLBACK")
+        throw new JournalWriteError(error)
+      }
+    } finally {
+      this.settling = false
+    }
+  }
+
+  /**
+   * Hands a flush to the writer when it is only what a running turn streams: blocks new or grown, and the revision.
+   * Anything else in it (a request, the session's state, the base, the controls, Mako's log) is this connection's to
+   * commit, and so is every flush of a turn that isn't running that changes anything the journal keeps, so what a
+   * window or a harness is told happened is committed before either hears it, as it always was. A flush that changes
+   * nothing kept (a roster of Fins moving) has only its revision to write, and that goes to the writer too: a host
+   * killed then reads the revision a few such flushes back, and the roster again from its Fins, as every start does. What streams rides behind by what the writer hasn't written
+   * yet: one transaction under way and one waiting, whatever the disk does.
+   */
+  private streamed(next: LiveSnapshot, previous: LiveSnapshot | undefined, grown: ReadonlyMap<number, ToolGrowth> | undefined): boolean {
+    if ((!this.writes && !this.writer) || !previous || this.closed || this.settling) return false
+    // The writer closed every journal's writes as the host stops (`JournalWriter.closeAll`): this one writes its own.
+    if (this.writes?.closed()) {
+      this.settleWrites()
+      this.writes = undefined
+      this.writer = undefined
+      return false
+    }
+    // Of a turn that isn't running, only a flush that changes nothing the journal keeps: its Fins' roster moved (an
+    // Apex's, at each step of each Fin), which is never saved, so all there is to write is the revision.
+    const running = next.session.status === "running" && previous.session.status === "running"
+    if (!running && (next.session.status !== previous.session.status || next.blocks !== previous.blocks)) return false
+    if (!this.optionsStored || this.messageBase || next.session.configOptions !== previous.session.configOptions) return false
+    if (next.requests !== previous.requests || next.harnessTurns !== previous.harnessTurns || next.blocks.length < previous.blocks.length) return false
+    if ((!this.rowsNamed && next.base) || this.staging || storedBase(next) !== storedBase(previous) || metadataChanged(previous, next)) return false
+    if (this.checkpointPolicyDirty) return false
+    const events = this.logState().advance(makoFacts(next))
+    if (events.length) {
+      this.carried = [...(this.carried ?? []), ...events]
+      return false
+    }
+    const writes = this.writes ?? (this.writes = this.writer?.open(this.path, WAL_KEPT_BYTES))
+    // A writer still starting opens nothing yet, and this journal writes its own until it runs; one stopped, lost or
+    // closing for the host's stop opens nothing more.
+    if (!writes) {
+      if (this.writer?.gone()) this.writer = undefined
+      return false
+    }
+    const { blocks } = next
+    const ops: JournalWriteOp[] = []
+    const counts = new Map<number, number>()
+    const from = changedEntryStart(previous.blocks, blocks)
+    for (let index = from; index < blocks.length; index++) {
+      const block = blocks[index]!
+      const before = previous.blocks[index]
+      if (block === before) continue
+      const count = this.appends.get(index) ?? 0
+      const growth = grown?.get(index)
+      if (count < 128 && growth && block.type === "tool" && before?.type === "tool") {
+        this.pager.detach("blocks", index)
+        ops.push(["append", index, count, JSON.stringify(growth)])
+        counts.set(index, count + 1)
+      } else if (count < 128 && (block.type === "text" || block.type === "thinking") && before?.type === block.type && before.id === block.id &&
+        block.text.length > before.text.length && continues(block.text, before.text)) {
+        this.pager.detach("blocks", index)
+        ops.push(["append", index, count, JSON.stringify(block.text.slice(before.text.length))])
+        counts.set(index, count + 1)
+      } else {
+        this.pager.detach("blocks", index, block)
+        ops.push(["block", index, JSON.stringify(block), turnRowOf(block)])
+        counts.set(index, 0)
+      }
+    }
+    for (const [index, count] of counts) {
+      if (count) this.appends.set(index, count)
+      else this.appends.delete(index)
+    }
+    this.queued = { from: Math.min(this.queued?.from ?? from, from), blocks, revision: next.revision }
+    writes.write(next.revision, ops, this.indexed)
+    return true
+  }
+
+  /**
+   * What the writer holds is written, and its connection let go of without waiting on this thread: the close is
+   * awaited with the worker's checkpoints (`leftWorker`) before anything tidies the file.
+   */
+  private leaveWriter(): void {
+    try {
+      this.settleWrites()
+    } finally {
+      this.writer = undefined
+      this.releaseWrites(true)
+    }
+  }
+
+  /**
+   * The writer's connection let go of; one opens again at the next streamed flush. At rest only once nothing of it is
+   * pending; closing, whatever it still holds is written before it closes, in order.
+   */
+  private releaseWrites(closing = false): void {
+    const writes = this.writes
+    if (!writes || (!closing && (writes.pending() || this.queued))) return
+    this.writes = undefined
+    const left = Promise.all([this.left, writes.release()]).then(() => {})
+    this.left = left
+    void left.then(() => { if (this.left === left) this.left = undefined })
   }
 
   /** Live resident only: listings and independent read connections retain their original policy. */
   checkpointWith(primer: WalPrimer): void {
     if (!this.closed) this.primer = primer
+  }
+
+  /**
+   * Gives back the pages its connection read: SQLite keeps up to 2 MB of them for each connection until it closes,
+   * and a few hundred conversations in memory, each read in once and at rest since, held 240 MB of them. A journal
+   * at work keeps its pages; one read in, or gone quiet, reads the few its next commit touches from the disk's cache.
+   */
+  rest(): void {
+    if (this.closed) return
+    this.releaseWrites()
+    if (this.connection.isTransaction) return
+    try {
+      this.connection.exec("PRAGMA shrink_memory")
+    } catch { /* The pages stay until it closes. */ }
   }
 
   /**
@@ -869,12 +1070,16 @@ export class LiveJournal {
     if (running || often) {
       if (!this.checkpoints && this.primer) this.lease(this.primer)
       if (!running && this.checkpoints) {
-        this.quiet = setTimeout(() => this.leaveWorker(), QUIET_MS)
+        this.quiet = setTimeout(() => {
+          this.leaveWorker()
+          this.rest()
+        }, QUIET_MS)
         this.quiet.unref()
       }
       return
     }
     this.leaveWorker()
+    this.rest()
   }
 
   /** Lets go of its place on the worker, which checkpoints what it left as it closes its connection. */
@@ -971,8 +1176,32 @@ export class LiveJournal {
     const wakeAt = sooner(this.wakeAt(), transferWakeAt)
     const promptedAt = laterPrompt(this.requestedAt(), steeredAt)
     const unsettled = this.unsettled()
+    const cut = this.cut()
     const hasSignInHold = this.db.prepare(`SELECT 1 FROM requests WHERE value LIKE '%"signIn":%' AND json_extract(value, '$.signIn') IS NOT NULL AND json_extract(value, '$.status') != 'canceled' LIMIT 1`).get() !== undefined
-    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled }, ...hasSignInHold && { hasSignInHold: true } }
+    return { ...summary, revision: Math.max(summary.revision, this.revision()), ...wakeAt !== undefined && { wakeAt }, ...promptedAt !== undefined && { promptedAt }, ...unsettled && { unsettled }, ...cut && { cut }, ...hasSignInHold && { hasSignInHold: true } }
+  }
+
+  /**
+   * Whether the last request that ran here was cut short as `cutLast` reads it: what a starting host watches a Fin for,
+   * learned without reading the journal in. The requests are read newest first, in the queue's order where the journal
+   * keeps one, and only their status and reason, until one that ran.
+   */
+  private cut(): true | undefined {
+    const facts = this.db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.interruption.reason') AS reason FROM requests WHERE id = ?")
+    const newest: CutFacts[] = []
+    const ran = (read: CutRow | undefined) => {
+      if (!read) return false
+      newest.unshift({ status: read.status, ...read.reason && { interruption: { reason: read.reason } } })
+      return read.status !== "queued" && read.status !== "held" && read.status !== "canceled"
+    }
+    const order = this.ordered ? this.db.prepare("SELECT keys FROM request_order WHERE id=1").get() : undefined
+    const keys = order ? KeyListSchema.safeParse(JSON.parse(RowKeysSchema.parse(order).keys)).data : undefined
+    if (keys) {
+      for (let index = keys.length - 1; index >= 0; index--) if (ran(CutRowSchema.safeParse(facts.get(keys[index]!)).data)) break
+    } else {
+      for (const row of this.db.prepare("SELECT json_extract(value, '$.status') AS status, json_extract(value, '$.interruption.reason') AS reason FROM requests ORDER BY rowid DESC").iterate()) if (ran(CutRowSchema.safeParse(row).data)) break
+    }
+    return cutLast(newest) ? true : undefined
   }
 
   /** Whether a message here was waiting, paused or running as the journal was last written; only rows that name such a status are parsed. */
@@ -1165,6 +1394,7 @@ export class LiveJournal {
 
   /** `grown`: tool blocks of `next` that differ from `previous` only by these appends (`deliverLiveUpdates`). */
   commit(next: LiveSnapshot, previous?: LiveSnapshot, grown?: ReadonlyMap<number, ToolGrowth>): void {
+    if (this.streamed(next, previous, grown)) return
     const timed = journalCommits.heard ? performance.now() : undefined
     try {
       this.beforeWrite()
@@ -1187,6 +1417,7 @@ export class LiveJournal {
           .prepare("INSERT OR REPLACE INTO metadata VALUES (1, ?)")
           .run(JSON.stringify({ ...metadata, session: { ...session, failureEvidence: session.failureEvidence && storedFailureEvidence(session.failureEvidence) }, nativeAgents: providerRoster(metadata.nativeAgents), control: controlRow(metadata.control), base: undefined, activityAt: undefined, nativeActivity: undefined, side: undefined, turnWait: undefined, historyFailure: undefined, spentThrough: undefined }))
       this.kept("INSERT OR REPLACE INTO progress VALUES (1, ?)").run(next.revision)
+      if (this.indexed) this.kept(TURN_INDEX_THROUGH).run(next.revision)
       // An unread base stays unread here: Mako's own blocks can follow it
       // meanwhile, and nothing reaches its harness until it is read.
       const stored = storedBase(next)
@@ -1201,6 +1432,10 @@ export class LiveJournal {
         upsertBlock.run(index, value)
         clear.run(index)
         counts.set(index, 0)
+        // Its line of the turn index, in the same transaction as the block: neither is ever there without the other.
+        const turn = turnRowOf(blocks[index]!)
+        if (turn) this.kept(TURN_INDEX_PUT).run(index, ...turn)
+        else this.kept(TURN_INDEX_DROP).run(index)
       }
       const from = previous ? changedEntryStart(previous.blocks, blocks) : 0
       for (let index = from; index < blocks.length; index++) {
@@ -1238,6 +1473,7 @@ export class LiveJournal {
       if (!previous || blocks.length < previous.blocks.length) {
         this.pager.detachFrom("blocks", blocks.length)
         this.db.prepare("DELETE FROM blocks WHERE id>=?").run(blocks.length)
+        this.db.prepare("DELETE FROM turn_index WHERE id>=?").run(blocks.length)
         this.db
           .prepare("DELETE FROM block_appends WHERE block_id>=?")
           .run(blocks.length)
@@ -1269,7 +1505,8 @@ export class LiveJournal {
         const insert = this.db.prepare("INSERT OR IGNORE INTO harness_turns VALUES (?, ?)")
         for (const turn of harnessTurns) if (!kept.has(turn.id)) insert.run(turn.id, JSON.stringify(turn))
       }
-      const events = this.logState().advance(makoFacts(next))
+      const events = [...(this.carried ?? []), ...this.logState().advance(makoFacts(next))]
+      this.carried = undefined
       if (events.length) this.appendLog(events, "host")
       if (events.length && process.env.MAKO_LOG_CHECK === "1") {
         const difference = makoLogDifference(this.makoLog(), makoFacts(next))
@@ -1291,6 +1528,7 @@ export class LiveJournal {
       // SQLite rolls a full disk, an I/O error or a busy lock back itself, and a ROLLBACK then would throw over why.
       if (this.db.isTransaction) this.db.exec("ROLLBACK")
       this.log = undefined
+      this.carried = undefined
       // What the rows hold is no longer known: the next write of the base writes each.
       if (written) this.forgetBaseRows()
       throw new JournalWriteError(error)
@@ -1515,7 +1753,8 @@ export class LiveJournal {
         hostWarn("journal", "a journal's history rows couldn't be dropped", { path: this.path, error: errorMessage({ error }) })
       }
     }
-    this.db.close()
+    this.leaveWriter()
+    this.connection.close()
     // Closed, it writes nothing more, so it lets go of what its rows held by identity: kept, they were the paged
     // entries' last holder, so none was ever collected and a journal waiting on them (`LiveRecords.releasing`) stayed
     // for the host's life with its connection and its log (2026-11-12: 68 journals, 80 MB, after 60 opens).
@@ -1552,7 +1791,8 @@ export class LiveJournal {
     clearTimeout(this.quiet)
     this.untidy = true
     this.stopStaging()
-    this.db.close()
+    this.leaveWriter()
+    this.connection.close()
     this.closing = this.leftWorker()
   }
 
@@ -1603,12 +1843,14 @@ export class LiveJournal {
 }
 
 /** Rows as the journal at `db` holds them; a block's appends (`appends`, by block) are folded in. */
-function journalRows(db: DatabaseSync, appends: () => ReadonlyMap<number, number>): PagedRows {
+function journalRows(connection: () => DatabaseSync, appends: () => ReadonlyMap<number, number>): PagedRows {
   let base: ReturnType<DatabaseSync["prepare"]> | undefined
   let block: ReturnType<DatabaseSync["prepare"]> | undefined
   let tail: ReturnType<DatabaseSync["prepare"]> | undefined
   return {
     read(table: PagedTable, row: number): string | undefined {
+      // Asked for at each read: a journal whose streamed rows are still with its writer waits for them first.
+      const db = connection()
       if (table === "base") {
         base ??= db.prepare("SELECT value FROM base_entries WHERE id=?")
         return RowSchema.safeParse(base.get(row)).data?.value
@@ -1639,7 +1881,7 @@ function readOnlyRows(path: string): PagedRows {
           const counted = AppendCountSchema.parse(value)
           counts.set(counted.block_id, counted.count)
         }
-        open = { db, rows: journalRows(db, () => counts) }
+        open = { db, rows: journalRows(() => db, () => counts) }
       }
       return open.rows.read(table, row)
     },
@@ -1827,6 +2069,91 @@ const TURN_ROWS_WHERE = "WHERE json_extract(value,'$.type') IN ('user','provider
  * A reader thread makes it (`JournalReaders.scan`), and the opening uses it when the journal still stands at its
  * revision.
  */
+/**
+ * The turn index: one line for each block that begins a turn or names a request (what `TURN_ROWS` reads of it),
+ * written in the transaction that writes the block, so a cold open reads these few lines and the newest blocks and
+ * never walks `blocks`. Walked, a 158 MB journal's first read was 2.3 s with its pages in the disk's cache and 8 to
+ * 10 s without. The index holds every block only once it was built from a walk (`buildTurnIndex`, on a reader's
+ * thread the first time a journal is opened cold); from then each commit says so again by writing its revision in
+ * `progress` row 2. A commit by a build that knows no index writes row 1 alone, the two differ, and the journal is
+ * walked and its index built again.
+ */
+const TURN_INDEX_TABLE = "CREATE TABLE IF NOT EXISTS turn_index (id INTEGER PRIMARY KEY, type TEXT NOT NULL, steering INTEGER NOT NULL, request TEXT, message TEXT)"
+const TURN_INDEX_PUT = "INSERT OR REPLACE INTO turn_index VALUES (?, ?, ?, ?, ?)"
+const TURN_INDEX_DROP = "DELETE FROM turn_index WHERE id=?"
+const TURN_INDEX_THROUGH = "INSERT OR REPLACE INTO progress VALUES (2, ?)"
+const ThroughRowsSchema = z.array(z.object({ id: z.number(), revision: z.number() }))
+const LastBlockSchema = z.object({ last: z.number().int().nullable() })
+
+/** A block's line of the turn index, as `TURN_ROWS` reads the same block; null for one that has none. */
+export function turnRowOf(block: Entry): [type: string, steering: number, request: string | null, message: string | null] | null {
+  if (block.type !== "user" && block.type !== "provider-turn") return null
+  const steering = "steeringFor" in block && block.steeringFor !== undefined && block.steeringFor !== null ? 1 : 0
+  const request = "requestId" in block ? block.requestId ?? null : null
+  const message = "messageId" in block ? block.messageId ?? null : null
+  return [block.type, steering, request, message]
+}
+
+/** Whether the journal's turn index holds every block as of its last commit. */
+function turnIndexed(db: DatabaseSync): boolean {
+  const rows = ThroughRowsSchema.safeParse(db.prepare("SELECT id, revision FROM progress WHERE id IN (1, 2)").all()).data ?? []
+  const through = rows.find((row) => row.id === 2)?.revision
+  return through !== undefined && through === rows.find((row) => row.id === 1)?.revision
+}
+
+/** Whether the journal at `path` has a whole turn index: its cold open then needs no reader's walk. */
+export function turnIndexWhole(path: string): boolean {
+  try {
+    const db = new DatabaseSync(path, { readOnly: true })
+    try {
+      return Boolean(db.prepare("SELECT 1 AS found FROM sqlite_master WHERE type='table' AND name='turn_index'").get()) && turnIndexed(db)
+    } finally {
+      db.close()
+    }
+  } catch {
+    return false
+  }
+}
+
+/** `coldScan`, from the turn index and no walk of `blocks`; undefined for a journal whose index doesn't hold every block. */
+export function readTurnIndex(db: DatabaseSync): ColdScan | undefined {
+  if (!db.prepare("SELECT 1 AS found FROM sqlite_master WHERE type='table' AND name='turn_index'").get() || !turnIndexed(db)) return undefined
+  const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
+  const last = LastBlockSchema.parse(db.prepare("SELECT max(id) AS last FROM blocks").get()).last
+  const appended = db.prepare("SELECT block_id, count(*) AS count FROM block_appends GROUP BY block_id").all().map((value): [number, number] => {
+    const row = AppendCountSchema.parse(value)
+    return [row.block_id, row.count]
+  })
+  const turns = db.prepare("SELECT id, type, steering, request, message FROM turn_index ORDER BY id").all().map((row) => TurnRowSchema.parse(row))
+  // Blocks are written by index from the first, so the newest one's id is how many there are: what the walk counted.
+  return { revision, count: last === null ? 0 : last + 1, last, appended, turns }
+}
+
+/**
+ * Writes the turn index from a walk (`scan`) and marks it whole, when the journal is still as the walk found it and
+ * its blocks are numbered from the first with none missing. Returns whether it did.
+ */
+export function buildTurnIndex(db: DatabaseSync, scan: ColdScan): boolean {
+  if (scan.last !== (scan.count === 0 ? null : scan.count - 1)) return false
+  db.exec("BEGIN IMMEDIATE")
+  try {
+    const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision
+    if (revision !== scan.revision) {
+      db.exec("ROLLBACK")
+      return false
+    }
+    db.exec(`${TURN_INDEX_TABLE}; DELETE FROM turn_index`)
+    const put = db.prepare(TURN_INDEX_PUT)
+    for (const turn of scan.turns) put.run(turn.id, turn.type, turn.steering, turn.request, turn.message)
+    db.prepare(TURN_INDEX_THROUGH).run(scan.revision)
+    db.exec("COMMIT")
+    return true
+  } catch (error) {
+    if (db.isTransaction) db.exec("ROLLBACK")
+    throw error
+  }
+}
+
 export const ColdScanSchema = z.object({
   revision: z.number().int().nonnegative(),
   count: z.number().int().nonnegative(),
@@ -1913,7 +2240,7 @@ export class ColdJournal {
       const revision = ProgressSchema.safeParse(db.prepare("SELECT revision FROM progress WHERE id=1").get()).data?.revision ?? 0
       // What a reader thread read of every block stands while the journal is at the revision it read; one written
       // since is read here, as every one was.
-      const scan = scanned?.revision === revision ? scanned : undefined
+      const scan = scanned?.revision === revision ? scanned : readTurnIndex(db)
       const counted = scan ?? BlockCountSchema.parse(db.prepare("SELECT count(*) AS count, max(id) AS last FROM blocks").get())
       // Blocks are kept by index; a journal whose ids say otherwise is read whole, as it always was. One whose history is
       // its session's record is read cold only when that record covers every block with nothing to merge: its pages are

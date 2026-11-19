@@ -1,8 +1,12 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, rmSync } from "node:fs"
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { delimiter, join } from "node:path"
+import { Executables, resolveExecutable } from "@mako/host/base/executable"
+import { StdoutPace } from "@mako/host/harnesses/stdout-pace"
+import { CodexRolloutTail } from "@mako/host/harnesses/codex/rollout-tail"
+import { onlyDeltas } from "@mako/host/harnesses/codex-app-protocol"
 import type { AgentsReportResult, AgentsStarted } from "@mako/host/contracts/agent-tools"
 import type { AgentRefused } from "@mako/host/contracts/agents"
 import { applyRosterPatch, rosteredLiveBatch, sharedFields, type CompactLiveBatch } from "@mako/host/contracts/live-conversations"
@@ -13,6 +17,7 @@ import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-ide
 import { WorkingSet, workingThreads, type WorkingSnapshot } from "@mako/host/conversations/cloud-handoffs"
 import { HELD_BY_TABLE, heldBy, ThreadStore } from "@mako/host/threads/store"
 import { readFileSync } from "node:fs"
+import { SessionMemory } from "@mako/host/threads/session-memory"
 import { DatabaseSync } from "node:sqlite"
 import { atOnce } from "@mako/sessions/slices"
 import { JournalReaders } from "@mako/host/conversations/journal-readers"
@@ -254,7 +259,8 @@ try {
         // With them, each Thread's record and conversations, held through the same commits.
         const said = (store: ThreadStore) => {
           const threads = store.edges().all.flatMap((edge) => [edge.parent, edge.child])
-          return JSON.stringify([store.edges().all, [...store.threadConversations(threads)].sort(([left], [right]) => (left < right ? -1 : 1)), threads.map((thread) => store.thread(ThreadIdSchema.parse(thread)))])
+          return JSON.stringify([store.edges().all, [...store.threadConversations(threads)].sort(([left], [right]) => (left < right ? -1 : 1)), threads.map((thread) => store.thread(ThreadIdSchema.parse(thread))),
+            [...store.childSessions()].sort(([left], [right]) => (left < right ? -1 : 1))])
         }
         const fresh = () => { const store = new ThreadStore(path); try { return said(store) } finally { store.close() } }
         const same = (after: string) => assert.equal(said(world.store), fresh(), `the edges and Threads held are the store's ${after}`)
@@ -368,6 +374,195 @@ try {
     assert.deepEqual([...direct].filter((name) => !opening.has(name)), [], "the store's connection is used directly only as it opens")
   }
 
+  // Whether this host holds a session, asked at every flush: read from its row once, then answered from what was
+  // read until a hold is written, by this host or another, and then at that same asking.
+  {
+    const path = join(root, "memory.sqlite")
+    const mine = new SessionMemory(path, { pid: 500, startedAt: 5, label: "this host" }, { now: () => 100, alive: () => true })
+    const other = new SessionMemory(path, { pid: 501, startedAt: 6, label: "another host" }, { now: () => 100, alive: () => false })
+    let reads = 0
+    const readHold = mine["readHold"].bind(mine)
+    mine["readHold"] = (...args) => { reads += 1; return readHold(...args) }
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), false)
+    mine.hold("codex", "native-a", "conversation-a")
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), true, "a hold this host took is its own at the next asking")
+    reads = 0
+    for (let flush = 0; flush < 100; flush += 1) assert.equal(mine.owns("codex", "native-a", "conversation-a"), true)
+    assert.equal(reads, 0, "asked again with no hold written, the row isn't read")
+    assert.equal(mine.owns("codex", "native-a", "conversation-b"), false, "another conversation of the session is asked of its row")
+    // Another host takes the session (this one's process reads as gone to it): seen at the very next asking.
+    other.hold("codex", "native-a", "conversation-elsewhere")
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), false, "a hold another host took is seen at once")
+    other.release("codex", "native-a")
+    mine.holdRunning("codex", "native-a", "conversation-a")
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), true)
+    mine.release("codex", "native-a", "conversation-a")
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), false, "a hold this host let go is gone at once")
+    // A hold of another session written by this host leaves this one's answer standing: thirty Fins taking and
+    // letting go of theirs sent every conversation back to its row.
+    mine.hold("codex", "native-a", "conversation-a")
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), true)
+    mine.hold("codex", "native-b", "conversation-b")
+    mine.release("codex", "native-b", "conversation-b")
+    reads = 0
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), true)
+    assert.equal(reads, 0, "another session's hold written, this one's row isn't read")
+    assert.equal(mine.owns("codex", "native-b", "conversation-b"), false, "and the one written is asked of its row")
+    mine.releaseAll()
+    assert.equal(mine.owns("codex", "native-a", "conversation-a"), false, "every hold let go at once is gone at once")
+    // The host's own ledger looks for another host's commits once in a turn of the loop.
+    const turnly = new SessionMemory(path, { pid: 502, startedAt: 7, label: "the host" }, { now: () => 100, alive: () => true, versionPerTurn: true })
+    let pragmas = 0
+    turnly.hold("codex", "native-c", "conversation-c")
+    assert.equal(turnly.owns("codex", "native-c", "conversation-c"), true)
+    const statement = turnly["versionRead"]!.statement
+    const get = statement.get.bind(statement)
+    statement.get = () => { pragmas += 1; return get() }
+    for (let flush = 0; flush < 100; flush += 1) turnly.owns("codex", "native-c", "conversation-c")
+    assert.equal(pragmas, 0, "asked again in the same turn, SQLite isn't called at all")
+    await new Promise((resolve) => setImmediate(resolve))
+    assert.equal(turnly.owns("codex", "native-c", "conversation-c"), true)
+    assert.equal(pragmas, 1, "the next turn looks once")
+    turnly.release("codex", "native-c", "conversation-c")
+    assert.equal(turnly.owns("codex", "native-c", "conversation-c"), false, "its own write is seen within the turn")
+    turnly.close()
+    mine.close()
+    other.close()
+  }
+  // Executables are found off the thread and kept: the same as the walk that waits finds, found again by asking
+  // only whether it is still there, looked for whole once it is gone, and a command that isn't here never kept.
+  {
+    const first = join(root, "bin-first"), second = join(root, "bin-second"), home = join(root, "no-home")
+    for (const folder of [first, second]) mkdirSync(folder)
+    writeFileSync(join(second, "mako-test-tool"), "#!/bin/sh\n", { mode: 0o755 })
+    writeFileSync(join(first, "unrunnable"), "", { mode: 0o644 })
+    const env = { PATH: [first, second].join(delimiter) }
+    const executables = new Executables()
+    assert.equal(await executables.find("mako-test-tool", env, home), join(second, "mako-test-tool"))
+    assert.equal(await executables.find("mako-test-tool", env, home), resolveExecutable("mako-test-tool", env, home), "as the walk on the thread finds it")
+    assert.equal(await executables.find("unrunnable", env, home), resolveExecutable("unrunnable", env, home))
+    assert.equal(await executables.find(join(second, "mako-test-tool"), env, home), join(second, "mako-test-tool"), "a path is itself")
+    // One earlier on the path, installed since: the one kept is still there, so it is still the answer for this
+    // host, as a launch already running from it would have it; gone, the walk finds the other.
+    writeFileSync(join(first, "mako-test-tool"), "#!/bin/sh\n", { mode: 0o755 })
+    assert.equal(await executables.find("mako-test-tool", env, home), join(second, "mako-test-tool"))
+    rmSync(join(second, "mako-test-tool"))
+    assert.equal(await executables.find("mako-test-tool", env, home), join(first, "mako-test-tool"), "one that went is looked for again")
+    assert.equal(await executables.find("mako-test-absent", env, home), null)
+    writeFileSync(join(second, "mako-test-absent"), "#!/bin/sh\n", { mode: 0o755 })
+    assert.equal(await executables.find("mako-test-absent", env, home), join(second, "mako-test-absent"), "one not found is looked for each time")
+    assert.equal(await executables.find("mako-test-tool", { PATH: second }, home), null, "what was found is kept for the folders it was looked for in")
+  }
+  // Processes' output is handled a turn's worth at a time: what the turn has no time for waits, paused, for the
+  // next, each process's in its order, and a process that ends has all it said taken first.
+  {
+    const taken: string[] = [], paused = new Set<string>()
+    const spin = (ms: number) => { for (const until = performance.now() + ms; performance.now() < until;) void 0 }
+    const pace = new StdoutPace<string>({
+      turnMs: 10,
+      take: (source, chunk) => { taken.push(`${source}:${chunk.toString()}`); spin(6) },
+      pause: (source) => void paused.add(source),
+      resume: (source) => void paused.delete(source),
+    })
+    const turned = () => new Promise((resolve) => setImmediate(resolve))
+    for (const source of ["a", "b", "c", "d"]) pace.read(source, Buffer.from("1"))
+    assert.deepEqual(taken, ["a:1", "b:1"], "a turn takes what it has time for")
+    assert.deepEqual([...paused], ["c", "d"])
+    pace.read("c", Buffer.from("2"))
+    pace.read("a", Buffer.from("2"))
+    assert.deepEqual(taken, ["a:1", "b:1"], "and nothing more, whoever it is from")
+    pace.flush("d")
+    assert.deepEqual(taken, ["a:1", "b:1", "d:1"], "a process that ended is heard out at once")
+    assert.deepEqual([...paused], ["c", "a"])
+    await turned()
+    assert.deepEqual(taken, ["a:1", "b:1", "d:1", "c:1", "a:2"], "the next turn takes a chunk of each waiting process in turn")
+    await turned()
+    await turned()
+    assert.deepEqual(taken.slice(5), ["c:2"], "and each process's own in its order")
+    assert.equal(paused.size, 0)
+    pace.read("b", Buffer.from("2"))
+    assert.equal(taken.at(-1), "b:2", "a turn with time takes output as it comes")
+  }
+  // A chunk whose handling needs something read first waits for it off the thread, and what its process says
+  // meanwhile waits behind it in order; another process's output isn't held by it; a process that ends is heard out.
+  {
+    const taken: string[] = [], paused = new Set<string>(), asked: string[] = []
+    const gates = new Map<string, () => void>()
+    const pace = new StdoutPace<string>({
+      turnMs: 50,
+      take: (source, chunk) => void taken.push(`${source}:${chunk.toString()}`),
+      pause: (source) => void paused.add(source),
+      resume: (source) => void paused.delete(source),
+      before: (source, chunk) => {
+        if (!chunk.toString().startsWith("r")) return undefined
+        asked.push(`${source}:${chunk.toString()}`)
+        return new Promise<void>((resolve) => gates.set(`${source}:${chunk.toString()}`, resolve))
+      },
+    })
+    const turned = async () => { for (let turn = 0; turn < 3; turn += 1) await new Promise((resolve) => setImmediate(resolve)) }
+    pace.read("a", Buffer.from("r1"))
+    pace.read("a", Buffer.from("2"))
+    pace.read("a", Buffer.from("r3"))
+    pace.read("b", Buffer.from("1"))
+    assert.deepEqual(taken, ["b:1"], "another process's output goes on")
+    assert.deepEqual(asked, ["a:r1"], "one read at a time for a process, for its first waiting chunk")
+    assert.deepEqual([...paused], ["a"])
+    gates.get("a:r1")!()
+    await turned()
+    assert.deepEqual(taken, ["b:1", "a:r1", "a:2"], "what waited behind it follows it, in order, up to the next that needs a read")
+    assert.deepEqual(asked, ["a:r1", "a:r3"])
+    gates.get("a:r3")!()
+    await turned()
+    assert.deepEqual(taken, ["b:1", "a:r1", "a:2", "a:r3"])
+    assert.equal(paused.size, 0)
+    pace.read("c", Buffer.from("r1"))
+    pace.read("c", Buffer.from("2"))
+    pace.flush("c")
+    assert.deepEqual(taken.slice(4), ["c:r1", "c:2"], "a process that ends is heard out without the read")
+    gates.get("c:r1")!()
+    await turned()
+    assert.deepEqual(taken.slice(4), ["c:r1", "c:2"], "and the read that comes back late takes nothing twice")
+  }
+
+  // A rollout read ahead off the thread gives the same records as reading it where it stands, and a read with
+  // nothing loaded, or loaded from another place, goes to the file as it always did.
+  {
+    const path = join(root, "rollout.jsonl")
+    const line = (n: number) => `${JSON.stringify({ type: "event", n })}\n`
+    writeFileSync(path, line(0))
+    const ahead = new CodexRolloutTail(path), plain = new CodexRolloutTail(path)
+    appendFileSync(path, line(1) + line(2) + `{"type":"event","n":3`)
+    await ahead.load()
+    assert.deepEqual(ahead.read(), plain.read(), "loaded, as read")
+    assert.equal(ahead.position, plain.position)
+    appendFileSync(path, `}\n` + line(4))
+    assert.deepEqual(ahead.read().map((read) => read.record.n), [3, 4], "with nothing loaded, the file is read")
+    plain.read()
+    appendFileSync(path, line(5))
+    await ahead.load()
+    appendFileSync(path, line(6))
+    assert.deepEqual(ahead.read().map((read) => read.record.n), [5], "a load holds what was written before it")
+    await ahead.load()
+    assert.deepEqual(plain.read().map((read) => read.record.n), [5, 6])
+    appendFileSync(path, line(7))
+    assert.deepEqual(ahead.read().map((read) => read.record.n), [6], "what was loaded is taken first")
+    assert.deepEqual(ahead.read().map((read) => read.record.n), [7])
+    // Replaced by a shorter file: read from its start, loaded or not.
+    writeFileSync(path, line(8))
+    await ahead.load()
+    assert.deepEqual(ahead.read().map((read) => read.record.n), [8])
+    const [first, second] = [ahead.load(), ahead.load()]
+    assert.notEqual(first, second, "a load asked for while one is under way begins after it")
+    assert.equal(ahead.load(), second, "and every asking meanwhile shares that one")
+    await Promise.all([first, second])
+    rmSync(path)
+    await ahead.load()
+    assert.deepEqual(ahead.read(), [], "a rollout that isn't there reads as nothing")
+    assert.equal(onlyDeltas(Buffer.from(`{"method":"item/agentMessage/delta","params":{}}\n{"method":"item/reasoning/summaryTextDelta","params":{}}\n`)), true)
+    assert.equal(onlyDeltas(Buffer.from(`{"method":"item/agentMessage/delta","params":{}}\n{"method":"item/completed","params":{}}\n`)), false)
+    assert.equal(onlyDeltas(Buffer.from(`{"method":"item/agentMessage/delta","params":{"te`)), false, "a chunk that ends inside a line isn't known to be")
+    assert.equal(onlyDeltas(Buffer.from(`{"id":3,"result":{"note":"a delta"}}\n`)), false)
+  }
   console.log("flush costs ok")
 } finally {
   rmSync(root, { recursive: true, force: true })

@@ -224,9 +224,14 @@ export class WorktreeSpares {
     const kept: Spare[] = []
     for (const spare of await this.list(true)) {
       const orphaned = spare.state === "preparing" && !alive(spare.pid)
-      const wanted = Number(await readFile(this.wantedFile(spare.repoRoot), "utf8").catch(() => "0")) || spare.createdAt
-      if (orphaned || now - wanted > IDLE_MS || !existsSync(spare.path) || (await isLink(spare.path))) await this.discard(spare)
-      else {
+      if (orphaned || (await this.idle(spare.repoRoot, spare.createdAt, now)) || !existsSync(spare.path) || (await isLink(spare.path))) {
+        // Held, as a claim and a spare's last step are: one claimed meanwhile is a Thread's, and one still being made
+        // anywhere finds its record gone and gives its checkout back itself (`prepare`).
+        await this.holding(spare.id, async () => {
+          const current = await this.read(spare.id)
+          if (current) await this.discard(current)
+        }).catch(() => {})
+      } else {
         kept.push(spare)
         // Its install outlived the host that followed it.
         if (spare.install?.state === "running" && !alive(spare.install.host)) this.queue(spare.id, () => this.adopt(spare.id))
@@ -306,6 +311,8 @@ export class WorktreeSpares {
     try {
       for (;;) {
         let spares = await this.sweep()
+        // Gone idle since this fill was asked for (another host's tidy may have said so): its spares were just given back, and it gets none.
+        if (await this.idle(repoRoot, Date.now())) return
         // A project folder whose repositories changed since its spares were made: they mirror what it was. One claimed meanwhile is a Thread's.
         // So is one whose install outputs were cloned for inputs the main checkout no longer has (its lockfile
         // changed): handed to a Thread, they'd be thrown away on the send and installed again, so it's made again here.
@@ -345,8 +352,7 @@ export class WorktreeSpares {
     const projects = new Set<string>()
     for (const spare of await this.list()) {
       // A project nobody starts Threads in anymore is giving its spares back (`sweep`), not getting new ones.
-      const wanted = Number(await readFile(this.wantedFile(spare.repoRoot), "utf8").catch(() => "0")) || spare.createdAt
-      if (now - wanted <= IDLE_MS) projects.add(spare.repoRoot)
+      if (!(await this.idle(spare.repoRoot, spare.createdAt, now))) projects.add(spare.repoRoot)
     }
     for (const repoRoot of projects) this.filling = this.filling.then(() => this.fill(repoRoot)).catch(() => {})
   }
@@ -518,8 +524,18 @@ export class WorktreeSpares {
       const pastSecond = Math.ceil((written + 1) / 1000) * 1000 - Date.now()
       if (pastSecond > 0) await delay(pastSecond)
       await mapLimit(worktreesOf(spare), 2, (worktree) => this.git.output(worktree.path, ["update-index", "-q", "--refresh"], true).catch(() => {}))
-      spare = { ...spare, state: "ready", outputs: carried, tookMs: Math.round(performance.now() - began) }
-      await this.save(spare)
+      const ready: Spare = { ...spare, state: "ready", outputs: carried, tookMs: Math.round(performance.now() - began) }
+      // A sweep anywhere may have given it back while it was made (its project went idle): then it isn't saved again, but removed.
+      const kept = await this.holding(id, async () => {
+        if (!(await this.read(id))) return false
+        await this.save(ready)
+        return true
+      })
+      if (!kept) {
+        await this.discard(spare)
+        return
+      }
+      spare = ready
     } catch (error) {
       await this.discard(spare)
       throw error
@@ -565,6 +581,12 @@ export class WorktreeSpares {
       else if (prune) await rm(join(this.records, name), { force: true })
     }
     return spares
+  }
+
+  /** Whether nobody has wanted the project's spares for a day; `since` stands in when no start has ever said it did. */
+  private async idle(repoRoot: string, since: number, now = Date.now()): Promise<boolean> {
+    const wanted = Number(await readFile(this.wantedFile(repoRoot), "utf8").catch(() => "0")) || since
+    return now - wanted > IDLE_MS
   }
 
   private wantedFile(repoRoot: string): string {

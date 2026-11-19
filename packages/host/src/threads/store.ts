@@ -864,6 +864,8 @@ export class ThreadStore {
   /** Read again only once the store moves, as a roster reads each Fin's on every look: */
   private readonly threadsSeen = new Map<string, ThreadRecord | null>()
   private readonly reportAsksSeen = new Map<string, readonly Report[]>()
+  /** Each tree's notice as `limitNotice` last read it, until a commit: asked of every row of the tree, each a read of the file. */
+  private readonly limitNoticesSeen = new Map<string, LimitNotice | null>()
   /**
    * By child, what `openReportAsks` took from its reports: the ones that ask, what they supersede and the newest. Kept
    * while its reports are the same rows (`stamp`), across commits, so a commit of anything else parses none of them again.
@@ -882,9 +884,15 @@ export class ThreadStore {
   private edgesEpoch = 0
   private asksSeen: { revision: number; stamp: string } | undefined
   private queuedSeen: { revision: number; spawns: QueuedSpawn[] } | undefined
-  private childSessionsSeen: { revision: number; children: ReadonlyMap<string, { harness: string; nativeId: string }[]> } | undefined
+  private childSessionsSeen: { epoch: number; children: ReadonlyMap<string, { harness: string; nativeId: string }[]> } | undefined
   /** The rows the last edges were read from, kept through commits: a read that finds the same keeps the same object. */
   private edgesKept: { records: string[]; native: Set<string>; edges: ThreadEdges } | undefined
+  /**
+   * Each edge as its row's text was last read into one, undefined for a row that isn't an edge: a start or an end
+   * rewrites one row of a few hundred, and reading every row into an edge again at each was 16 to 50 ms of every one
+   * of thirty Fins' starts.
+   */
+  private edgeOfRecord = new Map<string, ThreadParent | undefined>()
   /** Worktree inputs survive unrelated local commits; worktree/alias changes and foreign commits invalidate. */
   private worktreesSeen: ThreadWorktree[] | undefined
   /** Who hears this device's worktrees change here (`onWorktrees`). */
@@ -1125,10 +1133,11 @@ export class ThreadStore {
     const byParent = new Map<string, ThreadParent[]>()
     const byOp = new Map<string, ThreadParent>()
     const byRun = new Map<string, ThreadParent>()
+    const read = new Map<string, ThreadParent | undefined>()
     for (const record of records) {
-      const parsed = ThreadParentSchema.safeParse(JSON.parse(record))
-      if (!parsed.success) continue
-      const edge = parsed.data
+      const edge = this.edgeOfRecord.has(record) ? this.edgeOfRecord.get(record) : ThreadParentSchema.safeParse(JSON.parse(record)).data
+      read.set(record, edge)
+      if (!edge) continue
       // Keep the original edge and reports as history. A confirmed internal native reviewer was never delegated work.
       if (internalDiscoveredRun(edge)) { internalRuns.push(edge); continue }
       all.push(edge)
@@ -1152,6 +1161,8 @@ export class ThreadStore {
       this.edgesSeen = { epoch, edges }
       this.edgesKept = { records, native, edges }
     }
+    // Only the rows there now: an edge rewritten leaves its old text behind.
+    this.edgeOfRecord = read
     return edges
   }
 
@@ -1226,11 +1237,16 @@ export class ThreadStore {
 
   /** The notice of a limit a tree waits on the person's seeing: the newest not seen. */
   limitNotice(root: string): LimitNotice | undefined {
+    this.syncVersion()
+    const known = this.depth === 0 ? this.limitNoticesSeen.get(root) : undefined
+    if (known !== undefined) return known ?? undefined
     const rows = this.sql("SELECT record FROM limit_notices WHERE root_thread = ?").all(root).flatMap((row) => {
       const parsed = LimitNoticeSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
       return parsed.success ? [parsed.data] : []
     })
-    return rows.filter((notice) => !notice.seen && !notice.gathering).sort((a, b) => b.at - a.at)[0]
+    const notice = rows.filter((notice) => !notice.seen && !notice.gathering).sort((a, b) => b.at - a.at)[0]
+    if (this.depth === 0) this.limitNoticesSeen.set(root, notice ?? null)
+    return notice
   }
 
   /** Every tree's notices, said or gathering: what a host picks up from the last. */
@@ -1644,8 +1660,12 @@ export class ThreadStore {
    */
   childSessions(): ReadonlyMap<string, { harness: string; nativeId: string }[]> {
     this.syncVersion()
+    // Read from the tables the edges are (`heldBy`), so held as they are: read again at every commit, it was a join
+    // over every child's Sessions for each report of the uploads' scope, and once waited 1.09 s on the disk as 30
+    // turns ended.
     const seen = this.depth === 0 ? this.childSessionsSeen : undefined
-    if (seen && seen.revision === this.revision) return seen.children
+    if (seen && seen.epoch === this.edgesEpoch) return seen.children
+    const epoch = this.edgesEpoch
     const native = new Map<string, { harness: string; nativeId: string }[]>()
     const rows = this.sql(`SELECT m.thread_id, c.harness, c.native_id FROM native_claims c JOIN memberships m ON m.session_id = c.session_id
       WHERE c.device_id = ? AND m.thread_id IN (SELECT child_thread FROM thread_parents)
@@ -1665,7 +1685,7 @@ export class ThreadStore {
       if (held) held.push(...claimed)
       else children.set(edge.parent, [...claimed])
     }
-    if (this.depth === 0) this.childSessionsSeen = { revision: this.revision, children }
+    if (this.depth === 0) this.childSessionsSeen = { epoch, children }
     return children
   }
 
@@ -3890,6 +3910,7 @@ export class ThreadStore {
       this.threadsTouched = false
     }
     this.reportAsksSeen.clear()
+    this.limitNoticesSeen.clear()
     this.answersSeen.clear()
     this.forksSeen.clear()
     this.groupsSeen = undefined
