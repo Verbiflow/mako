@@ -633,7 +633,8 @@
         "filter": [
           "package.json",
           "dist/**/*.js",
-          "dist/application/local-update-startup.mjs"
+          "dist/application/local-update-startup.mjs",
+          "dist/control/machine-capture.page.mjs"
         ]
       }
     ],
