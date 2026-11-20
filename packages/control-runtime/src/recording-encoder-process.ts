@@ -1,7 +1,7 @@
 import { rename, stat } from "node:fs/promises"
 import { join } from "node:path"
 import { Mp4Writer, readMp4 } from "./mp4.js"
-import { onMac } from "./platform.js"
+import { onMac, onWindows } from "./platform.js"
 import { VideoHelper, videoHelperExecutable } from "./video-helper.js"
 
 /** The quality recordings ask the helper for: VideoToolbox's 0.85, or OpenH264's quantizer 21. */
@@ -17,13 +17,14 @@ export function recordingEncoder(): string {
 
 /** How recordings are encoded here, for their timeline. */
 export function recordingVideoEncoding() {
-  return { codec: "h264" as const, encoder: onMac() ? "mako-video (VideoToolbox)" : "mako-video (OpenH264)" }
+  return { codec: "h264" as const, encoder: onMac() ? "mako-video (VideoToolbox)" : onWindows() ? "mako-video (Media Foundation)" : "mako-video (OpenH264)" }
 }
 
 /**
- * One recording's encoder: the video helper encodes each rendered picture (VideoToolbox on a Mac, OpenH264 on Linux),
- * a key frame a second, and its units are written as fragmented MP4 as they come. A write is complete once the helper
- * has the picture; the worker submits one at a time and the owner bounds source history.
+ * One recording's encoder: the video helper encodes each rendered picture (VideoToolbox on a Mac, OpenH264 on Linux,
+ * Media Foundation on Windows), a key frame a second, and its units are written as fragmented MP4 as they come. A
+ * write is complete once the helper has the picture; the worker submits one at a time and the owner bounds source
+ * history.
  */
 export class RecordingEncoderProcess {
   private readonly helper: VideoHelper

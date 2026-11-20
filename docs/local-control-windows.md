@@ -27,7 +27,9 @@ contract needs (`0005-windows-driver.patch`, described in the
   (`\\.\pipe\mako-driver-<pid>-<random>`); a lease still needs its grant's token.
 - The host finds `cua-driver.exe` on `PATH` or in `~\.local\bin`, as it finds
   `cua-driver` elsewhere. Packaging has to put it in one of those, or the host
-  has to be told where it is.
+  has to be told where it is. The driver runs with its own folder as its
+  current folder, so nothing it names without a folder is found in the folder
+  the host started in.
 - Windows asks no permission to capture windows or drive UI Automation, so the
   host reports access as granted and shows nothing to allow.
 
@@ -46,7 +48,7 @@ contract needs (`0005-windows-driver.patch`, described in the
 | Launch and focus | `launch_app` by bundle id | By name, path, or AppUserModelID (`shell:AppsFolder`), without fronting. |
 | Clipboard | text, image, file | Same tools; text and image verified against Windows' own clipboard. |
 | Menus | `invoke_menu` | The tool exists; not verified, so the route stays unavailable. |
-| Recording | ScreenCaptureKit | The driver's FFmpeg recorder; Mako's own window video is the video helper's (Windows Graphics Capture, PR #1108). Not part of these checks. |
+| Recording | ScreenCaptureKit into MP4 | Mako's video helper (`mako-video.exe`, Windows Graphics Capture into Media Foundation H.264), run by the whole path the host gives, its units written as fragmented MP4 by the driver, the same bytes `mp4.ts` writes. No FFmpeg anywhere in the build. A pointer is kept in the timeline, not drawn into the video. Verified: driver and task recordings read back with Mediabunny, with no FFmpeg on `PATH`. |
 | Held input after a crash | journaled and released (+24) | Not ported; the journal is macOS-only. |
 
 Routes Mako's runtime offers on Windows (`control-contract.ts`): command,
@@ -123,9 +125,12 @@ Appshots, and a task's control session through the public program API.
   does, run a task end to end: `computer` use from a Thread on a Windows host,
   observe, set a field, click, and an Appshot.
 - Packaging `cua-driver.exe` with the Windows app, beside the executable or in
-  `~\.local\bin`, from the package this script builds.
+  `~\.local\bin`, from the package this script builds, and `mako-video.exe`
+  where `MAKO_VIDEO_HELPER` points: the host passes that whole path to the
+  driver, which records no window video without it.
 - Background keys without UI Automation focus (post to the element's own window
   handle), proven on an interactive desktop, before the pid keyboard is offered.
-- `invoke_menu`, multi-monitor and high-DPI scaling, and recording on Windows
-  were not exercised; the runner has one 100% display.
+- `invoke_menu` and multi-monitor or high-DPI scaling were not exercised; the
+  runner has one 100% display. A recorded window that changes size ends its
+  recording there (as on the other platforms), which was not exercised either.
 - Signing the executable.

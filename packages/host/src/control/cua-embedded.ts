@@ -5,10 +5,10 @@ import { randomUUID } from "node:crypto"
 import { access, chmod, mkdir, readdir, unlink } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { homedir } from "node:os"
-import { delimiter, isAbsolute, join } from "node:path"
+import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { hostLog } from "../base/host-log.js"
 import { trackProviderChild, untrackProviderPid } from "../base/provider-children.js"
-import { createPrivateControlSocket } from "@mako/control-runtime/desktop"
+import { createPrivateControlSocket, videoHelperExecutable } from "@mako/control-runtime/desktop"
 import { onMac, onWindows } from "../base/platform.js"
 
 /** The driver's executable: Windows finds a program by its extension. */
@@ -68,6 +68,12 @@ function stopDaemon(child: ChildProcess): void {
   }, 2_000)
   timer.unref()
   child.once("exit", () => clearTimeout(timer))
+}
+
+/** The video helper's whole path for the driver, where there is one (`video_helper.rs` in the driver's patch). */
+function videoHelperEnvironment(): { CUA_DRIVER_VIDEO_HELPER?: string } {
+  const helper = videoHelperExecutable()
+  return helper && isAbsolute(helper) ? { CUA_DRIVER_VIDEO_HELPER: helper } : {}
 }
 
 const SOCKET_WAIT_MS = 10_000
@@ -289,6 +295,9 @@ export class CuaEmbedded {
       ...(onWindows() && {
         CUA_DRIVER_EMBEDDED_HOST_PID: String(process.pid),
         CUA_DRIVER_PARENT_LIVENESS_STDIN: "1",
+        // A window's recording is captured and encoded by Mako's video helper, which the driver runs by this whole
+        // path and never looks up itself; without it the driver refuses window video. No FFmpeg is involved.
+        ...videoHelperEnvironment(),
       }),
     }
     // Cua's documented daemon API disables the overlay at construction. Hiding
@@ -319,6 +328,9 @@ export class CuaEmbedded {
     this.#stderr = ""
     const child = hostSpawn(command, args, {
       env,
+      // Windows looks a program or file named without its folder up in the current folder too (ShellExecute, which
+      // launch_app uses): the driver runs in its own folder, never in whatever folder the host was started from.
+      ...(onWindows() && { cwd: dirname(command) }),
       stdio: [onWindows() ? "pipe" : "ignore", "ignore", "pipe"],
       windowsHide: true,
     })

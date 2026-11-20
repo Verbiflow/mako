@@ -2,7 +2,8 @@ name: Windows computer control
 
 # The shared native driver (vendor/cua-driver: upstream Cua's Rust driver plus Mako's reviewed patch) built for Windows
 # x64 with MSVC and a static CRT, then driven on a hosted Windows runner: the driver's own protocol against a fixture
-# window, Notepad and Calculator, with latencies and idle cost, and Mako's control runtime over the same daemon.
+# window, Notepad and Calculator, with latencies and idle cost, a window recording read back with no FFmpeg on PATH,
+# and Mako's control runtime over the same daemon.
 
 on:
   workflow_dispatch:
@@ -17,6 +18,8 @@ on:
       - scripts/package-control-driver-windows.mjs
       - scripts/test-control-driver-windows.ts
       - scripts/fixtures/win-control-fixture.ps1
+      - native/video-windows/**
+      - scripts/build-video-helper.mjs
       - package-lock.json
 
 permissions:
@@ -83,12 +86,15 @@ jobs:
       - uses: ./.github/actions/install-dependencies
         with:
           electron: "false"
-      - name: Build the control runtime
+      - name: Build the control runtime and the video helper
         shell: bash
-        run: npm run build:control-runtime
+        run: |
+          npm run build:control-runtime
+          node scripts/build-video-helper.mjs --require
+          ls -l build/mako-video.exe
       - name: The driver and the control runtime against a fixture, Notepad and Calculator
         shell: bash
-        run: npx tsx scripts/test-control-driver-windows.ts --driver "$MAKO_DRIVER_PACKAGE/cua-driver.exe" --json evidence/windows-control.json
+        run: npx tsx scripts/test-control-driver-windows.ts --driver "$MAKO_DRIVER_PACKAGE/cua-driver.exe" --video-helper build/mako-video.exe --json evidence/windows-control.json
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

@@ -169,39 +169,51 @@ try {
   Object.defineProperty(process, "platform", { value: "linux", configurable: true })
   mock.method(process, "getuid", () => 4242)
   mock.method(fs, "statSync", path => ({ uid: path === "/proc/3000" ? 99 : 4242 }))
+  const denied = path => { if (path === `/proc/1000/${deniedFile}`) throw Object.assign(new Error("fixture denied"), { code: deniedCode }) }
   mock.method(fs, "readdirSync", path => {
     if (path === "/proc") return ["1000", "2000", "3000"]
+    denied(path)
+    if (path === "/proc/1000/fd") return []
     assert.equal(path, "/proc/2000/fd")
     return ["4"]
   })
   mock.method(fs, "readFileSync", path => {
     assert.doesNotMatch(path, /3000/, "another UID is skipped before reading its files")
     if (path === "/proc/1000/cmdline" && heldArgs) return "fixture\0/fixture/scratch\0"
-    if (path === `/proc/1000/${deniedFile}`) throw Object.assign(new Error("fixture denied"), { code: deniedCode })
+    denied(path)
     return path.endsWith("cmdline") ? "fixture\0" : "HOME=/outside\0"
   })
-  mock.method(fs, "readlinkSync", path => path.endsWith("/fd/4") && heldFile ? "/fixture/scratch/proof" : "/outside")
+  mock.method(fs, "readlinkSync", path => {
+    denied(path)
+    return path.endsWith("/fd/4") && heldFile ? "/fixture/scratch/proof" : "/outside"
+  })
   mock.method(fs, "rmSync", path => { assert.equal(path, "/fixture/scratch"); removed++ })
   syncBuiltinESMExports()
-  for (const code of ["EACCES", "EPERM", "ENOENT", "ESRCH"]) {
-    deniedCode = code
-    assert.deepEqual(processesUsingSync("/fixture/scratch", true).map(item => item.pid), [2000], `${code} environment refusal skips that row, but keeps every readable holder`)
-    if (code === "EACCES" || code === "EPERM") {
-      heldArgs = true
-      assert.deepEqual(processesUsingSync("/fixture/scratch", true).map(item => item.pid), [1000, 2000], `${code} cannot hide a holder already identified by its command line`)
-      heldArgs = false
+  // A process that stops being dumpable (a setuid exec, a sandbox's prctl) refuses its `cwd` and `fd` too: a CI job's
+  // inspection failed on `/proc/<pid>/fd`.
+  for (const file of ["environ", "cwd", "fd"]) {
+    deniedFile = file
+    for (const code of ["EACCES", "EPERM", "ENOENT", "ESRCH"]) {
+      deniedCode = code
+      assert.deepEqual(processesUsingSync("/fixture/scratch", true).map(item => item.pid), [2000], `${code} on ${file} skips that row, but keeps every readable holder`)
+      if (code === "EACCES" || code === "EPERM") {
+        heldArgs = true
+        assert.deepEqual(processesUsingSync("/fixture/scratch", true).map(item => item.pid), [1000, 2000], `${code} cannot hide a holder already identified by its command line`)
+        heldArgs = false
+      }
     }
   }
+  deniedFile = "environ"
   heldFile = false
   await removeScratch("/fixture/scratch", 0)
   assert.equal(removed, 1, "an inaccessible unrelated environment cannot fail scratch cleanup")
   deniedCode = "EIO"
   assert.throws(() => processesUsingSync("/fixture/scratch", true), error => error.cause?.code === "EIO", "other environment failures remain incomplete inspection")
   deniedCode = "EACCES"; deniedFile = "cmdline"
-  assert.throws(() => processesUsingSync("/fixture/scratch", true), error => error.cause?.code === "EACCES", "the exception is specific to environ, not a blanket process-probe bypass")
+  assert.throws(() => processesUsingSync("/fixture/scratch", true), error => error.cause?.code === "EACCES", "the exception is specific to environ, cwd and fd, not a blanket process-probe bypass")
   assert.equal(removed, 1, "unknown probes never authorize another removal")
 } finally {
   mock.restoreAll(); syncBuiltinESMExports()
   Object.defineProperty(process, "platform", platform)
 }
-console.log("Linux scratch: unreadable environments skipped; readable holders and other errors retained")
+console.log("Linux scratch: unreadable environments, working folders and open files skipped; readable holders and other errors retained")

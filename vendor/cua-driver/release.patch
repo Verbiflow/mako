@@ -252,6 +252,16 @@ index 49dea44..6e79342 100644
      pub role: String,
      pub depth: u32,
      #[serde(default, skip_serializing_if = "Option::is_none")]
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/Cargo.toml b/libs/cua-driver/rust/crates/cua-driver-core/Cargo.toml
+index 5e6a53e..40b259f 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/Cargo.toml
++++ b/libs/cua-driver/rust/crates/cua-driver-core/Cargo.toml
+@@ -61,4 +61,4 @@ libc = "0.2"
+ tempfile = "3"
+ 
+ [target.'cfg(windows)'.dependencies]
+-windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
++windows = { version = "0.58", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_System_SystemInformation"] }
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
 index 1800450..70b1988 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/action_record.rs
@@ -325,6 +335,31 @@ index cfd35d2..c8dec05 100644
      /// Regression for the proven same-PID wrong-target case: target window A
      /// requested while sibling window B is the process's focused/eligible
      /// window. Process-scoped keyboard must refuse before dispatch — an
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
+index 1d10b31..467f5d3 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/browser/prepare.rs
+@@ -249,12 +249,14 @@ impl Drop for ManagedBrowser {
+             // transfer the browser role to a descendant. The listener owner
+             // was attested inside that driver-spawned process tree, so reap
+             // that exact process tree when its owning session ends.
+-            let _ = Command::new("taskkill.exe")
+-                .args(["/PID", &self.owned_pid.to_string(), "/T", "/F"])
+-                .stdin(Stdio::null())
+-                .stdout(Stdio::null())
+-                .stderr(Stdio::null())
+-                .status();
++            if let Ok(taskkill) = crate::system_program::system_program("taskkill.exe") {
++                let _ = Command::new(taskkill)
++                    .args(["/PID", &self.owned_pid.to_string(), "/T", "/F"])
++                    .stdin(Stdio::null())
++                    .stdout(Stdio::null())
++                    .stderr(Stdio::null())
++                    .status();
++            }
+         }
+         let _ = self.child.kill();
+         let _ = self.child.wait();
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/daemon.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/daemon.rs
 index 004ece3..4521f9f 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/daemon.rs
@@ -1196,6 +1231,42 @@ index c349e73..e390109 100644
      #[test]
      fn token_round_trips_through_format_then_parse() {
          assert_eq!(format_token(0x1234, 42), "s00001234:42");
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
+index 11c7fb3..042b88a 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
+@@ -58,6 +58,7 @@ pub mod element_cache;
+ pub mod element_query;
+ pub mod element_token;
+ pub mod expectation;
++#[cfg(not(target_os = "windows"))]
+ pub mod ffmpeg_install;
+ pub mod health_report;
+ pub mod history;
+@@ -85,7 +86,23 @@ pub mod tool;
+ pub mod tool_args;
+ pub mod tool_schema;
+ pub mod video;
++pub mod video_fmp4;
++#[cfg(not(target_os = "windows"))]
+ pub mod video_ffmpeg;
++/// Windows records a window through Mako's video helper (`platform_windows::video_helper`) and runs no FFmpeg for
++/// anything: this build has no FFmpeg path at all, so nothing can resolve `ffmpeg` from `PATH` or the current
++/// directory. What would probe or render with it reports FFmpeg as absent.
++#[cfg(target_os = "windows")]
++pub mod video_ffmpeg {
++    pub fn find_ffprobe() -> Option<std::path::PathBuf> {
++        None
++    }
++    pub(crate) fn find_ffmpeg() -> Option<std::path::PathBuf> {
++        None
++    }
++}
++#[cfg(target_os = "windows")]
++pub mod system_program;
+ pub mod window_inspection;
+ pub mod window_target;
+ 
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/protocol.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/protocol.rs
 index ec46f81..64e0292 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/protocol.rs
@@ -1940,11 +2011,85 @@ index d3db85f..90aaeb7 100644
 +        );
 +    }
  }
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_render.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_render.rs
+index 733be19..1bd63f5 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_render.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_render.rs
+@@ -77,12 +77,15 @@ pub fn render(
+     let traj =
+         load(input_dir).map_err(|e: LoadError| anyhow::anyhow!("load {input_dir:?}: {e}"))?;
+     let ffmpeg = find_ffmpeg().ok_or_else(|| {
+-        anyhow::anyhow!(
+-            "ffmpeg not found on PATH. Install with: \
+-             winget install Gyan.FFmpeg (Windows), \
+-             brew install ffmpeg (macOS), \
+-             or apt install ffmpeg (Linux)."
+-        )
++        if cfg!(target_os = "windows") {
++            anyhow::anyhow!("Rendering a trajectory video needs ffmpeg, which this Windows build doesn't use")
++        } else {
++            anyhow::anyhow!(
++                "ffmpeg not found on PATH. Install with: \
++                 brew install ffmpeg (macOS), \
++                 or apt install ffmpeg (Linux)."
++            )
++        }
+     })?;
+ 
+     let in_dur = probe_duration_ms(&traj.metadata.video_path).unwrap_or(0.0);
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
-index 43779ee..7e27dec 100644
+index 43779ee..ad1da70 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
-@@ -99,7 +99,12 @@ impl Tool for StartRecordingTool {
+@@ -40,12 +40,25 @@ impl StartRecordingTool {
+ 
+ static START_REC_DEF: OnceLock<ToolDef> = OnceLock::new();
+ 
++/// How this build records video, for the tool's description.
++#[cfg(target_os = "windows")]
++const VIDEO_PLATFORM_NOTE: &str = "**Windows records one window** (`window_target`) through Mako's video \
++    helper, run by the whole path its host gives in `CUA_DRIVER_VIDEO_HELPER` (Windows Graphics Capture + \
++    Media Foundation H.264, written as fragmented MP4). No ffmpeg is used, and whole-display video is \
++    refused. Without the helper the per-turn capture (screenshots + action.json) still runs and the \
++    session's `last_error` field carries the diagnostic.\n\n";
++#[cfg(not(target_os = "windows"))]
++const VIDEO_PLATFORM_NOTE: &str = "**Windows + Linux use an ffmpeg subprocess** (`gdigrab` / \
++    `x11grab` + libx264). Requires ffmpeg on PATH (winget install Gyan.FFmpeg / apt install ffmpeg); \
++    when ffmpeg is missing or fails on startup the per-turn capture (screenshots + action.json) still \
++    runs and the session's `last_error` field carries the diagnostic.\n\n";
++
+ #[async_trait]
+ impl Tool for StartRecordingTool {
+     fn def(&self) -> &ToolDef {
+         START_REC_DEF.get_or_init(|| ToolDef {
+             name: "start_recording".into(),
+-            description: "Start trajectory recording. Every subsequent action-tool \
++            description: format!("Start trajectory recording. Every subsequent action-tool \
+                 invocation (click, right_click, scroll, type_text, press_key, hotkey, \
+                 set_value) writes a turn folder under `output_dir`:\n\n\
+                 - `before_state.json` / `after_state.json` — application AX/UIA/AT-SPI \
+@@ -72,16 +85,12 @@ impl Tool for StartRecordingTool {
+                 SCRecordingOutput) so video inherits the daemon's Screen \
+                 Recording grant — no extra TCC prompt, no ffmpeg subprocess. \
+                 Requires macOS 15.0+.\n\n\
+-                **Windows + Linux use an ffmpeg subprocess** (`gdigrab` / \
+-                `x11grab` + libx264). Requires ffmpeg on PATH (winget install \
+-                Gyan.FFmpeg / apt install ffmpeg); when ffmpeg is missing or \
+-                fails on startup the per-turn capture (screenshots + \
+-                action.json) still runs and the session's `last_error` field \
+-                carries the diagnostic.\n\n\
++                {VIDEO_PLATFORM_NOTE}\
+                 State persists for the life of the daemon; a restart \
+                 resets to disabled with no on-disk state. Call `stop_recording` to \
+-                disable + finalize the mp4."
+-                .into(),
++                disable + finalize the mp4.",
++                VIDEO_PLATFORM_NOTE = VIDEO_PLATFORM_NOTE
++            ),
+             input_schema: json!({
+                 "type": "object",
+                 "required": ["output_dir"],
+@@ -99,7 +108,12 @@ impl Tool for StartRecordingTool {
                              screenshots + JSON are recorded). On macOS this uses native \
                              ScreenCaptureKit (no extra TCC prompt, macOS 15.0+); on \
                              Windows + Linux it requires ffmpeg on PATH."
@@ -1958,7 +2103,7 @@ index 43779ee..7e27dec 100644
                  },
                  "additionalProperties": false
              }),
-@@ -122,10 +127,34 @@ impl Tool for StartRecordingTool {
+@@ -122,10 +136,34 @@ impl Tool for StartRecordingTool {
          // (session_end) only stops the recording its own session started.
          let owner = args.opt_str("_session_id");
  
@@ -1994,7 +2139,16 @@ index 43779ee..7e27dec 100644
          ) {
              Ok(()) => {
                  let state = self.session.current_state();
-@@ -192,7 +221,7 @@ impl Tool for StopRecordingTool {
+@@ -138,7 +176,7 @@ impl Tool for StartRecordingTool {
+                     " (video → recording.mp4)".to_string()
+                 } else if video_failed {
+                     let err = state.last_error.clone().unwrap_or_else(|| "unknown".into());
+-                    let hint = if crate::video_ffmpeg::find_ffmpeg().is_none() {
++                    let hint = if !cfg!(target_os = "windows") && crate::video_ffmpeg::find_ffmpeg().is_none() {
+                         "\n\nffmpeg was not found. Call install_ffmpeg (then again with \
+                          confirm=true) to install it, then restart recording."
+                     } else {
+@@ -192,7 +230,7 @@ impl Tool for StopRecordingTool {
                  .into(),
              input_schema: json!({
                  "type": "object",
@@ -2003,7 +2157,7 @@ index 43779ee..7e27dec 100644
                  "additionalProperties": false
              }),
              read_only: false,
-@@ -202,11 +231,17 @@ impl Tool for StopRecordingTool {
+@@ -202,11 +240,17 @@ impl Tool for StopRecordingTool {
          })
      }
  
@@ -2026,7 +2180,7 @@ index 43779ee..7e27dec 100644
              Ok(()) => {
                  let state = self.session.current_state();
                  let video_note = state
-@@ -256,8 +291,12 @@ impl Tool for GetRecordingStateTool {
+@@ -256,8 +300,12 @@ impl Tool for GetRecordingStateTool {
          })
      }
  
@@ -2040,7 +2194,7 @@ index 43779ee..7e27dec 100644
          // Match Swift text format 1:1:
          //   "✅ recording: enabled output_dir=<path> next_turn=<N>"
          //   "✅ recording: disabled"
-@@ -497,10 +536,14 @@ fn recording_state_json(state: &RecordingState) -> Value {
+@@ -497,10 +545,14 @@ fn recording_state_json(state: &RecordingState) -> Value {
          // "recording" mirrors the Swift field name for parity.
          "recording": state.enabled,
          "enabled": state.enabled,
@@ -2055,6 +2209,22 @@ index 43779ee..7e27dec 100644
          "last_video_path": state.last_video_path,
          // Session that owns the live recording (the daemon-injected
          // `_session_id`), or null when started anonymously. Informational; the
+@@ -561,6 +613,15 @@ impl Tool for InstallFfmpegTool {
+         })
+     }
+ 
++    #[cfg(target_os = "windows")]
++    async fn invoke(&self, _args: Value) -> ToolResult {
++        ToolResult::error(
++            "This Windows build records windows through Mako's video helper and uses no ffmpeg; \
++             there is nothing to install.",
++        )
++    }
++
++    #[cfg(not(target_os = "windows"))]
+     async fn invoke(&self, args: Value) -> ToolResult {
+         use crate::tool_args::ArgsExt;
+ 
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/session.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/session.rs
 index 727d305..1a1bc26 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/session.rs
@@ -2247,6 +2417,28 @@ index 727d305..1a1bc26 100644
      #[test]
      fn trusted_idle_ttl_override_controls_snapshot_and_eviction() {
          let sid = "test-trusted-lifecycle-ttl-A9B0C1";
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/system_program.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/system_program.rs
+new file mode 100644
+index 0000000..7bf52a1
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/system_program.rs
+@@ -0,0 +1,16 @@
++//! Windows programs the driver runs, by their whole path in the system directory. A bare name would be looked up
++//! beside the driver's own executable before the system directory, and on `PATH` after it, so a file planted in
++//! either could run in its place.
++
++use std::path::PathBuf;
++
++/// `relative` (e.g. `cmd.exe`, `WindowsPowerShell\v1.0\powershell.exe`) under the system directory, as
++/// `GetSystemDirectoryW` gives it rather than as an environment variable says.
++pub fn system_program(relative: &str) -> std::io::Result<PathBuf> {
++    let mut buffer = [0u16; 32768];
++    let length = unsafe { windows::Win32::System::SystemInformation::GetSystemDirectoryW(Some(&mut buffer)) } as usize;
++    if length == 0 || length >= buffer.len() {
++        return Err(std::io::Error::other("could not resolve the Windows system directory"));
++    }
++    Ok(PathBuf::from(String::from_utf16_lossy(&buffer[..length])).join(relative))
++}
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
 index d93bf6d..a7d52c3 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/tool.rs
@@ -2409,10 +2601,22 @@ index d93bf6d..a7d52c3 100644
      fn action_projection_keeps_browser_refusal_diagnostics_and_closes_structured_content() {
          let legacy = serde_json::json!({
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/video.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/video.rs
-index f7eddc5..576a425 100644
+index f7eddc5..d1665ce 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/video.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/video.rs
-@@ -31,18 +31,40 @@ pub struct VideoMetadata {
+@@ -7,8 +7,9 @@
+ //! - **macOS:** native ScreenCaptureKit via `platform_macos::video_sckit`
+ //!   (no extra TCC grant — inherits cua-driver's own Screen Recording
+ //!   permission, no subprocess).
+-//! - **Windows + Linux:** ffmpeg subprocess via `video_ffmpeg`
+-//!   (`gdigrab` / `x11grab` input + libx264 encode).
++//! - **Windows:** one window through Mako's video helper (`mako-video.exe`), run by its whole path, written as
++//!   fragmented MP4 by `video_fmp4` (`platform_windows::video_helper`); no ffmpeg in the build.
++//! - **Linux:** ffmpeg subprocess via `video_ffmpeg` (`x11grab` input + libx264 encode).
+ //!
+ //! The factory is registered with `set_video_backend_factory` from each
+ //! platform's `main.rs` startup block, mirroring how `SCREENSHOT_FN` /
+@@ -31,18 +32,40 @@ pub struct VideoMetadata {
      pub duration_ms: u64,
      /// Whether the backend finalized the mp4 cleanly (playable file).
      pub finalized: bool,
@@ -2453,7 +2657,7 @@ index f7eddc5..576a425 100644
  }
  
  static VIDEO_BACKEND_FACTORY: OnceLock<Box<dyn VideoBackendFactory>> = OnceLock::new();
-@@ -63,3 +85,27 @@ pub fn start_video(output_path: &Path) -> anyhow::Result<Box<dyn VideoBackend>>
+@@ -63,3 +86,27 @@ pub fn start_video(output_path: &Path) -> anyhow::Result<Box<dyn VideoBackend>>
          .ok_or_else(|| anyhow::anyhow!("no video backend registered for this platform"))?;
      factory.start(output_path)
  }
@@ -2493,6 +2697,402 @@ index 36d108c..2cce6e8 100644
          })
      }
  }
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/video_fmp4.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/video_fmp4.rs
+new file mode 100644
+index 0000000..e8b10bf
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/video_fmp4.rs
+@@ -0,0 +1,379 @@
++//! H.264 units into fragmented MP4, with no FFmpeg: the units Mako's video helper (`mako-video`) writes, and the file
++//! Mako's runtime writes from them (`packages/control-runtime/src/mp4.ts`), byte for byte. Each unit is its own
++//! fragment, written once the next unit gives its duration, so a crash keeps every unit but the newest playable.
++//!
++//! The helper's output is a stream of units, each a big-endian `u32` length and then a `ControlVideoPacket`
++//! (`packages/control-runtime/src/contracts/control-video.ts`): version 1, kind (0 delta, 1 key, 2 poster), width,
++//! height, description length, sequence, capture time (ms since 1970, `f64`), data length, then the key unit's `avcC`
++//! and the unit's length-prefixed NAL units.
++
++use std::fs::File;
++use std::io::{Read, Write};
++use std::path::Path;
++
++const HEADER: usize = 24;
++const DESCRIPTION_LIMIT: usize = 4096;
++const DATA_LIMIT: usize = 4 * 1024 * 1024;
++const SIZE_LIMIT: u16 = 4096;
++/// Time in the file's track, in ticks a second.
++const TIMESCALE: f64 = 90_000.0;
++
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum UnitKind {
++    Delta,
++    Key,
++    Poster,
++}
++
++#[derive(Debug, Clone)]
++pub struct VideoUnit {
++    pub kind: UnitKind,
++    pub width: u16,
++    pub height: u16,
++    pub sequence: u32,
++    /// When the frame was captured, in milliseconds since 1970.
++    pub captured_at: f64,
++    /// A key unit's `avcC` record; empty otherwise.
++    pub description: Vec<u8>,
++    pub data: Vec<u8>,
++}
++
++/// One packet, as `decodeControlVideo` reads it.
++pub fn decode_unit(bytes: &[u8]) -> anyhow::Result<VideoUnit> {
++    if bytes.len() < HEADER {
++        anyhow::bail!("Truncated video unit");
++    }
++    let u16_at = |at: usize| u16::from_be_bytes([bytes[at], bytes[at + 1]]);
++    let u32_at = |at: usize| u32::from_be_bytes(bytes[at..at + 4].try_into().unwrap());
++    let kind = match bytes[1] {
++        0 => UnitKind::Delta,
++        1 => UnitKind::Key,
++        2 => UnitKind::Poster,
++        _ => anyhow::bail!("Invalid video unit"),
++    };
++    let (width, height) = (u16_at(2), u16_at(4));
++    let description_length = usize::from(u16_at(6));
++    let data_length = u32_at(20) as usize;
++    let captured_at = f64::from_be_bytes(bytes[12..20].try_into().unwrap());
++    let valid_size = |side: u16| side > 0 && side <= SIZE_LIMIT;
++    if bytes[0] != 1
++        || bytes.len() != HEADER + description_length + data_length
++        || data_length == 0
++        || description_length > DESCRIPTION_LIMIT
++        || data_length > DATA_LIMIT
++        || (kind == UnitKind::Key) != (description_length > 0)
++        || !valid_size(width)
++        || !valid_size(height)
++        || !captured_at.is_finite()
++    {
++        anyhow::bail!("Invalid video unit");
++    }
++    Ok(VideoUnit {
++        kind,
++        width,
++        height,
++        sequence: u32_at(8),
++        captured_at,
++        description: bytes[HEADER..HEADER + description_length].to_vec(),
++        data: bytes[HEADER + description_length..].to_vec(),
++    })
++}
++
++/// The next unit of a helper's output; `None` at its end. A stream cut inside a unit ends there too.
++pub fn read_unit(input: &mut impl Read) -> anyhow::Result<Option<VideoUnit>> {
++    let mut length = [0u8; 4];
++    match input.read_exact(&mut length) {
++        Ok(()) => {}
++        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
++        Err(error) => return Err(error.into()),
++    }
++    let length = u32::from_be_bytes(length) as usize;
++    if length > DATA_LIMIT + 8192 {
++        anyhow::bail!("The video helper wrote an oversized unit");
++    }
++    let mut bytes = vec![0u8; length];
++    match input.read_exact(&mut bytes) {
++        Ok(()) => decode_unit(&bytes).map(Some),
++        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => Ok(None),
++        Err(error) => Err(error.into()),
++    }
++}
++
++fn mp4_box(kind: &[u8; 4], parts: &[&[u8]]) -> Vec<u8> {
++    let size = 8 + parts.iter().map(|part| part.len()).sum::<usize>();
++    let mut out = Vec::with_capacity(size);
++    out.extend_from_slice(&(size as u32).to_be_bytes());
++    out.extend_from_slice(kind);
++    for part in parts {
++        out.extend_from_slice(part);
++    }
++    out
++}
++
++/// Big-endian fields: (bytes, value) pairs, as `mp4.ts`'s `fields`.
++fn fields(values: &[(u8, f64)]) -> Vec<u8> {
++    let mut out = Vec::new();
++    for &(bytes, value) in values {
++        match bytes {
++            1 => out.push(value as u8),
++            2 => out.extend_from_slice(&(value as u16).to_be_bytes()),
++            4 => out.extend_from_slice(&((value as i64) as u32).to_be_bytes()),
++            _ => out.extend_from_slice(&(value.round().max(0.0) as u64).to_be_bytes()),
++        }
++    }
++    out
++}
++
++fn matrix() -> Vec<u8> {
++    fields(&[(4, 65536.0), (4, 0.0), (4, 0.0), (4, 0.0), (4, 65536.0), (4, 0.0), (4, 0.0), (4, 0.0), (4, 1073741824.0)])
++}
++
++/// The file's start: its brands, and one H.264 track whose samples all come in fragments.
++fn header(width: u16, height: u16, description: &[u8]) -> Vec<u8> {
++    let (w, h) = (f64::from(width), f64::from(height));
++    let ftyp = mp4_box(b"ftyp", &[b"isom", &fields(&[(4, 512.0)]), b"isomiso6avc1mp41"]);
++    let mvhd = mp4_box(
++        b"mvhd",
++        &[
++            &fields(&[(4, 0.0), (4, 0.0), (4, 0.0), (4, 1000.0), (4, 0.0), (4, 65536.0), (2, 256.0)]),
++            &[0u8; 10],
++            &matrix(),
++            &[0u8; 24],
++            &fields(&[(4, 2.0)]),
++        ],
++    );
++    let tkhd = mp4_box(
++        b"tkhd",
++        &[
++            &fields(&[(4, 3.0), (4, 0.0), (4, 0.0), (4, 1.0), (4, 0.0), (4, 0.0)]),
++            &[0u8; 8],
++            &fields(&[(2, 0.0), (2, 0.0), (2, 0.0), (2, 0.0)]),
++            &matrix(),
++            &fields(&[(4, w * 65536.0), (4, h * 65536.0)]),
++        ],
++    );
++    let mdhd = mp4_box(b"mdhd", &[&fields(&[(4, 0.0), (4, 0.0), (4, 0.0), (4, TIMESCALE), (4, 0.0), (2, 21956.0), (2, 0.0)])]);
++    let hdlr = mp4_box(b"hdlr", &[&fields(&[(4, 0.0), (4, 0.0)]), b"vide", &[0u8; 12], b"VideoHandler\0"]);
++    let avcc = mp4_box(b"avcC", &[description]);
++    let avc1 = mp4_box(
++        b"avc1",
++        &[
++            &[0u8; 6],
++            &fields(&[(2, 1.0)]),
++            &[0u8; 16],
++            &fields(&[(2, w), (2, h), (4, 4718592.0), (4, 4718592.0), (4, 0.0), (2, 1.0)]),
++            &[0u8; 32],
++            &fields(&[(2, 24.0), (2, 65535.0)]),
++            &avcc,
++        ],
++    );
++    let stsd = mp4_box(b"stsd", &[&fields(&[(4, 0.0), (4, 1.0)]), &avc1]);
++    let stts = mp4_box(b"stts", &[&fields(&[(4, 0.0), (4, 0.0)])]);
++    let stsc = mp4_box(b"stsc", &[&fields(&[(4, 0.0), (4, 0.0)])]);
++    let stsz = mp4_box(b"stsz", &[&fields(&[(4, 0.0), (4, 0.0), (4, 0.0)])]);
++    let stco = mp4_box(b"stco", &[&fields(&[(4, 0.0), (4, 0.0)])]);
++    let stbl = mp4_box(b"stbl", &[&stsd, &stts, &stsc, &stsz, &stco]);
++    let vmhd = mp4_box(b"vmhd", &[&fields(&[(4, 1.0), (2, 0.0), (2, 0.0), (2, 0.0), (2, 0.0)])]);
++    let url = mp4_box(b"url ", &[&fields(&[(4, 1.0)])]);
++    let dref = mp4_box(b"dref", &[&fields(&[(4, 0.0), (4, 1.0)]), &url]);
++    let dinf = mp4_box(b"dinf", &[&dref]);
++    let minf = mp4_box(b"minf", &[&vmhd, &dinf, &stbl]);
++    let mdia = mp4_box(b"mdia", &[&mdhd, &hdlr, &minf]);
++    let trak = mp4_box(b"trak", &[&tkhd, &mdia]);
++    let trex = mp4_box(b"trex", &[&fields(&[(4, 0.0), (4, 1.0), (4, 1.0), (4, 0.0), (4, 0.0), (4, 0.0)])]);
++    let mvex = mp4_box(b"mvex", &[&trex]);
++    let moov = mp4_box(b"moov", &[&mvhd, &trak, &mvex]);
++    [ftyp, moov].concat()
++}
++
++/// One sample as its own fragment: tfhd gives base-is-moof and the sample's duration, size and flags; trun its data
++/// offset (as FFmpeg writes a one-sample fragment, which every reader takes).
++fn fragment(sequence: u32, decode_time: f64, duration: f64, key: bool, data: &[u8]) -> Vec<u8> {
++    let flags = if key { 33554432.0 } else { 16842752.0 };
++    let tfhd = mp4_box(b"tfhd", &[&fields(&[(4, 131128.0), (4, 1.0), (4, duration), (4, data.len() as f64), (4, flags)])]);
++    let tfdt = mp4_box(b"tfdt", &[&fields(&[(4, 16777216.0), (8, decode_time)])]);
++    let mfhd = mp4_box(b"mfhd", &[&fields(&[(4, 0.0), (4, f64::from(sequence))])]);
++    let trun_body = |offset: f64| fields(&[(4, 5.0), (4, 1.0), (4, offset), (4, flags)]);
++    let moof_size = 8 + mfhd.len() + 8 + tfhd.len() + tfdt.len() + mp4_box(b"trun", &[&trun_body(0.0)]).len();
++    let trun = mp4_box(b"trun", &[&trun_body((moof_size + 8) as f64)]);
++    let traf = mp4_box(b"traf", &[&tfhd, &tfdt, &trun]);
++    let moof = mp4_box(b"moof", &[&mfhd, &traf]);
++    let mdat = mp4_box(b"mdat", &[data]);
++    [moof, mdat].concat()
++}
++
++/// JavaScript's `Math.round` for the non-negative times written here.
++fn ticks(ms: f64) -> f64 {
++    (ms * TIMESCALE / 1000.0 + 0.5).floor()
++}
++
++/// The H.264 configuration changed mid-recording (a window resized): the recording ends at the last unit before it.
++#[derive(Debug)]
++pub struct ConfigurationChanged;
++impl std::fmt::Display for ConfigurationChanged {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        f.write_str("The capture's size or encoder configuration changed")
++    }
++}
++impl std::error::Error for ConfigurationChanged {}
++
++/// A recording's file, as `Mp4Writer` writes it.
++pub struct Fmp4Writer {
++    path: std::path::PathBuf,
++    frame_ms: f64,
++    file: Option<File>,
++    description: Vec<u8>,
++    held: Option<(VideoUnit, f64)>,
++    origin: f64,
++    fragments: u32,
++    last_end: f64,
++}
++
++impl Fmp4Writer {
++    pub fn new(path: &Path, frame_ms: f64) -> Self {
++        Self { path: path.to_path_buf(), frame_ms, file: None, description: Vec::new(), held: None, origin: 0.0, fragments: 0, last_end: 0.0 }
++    }
++
++    /// Units written so far.
++    pub fn frames(&self) -> u32 {
++        self.fragments
++    }
++
++    /// Milliseconds from the first unit to the end of the last one written.
++    pub fn duration_ms(&self) -> f64 {
++        self.last_end
++    }
++
++    /// A unit presented `at` milliseconds into the video. The first must be a key unit; posters are skipped.
++    pub fn add(&mut self, unit: VideoUnit, at: f64) -> anyhow::Result<()> {
++        if unit.kind == UnitKind::Poster {
++            return Ok(());
++        }
++        if self.file.is_none() && self.held.is_none() {
++            if unit.kind != UnitKind::Key {
++                anyhow::bail!("A recording's first unit must be a key frame");
++            }
++            self.description = unit.description.clone();
++            self.origin = at;
++            let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&self.path)?;
++            file.write_all(&header(unit.width, unit.height, &self.description))?;
++            self.file = Some(file);
++        } else if unit.kind == UnitKind::Key && unit.description != self.description {
++            return Err(ConfigurationChanged.into());
++        }
++        if let Some((held, held_at)) = self.held.replace((unit, at)) {
++            self.write(&held, held_at, (at - held_at).max(1.0))?;
++        }
++        Ok(())
++    }
++
++    /// Writes the held unit, lasting `last_ms` (the frame time when `None`), and closes the file.
++    pub fn finish(&mut self, last_ms: Option<f64>) -> anyhow::Result<()> {
++        if let Some((held, at)) = self.held.take() {
++            self.write(&held, at, last_ms.unwrap_or(self.frame_ms).max(1.0))?;
++        }
++        if let Some(mut file) = self.file.take() {
++            file.flush()?;
++        }
++        Ok(())
++    }
++
++    /// When the held unit was presented, for a caller ending the recording at a later time.
++    pub fn held_at(&self) -> Option<f64> {
++        self.held.as_ref().map(|(_, at)| *at)
++    }
++
++    fn write(&mut self, unit: &VideoUnit, at: f64, duration_ms: f64) -> anyhow::Result<()> {
++        let start = ticks(at - self.origin);
++        let duration = (ticks(at - self.origin + duration_ms) - start).max(1.0);
++        self.fragments += 1;
++        let bytes = fragment(self.fragments, start, duration, unit.kind == UnitKind::Key, &unit.data);
++        self.file.as_mut().expect("a held unit has its file").write_all(&bytes)?;
++        self.last_end = at - self.origin + duration_ms;
++        Ok(())
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    fn encode(unit: &VideoUnit) -> Vec<u8> {
++        let mut out = vec![1u8, match unit.kind { UnitKind::Delta => 0, UnitKind::Key => 1, UnitKind::Poster => 2 }];
++        out.extend_from_slice(&unit.width.to_be_bytes());
++        out.extend_from_slice(&unit.height.to_be_bytes());
++        out.extend_from_slice(&(unit.description.len() as u16).to_be_bytes());
++        out.extend_from_slice(&unit.sequence.to_be_bytes());
++        out.extend_from_slice(&unit.captured_at.to_be_bytes());
++        out.extend_from_slice(&(unit.data.len() as u32).to_be_bytes());
++        out.extend_from_slice(&unit.description);
++        out.extend_from_slice(&unit.data);
++        out
++    }
++
++    /// Two key units with the same configuration, deltas, and a late last unit: a variable rate.
++    pub(crate) fn sample_units() -> Vec<(VideoUnit, f64)> {
++        let description = vec![1, 0x64, 0, 0x1f, 0xff, 0xe1, 0, 4, 0x67, 0x64, 0, 0x1f, 1, 0, 4, 0x68, 0xee, 0x3c, 0x80];
++        (0..5u32)
++            .map(|index| {
++                let key = index % 3 == 0;
++                (
++                    VideoUnit {
++                        kind: if key { UnitKind::Key } else { UnitKind::Delta },
++                        width: 642,
++                        height: 482,
++                        sequence: index + 1,
++                        captured_at: 1_700_000_000_000.0 + f64::from(index) * 33.4,
++                        description: if key { description.clone() } else { Vec::new() },
++                        data: vec![0, 0, 0, 3, if key { 0x65 } else { 0x41 }, index as u8, 0xaa],
++                    },
++                    f64::from(index) * 33.4 + if index == 4 { 120.0 } else { 0.0 },
++                )
++            })
++            .collect()
++    }
++
++    #[test]
++    fn units_round_trip_through_the_helper_framing() {
++        let mut stream = Vec::new();
++        for (unit, _) in sample_units() {
++            let bytes = encode(&unit);
++            stream.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
++            stream.extend_from_slice(&bytes);
++        }
++        stream.extend_from_slice(&[0, 0, 0, 40, 1]);
++        let mut input = stream.as_slice();
++        let mut read = Vec::new();
++        while let Some(unit) = read_unit(&mut input).unwrap() {
++            read.push(unit);
++        }
++        assert_eq!(read.len(), 5, "a unit cut short ends the stream");
++        assert_eq!(read[0].kind, UnitKind::Key);
++        assert_eq!(read[1].data, vec![0, 0, 0, 3, 0x41, 1, 0xaa]);
++        assert!(decode_unit(&[1, 9, 0, 1, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 7]).is_err());
++    }
++
++    #[test]
++    fn writes_one_fragment_a_unit_and_refuses_a_changed_configuration() {
++        let directory = tempfile::tempdir().unwrap();
++        let path = std::env::var_os("CUA_FMP4_SAMPLE_OUT").map(std::path::PathBuf::from).unwrap_or_else(|| directory.path().join("sample.mp4"));
++        let _ = std::fs::remove_file(&path);
++        let mut writer = Fmp4Writer::new(&path, 1000.0 / 30.0);
++        for (unit, at) in sample_units() {
++            writer.add(unit, at).unwrap();
++        }
++        writer.finish(None).unwrap();
++        assert_eq!(writer.frames(), 5);
++        let bytes = std::fs::read(&path).unwrap();
++        assert_eq!(&bytes[4..8], b"ftyp");
++        assert_eq!(bytes.windows(4).filter(|window| window == b"moof").count(), 5);
++
++        let other = directory.path().join("changed.mp4");
++        let mut writer = Fmp4Writer::new(&other, 33.0);
++        let mut units = sample_units();
++        writer.add(units.remove(0).0, 0.0).unwrap();
++        let (mut key, _) = units.remove(2);
++        key.description[3] = 0x28;
++        assert!(writer.add(key, 50.0).unwrap_err().is::<ConfigurationChanged>());
++    }
++}
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/tests/recording_shutdown_errors.rs b/libs/cua-driver/rust/crates/cua-driver-core/tests/recording_shutdown_errors.rs
+index 0d4b7bf..95eb167 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/tests/recording_shutdown_errors.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/tests/recording_shutdown_errors.rs
+@@ -1,3 +1,6 @@
++// FFmpeg is not part of the Windows build (`video_ffmpeg` is a stub there).
++#![cfg(not(target_os = "windows"))]
++
+ use std::{process::Command, sync::Arc};
+ 
+ use cua_driver_core::{
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/tests/window_video_rate.rs b/libs/cua-driver/rust/crates/cua-driver-core/tests/window_video_rate.rs
 new file mode 100644
 index 0000000..d561241
@@ -2553,10 +3153,21 @@ index 3445e64..bfc223f 100644
          assert!(validate_metadata(&metadata, 42, "com.example.host").is_ok());
          assert!(validate_metadata(&metadata, 43, "com.example.host").is_err());
 diff --git a/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs b/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs
-index bc860cd..22d91fe 100644
+index bc860cd..b7246ba 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs
-@@ -684,7 +684,7 @@ fn configure_linux_runtime(prepare_desktop_environment: bool) {
+@@ -649,8 +649,9 @@ fn configure_windows_runtime() {
+     cua_driver_core::recording::set_element_bounds_fn(|window_id, pid, index| {
+         platform_windows::recording_hooks::element_window_local_xy(window_id, pid, index)
+     });
++    // Windows records a window through Mako's video helper, by its whole path; no FFmpeg is part of this build.
+     cua_driver_core::video::set_video_backend_factory(Box::new(
+-        cua_driver_core::video_ffmpeg::FfmpegVideoBackendFactory,
++        platform_windows::video_helper::HelperVideoBackendFactory,
+     ));
+ }
+ 
+@@ -684,7 +685,7 @@ fn configure_linux_runtime(prepare_desktop_environment: bool) {
          ));
      } else {
          cua_driver_core::video::set_video_backend_factory(Box::new(
@@ -2565,6 +3176,119 @@ index bc860cd..22d91fe 100644
          ));
      }
  }
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/autostart.rs b/libs/cua-driver/rust/crates/cua-driver/src/autostart.rs
+index c0845eb..4df8b74 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/autostart.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/autostart.rs
+@@ -265,7 +265,7 @@ Register-ScheduledTask -TaskName $env:CUA_DRIVER_AS_TASK -Action $action -Trigge
+         // or a user running cua-driver autostart enable from an admin
+         // PowerShell). Pass the binary path via env var so the script
+         // doesn't need shell-quoting acrobatics for paths with spaces.
+-        let out = Command::new("powershell")
++        let out = Command::new(cua_driver_core::system_program::system_program(r"WindowsPowerShell\v1.0\powershell.exe")?)
+             .args(["-NoProfile", "-NonInteractive", "-Command", REGISTER_PS])
+             .env("CUA_DRIVER_AS_EXE", exe)
+             .env("CUA_DRIVER_AS_TASK", task_name())
+@@ -319,7 +319,7 @@ Register-ScheduledTask -TaskName $env:CUA_DRIVER_AS_TASK -Action $action -Trigge
+                 // (PS escapes ' as '' inside ''-strings).
+                 format!("'{}'", inner.replace('\'', "''"))
+             );
+-            Command::new("powershell")
++            Command::new(cua_driver_core::system_program::system_program(r"WindowsPowerShell\v1.0\powershell.exe")?)
+                 .args(["-NoProfile", "-NonInteractive", "-Command", &outer])
+                 .creation_flags(CREATE_NO_WINDOW)
+                 .status()
+@@ -345,7 +345,7 @@ Register-ScheduledTask -TaskName $env:CUA_DRIVER_AS_TASK -Action $action -Trigge
+         // task for the worker; current versions retain no worker autostart.
+         // Local management must never alter that release task.
+         if !crate::bundle::is_local_installation() {
+-            let _ = Command::new("schtasks")
++            let _ = Command::new(cua_driver_core::system_program::system_program("schtasks.exe")?)
+                 .args(["/Delete", "/TN", "cua-driver-uia", "/F"])
+                 .output();
+         }
+@@ -355,7 +355,7 @@ Register-ScheduledTask -TaskName $env:CUA_DRIVER_AS_TASK -Action $action -Trigge
+         // and it already isn't). Match on stderr text rather than exit
+         // code because schtasks doesn't distinguish "doesn't exist" from
+         // "permission denied" via exit code.
+-        let out = Command::new("schtasks")
++        let out = Command::new(cua_driver_core::system_program::system_program("schtasks.exe")?)
+             .args(["/Delete", "/TN", task_name(), "/F"])
+             .output()
+             .map_err(|e| anyhow!("failed to invoke schtasks: {e}"))?;
+@@ -385,7 +385,7 @@ Register-ScheduledTask -TaskName $env:CUA_DRIVER_AS_TASK -Action $action -Trigge
+         // means the named task is absent, while ERROR_PATH_NOT_FOUND means the
+         // scheduler namespace could not be inspected and therefore stays
+         // unknown.
+-        let out = Command::new("schtasks")
++        let out = Command::new(cua_driver_core::system_program::system_program("schtasks.exe")?)
+             .args(["/Query", "/TN", task_name(), "/HRESULT"])
+             .output()
+             .map_err(|e| anyhow!("unknown: failed to invoke schtasks: {e}"))?;
+@@ -430,7 +430,7 @@ Register-ScheduledTask -TaskName $env:CUA_DRIVER_AS_TASK -Action $action -Trigge
+     }
+ 
+     pub fn kick() -> Result<()> {
+-        let out = Command::new("schtasks")
++        let out = Command::new(cua_driver_core::system_program::system_program("schtasks.exe")?)
+             .args(["/Run", "/TN", task_name()])
+             .output()
+             .map_err(|e| anyhow!("failed to invoke schtasks: {e}"))?;
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/cli.rs b/libs/cua-driver/rust/crates/cua-driver/src/cli.rs
+index 46584ae..9e71535 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/cli.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/cli.rs
+@@ -4240,6 +4240,9 @@ pub fn run_dump_docs_with_type(tools_list: &serde_json::Value, pretty: bool, doc
+ ///   - TCC DB rows for com.trycua.driver (sqlite3, best-effort)
+ ///   - config + state paths with existence booleans
+ pub fn run_diagnose_cmd() {
++    // The signature, TCC and bundle sections run macOS's own tools (`codesign`, `sqlite3`) by name; elsewhere those
++    // names would be looked up on PATH, and there is nothing of the kind to report.
++    #[cfg(target_os = "macos")]
+     let sections = [
+         diagnose_runtime_section(),
+         diagnose_signature_section(),
+@@ -4248,6 +4251,8 @@ pub fn run_diagnose_cmd() {
+         diagnose_tcc_db_section(),
+         diagnose_config_paths_section(),
+     ];
++    #[cfg(not(target_os = "macos"))]
++    let sections = [diagnose_runtime_section(), diagnose_config_paths_section()];
+     println!("{}", sections.join("\n\n"));
+ }
+ 
+@@ -4270,6 +4275,7 @@ fn diagnose_runtime_section() -> String {
+     )
+ }
+ 
++#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+ fn diagnose_signature_section() -> String {
+     let exe = std::env::current_exe()
+         .ok()
+@@ -4309,6 +4315,7 @@ fn diagnose_signature_section() -> String {
+     )
+ }
+ 
++#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+ fn diagnose_tcc_section() -> String {
+     let socket = crate::serve::default_socket_path();
+     let status = crate::serve::is_daemon_listening(&socket)
+@@ -4350,6 +4357,7 @@ fn diagnose_tcc_section() -> String {
+     )
+ }
+ 
++#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+ fn diagnose_install_layout_section() -> String {
+     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+     let mut lines = vec!["## install layout".to_owned()];
+@@ -4406,6 +4414,7 @@ fn diagnose_install_layout_section() -> String {
+     lines.join("\n")
+ }
+ 
++#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+ fn diagnose_tcc_db_section() -> String {
+     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+     let db = format!("{home}/Library/Application Support/com.apple.TCC/TCC.db");
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/main.rs b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
 index 5d6ac1f..227f638 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/main.rs
@@ -2761,6 +3485,48 @@ index 67e123b..093f5a4 100644
                      }
                      if let Some(connection) = trusted_session {
                          detach_trusted_connection(&trusted_resume_registry, connection).await;
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/skills.rs b/libs/cua-driver/rust/crates/cua-driver/src/skills.rs
+index 69cea0a..fc7d533 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/skills.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/skills.rs
+@@ -615,7 +615,7 @@ fn make_dir_symlink(target: &Path, link: &Path) -> Result<()> {
+     // unlike `std::os::windows::fs::symlink_dir`. Shell out to cmd's
+     // `mklink /J` — the canonical way to create a junction from a
+     // standard user token.
+-    let status = std::process::Command::new("cmd")
++    let status = std::process::Command::new(cua_driver_core::system_program::system_program("cmd.exe")?)
+         .args(["/c", "mklink", "/J"])
+         .arg(link)
+         .arg(target)
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/telemetry.rs b/libs/cua-driver/rust/crates/cua-driver/src/telemetry.rs
+index 2453fec..24e9991 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/telemetry.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/telemetry.rs
+@@ -2560,9 +2560,8 @@ fn os_version() -> String {
+         .arg("-productVersion")
+         .output();
+     #[cfg(target_os = "windows")]
+-    let command = std::process::Command::new("cmd")
+-        .args(["/c", "ver"])
+-        .output();
++    let command = cua_driver_core::system_program::system_program("cmd.exe")
++        .and_then(|cmd| std::process::Command::new(cmd).args(["/c", "ver"]).output());
+     #[cfg(target_os = "linux")]
+     {
+         return std::fs::read_to_string("/etc/os-release")
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/updater.rs b/libs/cua-driver/rust/crates/cua-driver/src/updater.rs
+index 65a7bfe..a04f331 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/updater.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/updater.rs
+@@ -121,7 +121,7 @@ fn run_install_script_with_ownership(version: &str, managed: bool) -> std::io::R
+         // the user to Set-ExecutionPolicy first. -NoProfile keeps any
+         // user profile script from racing the install.
+         let pwsh_cmd = format!("iwr -useb {CANONICAL_INSTALL_PS1} | iex");
+-        Command::new("powershell.exe")
++        Command::new(cua_driver_core::system_program::system_program(r"WindowsPowerShell\v1.0\powershell.exe")?)
+             .env(VERSION_PIN_ENV, version)
+             .env(INSTALL_CHANNEL_ENV, "update_apply")
+             .env(RELEASE_VERSION_ENV, version)
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs b/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs
 index 2695747..1bb1383 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/atspi/cache.rs
@@ -10941,6 +11707,19 @@ index 7f42fa7..99d8194 100644
              automation_id: None,
              help_text: None,
              actions: actions.iter().map(|value| (*value).to_owned()).collect(),
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/health_report.rs b/libs/cua-driver/rust/crates/platform-windows/src/health_report.rs
+index fe90fa3..9a2a0e9 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/health_report.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/health_report.rs
+@@ -189,7 +189,7 @@ fn probe_d3d11_device() -> Result<(), String> {
+ fn ver_string() -> Option<String> {
+     #[cfg(target_os = "windows")]
+     {
+-        let output = std::process::Command::new("cmd")
++        let output = std::process::Command::new(cua_driver_core::system_program::system_program("cmd.exe").ok()?)
+             .args(["/c", "ver"])
+             .output()
+             .ok()?;
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs
 index 1a1d2e5..ec876bc 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs
@@ -10975,6 +11754,20 @@ index 1a1d2e5..ec876bc 100644
                  }
                  sleep(Duration::from_millis(KEY_DELAY_MS + inter_char_ms));
              }
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/lib.rs b/libs/cua-driver/rust/crates/platform-windows/src/lib.rs
+index 66d9f13..821805c 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/lib.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/lib.rs
+@@ -77,6 +77,9 @@ pub mod wgc;
+ #[cfg(target_os = "windows")]
+ pub mod launch_uwp;
+ 
++#[cfg(target_os = "windows")]
++pub mod video_helper;
++
+ pub fn register_tools() -> ToolRegistry {
+     tools::build_registry(false)
+ }
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/msaa.rs b/libs/cua-driver/rust/crates/platform-windows/src/msaa.rs
 index a1ed48d..ed25bf3 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/msaa.rs
@@ -10996,7 +11789,7 @@ index a1ed48d..ed25bf3 100644
                  help_text: None,
                  actions: Vec::new(),
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-index 9d0d4cf..dd95297 100644
+index 9d0d4cf..90aeb39 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 @@ -1073,6 +1073,7 @@ mod get_window_state_actions_tests {
@@ -11061,7 +11854,18 @@ index 9d0d4cf..dd95297 100644
          }
      }
  }
-@@ -8849,6 +8863,8 @@ impl Tool for ZoomTool {
+@@ -8399,7 +8413,9 @@ if ($null -ne $rid) {{ Write-Output ([int]$rid) }}
+ "#,
+         pid = pid
+     );
+-    let out = std::process::Command::new("powershell.exe")
++    let out = std::process::Command::new(
++        cua_driver_core::system_program::system_program(r"WindowsPowerShell\v1.0\powershell.exe").ok()?,
++    )
+         .args([
+             "-NoProfile",
+             "-NonInteractive",
+@@ -8849,6 +8865,8 @@ impl Tool for ZoomTool {
                          "mime_type": "image/jpeg"
                      })),
                      action_record: None,
@@ -11206,6 +12010,276 @@ index 193d898..df2423e 100644
  fn read_cached_bstr(
      element: &IUIAutomationElement,
      property_id: windows::Win32::UI::Accessibility::UIA_PROPERTY_ID,
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/video_helper.rs b/libs/cua-driver/rust/crates/platform-windows/src/video_helper.rs
+new file mode 100644
+index 0000000..36e8cbc
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-windows/src/video_helper.rs
+@@ -0,0 +1,264 @@
++//! Exact-window video on Windows without FFmpeg: Mako's video helper (`mako-video.exe`: Windows Graphics Capture into
++//! Media Foundation's H.264 encoder) captures the window, and its units are written here as fragmented MP4, the file
++//! Mako's runtime writes from the same units. The helper is run by the whole path the host gives in
++//! `CUA_DRIVER_VIDEO_HELPER`, never looked up on `PATH` or in the current directory; without one, window video is
++//! refused before anything starts. Whole-display video is not recorded on Windows.
++//!
++//! The helper sends a unit only when the window's pixels change, so the video has a variable rate, as on a Mac. The
++//! last unit lasts until the recording stops. A window that closes ends the recording with the helper's reason; one
++//! that changes size ends it at the last unit before the change (the encoder's configuration changed), and the
++//! video kept so far is finalized either way.
++
++use cua_driver_core::video::{VideoBackend, VideoBackendFactory, VideoMetadata, WindowVideoTarget};
++use cua_driver_core::video_fmp4::{read_unit, ConfigurationChanged, Fmp4Writer};
++use std::io::{BufReader, Read};
++use std::os::windows::process::CommandExt;
++use std::path::{Path, PathBuf};
++use std::process::{Child, ChildStdin, Command, Stdio};
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::{mpsc, Arc, Mutex};
++use std::time::{Duration, SystemTime, UNIX_EPOCH};
++use windows::Win32::Foundation::HWND;
++use windows::Win32::UI::WindowsAndMessaging::{GetWindowThreadProcessId, IsWindow};
++
++/// Where the host puts the helper's whole path.
++pub const VIDEO_HELPER_ENV: &str = "CUA_DRIVER_VIDEO_HELPER";
++/// The quality recordings ask the helper for, as Mako's own recordings do (`RECORDING_QUALITY`).
++const RECORDING_QUALITY: u32 = 85;
++const CREATE_NO_WINDOW: u32 = 0x0800_0000;
++
++static ACTIVE: AtomicBool = AtomicBool::new(false);
++struct Admission;
++impl Drop for Admission {
++    fn drop(&mut self) {
++        ACTIVE.store(false, Ordering::Release);
++    }
++}
++
++/// The helper's whole path, or why there is none.
++fn helper_path() -> anyhow::Result<PathBuf> {
++    let configured = std::env::var_os(VIDEO_HELPER_ENV).map(PathBuf::from).ok_or_else(|| {
++        anyhow::anyhow!("Window video needs Mako's video helper; its host gives the helper's whole path in {VIDEO_HELPER_ENV}. No capture was started")
++    })?;
++    if !configured.is_absolute() || !configured.is_file() {
++        anyhow::bail!("{VIDEO_HELPER_ENV} must be the whole path of an existing mako-video.exe; no capture was started");
++    }
++    Ok(configured)
++}
++
++fn now_ms() -> f64 {
++    SystemTime::now().duration_since(UNIX_EPOCH).map(|elapsed| elapsed.as_secs_f64() * 1000.0).unwrap_or(0.0)
++}
++
++pub struct HelperVideoBackendFactory;
++
++impl VideoBackendFactory for HelperVideoBackendFactory {
++    fn start(&self, _path: &Path) -> anyhow::Result<Box<dyn VideoBackend>> {
++        anyhow::bail!("Whole-display video isn't recorded on Windows; record one window (window_target). No capture was started")
++    }
++
++    fn max_window_fps(&self) -> u32 {
++        60
++    }
++
++    fn start_window(&self, path: &Path, target: WindowVideoTarget, fps: u32) -> anyhow::Result<Box<dyn VideoBackend>> {
++        if path.exists() {
++            anyhow::bail!("Recording output exists; choose a new directory");
++        }
++        let hwnd = HWND(target.window_id as usize as *mut _);
++        let mut owner = 0u32;
++        if !unsafe { IsWindow(hwnd) }.as_bool()
++            || unsafe { GetWindowThreadProcessId(hwnd, Some(&mut owner)) } == 0
++            || i64::from(owner) != i64::from(target.pid)
++        {
++            anyhow::bail!("Window {} does not belong to pid {}; no capture was started", target.window_id, target.pid);
++        }
++        let helper = helper_path()?;
++        if ACTIVE.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
++            anyhow::bail!("A previous window recording still owns capture");
++        }
++        let admission = Admission;
++        if let Some(parent) = path.parent() {
++            std::fs::create_dir_all(parent)?;
++        }
++        let mut child = Command::new(&helper)
++            .args([
++                "window".to_string(),
++                target.window_id.to_string(),
++                "--fps".into(),
++                fps.to_string(),
++                "--keyint".into(),
++                fps.to_string(),
++                "--quality".into(),
++                RECORDING_QUALITY.to_string(),
++            ])
++            .current_dir(helper.parent().unwrap_or(Path::new("\\")))
++            .stdin(Stdio::piped())
++            .stdout(Stdio::piped())
++            .stderr(Stdio::piped())
++            .creation_flags(CREATE_NO_WINDOW)
++            .spawn()
++            .map_err(|error| anyhow::anyhow!("The video helper couldn't start: {error}"))?;
++        let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("Missing video helper output"))?;
++        let mut stderr = child.stderr.take().ok_or_else(|| anyhow::anyhow!("Missing video helper diagnostics"))?;
++        let stdin = Arc::new(Mutex::new(child.stdin.take()));
++        let child = Arc::new(Mutex::new(child));
++        let diagnostics = std::thread::spawn(move || {
++            let mut tail = Vec::new();
++            let mut buffer = [0u8; 4096];
++            while let Ok(read) = stderr.read(&mut buffer) {
++                if read == 0 {
++                    break;
++                }
++                tail.extend_from_slice(&buffer[..read]);
++                if tail.len() > 8192 {
++                    tail.drain(..tail.len() - 8192);
++                }
++            }
++            String::from_utf8_lossy(&tail).into_owned()
++        });
++        let stopped = Arc::new(AtomicBool::new(false));
++        let finished = Arc::new(AtomicBool::new(false));
++        let (ready_tx, ready) = mpsc::sync_channel::<Result<(), String>>(1);
++        let (done_tx, done) = mpsc::sync_channel(1);
++        let output = path.to_path_buf();
++        let frame_ms = 1000.0 / f64::from(fps);
++        let worker_stopped = stopped.clone();
++        let worker_finished = finished.clone();
++        let worker_stdin = stdin.clone();
++        std::thread::spawn(move || {
++            let _admission = admission;
++            let result = record(output, frame_ms, stdout, diagnostics, &worker_stopped, &worker_stdin, &ready_tx);
++            if let Err(error) = &result {
++                let _ = ready_tx.try_send(Err(error.to_string()));
++            }
++            worker_finished.store(true, Ordering::Release);
++            let _ = done_tx.send(result);
++        });
++        let recording = Recording { stdin, child, stopped, finished, done };
++        match ready.recv_timeout(Duration::from_secs(10)) {
++            Ok(Ok(())) => Ok(Box::new(recording)),
++            Ok(Err(error)) => anyhow::bail!(error),
++            Err(_) => {
++                recording.end();
++                anyhow::bail!("The window's first frame did not come within 10 s; no recording was kept")
++            }
++        }
++    }
++}
++
++fn record(
++    path: PathBuf,
++    frame_ms: f64,
++    stdout: std::process::ChildStdout,
++    diagnostics: std::thread::JoinHandle<String>,
++    stopped: &AtomicBool,
++    stdin: &Mutex<Option<ChildStdin>>,
++    ready: &mpsc::SyncSender<Result<(), String>>,
++) -> anyhow::Result<VideoMetadata> {
++    let mut writer = Fmp4Writer::new(&path, frame_ms);
++    let mut input = BufReader::with_capacity(1 << 20, stdout);
++    let mut interruption = None;
++    let mut announced = false;
++    loop {
++        let unit = match read_unit(&mut input) {
++            Ok(Some(unit)) => unit,
++            Ok(None) => break,
++            Err(error) => {
++                interruption = Some(error.to_string());
++                break;
++            }
++        };
++        let at = unit.captured_at;
++        match writer.add(unit, at) {
++            Ok(()) => {}
++            Err(error) if error.is::<ConfigurationChanged>() => {
++                interruption = Some("The window changed size; the recording ends at its last frame before the change".into());
++                break;
++            }
++            Err(error) => {
++                interruption = Some(format!("Writing the recording failed: {error}"));
++                break;
++            }
++        }
++        if !announced {
++            let _ = ready.send(Ok(()));
++            announced = true;
++        }
++    }
++    // Stopped, or the source ended: the helper's input closes either way, and its diagnostics say why it ended.
++    drop(stdin.lock().unwrap().take());
++    let ended_at = now_ms();
++    let tail = diagnostics.join().unwrap_or_default();
++    if interruption.is_none() && !stopped.load(Ordering::Acquire) {
++        interruption = Some(
++            tail.lines()
++                .find_map(|line| line.strip_prefix("ended: ").map(str::to_owned))
++                .unwrap_or_else(|| "The video helper stopped".into()),
++        );
++    }
++    let last = writer.held_at().map(|at| ended_at - at);
++    writer.finish(last)?;
++    if writer.frames() == 0 {
++        let _ = std::fs::remove_file(&path);
++        anyhow::bail!(
++            "{}; no frame was recorded",
++            interruption.as_deref().unwrap_or("The window's capture produced no frame")
++        );
++    }
++    Ok(VideoMetadata {
++        path,
++        duration_ms: writer.duration_ms().round() as u64,
++        finalized: true,
++        interruption,
++    })
++}
++
++struct Recording {
++    stdin: Arc<Mutex<Option<ChildStdin>>>,
++    child: Arc<Mutex<Child>>,
++    stopped: Arc<AtomicBool>,
++    finished: Arc<AtomicBool>,
++    done: mpsc::Receiver<anyhow::Result<VideoMetadata>>,
++}
++
++impl Recording {
++    /// The helper stops when its input ends; one that doesn't within three seconds is terminated.
++    fn end(&self) {
++        self.stopped.store(true, Ordering::Release);
++        drop(self.stdin.lock().unwrap().take());
++        let child = self.child.clone();
++        std::thread::spawn(move || {
++            for _ in 0..30 {
++                if matches!(child.lock().unwrap().try_wait(), Ok(Some(_))) {
++                    return;
++                }
++                std::thread::sleep(Duration::from_millis(100));
++            }
++            let mut child = child.lock().unwrap();
++            let _ = child.kill();
++            let _ = child.wait();
++        });
++    }
++}
++
++impl Drop for Recording {
++    fn drop(&mut self) {
++        if !self.stopped.load(Ordering::Acquire) {
++            self.end();
++        }
++    }
++}
++
++impl VideoBackend for Recording {
++    fn is_recording(&self) -> bool {
++        !self.finished.load(Ordering::Acquire)
++    }
++
++    fn stop(self: Box<Self>) -> anyhow::Result<VideoMetadata> {
++        self.end();
++        self.done
++            .recv_timeout(Duration::from_secs(10))
++            .map_err(|_| anyhow::anyhow!("Window recording cleanup is still pending"))?
++    }
++}
 diff --git a/libs/cua-driver/wayland-helper/README.md b/libs/cua-driver/wayland-helper/README.md
 index 8e9c373..e7d6735 100644
 --- a/libs/cua-driver/wayland-helper/README.md

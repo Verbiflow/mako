@@ -9,6 +9,17 @@ import {
 import type { ComputerDriverResult } from "./computer-driver-client.js"
 import type { JsonObject } from "./json.js"
 import { ControlRecording } from "./control-recording.js"
+import { onWindows } from "./platform.js"
+
+/**
+ * A path as the driver reports it, spelled as Node spells it: on Windows the driver's canonical form is a verbatim
+ * path (`\\?\C:\…`, `\\?\UNC\server\…`) for the same file that `realpath` names `C:\…`.
+ */
+function plainPath(path: string): string {
+  if (!onWindows() || !path.startsWith("\\\\?\\")) return path
+  return path.startsWith("\\\\?\\UNC\\") ? `\\\\${path.slice(8)}` : path.slice(4)
+}
+const driverPath = z.string().transform(plainPath)
 
 const stateSchema = z.object({
   generation: z.number().int().positive(),
@@ -19,8 +30,8 @@ const stateSchema = z.object({
   }),
   video_active: z.boolean(),
   fps: z.number().int().min(1).max(60).optional(),
-  output_dir: z.string().nullable(),
-  last_video_path: z.string().nullable(),
+  output_dir: driverPath.nullable(),
+  last_video_path: driverPath.nullable(),
   last_error: z.string().nullable(),
 })
 function data(result: ComputerDriverResult) {

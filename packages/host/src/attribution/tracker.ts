@@ -887,28 +887,40 @@ export class LaptopTracker implements AttributionTracker {
    * behind it; only a root with none waits for one. The listing is `ls-files --others --ignored` over the checkout, and
    * the index moves with every `git add` or `status` that refreshes it: on 2026-11-18 it ran 157 times in two hours at
    * 3.5 s each (15 s at most), and each flush after a move waited on it (a 4-file flush's stats took 4.4 s). What the
-   * stale listing left unread is read once the new one no longer has Git ignore it.
+   * stale listing left unread is read once the new one no longer has Git ignore it (`listAgain`).
    */
   private async ignoredForFlush(state: RootState): Promise<(GitIgnored & { moves: number }) | undefined> {
     if (!state.ignored) return this.gitIgnored(state)
-    if (state.ignored.moves !== state.ignoreMoves && !state.ignoring) {
-      state.ignoring = (async () => {
-        try {
-          await this.gitIgnored(state)
-        } finally {
-          state.ignoring = undefined
-        }
-        const left = state.unreadStale
-        state.unreadStale = undefined
-        const fresh = state.ignored
-        if (!left || this.states.get(state.root.id) !== state) return
-        const unread = fresh && this.unreadIn(state, fresh)
-        const read = [...left].filter((path) => !unread || !unread(path))
-        if (read.length) this.heard(state, read)
-        // Moved again while it listed: listed again at the next flush that asks.
-      })().catch(() => {})
-    }
+    if (state.ignored.moves !== state.ignoreMoves) this.listAgain(state)
     return state.ignored
+  }
+
+  /**
+   * Takes the ignore listing again, unless it's being taken, and hears again what flushes left unread by a stale one
+   * that the new one no longer has Git ignore. While anything is in `unreadStale`, a listing is being taken. Moved
+   * again while it listed, it lists again for what is still unread: no flush may come to ask, and what a `.gitignore`
+   * stopped ignoring during a run of index moves was dropped.
+   */
+  private listAgain(state: RootState): void {
+    if (state.ignoring) return
+    state.ignoring = (async () => {
+      try {
+        for (;;) {
+          await this.gitIgnored(state)
+          const left = state.unreadStale
+          state.unreadStale = undefined
+          const fresh = state.ignored
+          if (!left || this.states.get(state.root.id) !== state) return
+          const unread = fresh && this.unreadIn(state, fresh)
+          const read = [...left].filter((path) => !unread || !unread(path))
+          if (read.length) this.heard(state, read)
+          if (!fresh || fresh.moves === state.ignoreMoves || read.length === left.size) return
+          state.unreadStale = new Set([...left].filter((path) => !read.includes(path)))
+        }
+      } finally {
+        state.ignoring = undefined
+      }
+    })().catch(() => {})
   }
 
   /**
@@ -1040,7 +1052,12 @@ export class LaptopTracker implements AttributionTracker {
     const stale = ignored !== undefined && ignored.moves !== state.ignoreMoves
     const unread = (path: string) => {
       if (!unreadNow(path)) return false
-      if (stale) (state.unreadStale ??= new Set()).add(path)
+      if (stale) {
+        // A folder's walk asks after the listing it started may be in: one is taken again for what it adds.
+        state.unreadStale ??= new Set()
+        state.unreadStale.add(path)
+        this.listAgain(state)
+      }
       return true
     }
     await mapLimit(batch, PARALLEL, async ([path, how]) => {
@@ -2203,7 +2220,10 @@ export class LaptopTracker implements AttributionTracker {
         await this.footprints?.settled()
         while (this.reattribution) await this.reattribution
         await new Promise((resolve) => setImmediate(resolve))
-        if (!this.reattribution && states.every((state) => !state.pending.size && !state.rescanTimer && !state.rescanQueued)) return
+        // A flush its debounce began meanwhile, as one for what a listing heard again, took its paths from `pending`:
+        // settled once it's done, not while it runs (an un-ignored file went unjournaled on a loaded CI runner).
+        await Promise.all(states.map((state) => state.chain))
+        if (!this.reattribution && states.every((state) => !state.pending.size && !state.unreadStale?.size && !state.rescanTimer && !state.rescanQueued)) return
       }
     } finally {
       this.settling--
@@ -2235,6 +2255,7 @@ export class LaptopTracker implements AttributionTracker {
     for (let pass = 0; pass < HEARD_PASSES; pass++) {
       await timed("ignoreListings", this.staleListings(states))
       const runs: Promise<void>[] = []
+      let queued = false
       for (const state of states) {
         if (state.rescanning) continue
         if (state.headTimer || state.gitSince !== undefined) {
@@ -2242,13 +2263,15 @@ export class LaptopTracker implements AttributionTracker {
           clearTimeout(state.headTimer)
           state.headTimer = undefined
           runs.push(this.queue(state, () => this.gitMoved(state)))
+          queued = true
         } else if (state.pending.size) {
           clearTimeout(state.timer)
           runs.push(this.queue(state, () => this.flush(state)))
-        }
+          queued = true
+        } else if (!state.rescanQueued) runs.push(state.chain) // a flush its debounce began, which took its paths from `pending`
       }
-      if (!runs.length) break
       await timed("flushes", Promise.all(runs))
+      if (!queued && states.every((state) => state.rescanning || (!state.pending.size && !state.unreadStale?.size))) break
     }
     await timed("scripts", Promise.all(this.scriptReads))
     await timed("footprints", this.footprints?.settled(checkouts) ?? Promise.resolve())

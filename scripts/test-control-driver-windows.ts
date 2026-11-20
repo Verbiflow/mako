@@ -8,7 +8,8 @@
 //   npm run build:control-runtime && npx tsx scripts/test-control-driver-windows.ts --driver <cua-driver.exe> [--json out.json]
 import assert from "node:assert/strict"
 import { execFile, spawn, type ChildProcess } from "node:child_process"
-import { copyFile, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { existsSync } from "node:fs"
+import { copyFile, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { delimiter, dirname, join, resolve } from "node:path"
 import { promisify } from "node:util"
@@ -19,17 +20,23 @@ import { computerPermissions } from "../packages/host/src/control/computer-permi
 import { Appshots } from "../packages/host/src/control/appshots.js"
 import { DriverBroker } from "../packages/control-runtime/src/driver-broker.js"
 import { exchange, parseReply } from "../packages/control-runtime/src/driver-daemon.js"
+import { readMp4 } from "../packages/control-runtime/src/mp4.js"
 import type { ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
 import type { JsonObject, JsonValue } from "../packages/control-runtime/src/json.js"
 import { controlSessionProbe } from "./lib/control-session-probe.js"
 
 const run = promisify(execFile)
-const { values } = parseArgs({ options: { driver: { type: "string" }, json: { type: "string" } } })
+const { values } = parseArgs({ options: { driver: { type: "string" }, "video-helper": { type: "string" }, json: { type: "string" } } })
 assert.equal(process.platform, "win32", "This checks the Windows driver on Windows")
 assert.ok(values.driver, "--driver <path to cua-driver.exe>")
 const driverPath = resolve(values.driver)
 // The host finds the driver the way it finds any executable: on PATH.
 process.env.PATH = `${dirname(driverPath)}${delimiter}${process.env.PATH ?? ""}`
+// Video comes from Mako's video helper, by its whole path (the host sets MAKO_VIDEO_HELPER for a packaged app), and
+// never from FFmpeg: no folder on PATH holds one while this runs, so nothing here or in the driver can reach it.
+assert.ok(values["video-helper"], "--video-helper <path to mako-video.exe>")
+process.env.MAKO_VIDEO_HELPER = resolve(values["video-helper"])
+process.env.PATH = (process.env.PATH ?? "").split(delimiter).filter((folder) => folder && !existsSync(join(folder, "ffmpeg.exe")) && !existsSync(join(folder, "ffmpeg"))).join(delimiter)
 
 const root = await mkdtemp(join(tmpdir(), "mako-win-control-"))
 interface CheckOutcome {
@@ -146,6 +153,7 @@ const Structured = z.record(z.string(), z.json())
 const Sample = z.object({ cpu: z.number(), ws: z.number(), private: z.number(), threads: z.number(), handles: z.number() })
 const Rates = z.array(z.number())
 const Json = z.json()
+const RecordingReceipt = z.looseObject({ status: z.string(), video: z.string().optional(), error: z.string().nullable() })
 
 const cua = new CuaEmbedded()
 let broker: DriverBroker | undefined
@@ -583,6 +591,64 @@ try {
       return { permissions: text(permissions), click: text(click), typed: text(typed), observe: text(state) }
     } finally {
       child.kill()
+    }
+  })
+
+  // Recording a window: the driver's window video is Windows Graphics Capture and Media Foundation in the video
+  // helper, written as fragmented MP4 by the driver, and read back here with Mediabunny, as Mako reads a recording.
+  await check("no FFmpeg is reachable while recording", async () => {
+    const found = await run("where.exe", ["ffmpeg"]).then((result) => result.stdout.trim(), () => "")
+    assert.equal(found, "", `ffmpeg resolves to ${found}`)
+    return { path: process.env.PATH?.split(delimiter).length }
+  })
+
+  await check("start_recording records the window through the video helper; Mediabunny reads the MP4", async () => {
+    const directory = join(root, "driver-recording")
+    const id = "windows-recording-check"
+    const started = await call("start_recording", { recording_id: id, output_dir: directory, record_video: true, capture_actions: false, window_target: target, fps: 30 })
+    assert.equal(started.data.video_active, true, `video started: ${started.text}`)
+    for (let index = 0; index < 6; index++) {
+      await fresh()
+      await call("set_value", { ...target, element_token: token("Edit", "Proof"), value: `frame ${index}` })
+      await new Promise((done) => setTimeout(done, 300))
+    }
+    await new Promise((done) => setTimeout(done, 500))
+    const stopped = await call("stop_recording", { recording_id: id }, 30_000)
+    const path = String(stopped.data.last_video_path ?? "")
+    // The driver names the file by its canonical, verbatim path (\\?\C:\…); the same file either way.
+    assert.equal(await realpath(path), await realpath(join(directory, "recording.mp4")), `the video's path: ${stopped.text}`)
+    const video = await readMp4(path)
+    assert.ok(video, "Mediabunny reads the recording")
+    assert.ok(video.codec?.startsWith("avc1."), `H.264: ${video.codec}`)
+    assert.ok(video.packets.length >= 4, `the field's changes are frames: ${video.packets.length}`)
+    assert.ok(video.duration >= 2, `the video lasts the recording: ${video.duration} s`)
+    const pixels = { width: Number(video.width), height: Number(video.height) }
+    assert.ok(Math.abs(pixels.width - (windowBounds?.width ?? 0)) <= 16 && Math.abs(pixels.height - (windowBounds?.height ?? 0)) <= 16, `the window's size: ${JSON.stringify(pixels)}`)
+    return { ...pixels, frames: video.packets.length, seconds: video.duration, codec: video.codec, error: stopped.data.last_error ?? null }
+  })
+
+  await check("a task's recording through the public API, read back with Mediabunny", async () => {
+    const grant = await broker!.grant("agent windows-recording")
+    const session = controlSessionProbe(grant, "windows-recording-test")
+    try {
+      const result = await session.request({ method: "exec", arguments: { source: `const win = control.window({pid:${fixture.pid}, window_id:${fixture.hwnd}});
+        await win.observe();
+        const recording = await win.record({fps: 30});
+        for (let i = 0; i < 4; i++) { const view = await win.observe(); await win.setValue(view.nodes.find(n => n.role === 'TextField' && n.name === 'Proof').ref, 'recorded ' + i); await new Promise(r => setTimeout(r, 300)) }
+        let receipt = await recording.stop();
+        // stop() returns while the video is finalized; status() says when it is done.
+        for (let i = 0; i < 100 && ['recording', 'finalizing'].includes(receipt.status); i++) { await new Promise(r => setTimeout(r, 200)); receipt = await recording.status() }
+        return {status: receipt.status, video: receipt.video, error: receipt.error ?? null, dimensions: receipt.dimensions, durationMs: receipt.durationMs}` } })
+      const text = result.content.filter((block) => block.type === "text").map((block) => ("text" in block ? String(block.text) : ""))
+      if ("isError" in result && result.isError) throw new Error(text.join("\n"))
+      const receipt = RecordingReceipt.parse(JSON.parse(text.at(-1)!))
+      assert.ok(receipt.status === "finished" && receipt.video, JSON.stringify(receipt))
+      const video = await readMp4(receipt.video)
+      assert.ok(video && video.packets.length >= 3 && video.duration > 1, `the task's video reads back: ${JSON.stringify(video && { frames: video.packets.length, seconds: video.duration })}`)
+      return { ...receipt, frames: video.packets.length, seconds: video.duration }
+    } finally {
+      await session.close()
+      broker!.revoke("agent windows-recording")
     }
   })
 

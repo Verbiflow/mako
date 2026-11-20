@@ -14,12 +14,29 @@ Upstream's `platform-windows` is the same driver on Windows: the same tools,
 daemon protocol, element tokens, transport-scoped snapshots and embedded
 mode, with UI Automation for the tree and actions, Windows Graphics Capture
 and PrintWindow for pictures, PostMessage for background input and SendInput
-for foreground input. Mako had never built it. Four changes make it build and
-meet Mako's contract; none touches macOS or Linux code.
+for foreground input. Mako had never built it. These changes make it build and
+meet Mako's contract. On a Mac or Linux they add only the MP4 writer (unused
+there), `diagnose` skipping its macOS sections on Linux, and wording.
 
-- The patch's switch of the X11 recorder to `X11VideoBackendFactory` had also
-  replaced the Windows recorder, which does not compile on Windows. Windows
-  records with upstream's FFmpeg backend again.
+- Window video without FFmpeg. The patch's switch of the X11 recorder to
+  `X11VideoBackendFactory` had also replaced the Windows recorder, which does
+  not compile on Windows. Windows now records a window through Mako's video
+  helper (`mako-video.exe`: Windows Graphics Capture into Media Foundation's
+  H.264), run by the whole path the host gives in `CUA_DRIVER_VIDEO_HELPER`
+  and refused without one (`platform-windows/src/video_helper.rs`). Its units
+  go into fragmented MP4 through `cua-driver-core/src/video_fmp4.rs`, which
+  writes the same bytes as Mako's `packages/control-runtime/src/mp4.ts` (one
+  fragment a unit, so a crash keeps every unit but the newest). A window that
+  closes or changes size ends the recording and keeps what was recorded.
+  Whole-display video is refused on Windows.
+- No FFmpeg in the Windows build at all: `video_ffmpeg` and `ffmpeg_install`
+  are compiled out, `install_ffmpeg` refuses, and what would probe or render
+  with FFmpeg finds none. Nothing can resolve an `ffmpeg` from `PATH`.
+- Programs by whole path: `cmd.exe`, `powershell.exe`, `schtasks.exe` and
+  `taskkill.exe` run from the system directory (`GetSystemDirectoryW`, through
+  `cua-driver-core/src/system_program.rs`), never by a bare name that Windows
+  looks up beside the driver and on `PATH`. `cua-driver diagnose` runs its
+  macOS sections (`codesign`, `sqlite3`) on a Mac only.
 - Exact values, as `0001-lossless-values.patch` gives the Mac and the Linux
   build gives AT-SPI: a ValuePattern control's value is sent as UI Automation
   holds it, empty and whitespace included, with `value_exact: true`, and Mako's

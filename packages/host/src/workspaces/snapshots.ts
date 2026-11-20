@@ -18,7 +18,7 @@ import {
   rm,
 } from "node:fs/promises"
 import { homedir } from "node:os"
-import { dirname, join, relative, resolve } from "node:path"
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { fileStamp, GitError, TreeComparison, type Git } from "@mako/git"
@@ -173,11 +173,14 @@ const GroupSchema = WorkspaceSnapshotSchema.extend({
 })
 type GroupRecord = z.infer<typeof GroupSchema>
 
-/** Whether one folder holds the other, or is it. */
-const overlaps = (left: string, right: string) => {
+/**
+ * Whether one folder holds the other, or is it. `relative` answers in the system's own separator, and on Windows with
+ * another drive's absolute path, so `..\x` and `D:\x` are outside too: read as `/`, they made every two folders overlap.
+ */
+export const foldersOverlap = (left: string, right: string) => {
   const holds = (folder: string, path: string) => {
     const child = relative(folder, path)
-    return child === "" || (!child.startsWith("../") && child !== ".." && !child.startsWith("/"))
+    return child === "" || (child !== ".." && !child.startsWith(`..${sep}`) && !isAbsolute(child))
   }
   return holds(left, right) || holds(right, left)
 }
@@ -203,7 +206,7 @@ export function protectedBudgetSnapshots(db: DatabaseSync, activeScopes: readonl
   const records = budgetSnapshotRecords(db), held = new Set<string>()
   const groups = db.prepare("SELECT value FROM groups").all().map(row => GroupSchema.parse(JSON.parse(RowSchema.parse(row).value)))
   for (const record of records) {
-    if (record.retiring || (record.retainUntil ?? 0) > Date.now() || activeScopes.some(scope => overlaps(scope, record.scope))) held.add(record.id)
+    if (record.retiring || (record.retainUntil ?? 0) > Date.now() || activeScopes.some(scope => foldersOverlap(scope, record.scope))) held.add(record.id)
   }
   for (const row of db.prepare("SELECT value FROM restores").iterate()) {
     const operation = OperationSchema.parse(JSON.parse(RowSchema.parse(row).value))
@@ -365,7 +368,7 @@ export class WorkspaceSnapshots {
       ...this.restoring,
       ...this.pending().map((plan) => this.scopeOf(plan.targetId)),
     ]
-    if (scopes.some((scope) => overlaps(scope, path)))
+    if (scopes.some((scope) => foldersOverlap(scope, path)))
       throw new Error(
         "A rewind of this workspace is unfinished. Wait for it to finish before starting another turn."
       )
@@ -381,7 +384,7 @@ export class WorkspaceSnapshots {
     const { scope } = await this.workspace(cwd)
     const run: ActiveRun = { scope, shared: new Set(), checkpoints: new Set() }
     for (const [otherId, other] of this.runs) {
-      if (!overlaps(other.scope, scope) || other.ending) continue
+      if (!foldersOverlap(other.scope, scope) || other.ending) continue
       other.shared.add(id)
       run.shared.add(otherId)
     }
@@ -422,7 +425,7 @@ export class WorkspaceSnapshots {
   }
 
   private assertIdle(scope: string): void {
-    if ([...this.runs.values()].some((run) => overlaps(run.scope, scope)))
+    if ([...this.runs.values()].some((run) => foldersOverlap(run.scope, scope)))
       throw new Error(
         "Wait for every agent using this workspace to finish before rewinding"
       )
@@ -1132,7 +1135,7 @@ export class WorkspaceSnapshots {
     for (const entry of listed.split("\0")) {
       const path = entry.slice(entry.indexOf("\n") + 1)
       const folder = resolve(repository, path)
-      if (!entry || !overlaps(repository, folder) || folder === repository || !existsSync(join(folder, ".git"))) continue
+      if (!entry || !foldersOverlap(repository, folder) || folder === repository || !existsSync(join(folder, ".git"))) continue
       out.push(...(await this.withSubmodules(await realpath(folder), depth + 1)))
     }
     return out
