@@ -233,7 +233,6 @@
   "npm run -s test:cloud-account": 29,
   "npm run -s test:codex-protocol": 1,
   "npm run -s test:control-driver-install": 0,
-  "npm run -s test:control-media-sources": 0,
   "npm run -s test:control-recording-continuous": 69,
   "npm run -s test:host-load-memory": 1,
   "npm run -s test:listed-repositories": 2,

@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto"
 import {
-  ffmpegLiveEncoder,
   type EncodedVideoSource,
   type LiveEncoder,
   type LiveEncoderFactory,
@@ -22,21 +21,21 @@ export interface LiveVideoChannel {
 
 /** Pictures a `frames` session holds between the host and its encoder; the page's encoder bounds its own. */
 const FRAMES_IN_FLIGHT = 4
-/** After the desktop couldn't open an encoder, FFmpeg encodes for this long before it's asked again. */
+/** After the desktop couldn't open an encoder, `fallback` encodes for this long before it's asked again. */
 const UNAVAILABLE_MS = 60_000
 
 /**
- * The screencast's JPEGs encoded by the desktop app's WebCodecs (`contracts/live-video.ts`), hardware first, in place
- * of an FFmpeg per encode. A desktop that isn't attached, or can't open an encoder, leaves the encode to `fallback`
- * (FFmpeg), which the video never hears about: the encoder it was given still sends its units.
+ * The screencast's JPEGs encoded by the desktop app's WebCodecs (`contracts/live-video.ts`), hardware first: where
+ * there's no video helper to encode them (Windows). A desktop that isn't attached, or can't open an encoder, leaves the
+ * encode to `fallback`, which the video never hears about: the encoder it was given still sends its units.
  */
-export function desktopLiveEncoder(channel: LiveVideoChannel, fallback: LiveEncoderFactory = ffmpegLiveEncoder): LiveEncoderFactory {
+export function desktopLiveEncoder(channel: LiveVideoChannel, fallback: LiveEncoderFactory): LiveEncoderFactory {
   let unavailableUntil = 0
   return (size, fps, unit, drained, failed) => {
     if (!channel.answers("live-video-open") || performance.now() < unavailableUntil) return fallback(size, fps, unit, drained, failed)
     return new DesktopFramesEncoder(channel, size, fps, { unit, drained, failed }, (reason) => {
       unavailableUntil = performance.now() + UNAVAILABLE_MS
-      hostWarn("control", "the desktop's live video encoder didn't open; FFmpeg encodes", { reason })
+      hostWarn("control", "the desktop's live video encoder didn't open", { reason })
       return fallback(size, fps, unit, drained, failed)
     })
   }

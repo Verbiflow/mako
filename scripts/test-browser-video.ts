@@ -6,19 +6,17 @@ import { z } from "zod"
 import type { BrowserFrame, CaptureSize } from "../packages/control-runtime/src/browser-capture.js"
 import {
   BrowserVideo,
-  ffmpegLiveEncoder,
   type BrowserVideoViewer,
   type LiveEncoderFactory,
   type VideoSourceFrame,
 } from "../packages/control-runtime/src/browser-video.js"
-import { mediaExecutable } from "../packages/control-runtime/src/control-media.js"
+import { helperLiveEncoder, videoHelperExecutable } from "../packages/control-runtime/src/video-helper.js"
 import {
   controlVideoCodec,
   decodeControlVideo,
   encodeControlVideo,
   type ControlVideoPacket,
 } from "../packages/control-runtime/src/contracts/control-video.js"
-import { MovVideoInput } from "../packages/control-runtime/src/mov-video-input.js"
 
 const execute = promisify(execFile)
 const wait = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -47,36 +45,21 @@ const ENCODER_HANG_MS = 30_000
   assert.throws(() => controlVideoCodec(Uint8Array.from([0, 1, 2, 3])), /AVC/)
 }
 
-// The shared MOV input: RGB24 samples have one exact size, JPEG samples carry their own.
-{
-  const raw = new MovVideoInput(4, 2, 30)
-  assert.equal(raw.frameBytes, 24)
-  assert.throws(() => raw.frame(0, 23), /Invalid/)
-  const jpeg = new MovVideoInput(4, 2, 30, "jpeg")
-  assert.equal(jpeg.frameBytes, undefined)
-  const first = jpeg.frame(0, 1000), second = jpeg.frame(16.7, 2345)
-  const trun = first.indexOf("trun")
-  assert.equal(first.readUInt32BE(trun + 20), 1000)
-  assert.equal(second.readUInt32BE(trun + 20), 2345)
-  assert.equal(second.readUInt32BE(second.length - 8), 2345 + 8, "mdat covers exactly the sample")
-  assert.throws(() => jpeg.frame(16.7, 10), /Invalid/, "time must advance")
-  assert.throws(() => jpeg.frame(40, 0), /Invalid/)
-}
-
 const jpegFrame = async (width: number, height: number, color: string) =>
   sharp({ create: { width, height, channels: 3, background: color } })
     .composite([{ input: Buffer.from(`<svg width="${width}" height="${height}" xmlns="http://www.w3.org/2000/svg"><text x="10" y="40" font-size="32" fill="black">${color}</text></svg>`) }])
     .jpeg({ quality: 90 }).toBuffer()
 
-// The real encoder: each frame leaves as one unit before the next is sent, not
-// when it arrives; the first is a key frame with its configuration; odd
-// sizes lose an edge row and column; and the units decode.
+// The real encoder, the video helper's (VideoToolbox on a Mac, OpenH264 on Linux): each frame leaves as one unit
+// before the next is sent, not when it arrives; the first is a key frame with its configuration; odd sizes lose an
+// edge row and column; and the units decode (FFprobe on PATH decodes them: a check, not a dependency).
 {
   const colors = ["red", "blue", "green", "white"]
   const frames = await Promise.all(colors.map((color) => jpegFrame(641, 361, color)))
   const units: ControlVideoPacket[] = []
   const drained: number[] = []
-  const encoder = ffmpegLiveEncoder({ width: 641, height: 361 }, 30,
+  const helper = videoHelperExecutable() ?? assert.fail("This check needs the video helper (scripts/build-video-helper.mjs)")
+  const encoder = helperLiveEncoder(helper)({ width: 641, height: 361 }, 30,
     (unit) => units.push(unit),
     () => drained.push(performance.now()),
     (reason) => assert.fail(reason))
@@ -117,7 +100,7 @@ const jpegFrame = async (width: number, height: number, color: string) =>
       parts.push(start, Buffer.from(unit.data.subarray(at + 4, at + 4 + length)))
       at += 4 + length
     }
-  const child = execute(mediaExecutable("ffprobe"), ["-v", "error", "-f", "h264", "-count_frames", "-show_entries", "stream=nb_read_frames,width,height", "-of", "json", "pipe:0"])
+  const child = execute("ffprobe", ["-v", "error", "-f", "h264", "-count_frames", "-show_entries", "stream=nb_read_frames,width,height", "-of", "json", "pipe:0"])
   child.child.stdin!.end(Buffer.concat(parts))
   const probe = z.object({ streams: z.array(z.object({ nb_read_frames: z.string(), width: z.number(), height: z.number() })) })
     .parse(JSON.parse((await child).stdout))
@@ -256,4 +239,4 @@ await other.join(watcher.handle)
 endCapture!("Recording target detached")
 assert.equal(watcher.self.ended, "Recording target detached")
 
-console.log("Browser video: wire format, shared MOV input, prompt real encoding that decodes, posters and key frames on join and on asking again, slow-viewer recovery, resize, leave and failure passed")
+console.log("Browser video: wire format, prompt real encoding by the video helper that decodes, posters and key frames on join and on asking again, slow-viewer recovery, resize, leave and failure passed")

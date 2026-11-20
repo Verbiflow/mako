@@ -18,14 +18,6 @@ import { physicalFiles } from "../base/physical-files.js"
  */
 export const UPSTREAM_COPY = "upstream.noindex"
 
-/**
- * What a clean checkout lacks that packaging needs and rebuilding costs many
- * minutes: the recording encoder, built from FFmpeg's sources. Packaging
- * checks its recipe and rebuilds it when the commit's differs, so the source
- * checkout's copy is only ever a head start.
- */
-const CARRIED = ["vendor/control-media/darwin-arm64"]
-
 const NO_HOOKS = ["-c", "core.hooksPath=/dev/null", "-c", "advice.detachedHead=false"]
 
 /** Check `commit` out clean in the clone under `root`, making it first, and answer its folder. */
@@ -50,12 +42,6 @@ export async function checkoutUpstream(git: Git, source: string, root: string, c
     await files.rm(copy, { recursive: true, force: true })
     await git.run({ cwd: root, args: [...NO_HOOKS, "clone", "--quiet", "--shared", "--no-checkout", "--", source, copy], timeoutMs: 5 * 60_000, signal })
     await place()
-  }
-  for (const path of CARRIED) {
-    const from = join(source, path)
-    const to = join(copy, path)
-    if (!(await lstat(from).catch(() => null))?.isDirectory() || (await lstat(to).catch(() => null))) continue
-    await files.cp(from, to, { recursive: true, verbatimSymlinks: true, mode: constants.COPYFILE_FICLONE })
   }
   return copy
 }

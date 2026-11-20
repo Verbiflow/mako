@@ -1,6 +1,6 @@
-// A cloud machine's tab as live video, before and after: the screencast's JPEGs through FFmpeg (`frames`) against the
+// A cloud machine's tab as live video: the screencast's JPEGs through the video helper (`frames`; FFmpeg before it) against the
 // capture extension's WebCodecs inside the machine's Chromium (`extension`), both through the product's
-// `BrowserVideo` to one viewer. Linux with Debian's Chromium (and FFmpeg for `frames`), after
+// `BrowserVideo` to one viewer. Linux with Debian's Chromium (and the video helper for `frames`), after
 // `npm run build:control-runtime`. Prints one JSON line.
 //
 //   node scripts/bench-machine-tab-video.mjs '{"mode":"extension","width":1280,"height":800,"fps":30,"seconds":12,"scene":"moving"}'

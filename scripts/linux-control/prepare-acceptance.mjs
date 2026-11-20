@@ -60,6 +60,7 @@ for (const folder of packageFolders) {
 await copy("scripts/linux-control/runtime/package.json", "package.json")
 await copy("scripts/linux-control/runtime/package-lock.json", "package-lock.json")
 await copy("scripts/lib/control-cli-probe.mjs", "scripts/lib/control-cli-probe.mjs")
+await copy("native/video-linux/mako-video.c", "native/video-linux/mako-video.c")
 for (const name of ["Dockerfile.acceptance", "start-desktop.sh", "start-recording.sh", "wait-desktop.py", "fixture.py", "probe.mjs", "recording-fixture.py", "recording-probe.mjs", "run-acceptance.sh", "start-wayland.sh", "wayland-probe.mjs", "wayland-gestures.mjs", "identity.sh"]) {
   await copy(join("scripts/linux-control", name), join("scripts/linux-control", name))
 }

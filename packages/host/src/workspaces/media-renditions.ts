@@ -1,4 +1,6 @@
 import { fileSha256 } from "../base/file-hash.js"
+import { findExecutable } from "../base/executable.js"
+import { heavy } from "../base/heavy-packages.js"
 import { hostExecFile } from "../base/host-command.js"
 import { createHash } from "node:crypto"
 import { mkdir, readdir, rename, rm, stat } from "node:fs/promises"
@@ -18,7 +20,7 @@ export function renditionKind(asked: string | null): RenditionKind | undefined {
  * picture alone its 30rem box at 3x (`INLINE_RENDITION_SIDE` in the window's `transcript-media.ts` is the same number).
  */
 const SIDE = { poster: 1280, thumbnail: 640, inline: 1440 } as const satisfies Record<RenditionKind, number>
-/** One ffmpeg at a time per kind keeps a gallery of forty recordings from starting forty encoders. */
+/** Two at a time keeps a gallery of forty recordings from starting forty decoders. */
 const CONCURRENT = 2
 const RENDER_TIMEOUT_MS = 15_000
 /** Renditions kept on disk, newest first; each is tens of kilobytes. */
@@ -29,26 +31,39 @@ const HASHED_BELOW = 64 * 1024 * 1024
 /** Pictures whose hash is remembered by which file they are, so a rendition asked for again reads none of it. */
 const HASHES_KEPT = 512
 
+/**
+ * An FFmpeg already on this machine's PATH, looked for off the thread; none where there isn't one. Mako ships none: the
+ * desktop app and a browser draw a video's own frame where it has no poster.
+ */
+export async function pathFfmpeg(): Promise<string | undefined> {
+  return (await findExecutable("ffmpeg")) ?? undefined
+}
+
+/** Whether a video read here gets a poster (`posterUrl`): only where FFmpeg is on PATH to take its frame. */
+export async function videoPosters(): Promise<boolean> {
+  return Boolean(await pathFfmpeg())
+}
+
 export interface MediaRenditionsOptions {
   /** Where renditions are kept, as `<key>.<ext>`. */
   folder: string
-  /** The ffmpeg Mako records with; throws when there is none. */
-  ffmpeg(): string
+  /** The FFmpeg a video's poster is taken with (`pathFfmpeg`); none for no posters. */
+  ffmpeg?(): Promise<string | undefined>
 }
 
 /**
- * Posters and thumbnails, made once with the ffmpeg Mako already ships for
- * recordings. A picture's are kept by its content's hash, so the copies Mako
- * makes of one attachment (the staged file, the one a conversation keeps)
- * share a rendition and a picture sent again never runs ffmpeg twice; a
- * video's poster is kept by the file's identity, since hashing a recording
- * costs more than its poster. Either way a file the agent rewrites gets a
- * new one. Made only when a preview asks for one, which it does only near
- * the viewport.
+ * Posters and thumbnails, made once. A picture's are scaled with sharp and
+ * kept by its content's hash, so the copies Mako makes of one attachment (the
+ * staged file, the one a conversation keeps) share a rendition and a picture
+ * sent again is never scaled twice; a video's poster is a frame FFmpeg takes
+ * where one is on PATH, kept by the file's identity, since hashing a
+ * recording costs more than its poster. Either way a file the agent rewrites
+ * gets a new one. Made only when a preview asks for one, which it does only
+ * near the viewport.
  */
 export class MediaRenditions {
   private readonly folder: string
-  private readonly ffmpeg: () => string
+  private readonly ffmpeg: () => Promise<string | undefined>
   private readonly asking = new Map<string, Promise<string | null>>()
   private readonly making = new Map<string, Promise<string | null>>()
   private readonly hashes = new Map<string, string>()
@@ -58,10 +73,10 @@ export class MediaRenditions {
 
   constructor(options: MediaRenditionsOptions) {
     this.folder = options.folder
-    this.ffmpeg = options.ffmpeg
+    this.ffmpeg = options.ffmpeg ?? pathFfmpeg
   }
 
-  /** The rendition's path, or null when this file can't have one (no ffmpeg, no video frame, an unreadable file). */
+  /** The rendition's path, or null when this file can't have one (no FFmpeg for a poster, no video frame, an unreadable file). */
   rendition(path: string, identity: FileIdentity, kind: RenditionKind): Promise<string | null> {
     const file = JSON.stringify([path, identity.dev, identity.ino, identity.size, Math.round(identity.mtimeMs)])
     const asked = `${kind}\0${file}`
@@ -105,31 +120,17 @@ export class MediaRenditions {
 
   private async make(path: string, target: string, kind: RenditionKind): Promise<string | null> {
     if (await stat(target).then((info) => info.size > 0, () => false)) return target
-    let executable: string
-    try {
-      executable = this.ffmpeg()
-    } catch {
-      return null
-    }
+    const executable = kind === "poster" ? await this.ffmpeg() : undefined
+    if (kind === "poster" && !executable) return null
     await mkdir(this.folder, { recursive: true })
     await this.turn()
     const partial = `${target}.${process.pid}.partial`
     try {
-      const side = SIDE[kind]
-      const scale = `scale=w='min(${side},iw)':h='min(${side},ih)':force_original_aspect_ratio=decrease`
-      // A poster half a second in skips the black first frame most recordings open on; a clip shorter than that takes its first.
-      const attempts = kind === "poster" ? [["-ss", "0.5"], []] : [[]]
-      // `inline` and `thumbnail` are both pictures, kept as PNG so a screenshot's text stays sharp.
-      for (const seek of attempts) {
-        const ok = await run(executable, ["-v", "error", "-nostdin", ...seek, "-i", path, "-frames:v", "1", "-vf", scale,
-          ...(kind === "poster" ? ["-q:v", "4", "-f", "mjpeg"] : ["-f", "image2", "-c:v", "png"]), "-y", partial])
-        if (ok && await stat(partial).then((info) => info.size > 0, () => false)) {
-          await rename(partial, target)
-          void this.prune()
-          return target
-        }
-      }
-      return null
+      const made = executable ? await poster(executable, path, partial) : await picture(path, partial, SIDE[kind])
+      if (!made || !(await stat(partial).then((info) => info.size > 0, () => false))) return null
+      await rename(partial, target)
+      void this.prune()
+      return target
     } finally {
       await rm(partial, { force: true })
       this.release()
@@ -160,6 +161,31 @@ export class MediaRenditions {
     dated.sort((a, b) => b.at - a.at)
     await Promise.all(dated.slice(KEPT).map(({ name }) => rm(join(this.folder, name), { force: true })))
   }
+}
+
+/** A picture at most `side` on its longer side, as PNG so a screenshot's text stays sharp. */
+async function picture(path: string, output: string, side: number): Promise<boolean> {
+  try {
+    const sharp = await heavy.sharp.load("a picture's thumbnail")
+    await sharp(path, { animated: false, limitInputPixels: 268_402_689 })
+      .rotate()
+      .resize({ width: side, height: side, fit: "inside", withoutEnlargement: true })
+      .png()
+      .toFile(output)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** A video's frame half a second in (most recordings open on black), or its first for a shorter clip, as JPEG. */
+async function poster(ffmpeg: string, path: string, output: string): Promise<boolean> {
+  const side = SIDE.poster
+  const scale = `scale=w='min(${side},iw)':h='min(${side},ih)':force_original_aspect_ratio=decrease`
+  for (const seek of [["-ss", "0.5"], []])
+    if (await run(ffmpeg, ["-v", "error", "-nostdin", ...seek, "-i", path, "-frames:v", "1", "-vf", scale, "-q:v", "4", "-f", "mjpeg", "-y", output])
+      && await stat(output).then((info) => info.size > 0, () => false)) return true
+  return false
 }
 
 function run(executable: string, args: string[]): Promise<boolean> {

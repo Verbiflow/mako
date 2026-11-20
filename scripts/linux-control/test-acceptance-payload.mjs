@@ -46,12 +46,14 @@ try {
   for (const name of ["Dockerfile.acceptance", "start-desktop.sh", "start-recording.sh", "wait-desktop.py", "fixture.py", "probe.mjs", "recording-fixture.py", "recording-probe.mjs", "run-acceptance.sh", "start-wayland.sh", "wayland-probe.mjs", "wayland-gestures.mjs", "identity.sh"]) {
     await put(`scripts/linux-control/${name}`, "test fixture")
   }
+  await put("native/video-linux/mako-video.c", "test fixture")
   await prepare("payload")
   const payload = JSON.parse(await readFile(join(root, "payload/payload.json"), "utf8"))
   assert.ok(payload.files.some(file => file.path === "packages/control-runtime/dist/helper.js"), "Referenced host module survives without rebundling")
   assert.ok(payload.files.some(file => file.path === "packages/control-runtime/dist/browser-service.js"), "Shared code identity includes the browser backend even in native-only acceptance")
   assert.ok(payload.files.some(file => file.path === "packages/control/dist/program/worker.js"), "Worker loaded by URL survives packaging")
   assert.ok(payload.files.some(file => file.path === "packages/lazy/dist/index.js"), "The runtime's own lazy-loading package ships with it")
+  assert.ok(payload.files.some(file => file.path === "native/video-linux/mako-video.c"), "The video helper's source goes with it, to compile in the image")
   for (const file of payload.files) {
     const bytes = await readFile(join(root, "payload", file.path))
     assert.equal(bytes.includes(canary), false, file.path)

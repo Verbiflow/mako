@@ -200,7 +200,6 @@
     "test:telemetry": "tsx scripts/test-telemetry.ts",
     "test:host": "tsx scripts/test-host.ts && tsx scripts/test-device-cli.ts && tsx scripts/test-repeated-calls.ts && tsx scripts/test-heap-watch.ts && tsx scripts/test-reader-history.ts && tsx scripts/test-storage.ts && tsx scripts/test-storage-reclaim.ts",
     "test:host-linux": "npm run build:control-runtime && node scripts/test-host-linux.mjs",
-    "test:control-media-sources": "node scripts/test-control-media-sources.mjs",
     "test:harness-builds": "node scripts/test-harness-builds.mjs",
     "test:linux-locks": "npm run -s build --workspace @mako/sessions && node scripts/test-linux-locks.mjs",
     "host:inspect": "tsx packages/host/src/mako-host.ts inspect",
@@ -434,7 +433,6 @@
     "test:packaged-startup": "node scripts/test-packaged-startup.mjs",
     "test:packaged-lifecycle": "node --max-old-space-size=256 scripts/test-packaged-lifecycle.mjs",
     "test:control-driver-install": "node scripts/test-control-driver-install.mjs",
-    "prepare:control-media": "node scripts/build-control-media.mjs",
     "build:control-runtime": "node scripts/prune-host-output.mjs && tsgo -b packages/lazy && tsgo -b packages/control && tsgo -b packages/control-runtime && tsgo -b packages/host && node scripts/build-machine-capture.mjs && tsgo -b packages/client",
     "test:control-packages": "npm run build:control-runtime && npm run test:control-cleanup && node packages/control-runtime/test/lifecycle.mjs && node packages/control-runtime/test/media.mjs && node scripts/test-control-session-build.mjs && node scripts/test-control-private-socket.mjs && node scripts/test-control-package-consumer.mjs && node scripts/test-control-runtime-package.mjs && node scripts/linux-control/test-acceptance-payload.mjs",
     "probe:plan-turn": "node scripts/probe-plan-turn.mjs",
@@ -632,7 +630,8 @@
         "filter": [
           "package.json",
           "dist/**/*.js",
-          "dist/application/local-update-startup.mjs"
+          "dist/application/local-update-startup.mjs",
+          "dist/control/machine-capture.page.mjs"
         ]
       }
     ],

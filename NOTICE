@@ -37,6 +37,19 @@ Pretext
 Interface Sounds by Kenney (https://www.kenney.nl)
   Notification sounds. CC0 1.0; see public/licenses/interface-sounds.txt.
 
+Mediabunny (Vanilagy)
+  Reads and rewrites MP4 files for recordings. Mozilla Public License 2.0;
+  used unmodified, its source is at https://github.com/Vanilagy/mediabunny
+  and in the npm package Mako installs.
+
+OpenH264 (Cisco Systems), libyuv (the WebM project authors) and
+libjpeg-turbo
+  Encode, convert and decode video in Mako's video helper on Linux
+  (native/video-linux), linked from the system's packages, not shipped with
+  the Mac app. OpenH264: BSD 2-Clause License. libyuv: BSD 3-Clause License.
+  libjpeg-turbo: the IJG License, the BSD 3-Clause License and the zlib
+  License. Each image carries their texts in /usr/share/doc/<package>/copyright.
+
 Electron, React, the AI SDK, the Model Context Protocol SDK and the remaining
 npm dependencies
   Each under the license declared in its package (MIT, Apache 2.0, ISC, BSD or

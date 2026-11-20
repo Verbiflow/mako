@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { execFile } from "node:child_process"
+import { execFile, execFileSync } from "node:child_process"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { join, resolve } from "node:path"
@@ -13,11 +13,16 @@ assert.ok(appArgument && outputArgument, "Pass the candidate Mako.app and an evi
 const app = resolve(appArgument)
 const output = resolve(outputArgument)
 assert.equal(process.execPath, join(app, "Contents/MacOS/Mako"))
+// FFmpeg decodes the results and makes the native fixture: a check, found before PATH narrows, never what records.
+const tools = Object.fromEntries(["ffmpeg", "ffprobe"].map((name) => [name, execFileSync("sh", ["-c", `command -v ${name}`], { encoding: "utf8" }).trim()]))
+const mediaExecutable = (name) => tools[name]
 // An installed recording must not find Homebrew or shell-installed encoders.
 process.env.PATH = "/usr/bin:/bin";
 const archive = join(app, "Contents/Resources/app.asar")
-const { mediaExecutable } = await import(pathToFileURL(join(archive, "node_modules/@mako/control-runtime/dist/control-media.js")).href)
-for (const name of ["ffmpeg", "ffprobe"]) assert.equal(mediaExecutable(name), join(app, "Contents/Resources/control-media/darwin-arm64", name))
+// The packaged app's video helper records; no FFmpeg ships.
+process.env.MAKO_VIDEO_HELPER = join(app, "Contents/MacOS/mako-video")
+const { videoHelperExecutable } = await import(pathToFileURL(join(archive, "node_modules/@mako/control-runtime/dist/video-helper.js")).href)
+assert.equal(videoHelperExecutable(), join(app, "Contents/MacOS/mako-video"))
 const require = createRequire(join(archive, "package.json"))
 const sharp = require("sharp")
 const { ControlRecording } = await import(
@@ -46,8 +51,7 @@ assert.equal(probe.streams[0].width, 640)
 assert.equal(probe.streams[0].height, 480)
 assert.ok(Number(probe.format.duration) >= 0.25)
 const timeline = JSON.parse(await readFile(receipt.timeline, "utf8"))
-assert.equal(timeline.videoEncoding.codec, "h264_videotoolbox")
-assert.equal(timeline.videoEncoding.hardwareRequired, true)
+assert.deepEqual(timeline.videoEncoding, { codec: "h264", encoder: "mako-video (VideoToolbox)" })
 assert.equal(timeline.pointer.length, 2)
 assert.deepEqual(timeline.target, target)
 await promisify(execFile)(mediaExecutable("ffmpeg"), ["-v", "error", "-i", receipt.video, "-frames:v", "1", join(receipt.directory, "decoded.png")])
@@ -74,8 +78,7 @@ assert.ok(preservedPixel.every((value, index) => Math.abs(value - originalPixel[
 const cursorPixels = await sharp(nativeDecoded).extract({ left: 315, top: 235, width: 45, height: 50 }).removeAlpha().raw().toBuffer()
 assert.ok(cursorPixels.some(value => value > 180), "The dispatched cursor is visible in the video")
 const nativeTimeline = JSON.parse(await readFile(nativeReceipt.timeline, "utf8"))
-assert.equal(nativeTimeline.videoEncoding.codec, "h264_videotoolbox")
-assert.equal(nativeTimeline.videoEncoding.hardwareRequired, true)
+assert.deepEqual(nativeTimeline.videoEncoding, { codec: "h264", encoder: "mako-video (VideoToolbox)" })
 assert.deepEqual(nativeTimeline.pointer, [{ at: 100, x: 320, y: 240, pressed: true }])
 await writeFile(join(output, "native-result.json"), JSON.stringify({ passed: true, nativeReceipt, nativeDecoded }, null, 2) + "\n")
 console.log(JSON.stringify({ nativePassed: true, video: nativeReceipt.video }))

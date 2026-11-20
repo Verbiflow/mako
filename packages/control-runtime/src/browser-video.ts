@@ -1,9 +1,6 @@
-import { spawn } from "./processes.js"
-
 import type { BrowserFrame, CaptureSize } from "./browser-capture.js"
-import { liveVideoEncoding, mediaExecutable } from "./control-media.js"
 import { encodeControlVideo, type ControlVideoPacket } from "./contracts/control-video.js"
-import { MovVideoInput } from "./mov-video-input.js"
+import { helperLiveEncoder, videoHelperExecutable } from "./video-helper.js"
 
 /** A frame as the encoder takes it: the screencast's JPEG and its place in the capture. */
 export interface VideoSourceFrame {
@@ -31,117 +28,15 @@ export type LiveEncoderFactory = (
   failed: (reason: string) => void
 ) => LiveEncoder
 
-/** At most this many frames are inside the encoder; a newer frame waits and replaces an older waiting one. */
-const IN_FLIGHT = 2
 /** The least time between key frames made for viewers that fell behind. */
 const RECOVERY_MS = 1000
 
-/** FFmpeg reading the screencast's JPEGs as streaming MOV and writing FLV,
- * whose tags carry each unit's length, its key flag and the decoder
- * configuration, so a unit is complete the moment it arrives. */
-export const ffmpegLiveEncoder: LiveEncoderFactory = (size, fps, unit, drained, failed) => {
-  const input = new MovVideoInput(size.width, size.height, fps, "jpeg")
-  const child = spawn(mediaExecutable("ffmpeg"), [
-    "-hide_banner", "-loglevel", "error", "-nostdin",
-    "-probesize", "32", "-analyzeduration", "0",
-    "-f", "mov", "-i", "pipe:0", "-an",
-    "-fps_mode", "passthrough",
-    // 4:2:0 needs even dimensions; drop an odd edge row or column rather than resample the frame.
-    "-vf", "crop=trunc(iw/2)*2:trunc(ih/2)*2:0:0",
-    ...liveVideoEncoding(size, fps),
-    "-flvflags", "no_duration_filesize", "-flush_packets", "1", "-f", "flv", "pipe:1",
-  ], { stdio: ["pipe", "pipe", "pipe"] })
-  const waiting: VideoSourceFrame[] = []
-  let writing = false
-  let closed = false
-  let description: Uint8Array | undefined
-  let tail = ""
-  const fail = (reason: string) => {
-    if (closed) return
-    closed = true
-    child.kill("SIGKILL")
-    failed(reason)
-  }
-  const reader = new FlvReader((tag) => {
-    if (closed) return
-    if (tag.config) {
-      description = tag.data
-      return
-    }
-    const frame = waiting.shift()
-    if (!frame) return fail("The live encoder returned a frame it was never given")
-    if (tag.key && !description) return fail("The live encoder sent a key frame before its configuration")
-    const common = {
-      width: frame.width - (frame.width % 2),
-      height: frame.height - (frame.height % 2),
-      sequence: frame.sequence,
-      capturedAt: frame.capturedAt,
-      data: tag.data,
-    }
-    unit(tag.key && description ? { ...common, kind: "key", description } : { ...common, kind: "delta" })
-    drained()
-  })
-  child.stdout.on("data", (chunk: Buffer) => {
-    try { reader.push(chunk) } catch (error) { fail(error instanceof Error ? error.message : String(error)) }
-  })
-  child.stderr.on("data", (data: Buffer) => { tail = (tail + data.toString()).slice(-2048) })
-  child.stdin.on("error", (error: Error) => fail(`Live encoder input failed: ${error.message}`))
-  child.on("error", (error: Error) => fail(`Live encoder failed: ${error.message}`))
-  child.once("close", (code) => fail(`Live encoder ended: ${tail.trim() || `exit ${code}`}`))
-  child.stdin.write(input.header)
-  let origin: number | undefined
-  let previous = -1
-  return {
-    ready: () => !closed && !writing && waiting.length < IN_FLIGHT,
-    submit(frame) {
-      if (closed) return
-      const now = performance.now()
-      origin ??= now
-      // FLV keeps milliseconds; two frames in one millisecond would collide.
-      previous = Math.max(previous + 1, Math.round(now - origin))
-      waiting.push(frame)
-      writing = true
-      child.stdin.cork()
-      child.stdin.write(input.frame(previous, frame.bytes.length))
-      child.stdin.write(frame.bytes, () => { writing = false; drained() })
-      child.stdin.uncork()
-    },
-    close() {
-      if (closed) return
-      closed = true
-      child.kill("SIGKILL")
-    },
-  }
-}
-
-interface FlvTag { config: boolean; key: boolean; data: Uint8Array }
-
-/** Reads FLV video tags as they arrive, without waiting for the next one. */
-export class FlvReader {
-  private buffer: Buffer = Buffer.alloc(0)
-  private started = false
-  constructor(private readonly tag: (tag: FlvTag) => void) {}
-  push(chunk: Buffer) {
-    this.buffer = this.buffer.length ? Buffer.concat([this.buffer, chunk]) : chunk
-    if (!this.started) {
-      if (this.buffer.length < 13) return
-      if (this.buffer.toString("latin1", 0, 3) !== "FLV") throw new Error("The live encoder did not write FLV")
-      this.buffer = this.buffer.subarray(this.buffer.readUInt32BE(5) + 4)
-      this.started = true
-    }
-    while (this.buffer.length >= 11) {
-      const size = this.buffer.readUIntBE(1, 3)
-      if (size > 8 * 1024 * 1024) throw new Error("The live encoder wrote an oversized frame")
-      if (this.buffer.length < 11 + size + 4) return
-      const type = this.buffer[0]!
-      const body = this.buffer.subarray(11, 11 + size)
-      this.buffer = this.buffer.subarray(11 + size + 4)
-      if (type !== 9 || body.length < 5) continue
-      if ((body[0]! & 0x0f) !== 7) throw new Error("The live encoder wrote a codec other than H.264")
-      if (body[1] === 0) this.tag({ config: true, key: false, data: Uint8Array.from(body.subarray(5)) })
-      else if (body[1] === 1) this.tag({ config: false, key: body[0]! >> 4 === 1, data: Uint8Array.from(body.subarray(5)) })
-    }
-  }
+/** Where no encoder was given: the video helper's, or a failure that says what's missing. */
+const defaultEncoder: LiveEncoderFactory = (size, fps, unit, drained, failed) => {
+  const executable = videoHelperExecutable()
+  if (executable) return helperLiveEncoder(executable)(size, fps, unit, drained, failed)
+  queueMicrotask(() => failed("Live video of this tab needs Mako's video helper (mako-video) or desktop app, and this machine has neither"))
+  return { ready: () => false, submit() {}, close() {} }
 }
 
 /** One remote viewer. `backlog` is what it has been sent and not yet taken,
@@ -248,7 +143,7 @@ export class BrowserVideo {
   constructor(private readonly sources: BrowserVideoSources, options: BrowserVideoOptions = {}) {
     this.fps = options.fps ?? 30
     this.backlogLimit = options.backlog ?? 512 * 1024
-    this.createEncoder = options.encoder ?? ffmpegLiveEncoder
+    this.createEncoder = options.encoder ?? defaultEncoder
   }
 
   async join(viewer: BrowserVideoViewer): Promise<() => Promise<void>> {
