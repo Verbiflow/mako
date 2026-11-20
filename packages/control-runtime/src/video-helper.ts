@@ -5,6 +5,7 @@ import type { CaptureSize } from "./browser-capture.js"
 import type { EncodedVideoSource } from "./browser-video.js"
 import { CONTROL_VIDEO_DATA_LIMIT, decodeControlVideo, type ControlVideoPacket } from "./contracts/control-video.js"
 import { resolveExecutable } from "./executable.js"
+import { onLinux } from "./platform.js"
 import { spawn } from "./processes.js"
 
 /**
@@ -42,7 +43,7 @@ export function videoHelperExecutable(): string | undefined {
 
 /** Whether this machine has an X display the helper can capture (a Wayland session is captured another way). */
 export function x11Display(): boolean {
-  return process.platform === "linux" && Boolean(process.env.DISPLAY?.trim())
+  return onLinux() && Boolean(process.env.DISPLAY?.trim())
 }
 
 const PICTURE = { jpeg: 0, rgb: 1, rgba: 2 } as const
