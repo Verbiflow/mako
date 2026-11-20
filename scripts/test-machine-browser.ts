@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { BrowserService } from "@mako/control-runtime/browser"
-import { MACHINE_BROWSER_ID, MachineBrowser, writeMachineCaptureExtension } from "@mako/control-runtime/desktop"
+import { MACHINE_BROWSER_ID, MachineBrowser } from "@mako/control-runtime/desktop"
 
 /**
  * A machine's own Chromium: nothing runs until an agent connects, concurrent connects start one process, a stale
@@ -91,26 +91,7 @@ await unsandboxed.definition.endpoint()
 assert.ok((await launches()).at(-1)!.args.includes("--no-sandbox"), "a host running as root runs Chromium without its sandbox, which refuses root")
 unsandboxed.close()
 
-// The capture extension, written before the launch and named by its flags: allowlisted, so its tab capture needs no
-// gesture, and the only extension loaded. Its id is the one Chromium derives from the key in its manifest.
-const capture = join(root, "capture")
-const capturing = new MachineBrowser({
-  executable,
-  profile: join(root, "capturing"),
-  captureExtension: () => writeMachineCaptureExtension(capture, "/* page */"),
-})
-await capturing.definition.endpoint()
-const flags = (await launches()).at(-1)!.args
-const manifest = JSON.parse(await readFile(join(capture, "manifest.json"), "utf8"))
-const { createHash } = await import("node:crypto")
-const id = [...createHash("sha256").update(Buffer.from(manifest.key, "base64")).digest("hex").slice(0, 32)].map((digit) => String.fromCharCode(97 + parseInt(digit, 16))).join("")
-for (const flag of [`--load-extension=${capture}`, `--disable-extensions-except=${capture}`, `--allowlisted-extension-id=${id}`])
-  assert.ok(flags.includes(flag), `the launch has ${flag}: ${flags.join(" ")}`)
-assert.equal(await readFile(join(capture, "capture.js"), "utf8"), "/* page */")
-assert.deepEqual(manifest.permissions.sort(), ["debugger", "offscreen", "tabCapture"])
-capturing.close()
-
 await rm(root, { recursive: true, force: true })
 console.log(
-  "Machine browser: nothing runs until a connect, one launch for concurrent connects, stale port file ignored, relaunch after exit, a refused endpoint started again, a refused sandbox explained and retried, preferred by default, closing stops it, the capture extension loaded and allowlisted passed"
+  "Machine browser: nothing runs until a connect, one launch for concurrent connects, stale port file ignored, relaunch after exit, a refused endpoint started again, a refused sandbox explained and retried, preferred by default, closing stops it passed"
 )

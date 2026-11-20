@@ -187,8 +187,6 @@ export interface EncodedVideoCapture {
 export interface BrowserVideoSources {
   frames?: BrowserVideoSource
   encoded?: EncodedVideoSource
-  /** The picture now, for a viewer to paint while an encoded capture makes its first key frame. */
-  poster?: (size: () => CaptureSize | undefined) => Promise<BrowserFrame>
 }
 
 export interface BrowserVideoOptions {
@@ -254,8 +252,6 @@ export class BrowserVideo {
   async join(viewer: BrowserVideoViewer): Promise<() => Promise<void>> {
     if (this.closed) throw new Error("Live video ended")
     this.viewers.set(viewer, { awaitingKey: true, painted: false })
-    // Asked beside the capture's start, so the viewer paints while its first key frame is made.
-    this.fetchPoster()
     try {
       this.source ??= this.open()
       const source = await this.source
@@ -345,20 +341,7 @@ export class BrowserVideo {
     state.awaitingKey = true
     state.painted = false
     this.poster()
-    this.fetchPoster()
     this.recover()
-  }
-
-  /** Without frames here, the source's poster is fetched for viewers that have painted nothing. */
-  private fetchPoster() {
-    const fetch = this.sources.poster
-    if (!fetch || this.latest || this.capture?.kind === "frames") return
-    void fetch(() => this.demand()).then((frame) => {
-      if (this.closed || this.latest) return
-      this.sendPoster({ bytes: frame.bytes, width: frame.width, height: frame.height, sequence: 0, capturedAt: frame.capturedAt })
-    }, () => {
-      // No poster: the viewer paints at the first key frame instead.
-    })
   }
 
   private demand(): CaptureSize | undefined {
@@ -382,10 +365,8 @@ export class BrowserVideo {
 
   /** Viewers that have painted nothing get the newest frame as it is, while its key frame is encoded. */
   private poster() {
-    if (this.latest) this.sendPoster(this.latest)
-  }
-
-  private sendPoster(frame: VideoSourceFrame) {
+    const frame = this.latest
+    if (!frame) return
     let bytes: Uint8Array | undefined
     for (const [viewer, state] of this.viewers) {
       if (state.painted || viewer.backlog() > this.backlogLimit) continue

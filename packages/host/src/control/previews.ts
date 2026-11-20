@@ -69,7 +69,7 @@ export interface PreviewVideoOptions extends BrowserVideoOptions {
   capture?: PreviewCapture
 }
 /** The part of the browser a preview reads: its tab's screencast. */
-export type PreviewBrowser = Pick<BrowserService, "previewStream" | "previewResized" | "previewPoster">
+export type PreviewBrowser = Pick<BrowserService, "previewStream" | "previewResized">
 
 /** A native snapshot as the viewer shows it: JPEG, at most 1440 pixels wide; none for an image too large to decode. */
 export async function previewThumbnail(image: ControlImage): Promise<ControlImage | null> {
@@ -258,7 +258,6 @@ export class ControlPreviews {
     const { target } = entry
     const owner = entry.owner ?? entry.preview.activity.conversationId
     if (!target || !entry.authorize) return video.show(undefined)
-    const encoded = this.videoCapture?.tab(target)
     video.show({
       key: JSON.stringify([owner, target]),
       sources: {
@@ -269,12 +268,7 @@ export class ControlPreviews {
           }, consumer.frame, consumer.ended, consumer.size)
           return { stop, resized: () => this.browser.previewResized(owner, target) }
         },
-        encoded,
-        // A capture that encodes for itself has no frame here to paint while its first key frame is made.
-        poster: encoded && ((size) => this.browser.previewPoster(owner, target, () => {
-          if (entry.target !== target) throw new Error("Preview target changed")
-          entry.authorize?.()
-        }, size)),
+        encoded: this.videoCapture?.tab(target),
       },
     })
   }
