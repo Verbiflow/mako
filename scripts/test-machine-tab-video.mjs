@@ -1,7 +1,8 @@
 // A cloud machine's tab as live video, encoded inside the machine's own Chromium by its capture extension
 // (`packages/control-runtime/src/machine-capture.ts`, `src/live-video/machine-capture.ts`), against a real Chromium.
 // Run on Linux with Debian's Chromium, after `npm run build:control-runtime`; scripts/test-machine-tab-video-docker.sh
-// runs it in a container from a Mac.
+// runs it in a container from a Mac. On Windows, name Chrome or Edge in MAKO_TEST_BROWSER_EXECUTABLE: its capture
+// extension loads over the DevTools pipe, as the host loads it there.
 //
 //   1. The extension's pages are never listed as tabs.
 //   2. A viewer paints the screencast's first frame as a poster, then gets a key frame with its configuration first, sized to its box and shaped like the tab, then a unit
@@ -12,7 +13,10 @@
 import assert from "node:assert/strict"
 import { mkdtemp, readFile, readdir } from "node:fs/promises"
 import { createServer } from "node:http"
+import { execFile } from "node:child_process"
+import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
+import { promisify } from "node:util"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { BrowserService, BrowserVideo } from "../packages/control-runtime/dist/browser.js"
@@ -32,6 +36,18 @@ async function until(read, check, what, ms = 10_000) {
 /** CPU seconds of the extension's renderer, the process its offscreen document runs in, and its resident memory. */
 let extensionRss = 0
 async function extensionCpu() {
+  if (process.platform === "win32") {
+    // WMI's view of the extension's renderer: its kernel and user time in 100 ns units, and its working set.
+    const { stdout } = await promisify(execFile)("powershell.exe", ["-NoProfile", "-Command", `Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*--extension-process*' -and $_.ExecutablePath -eq '${process.env.MAKO_TEST_BROWSER_EXECUTABLE}' } | ForEach-Object { "$($_.KernelModeTime + $_.UserModeTime) $($_.WorkingSetSize)" }`], { windowsHide: true })
+    let time = 0
+    const lines = stdout.trim().split(/\r?\n/).filter(Boolean)
+    assert.ok(lines.length > 0, "the extension's renderer is found")
+    for (const [cpu, rss] of lines.map((line) => line.split(" ").map(Number))) {
+      time += cpu / 1e7
+      extensionRss = rss / 1024 / 1024
+    }
+    return time
+  }
   let ticks = 0
   for (const pid of (await readdir("/proc")).filter((name) => /^\d+$/.test(name))) {
     try {
@@ -62,7 +78,8 @@ const origin = `http://127.0.0.1:${server.address().port}`
 
 const script = await readFile(join(repo, "packages/host/dist/control/machine-capture.page.mjs"), "utf8")
 const machine = new MachineBrowser({
-  executable: "/usr/bin/chromium",
+  executable: process.env.MAKO_TEST_BROWSER_EXECUTABLE ?? "/usr/bin/chromium",
+  extensionLoading: process.platform === "win32" ? "pipe" : "flag",
   profile: join(root, "profile"),
   sandbox: process.getuid?.() !== 0,
   captureExtension: () => writeMachineCaptureExtension(join(root, "capture"), script),
@@ -78,7 +95,10 @@ try {
 
   // 1.
   const tabs = await command({ action: "tabs", browser: MACHINE_BROWSER_ID })
-  assert.ok(tabs.length > 0 && tabs.every((tab) => !tab.url.startsWith("chrome-extension://")), `no extension page is a tab: ${tabs.map((tab) => tab.url).join(", ")}`)
+  // Google Chrome and Edge list their own component extensions' pages too; the capture extension's are never listed.
+  const { key: captureKey } = JSON.parse(await readFile(join(root, "capture", "manifest.json"), "utf8"))
+  const captureId = createHash("sha256").update(Buffer.from(captureKey, "base64")).digest("hex").slice(0, 32).replace(/./g, (digit) => String.fromCharCode(97 + parseInt(digit, 16)))
+  assert.ok(tabs.length > 0 && tabs.every((tab) => !tab.url.startsWith(`chrome-extension://${captureId}/`)), `no page of the capture extension is a tab: ${tabs.map((tab) => tab.url).join(", ")}`)
 
   // 2.
   let screencast = 0
