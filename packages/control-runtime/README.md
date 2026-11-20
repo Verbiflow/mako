@@ -116,10 +116,12 @@ exports. MCP, CLI and desktop use the same targeting, capture and cleanup code.
 Changes to engine code invalidate old CLI session descriptors; reconnect using the
 current owner instead of silently mixing versions.
 
-Recording uses FFmpeg/FFprobe on PATH, or both tools in an absolute
-`MAKO_CONTROL_MEDIA_ROOT`. Packaged desktop builds require the reviewed tools in
-their application resources. Sharp installs only the current platform's optional
-native package; this package includes no browser, driver, encoder or Python cache.
+Recording and live video encode with Mako's video helper, `mako-video` (VideoToolbox
+on macOS, OpenH264 on Linux; see `native/`): an absolute `MAKO_VIDEO_HELPER`, else
+`mako-video` on PATH. Packaged desktop builds carry it beside their executable. No
+FFmpeg is needed; on Linux an FFmpeg already on PATH draws the pointer on a native
+window's video. Sharp installs only the current platform's optional native package;
+this package includes no browser, driver, encoder or Python cache.
 
 Licensed under Elastic License 2.0; see LICENSE. Publishing is a separate release
 step. Current physical-input, compositor and installed-browser acceptance limits

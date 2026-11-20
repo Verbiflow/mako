@@ -187,7 +187,6 @@ export const STEPS = [
   [9, "npm run -s test:commit-generation"],
   [53, "npm run -s test:control-cli"],
   [0, "npm run -s test:control-driver-install"],
-  [0, "npm run -s test:control-media-sources"],
   [28, "npm run -s test:control-packages"],
   [17, "npm run -s test:control-preview"],
   [71, "npm run -s test:control-recording-continuous"],
@@ -479,21 +478,21 @@ const SHARD_MS = 12 * 60_000
 
 /** What a step needs on the runner beyond the job's own setup, by its npm script, installed once in a shard that picks it. */
 const NEEDS = {
-  "test:mcp": "ffmpeg",
-  "test:control-cli": "ffmpeg",
-  "test:control-packages": "ffmpeg",
-  "test:control-recording-continuous": "ffmpeg",
+  "test:mcp": "video",
+  "test:control-cli": "video",
+  "test:control-packages": "video",
+  "test:control-recording-continuous": "video",
 }
 /**
  * Parts of a script `NEEDS` names that don't need it themselves, so a shard that picks only them installs nothing:
- * test:mcp's parts on the Mac read MCP configurations and computer use, and record nothing (ffmpeg took 31 s there).
+ * test:mcp's parts on the Mac read MCP configurations and computer use, and record nothing (installing took 31 s there).
  */
 const NEEDS_NOTHING = [/scripts\/test-mcp\.ts\b/, /scripts\/test-computer-tools\.ts\b/]
-/** What a part run outside an npm script needs, by its file: recording reads ffmpeg and ffprobe. */
-const NEEDS_BY_FILE = [[/scripts\/test-(native-recording|control-recording|control-recording-idle|control-recording-stream|browser-recording|browser-video)\.ts\b/, "ffmpeg"]]
+/** What a part run outside an npm script needs, by its file: recording and live video encode with the video helper. */
+const NEEDS_BY_FILE = [[/scripts\/test-(native-recording|control-recording|control-recording-idle|control-recording-stream|browser-recording|browser-video)\.ts\b/, "video"]]
 /**
- * Each prints `install-via: <path>` last: image (already there), cache, apt or archive (`install-apt-cached.sh`), brew.
- * On Linux, ffmpeg comes from the .debs `MAKO_APT_DEBS` holds, which the gate job keeps between runs, so a shard that
+ * Each prints `install-via: <path>`: image (already there), cache, apt or archive (`install-apt-cached.sh`), brew.
+ * On Linux, the helper's libraries and FFmpeg come from the .debs `MAKO_APT_DEBS` holds, which the gate job keeps between runs, so a shard that
  * restored them installs it with no network: on 2026-11-19 the runners couldn't reach Ubuntu's mirrors and every
  * shard that recorded hung on `apt-get update` until this budget ran out.
  */
@@ -501,11 +500,14 @@ const NEEDS_BY_FILE = [[/scripts\/test-(native-recording|control-recording|contr
 function unlessPresent(tool, install) {
   return `if command -v ${tool} >/dev/null; then echo "install-via: image"; else ${install}; fi`
 }
+/** The video helper's build on Linux, and FFmpeg, which the recording checks decode their files with (Mako ships none). */
+export const VIDEO_PACKAGES = "ffmpeg gcc pkg-config libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcomposite-dev libopenh264-dev libyuv-dev libturbojpeg0-dev"
+const buildHelper = `node "${new URL("build-video-helper.mjs", import.meta.url).pathname}" --require --if-fresh`
 const INSTALL = {
-  // Recording reads ffmpeg and ffprobe on PATH; the runner's image has neither.
-  ffmpeg: unlessPresent("ffmpeg", process.platform === "darwin"
-    ? 'HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg && echo "install-via: brew"'
-    : `"${new URL("install-apt-cached.sh", import.meta.url).pathname}" "\${MAKO_APT_DEBS:-\${RUNNER_TEMP:-/tmp}/apt-debs}" ffmpeg`),
+  // Recording and live video encode with the video helper, which the shard builds; the checks decode with FFmpeg.
+  video: process.platform === "darwin"
+    ? `${unlessPresent("ffmpeg", 'HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_CLEANUP=1 brew install ffmpeg && echo "install-via: brew"')} && ${buildHelper}`
+    : `"${new URL("install-apt-cached.sh", import.meta.url).pathname}" "\${MAKO_APT_DEBS:-\${RUNNER_TEMP:-/tmp}/apt-debs}" ${VIDEO_PACKAGES} && ${buildHelper}`,
 }
 
 /**

@@ -5,7 +5,7 @@
 //   1. A desk window captured as a tab: the host's BrowserVideo, over the real /desktop channel, opens a capture in the
 //      desktop's live video page; units come only while the window paints, and a key frame of the still picture comes
 //      when a viewer joins.
-//   2. The screencast's JPEGs encoded there instead of by FFmpeg (`desktopLiveEncoder`).
+//   2. The screencast's JPEGs encoded there (`desktopLiveEncoder`), as on a machine with no video helper.
 //   3. A synthetic window: a canvas that repeats one picture at 30 fps, as a system capturer does with a still window,
 //      through the page's own capture session and change gate: nothing is encoded while the picture holds, apart from
 //      one frame a second, and a key frame asked for shows the picture as it is.
@@ -192,7 +192,7 @@ async function main() {
     second.window.destroy()
   }
 
-  // 2. The screencast's JPEGs, encoded by the desktop instead of FFmpeg.
+  // 2. The screencast's JPEGs, encoded by the desktop.
   {
     const viewer = await viewerWindow()
     const debug = contents.debugger
@@ -212,7 +212,7 @@ async function main() {
           resized: async () => {},
         }
       },
-    }, { fps: 30, encoder: desktopLiveEncoder(channel, () => assert.fail("FFmpeg encoded though the desktop could")) })
+    }, { fps: 30, encoder: desktopLiveEncoder(channel, () => assert.fail("the fallback encoded though the desktop could")) })
     const leave = await live.join(viewer.port)
     await paint("rgb(230,200,30)", true)
     await until(() => viewer.evaluate("shown()"), (shown) => near(shown, [230, 200, 30]) && shown.painted >= 10, "the desktop-encoded screencast decodes")

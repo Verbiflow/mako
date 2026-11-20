@@ -12,7 +12,7 @@ import { MediaRenditions } from "@mako/host/workspaces/media-renditions"
  */
 const [socket, folder] = process.argv.slice(2)
 if (!socket || !folder) throw new Error("owned-files-owner <socket> <folder>")
-const renditions = new MediaRenditions({ folder, ffmpeg: () => "ffmpeg-not-here" })
+const renditions = new MediaRenditions({ folder, ffmpeg: async () => undefined })
 const server = createServer((request, response) => {
   void (async () => {
     const url = new URL(request.url ?? "/", "http://owner")

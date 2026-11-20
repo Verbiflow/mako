@@ -5,17 +5,13 @@ on:
   pull_request:
     paths:
       - .github/actions/install-dependencies/**
-      - .github/actions/control-media-sources/**
       - .github/actions/harness-builds/**
       - .github/workflows/host-linux-x64.yml
+      - native/video-linux/**
       - packages/**
       - runtime/host/**
-      - scripts/build-control-media.mjs
-      - scripts/fetch-control-media-sources.mjs
       - scripts/fetch-harness-builds.mjs
       - scripts/lib/harness-builds.mjs
-      - scripts/lib/control-media-sources.mjs
-      - scripts/test-control-media-sources.mjs
       - scripts/test-harness-builds.mjs
       - scripts/linux-host/**
       - scripts/measure-host.mjs
@@ -30,7 +26,6 @@ on:
       - package.json
       - package-lock.json
       - tsconfig*.json
-      - vendor/control-media/**
       - vendor/harness-builds/sources.json
 
 permissions:
@@ -63,10 +58,6 @@ jobs:
         with:
           # The host never loads Electron; the image proves it can't.
           electron: "false"
-      - name: The recording media's sources, from mirrors and checked by hash
-        run: npm run test:control-media-sources
-      # The image's media build reads them from its context, with no network.
-      - uses: ./.github/actions/control-media-sources
       - name: The harness builds Mako keeps, checked by their sha256 and laid out as their installers do
         run: npm run test:harness-builds
       # The image lays out the harness builds Mako keeps, never the vendor's withdrawn ones: from the cache, the vendor

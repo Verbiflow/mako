@@ -20,17 +20,6 @@ RUN test "$(dpkg --print-architecture)" = amd64 || { echo "Mako's Linux host ima
     && rm /tmp/node.tar.gz \
     && node -e 'if (!process.config.variables.v8_enable_pointer_compression) throw new Error("this Node lacks pointer compression")'
 
-# FFmpeg as the Mac app bundles it (vendor/control-media): static, with x264
-# and only what recordings and live video use, a few megabytes where Debian's
-# package and its libraries are hundreds. Its sources and licenses go with it.
-# The context carries the source archives, each checked by its hash, so the
-# build has no network: nothing it compiles comes from anywhere else.
-FROM node AS media
-RUN apt-get update && apt-get install -y --no-install-recommends build-essential nasm pkg-config xz-utils zlib1g-dev \
-    && rm -rf /var/lib/apt/lists/*
-COPY media/ /build/
-RUN --network=none node /build/scripts/build-control-media.mjs
-
 # Mako's video helper (native/video-linux): an X display or window captured when it
 # changes and encoded with OpenH264, for computer use on a machine with a display.
 # Debian's OpenH264, libyuv and libjpeg-turbo are BSD-style; nothing here is GPL.
@@ -60,10 +49,9 @@ RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --workspace @mako/hos
     && chmod 755 /opt/mako/packages/host/dist/mako-host.js \
     && if node -e 'require.resolve("electron")' 2>/dev/null; then echo "electron resolves in the host's install" >&2; exit 1; fi \
     && mako-host --help >/dev/null
-# The video helper, on PATH, where the host finds it.
+# The video helper, on PATH, where the host finds it: live video of the
+# machine's display or windows, and recordings. No FFmpeg is installed.
 COPY --from=video /build/mako-video /usr/local/bin/mako-video
-# Where the host looks for its media beside its install, as a checkout keeps it.
-COPY --from=media /build/vendor/control-media/linux-x64/ /opt/mako/vendor/control-media/linux-x64/
 USER node
 # Harnesses install into the user's home, as on a person's machine.
 ENV NPM_CONFIG_PREFIX=/home/node/.local PATH=/home/node/.local/bin:$PATH

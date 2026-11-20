@@ -780,3 +780,22 @@ A picture's thumbnail and inline rendition are scaled with sharp. A video gets
 a poster only where an FFmpeg is already on the machine's PATH; otherwise its
 read has no `posterUrl` and the transcript's tile draws the video's own frame
 half a second in (`<video preload="metadata">`), as the player already did.
+
+## November 20: no FFmpeg ships
+
+Nothing Mako builds or ships contains FFmpeg any more: the GPL FFmpeg/x264
+recipe (`build-control-media.mjs`, `vendor/control-media`, its source cache and
+workflow), the Mac app's `Resources/control-media`, the host image's FFmpeg
+stage, `control-media.ts`, the MOV input and the FLV reader are gone. A
+screencast's JPEGs (a tab in a person's Chrome) are encoded by the video
+helper's `frames` mode where it's installed (every Mac app and Linux image),
+else by the desktop app's WebCodecs (`desktopLiveEncoder`, Windows); with
+neither, its live video says so when a viewer joins. Recording refuses before
+capture without the helper.
+
+FFmpeg remains only where it isn't Mako's: a Linux driver records a native
+window through the FFmpeg on PATH (the control runtime's `native-os` image keeps
+Debian's for it, and Mako draws that video's pointer with it), a host with an
+FFmpeg on PATH makes video posters, and the checks decode their results with an
+FFmpeg the CI runner installs. `scripts/linux-host/prove.mjs` checks the host
+image has the helper and no FFmpeg.
