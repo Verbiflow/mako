@@ -1,4 +1,5 @@
 import { stoppingSignal } from "../base/host-stopping.js"
+import { onWindows } from "../base/platform.js"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
 import { z } from "zod"
@@ -48,6 +49,27 @@ export async function groupHoldsNothingAlive(group: number): Promise<boolean> {
 }
 
 /**
+ * `signalGroup` on Windows, which has no process groups: `kill(-pid)` there names no process, so it stopped nothing and
+ * a stopped step ran on. A stop ends the step and every process under it at once (`taskkill /T /F`; a console program
+ * hears no SIGTERM), while the step is there to find them by; a look asks only whether the step itself is.
+ */
+function signalTree(pid: number, name: NodeJS.Signals | 0, failed: (error: Error) => void): boolean {
+  if (name === 0) {
+    try {
+      process.kill(pid, 0)
+      return true
+    } catch {
+      return false
+    }
+  }
+  // taskkill answers 128 for a step already gone; only one still there makes its failure the stop's.
+  void run("taskkill", ["/PID", String(pid), "/T", "/F"], { timeout: 5_000, windowsHide: true }).catch(() => {
+    if (signalTree(pid, 0, failed)) failed(new Error(`taskkill could not end the step's process tree (pid ${pid})`))
+  })
+  return true
+}
+
+/**
  * Runs a build step (npm install, npm run build, packaging) in a process
  * group of its own, and stops the whole group when `signal` aborts or
  * `timeoutMs` passes: SIGTERM, then SIGKILL after `graceMs`.
@@ -68,6 +90,8 @@ export async function runProcessGroup(command: string, args: string[], options: 
     env: options.env,
     stdio: options.stdio === "inherit" ? "inherit" : ["ignore", "pipe", "pipe"],
     detached: true,
+    // Windows gives a detached child a console window of its own; a build step shows none.
+    windowsHide: true,
   })
   const output = options.output
   if (output) {
@@ -82,6 +106,7 @@ export async function runProcessGroup(command: string, args: string[], options: 
   /** Signals the group; false once nothing in it is left. */
   const signalGroup = (name: NodeJS.Signals | 0): boolean => {
     if (!child.pid) return false
+    if (onWindows()) return signalTree(child.pid, name, (error) => { failure ??= error })
     try {
       process.kill(-child.pid, name)
       return true
