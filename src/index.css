@@ -2094,6 +2094,12 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 /*
  * Reduced motion means less movement, not less feedback: opacity and colour
  * transitions still carry meaning, so only the transforms are dropped.
+ *
+ * Colour fades only where an element asks for one. `color` is inherited: given
+ * to every element, a parent's colour change starts a transition in each
+ * descendant, following the parent's fading colour, so the body taking its
+ * colour on load (or a theme switch) restyled a long answer whole every frame
+ * for as long as a fade ran at any depth (test-prose-settle-ui.mjs).
  */
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -2101,9 +2107,16 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
+    transition-property: opacity, background-color, border-color !important;
+    transition-duration: 120ms !important;
+  }
+
+  .transition,
+  .transition-all,
+  .transition-colors,
+  [class*="transition-["][class*="color"] {
     transition-property:
       opacity, color, background-color, border-color !important;
-    transition-duration: 120ms !important;
   }
 
   .pressable:active:not(:disabled) {
