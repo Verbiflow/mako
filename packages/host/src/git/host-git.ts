@@ -1,3 +1,5 @@
+import { resolveExecutable } from "../base/executable.js"
+import { onWindows } from "../base/platform.js"
 import { hostStopping } from "../base/host-stopping.js"
 import { hostSpawn, closeHostChild } from "../base/host-command.js"
 import { Git, type GitTrace } from "@mako/git"
@@ -42,6 +44,8 @@ export function hostGit(traceAll: boolean): Git {
   const helper = process.env.MAKO_GIT_HELPER === "0" ? undefined : new GitHelper(direct)
   if (helper) stopping?.addEventListener("abort", () => { void helper.stop() }, { once: true })
   return new Git({
+    // Windows: a Git only from a folder no other account can write (`resolveExecutable`), never a bare name.
+    ...(onWindows() && { resolveExecutable: () => resolveExecutable("git") ?? missingGit() }),
     processes: helper?.runner() ?? direct,
     signal: stopping,
     background: belowAgents,
@@ -54,4 +58,8 @@ export function hostGit(traceAll: boolean): Git {
       hostLog("git", `${run.command} ${run.outcome}`, { args: run.args.slice(0, 6).join(" ").slice(0, 200), cwd: run.cwd, ms: Math.round(run.ms), queuedMs: Math.round(run.queuedMs), code: run.code ?? -1, bytes: run.bytes, ...stderr })
     },
   })
+}
+
+function missingGit(): never {
+  throw new Error("Git wasn't found on PATH, in a folder only you or Windows can write. Install Git for Windows and start Mako again.")
 }

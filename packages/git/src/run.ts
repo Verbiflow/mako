@@ -31,6 +31,11 @@ export interface GitTrace {
 }
 
 export interface GitRuntime {
+  /**
+   * Where Git is, when the host knows better than PATH: on Windows only a Git in a folder no other account can write
+   * (the host's `resolveExecutable`). Throws when there is none.
+   */
+  resolveExecutable?: () => string
   /** The owner supplies process ownership; standalone Git uses its own group runner. */
   processes?: Pick<ProcessRunner, "spawn" | "close">
   /** The owner stopped: cancel running commands and refuse queued or new ones. */
@@ -181,7 +186,7 @@ export class Git {
    * them spawns nothing. A Git earlier on PATH (Homebrew's) is used as is.
    */
   get executable(): string {
-    this.#executable ??= resolveGit()
+    this.#executable ??= this.#runtime.resolveExecutable?.() ?? resolveGit()
     return this.#executable
   }
 
@@ -536,7 +541,12 @@ function trackProcesses(runner: Pick<ProcessRunner, "spawn" | "close">, signal: 
 function resolveGit(): string {
   // Windows looks for a bare name in the working folder first: a repository holding a `git.exe` would run it. Git is
   // only ever the one on PATH, by its whole path, from PATH's whole-path folders.
-  if (onWindows()) return windowsGit() ?? "git"
+  if (onWindows()) {
+    const found = windowsGit()
+    // Never a bare `git`: Windows would look for it in the working folder first, a repository holding a `git.exe`.
+    if (!found) throw new Error("Git wasn't found on PATH. Install Git for Windows and start Mako again.")
+    return found
+  }
   if (!onMac()) return "git"
   const first = (process.env.PATH ?? "").split(delimiter).map((dir) => join(dir, "git")).find((path) => existsSync(path))
   if (first && first !== "/usr/bin/git") return first

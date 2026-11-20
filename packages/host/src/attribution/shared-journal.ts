@@ -23,6 +23,7 @@ import {
 } from "@mako/protocol/attribution"
 import { acquireHostLock, type HostLock } from "../base/host-lock.js"
 import { nodePlatform } from "../base/platform.js"
+import { connectFamily, drawFamilyPipe, isPipeFamily, publishFamilyPipe, requireProof, retractFamilyPipe } from "@mako/sessions/private-pipe"
 import type { LostVersion } from "../contracts/thread-changes.js"
 import { TurnChangesSchema, type TurnChanges } from "../contracts/turn-changes.js"
 import type { BackfillResult } from "./backfill.js"
@@ -75,6 +76,7 @@ const shortSocketFolder = () => join(sep, "tmp", `mako-${userInfo().uid}`)
  */
 export function ownerAddress(folder: string, platform: NodeJS.Platform = nodePlatform(), temporary = tmpdir()): string {
   const id = createHash("sha256").update(resolve(folder)).digest("hex").slice(0, 24)
+  // Windows: the family whose owner publishes a fresh pipe each time it owns (`@mako/sessions/private-pipe`).
   if (platform === "win32") return `\\\\.\\pipe\\mako-attribution-${id}`
   if (platform !== "darwin") return `\0mako-attribution-${id}`
   const path = join(folder, "owner.sock")
@@ -354,6 +356,8 @@ const send = (socket: Socket, message: ToOwner | ToFollower) => {
 const openKey = (mark: ActivityMark) => `${mark.session}\u0000${mark.kind}\u0000${mark.id}`
 
 function tryConnect(address: string): Promise<Socket | null> {
+  // Windows: only the pipe the owner published, once it has proved itself; a program holding a name gets no write.
+  if (isPipeFamily(address)) return connectFamily(address).then((socket) => socket, () => null)
   if (!trustedAddress(address, false)) return Promise.resolve(null)
   return new Promise((settle) => {
     const socket = connect(address)
@@ -716,10 +720,17 @@ export class SharedJournal {
     if (onFileSystem(this.address)) rmSync(this.address, { force: true })
     const server = createServer((socket) => this.accept(socket))
     this.server = server
+    const drawn = isPipeFamily(this.address) ? drawFamilyPipe(this.address) : undefined
+    if (drawn) {
+      const family = this.address
+      requireProof(server, () => drawn.proof)
+      server.once("close", () => retractFamilyPipe(family, drawn))
+    }
     return new Promise((done, fail) => {
       server.once("error", fail)
-      server.listen(this.address, () => {
+      server.listen(drawn?.pipe ?? this.address, () => {
         server.off("error", fail)
+        if (drawn) publishFamilyPipe(this.address, drawn)
         server.on("error", (error) => this.options.log("the owner's socket failed", { error: error.message }))
         if (onFileSystem(this.address)) chmodSync(this.address, 0o600)
         done()

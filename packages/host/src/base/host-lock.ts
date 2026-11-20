@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto"
-import { closeSync, constants, ftruncateSync, mkdirSync, openSync, readFileSync, writeSync } from "node:fs"
+import { closeSync, constants, ftruncateSync, mkdirSync, openSync, readFileSync, writeFileSync, writeSync } from "node:fs"
+import { exclusiveFileLock } from "@mako/sessions/private-pipe"
 import { connect, createServer } from "node:net"
 import { join, resolve } from "node:path"
 import { nodePlatform } from "./platform.js"
@@ -51,7 +52,7 @@ export interface HostLockOptions {
 export async function acquireHostLock(dataRoot: string, options: HostLockOptions = {}): Promise<HostLock> {
   const platform = options.platform ?? nodePlatform()
   const purpose = options.purpose ?? "host"
-  const attempt = () => (platform === "darwin" ? fileLock(dataRoot, purpose) : nameLock(dataRoot, platform, purpose))
+  const attempt = () => (platform === "darwin" ? fileLock(dataRoot, purpose) : platform === "win32" ? windowsLock(dataRoot, purpose) : nameLock(dataRoot, platform, purpose))
   const until = Date.now() + (options.waitMs ?? 30_000)
   const briefUntil = Date.now() + (options.brief?.ms ?? 0)
   let recheckedAfterExit = false
@@ -80,7 +81,7 @@ export async function acquireHostLock(dataRoot: string, options: HostLockOptions
       // This never retries the lock: a silent or departed holder stays unknown, not an assumed admission.
       if (lock.holder === null) {
         const name = hostLockName(dataRoot, platform, purpose)
-        return { kind: "taken", holder: await (platform === "darwin" ? fileHolder(name) : askHolder(name)) }
+        return { kind: "taken", holder: await (platform === "darwin" ? fileHolder(name) : platform === "win32" ? windowsHolder(name) : askHolder(name)) }
       }
     }
     return lock
@@ -90,9 +91,47 @@ export async function acquireHostLock(dataRoot: string, options: HostLockOptions
 /** Where the lock lives, for messages and tests. */
 export function hostLockName(dataRoot: string, platform: NodeJS.Platform = nodePlatform(), purpose = "host"): string {
   if (!/^[a-z0-9-]{1,40}$/.test(purpose)) throw new Error(`A lock's purpose is lowercase letters, digits and dashes: ${purpose}`)
-  if (platform === "darwin") return join(resolve(dataRoot), `${purpose}.lock`)
+  // Windows: the same file, opened with no sharing (`exclusiveFileLock`); a pipe's name another account could hold.
+  if (platform === "darwin" || platform === "win32") return join(resolve(dataRoot), `${purpose}.lock`)
   const id = createHash("sha256").update(resolve(dataRoot)).digest("hex").slice(0, 32)
-  return platform === "win32" ? `\\\\.\\pipe\\mako-${purpose}-${id}` : `\0mako-${purpose}-${id}`
+  return `\0mako-${purpose}-${id}`
+}
+
+/**
+ * Windows' lock: `<purpose>.lock` in the data root, opened with no sharing, which Windows lets go of with its process.
+ * Nobody can read a file so held, so its holder's pid is written beside it.
+ */
+async function windowsLock(dataRoot: string, purpose: string): Promise<HostLock> {
+  const path = hostLockName(dataRoot, "win32", purpose)
+  const lock = exclusiveFileLock(path)
+  if (!lock) return { kind: "taken", holder: await windowsHolder(path) }
+  writeFileSync(`${path}.pid`, `${process.pid}\n`, { mode: 0o600 })
+  let released = false
+  return {
+    kind: "held",
+    release: async () => {
+      if (released) return
+      released = true
+      lock.release()
+    },
+  }
+}
+
+/** The live process that wrote its pid beside the Windows lock, waiting out a holder that hasn't yet. */
+async function windowsHolder(path: string): Promise<number | null> {
+  const until = Date.now() + HOLDER_WRITE_MS
+  for (;;) {
+    let text = ""
+    try {
+      text = readFileSync(`${path}.pid`, "utf8")
+    } catch {
+      // Not written yet.
+    }
+    const pid = pidIn(text)
+    if (pid !== null && running(pid)) return pid
+    if (Date.now() >= until) return null
+    await new Promise((done) => setTimeout(done, 10))
+  }
 }
 
 async function fileLock(dataRoot: string, purpose: string): Promise<HostLock> {

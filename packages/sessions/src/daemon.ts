@@ -25,6 +25,7 @@
  * client; if something answers the ping, it exits quietly.
  */
 
+import { connectFamily, drawFamilyPipe, exclusiveFileLock, isPipeFamily, makoLocalFolder, publishFamilyPipe, requireProof, retractFamilyPipe } from "./private-pipe.js"
 import type { ReceivedRecords, ReceivingSession, RecordsLink, SentRecords, StagedRecords } from "./record-sync.js"
 import type { CopyPage } from "./reading-copies.js"
 import type { CatalogSyncStatus, SyncScope } from "./scoped-uploads.js"
@@ -76,10 +77,9 @@ import { onMac, onWindows } from "./platform.js"
 export type { DaemonEvent, DaemonStats } from "./daemon-wire.js"
 
 export function daemonSocketPath(): string {
-  if (onWindows()) {
-    const user = (process.env.USERNAME ?? "user").replace(/[^a-z0-9_-]/gi, "-")
-    return `\\\\.\\pipe\\mako-syncd-${user}`
-  }
+  // Windows: the family whose server publishes a fresh pipe each start (`private-pipe.ts`); a name derived from the
+  // user's was one another account could take first.
+  if (onWindows()) return "\\\\.\\pipe\\mako-syncd"
   return join(homedir(), ".mako", "syncd.sock")
 }
 
@@ -127,7 +127,8 @@ const O_EXLOCK = 0x20
  *
  * - macOS: `<socket>.lock`, opened with `O_EXLOCK` and never removed.
  * - Linux: a listening socket in the abstract namespace named for the socket.
- * - Windows: a named pipe named for it.
+ * - Windows: `<family>.claim` in this user's Mako folder, opened with no sharing (`exclusiveFileLock`): another
+ *   account can neither hold it nor see it.
  */
 export async function claimDaemon(
   socketPath = daemonSocketPath()
@@ -153,6 +154,11 @@ export async function claimDaemon(
     }
   }
   const id = createHash("sha256").update(socketPath).digest("hex").slice(0, 32)
+  if (onWindows()) {
+    const lock = exclusiveFileLock(join(makoLocalFolder(), "locks", `syncd-claim-${id}`))
+    if (!lock) throw taken()
+    return { release: async () => lock.release() }
+  }
   const server = createServer((socket) => socket.destroy())
   await new Promise<void>((resolve, reject) => {
     server.once("error", (error: NodeJS.ErrnoException) => reject(error.code === "EADDRINUSE" ? taken() : error))
@@ -580,6 +586,8 @@ export async function serveCatalog(
   if (!onWindows()) await unlink(socketPath).catch(() => {})
 
   const service = catalogService(catalog, options)
+  // Windows: a pipe of this start's own, every connection proving itself first, published once it listens.
+  const drawn = onWindows() && isPipeFamily(socketPath) ? drawFamilyPipe(socketPath) : undefined
   const server = createServer((socket) => {
     if (
       !service.attach(
@@ -593,18 +601,21 @@ export async function serveCatalog(
       socket.destroy(new Error("The sync daemon has too many clients"))
   })
   service.onRetire(() => server.close())
+  if (drawn) requireProof(server, () => drawn.proof)
 
   server.once("close", () => {
     service.dispose()
     void ownership.release()
     if (!onWindows()) void unlink(socketPath).catch(() => {})
+    if (drawn) retractFamilyPipe(socketPath, drawn)
   })
   try {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject)
-      server.listen(socketPath, resolve)
+      server.listen(drawn?.pipe ?? socketPath, resolve)
     })
     if (!onWindows()) await chmod(socketPath, 0o600)
+    if (drawn) publishFamilyPipe(socketPath, drawn)
     return server
   } catch (error) {
     service.dispose()
@@ -725,6 +736,8 @@ export async function connectDaemon(
   socketPath = daemonSocketPath(),
   timeoutMs = 3000
 ): Promise<DaemonClient> {
+  // Windows: only the pipe this family's server published now, once it has proved itself (`private-pipe.ts`).
+  if (onWindows() && isPipeFamily(socketPath)) return connectProvenDaemon(socketPath, timeoutMs)
   const socket = createConnection(socketPath)
   socket.setNoDelay(true)
   try {
@@ -750,6 +763,21 @@ export async function connectDaemon(
       ),
       timeoutMs
     )
+  } catch (error) {
+    socket.destroy()
+    throw error
+  }
+}
+
+async function connectProvenDaemon(family: string, timeoutMs: number): Promise<DaemonClient> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const socket = await Promise.race([
+    connectFamily(family),
+    new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new Error("The sync daemon did not answer")), timeoutMs) }),
+  ]).finally(() => clearTimeout(timer))
+  socket.setNoDelay(true)
+  try {
+    return await connectDaemonLink(socketLink(socket, MAX_RESPONSE_FRAME_BYTES, "The sync daemon response was too large"), timeoutMs)
   } catch (error) {
     socket.destroy()
     throw error

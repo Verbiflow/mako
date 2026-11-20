@@ -120,7 +120,7 @@ try {
 
   // Another account, made for the check, once the host has narrowed its pipe's DACL: it can't open it at all, and
   // network logons are denied outright.
-  await until(() => readFile(join(dataRoot, "logs", "host.log"), "utf8").catch(() => ""), (log) => /pipes (made private to this user|a pipe kept Windows' default access)[^\n]*host's pipe/.test(log), "the host's pipe DACL", 60_000)
+  await until(() => readFile(join(dataRoot, "logs", "host.log"), "utf8").catch(() => ""), (log) => /pipes (a pipe's DACL is its owner's alone|a pipe keeps Windows' default DACL)[^\n]*host's pipe/.test(log), "the host's pipe DACL", 60_000)
   const { stdout: access } = await run("pwsh", ["-NoProfile", "-File", join(repo, "scripts", "windows-host", "pipe-access.ps1"), "-Pipe", socket], { timeout: 60_000 })
   const seen = JSON.parse(access.trim().split("\n").at(-1))
   report.pipeAccess = seen

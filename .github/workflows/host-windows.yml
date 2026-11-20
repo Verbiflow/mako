@@ -20,6 +20,13 @@ on:
       - packages/host/src/workspaces/project-folders.ts
       - packages/host/src/workspaces/thread-processes.ts
       - packages/client/src/**
+      - packages/sessions/src/private-pipe.ts
+      - packages/sessions/src/daemon.ts
+      - packages/sessions/src/record-locks.ts
+      - packages/host/src/attribution/shared-journal.ts
+      - packages/host/src/git/host-git.ts
+      - native/windows-helper/**
+      - scripts/build-windows-helper.mjs
       - packages/git/src/process-runner.ts
       - scripts/check-host-children.mjs
       - scripts/windows-host/**
@@ -59,6 +66,8 @@ jobs:
           electron: "false"
       - name: Build the host and its client
         run: npm run build:control-runtime
+      - name: The Windows helper, which must build here
+        run: node scripts/build-windows-helper.mjs --require
       - name: Executables, batch-file launches and process trees
         if: success() || failure()
         run: npx tsx scripts/test-windows-launch.ts

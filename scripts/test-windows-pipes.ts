@@ -23,6 +23,17 @@ import { drawHostPipe, publishHostPipe, runtimeIdentity, windowsRuntimeDirectory
 import { runtimeLocation } from "@mako/host/transport/service"
 import { TerminalDaemonClient, terminalEndpoint } from "@mako/host/terminals/client"
 import { handOverSecretKey } from "../electron/secret-key-link.js"
+import { promisify } from "node:util"
+import { execFile } from "node:child_process"
+import { connectDaemon, onDemandCatalogPaths } from "@mako/sessions"
+import { claimDaemon, DaemonAlreadyServing } from "../packages/sessions/src/daemon.ts"
+import { drawFamilyPipe, familyFile, isPipeFamily, publishedFamilyPipe, publishFamilyPipe, retractFamilyPipe } from "@mako/sessions/private-pipe"
+import { probeLock, takeLock } from "../packages/sessions/src/record-locks.ts"
+import { resolveExecutable } from "@mako/host/base/executable"
+import { windowsHelperLines } from "@mako/host/base/windows-helper"
+import { terminalShell } from "@mako/host/terminals/shell"
+
+const run = promisify(execFile)
 
 assert.equal(process.platform, "win32", "This test is Windows' own")
 const scratch = await mkdtemp(join(tmpdir(), "mako-windows-pipes-"))
@@ -38,10 +49,16 @@ async function impostor(pipe: string): Promise<{ heard: () => string; close: () 
       socket.write('HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 15\r\n\r\n{"wanted":true}')
     })
   })
-  await new Promise<void>((done, fail) => {
-    server.once("error", fail)
-    server.listen(pipe, done)
-  })
+  // The name is free once the last handle to it closes (a client's end, or the helper narrowing its DACL).
+  for (let tries = 0; ; tries += 1) {
+    const listened = await new Promise<Error | undefined>((done) => {
+      server.once("error", done)
+      server.listen(pipe, () => done(undefined))
+    })
+    if (!listened) break
+    if (tries >= 50) throw listened
+    await delay(100)
+  }
   return { heard: () => heard, close: () => new Promise((done) => server.close(() => done())) }
 }
 
@@ -147,6 +164,84 @@ try {
   })
   console.log(`info a bare spawn of git from the planted folder, outside the host's launcher, said: ${JSON.stringify(bare.slice(0, 80))}`)
   console.log("ok   a git.exe or git.com planted at a project's root never runs: the host starts Git by its whole path")
+
+  // The sessions daemon's pipe and a catalog reader's: a family whose server publishes a fresh pipe each start. An
+  // impostor holding the published name hears only nonces, and the client finds no daemon.
+  const family = "\\\\.\\pipe\\mako-syncd-test-" + randomUUID().slice(0, 8)
+  assert.ok(isPipeFamily(family) && isPipeFamily(onDemandCatalogPaths("a".repeat(64)).socket), "the sessions daemon and catalog readers are named by family")
+  // A real daemon on the family first: its clients reach it through the published pipe and the handshake.
+  const served = spawn(process.execPath, [resolve("scripts/windows-host/serve-fake-catalog.mjs"), family], { stdio: ["ignore", "pipe", "inherit"] })
+  await new Promise<void>((done, fail) => {
+    served.stdout.on("data", (chunk: Buffer) => { if (chunk.toString().includes("serving")) done() })
+    served.once("exit", (code) => fail(new Error(`the daemon exited ${code}`)))
+  })
+  const client = await connectDaemon(family, 5_000)
+  assert.equal(client.stats.pid, served.pid, "a client reaches the daemon serving the family, through its handshake")
+  client.close()
+  const gone = publishedFamilyPipe(family)
+  served.kill()
+  await new Promise((done) => served.once("exit", done))
+  assert.ok(gone, "the daemon published its pipe")
+  await assert.rejects(connectDaemon(family, 3_000), "a daemon ended outright leaves a name that reaches nothing")
+  const syncd = drawFamilyPipe(family)
+  publishFamilyPipe(family, syncd)
+  folders.push(familyFile(family))
+  const sessionsImpostor = await impostor(syncd.pipe)
+  await assert.rejects(connectDaemon(family, 3_000), "no daemon is taken for the impostor")
+  await sessionsImpostor.close()
+  assert.ok(onlyGreetings(sessionsImpostor.heard()), `the sessions impostor heard only nonces: ${JSON.stringify(sessionsImpostor.heard().slice(0, 200))}`)
+  retractFamilyPipe(family, syncd)
+  // Its claim, and record locks: a file in this user's folder opened with no sharing, never a pipe's name.
+  const claim = await claimDaemon(family)
+  await assert.rejects(claimDaemon(family), DaemonAlreadyServing, "one claim at a time")
+  await claim.release()
+  await (await claimDaemon(family)).release()
+  const recordLock = join(scratch, "records", "one.lock")
+  const held = await takeLock(recordLock)
+  assert.ok(held, "the record's lock is taken")
+  assert.equal(await takeLock(recordLock), null, "and held")
+  assert.equal(await probeLock(recordLock), "held")
+  await held.release()
+  assert.equal(await probeLock(recordLock), "free")
+  console.log("ok   the sessions daemon's pipe proves itself; its claim and record locks are files no other account can open")
+
+  // Programs found only where another account can't put them. A second account owns C:\opt\homebrew\bin (which
+  // Windows reads `/opt/homebrew/bin` as) and plants pwsh.exe and git.exe there, first on PATH; a folder made under
+  // C:\ by anyone inherits write for every authenticated user, and holds another pwsh.exe, second.
+  assert.match((await windowsHelperLines(["sid"]))?.[0] ?? "", /^S-1-5-21-/, "the helper names this user's SID")
+  const planted = "C:\\opt\\homebrew\\bin"
+  const open = "C:\\mako-open-" + randomUUID().slice(0, 8)
+  const other = `makoplant${Math.floor(Math.random() * 1e5)}`
+  const system32 = join(process.env.SystemRoot ?? "C:\\Windows", "System32")
+  await run(join(system32, "net.exe"), ["user", other, `Mk!${randomUUID().replaceAll("-", "")}a9Z`, "/add", "/y"])
+  try {
+    await mkdir(planted, { recursive: true })
+    await mkdir(open, { recursive: true })
+    await run(join(system32, "icacls.exe"), [planted, "/setowner", other])
+    await run(join(system32, "icacls.exe"), [planted, "/grant", `${other}:(OI)(CI)F`])
+    for (const name of ["pwsh.exe", "git.exe"]) await copyFile(join(system32, "cmd.exe"), join(planted, name))
+    await copyFile(join(system32, "cmd.exe"), join(open, "pwsh.exe"))
+    assert.match((await windowsHelperLines(["trusted", planted]))?.[0] ?? "", /^untrusted (owned by another|writable by)/, "the planted folder isn't trusted")
+    assert.match((await windowsHelperLines(["trusted", open]))?.[0] ?? "", /^untrusted writable by S-1-5-11/, "a folder under C:\\ is writable by every authenticated user")
+    assert.equal((await windowsHelperLines(["trusted", system32]))?.[0], "trusted")
+    const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "Path"
+    const env = { ...process.env, [pathKey]: [planted, open, process.env[pathKey]].join(";") }
+    for (const name of ["pwsh", "git"]) {
+      const found = resolveExecutable(name, env)
+      assert.ok(found && !found.toLowerCase().startsWith(planted.toLowerCase()) && !found.toLowerCase().startsWith(open.toLowerCase()), `${name} isn't taken from a folder another account can write: ${found}`)
+    }
+    assert.ok(!terminalShell(env).file.toLowerCase().startsWith("c:\\opt"), "a terminal never opens the planted pwsh")
+    const { stdout } = await hostCommand("git", ["--version"], { env, timeout: 20_000 })
+    assert.match(stdout, /^git version/, `Git ran, not what was planted: ${stdout.slice(0, 120)}`)
+    // And a POSIX path, which Windows reads from the drive's root, is never started.
+    await assert.rejects(hostCommand("/opt/homebrew/bin/git", ["--version"], { timeout: 20_000 }), "a path with no drive is no program")
+  } finally {
+    await rm("C:\\opt", { recursive: true, force: true }).catch(() => undefined)
+    await rm(open, { recursive: true, force: true }).catch(() => undefined)
+    await run(join(system32, "net.exe"), ["user", other, "/delete"]).catch(() => undefined)
+  }
+  console.log("ok   no program is taken from a folder another account can write: not C:\\opt\\homebrew\\bin, not one under C:\\")
+
   console.log("PASS: Windows pipes prove their servers, and no planted program runs")
 } finally {
   await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => undefined)

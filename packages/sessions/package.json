@@ -9,6 +9,7 @@
   "exports": {
     "./amounts": "./dist/amounts.js",
     "./processes": "./dist/processes.js",
+    "./private-pipe": "./dist/private-pipe.js",
     "./jsonl": "./dist/jsonl.js",
     "./record-files": "./dist/record-files.js",
     "./record-original": "./dist/record-original.js",

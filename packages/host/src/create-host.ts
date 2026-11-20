@@ -6,6 +6,7 @@ import { basename, dirname } from "node:path"
 import type { HostConfig } from "./host-config.js"
 import { HostMethods, publishHostPipe, runtimeInfo, startWebHost } from "./transport/index.js"
 import { ensurePrivateDirectory } from "./base/private-directory.js"
+import { makoLocalFolder } from "./base/kept-pipe.js"
 import { HostJobs, type JobDemand } from "./base/host-jobs.js"
 import { HostDomains, hostDomainOptions, type Domain } from "./base/host-domains.js"
 import { EventLoopWatch } from "./base/event-loop.js"
@@ -415,7 +416,11 @@ interface ListenParts {
 async function listen(config: HostConfig, methods: HostMethods, handover: SecretKeyHandover | undefined, { domains, jobs, subscribed, loop }: ListenParts, handlers: ListenHandlers) {
   const { socket, environment, pipe } = config
   // On Windows the pipe's name is this start's own and nothing is there before it: its folder holds what's published.
-  if (pipe) await ensurePrivateDirectory(config.runtimeDirectory, "Mako host")
+  if (pipe) {
+    // Mako's own folder first, which every Windows pipe's publication sits in, then this host's.
+    await ensurePrivateDirectory(makoLocalFolder(), "Mako")
+    await ensurePrivateDirectory(config.runtimeDirectory, "Mako host")
+  }
   else await mkdir(dirname(socket), { recursive: true, mode: 0o700 })
   const stale = pipe ? null : await lstat(socket).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return null

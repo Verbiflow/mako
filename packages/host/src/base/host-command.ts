@@ -5,6 +5,7 @@ import { resolveExecutable } from "./executable.js"
 import { hostStopping, type ProbeOptions } from "./host-stopping.js"
 import { onWindows } from "./platform.js"
 import { isBatchFile, windowsLaunch } from "./windows-launch.js"
+import { makoLocalFolder } from "./kept-pipe.js"
 
 /** Programs that only read the machine, which the host's probe child runs for it (`HostProbes`). */
 const PROBES = new Set(["ps", "pgrep", "lsof", "sysctl", "footprint", "vm_stat", "pmset", "notifyutil"])
@@ -99,8 +100,13 @@ function windowsSpawn(args: Parameters<typeof spawn>): Parameters<typeof spawn> 
   const options = (Array.isArray(second) ? third : second) as SpawnOptions | undefined
   const env = options?.env ?? process.env
   // A bare name is looked for by Windows in the working folder before PATH: a project holding a `git.exe` would run
-  // it. It's found here instead, on PATH's whole-path folders only, and started by its whole path.
-  const file = win32.isAbsolute(named) || /[\\/]/.test(named) ? named : (resolveExecutable(named, env) ?? named)
+  // it. It's found here instead, in folders only this user or the system can write (`resolveExecutable`), and started
+  // by its whole path. One not found, or a path with no drive (`/usr/bin/x` is `C:\usr\bin\x`, which any account may
+  // make), fails as a missing program does: it's started as a path in this user's own Mako folder that isn't there.
+  const missing = (why: string) => win32.join(makoLocalFolder(env), why, win32.basename(named))
+  const file = /^[\\/](?![\\/])/.test(named) ? missing("no-drive")
+    : win32.isAbsolute(named) || /[\\/]/.test(named) ? named
+    : (resolveExecutable(named, env) ?? missing("not-on-path"))
   if (!isBatchFile(file)) return file === named ? args : [file, words, options ?? {}]
   const launch = windowsLaunch(file, words, env, resolveExecutable("node", env))
   return [launch.file, launch.args, { ...options, env: launch.env ?? options?.env, windowsVerbatimArguments: launch.verbatim || options?.windowsVerbatimArguments }]
