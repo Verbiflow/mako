@@ -8,11 +8,12 @@ import {
   MachineBrowser,
   MachineTabVideo,
   helperCapture,
+  helperCaptures,
   helperLiveEncoder,
   localBrowsers,
   publishDeskBrowserRegistration,
   videoHelperExecutable,
-  x11Display,
+  videoHelperName,
 } from "@mako/control-runtime/desktop"
 import type { MethodTable } from "../base/methods.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -193,11 +194,11 @@ export function openControl(
     return (defaultBrowserApplication ??= machine.kind === "present" ? machine.defaultBrowser() : Promise.resolve(undefined))
   }
   // The video helper (`mako-video`): a packaged Mac app's beside its executable, a checkout's where `build:electron`
-  // built it; a Linux machine's is on PATH. The application owns these paths; the reusable Node runtime and the child
-  // control servers read the same one from the environment.
+  // built it (`mako-video.exe` on Windows); a Linux machine's is on PATH. The application owns these paths; the
+  // reusable Node runtime and the child control servers read the same one from the environment.
   const bundledVideoHelper = environment.packaged
-    ? join(dirname(dirname(environment.appRoot)), "MacOS", "mako-video")
-    : join(environment.appRoot, "build", "mako-video")
+    ? join(dirname(dirname(environment.appRoot)), ...(onMac() ? ["MacOS"] : []), videoHelperName())
+    : join(environment.appRoot, "build", videoHelperName())
   if (existsSync(bundledVideoHelper)) process.env.MAKO_VIDEO_HELPER ??= bundledVideoHelper
   // A Linux machine has no person's browser for Mako to connect to, so it runs its own.
   const chromium = onLinux() ? resolveExecutable("chromium") : undefined
@@ -295,8 +296,9 @@ export function openControl(
         }),
     capture: {
       tab: (target) => (machineVideo && target.browser === MACHINE_BROWSER_ID ? machineVideo.source(target.tab) : desktopCapture.tab(target)),
-      // Without the desktop app, a window is captured by the video helper: ScreenCaptureKit on a Mac, an X display's.
-      window: (target) => desktopCapture.window(target) ?? (videoHelper && (onMac() || x11Display()) ? helperCapture(videoHelper, { kind: "window", windowId: target.windowId }) : undefined),
+      // Without the desktop app, a window is captured by the video helper: ScreenCaptureKit on a Mac, Windows Graphics
+      // Capture on Windows, an X display's on Linux.
+      window: (target) => desktopCapture.window(target) ?? (videoHelper && helperCaptures() ? helperCapture(videoHelper, { kind: "window", windowId: target.windowId }) : undefined),
     },
   })
   const elementPicks = new ElementPicks(browser, previews, onMac() ? "mac" : "other")

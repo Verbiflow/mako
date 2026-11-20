@@ -708,6 +708,12 @@
     "win": {
       "target": [
         "nsis"
+      ],
+      "extraFiles": [
+        {
+          "from": "build/mako-video.exe",
+          "to": "mako-video.exe"
+        }
       ]
     },
     "extraResources": [
