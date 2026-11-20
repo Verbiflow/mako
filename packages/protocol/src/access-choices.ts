@@ -9,7 +9,7 @@ import { z } from "zod"
  * `mode` is the harness's own mode ID as its ladder lists it (`bypassPermissions`, `access:full`, …); `access` is the
  * tier that mode is on (`full`, `ask`, …), so a surface without the ladder can still say what's in effect.
  */
-export const AccessChoiceSchema = z.object({ mode: z.string().min(1).max(64), access: z.string().min(1).max(16).optional() }).strict()
+export const AccessChoiceSchema = z.lazy(() => z.object({ mode: z.string().min(1).max(64), access: z.string().min(1).max(16).optional() }).strict())
 export type AccessChoice = z.infer<typeof AccessChoiceSchema>
 
 /** A harness's ID, as the choices are keyed. */
@@ -17,9 +17,9 @@ export const AccessHarnessSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/)
 /** The most harnesses the choices keep. */
 export const ACCESS_CHOICES_MAX = 32
 
-export const AccessChoicesSchema = z
+export const AccessChoicesSchema = z.lazy(() => z
   .record(AccessHarnessSchema, AccessChoiceSchema)
-  .refine((choices) => Object.keys(choices).length <= ACCESS_CHOICES_MAX, `At most ${ACCESS_CHOICES_MAX} harnesses`)
+  .refine((choices) => Object.keys(choices).length <= ACCESS_CHOICES_MAX, `At most ${ACCESS_CHOICES_MAX} harnesses`))
 export type AccessChoices = z.infer<typeof AccessChoicesSchema>
 
 /** Where they're read and changed: `GET` answers them all, `PATCH` changes those it names and answers them all. */
@@ -29,14 +29,14 @@ export const ACCESS_CHOICES_PATH = "/v1/access"
  * `GET /v1/access`, and what a `PATCH` answers: every choice the account keeps, and their revision, which each change
  * raises by one. A device keeps the highest it heard: an answer or an event older than that changes nothing.
  */
-export const AccessChoicesAnswerSchema = z.object({ choices: AccessChoicesSchema, revision: z.number().int().nonnegative() })
+export const AccessChoicesAnswerSchema = z.lazy(() => z.object({ choices: AccessChoicesSchema, revision: z.number().int().nonnegative() }))
 export type AccessChoicesAnswer = z.infer<typeof AccessChoicesAnswerSchema>
 
 /**
  * `PATCH /v1/access`: the choices named are made, the rest left as they are. `fill`: only for harnesses the account
  * has no choice for yet, as a Mac offers what it kept before the account kept them; asked twice, the same end.
  */
-export const AccessChoosingSchema = z.object({ choices: AccessChoicesSchema, fill: z.boolean().optional() }).strict()
+export const AccessChoosingSchema = z.lazy(() => z.object({ choices: AccessChoicesSchema, fill: z.boolean().optional() }).strict())
 export type AccessChoosing = z.infer<typeof AccessChoosingSchema>
 
 /** `choices` with `next` applied as a `PATCH` applies it. */

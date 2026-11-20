@@ -31,17 +31,17 @@ export { CONTINUE_REASON_MAX, ContinuePhaseSchema, ContinueRepositorySchema, Lis
  * originals last did, so the turns the person read last may not be in what the cloud continues from; they stay on the
  * device, which says so when it's back.
  */
-export const ContinueFreshnessSchema = z
+export const ContinueFreshnessSchema = z.lazy(() => z
   .object({
     originalsAt: z.iso.datetime().optional(),
     copyAt: z.iso.datetime().optional(),
     behind: z.boolean(),
   })
-  .strict()
+  .strict())
 export type ContinueFreshness = z.infer<typeof ContinueFreshnessSchema>
 
 /** One Session a continue carries, as its row named it and its originals held it. */
-export const ContinueSessionSchema = z
+export const ContinueSessionSchema = z.lazy(() => z
   .object({
     session: z.uuid(),
     conversation: z.uuid(),
@@ -54,14 +54,14 @@ export const ContinueSessionSchema = z
     holdings: z.record(z.string(), z.number().int()).optional(),
     freshness: ContinueFreshnessSchema.optional(),
   })
-  .strict()
+  .strict())
 export type ContinueSession = z.infer<typeof ContinueSessionSchema>
 
 /** A continue as the account keeps it, and every route about it answers. */
 /** At most this many checkpoints a continue's arrival applies: a project folder's first repository and its others. */
 export const CONTINUE_APPLIED_MAX = 32
 
-export const ContinueStateSchema = z
+export const ContinueStateSchema = z.lazy(() => z
   .object({
     op: z.uuid(),
     /** The device's Thread, under its own ID, which the cloud keeps. */
@@ -95,11 +95,11 @@ export const ContinueStateSchema = z
     at: z.iso.datetime(),
     changedAt: z.iso.datetime(),
   })
-  .strip()
+  .strip())
 export type ContinueState = z.infer<typeof ContinueStateSchema>
 
 /** `POST /v1/sessions/:session/continue/:op`: nothing to say but the press, which the op ID names. */
-export const ContinueRequestSchema = z.object({}).strict()
+export const ContinueRequestSchema = z.lazy(() => z.object({}).strict())
 
 /** How long a client's ask for a continue's state is held open for it at most, in ms. */
 export const CONTINUE_WAIT_MS = 20_000
@@ -113,7 +113,7 @@ export const ContinueRefusalSchema = z.enum(["reachable", "working", "waiting", 
 export type ContinueRefusal = z.infer<typeof ContinueRefusalSchema>
 
 /** `GET /v1/sessions/:session/continue`: whether its Thread may continue in the cloud now, and what from. */
-export const ContinueOfferSchema = z.discriminatedUnion("offer", [
+export const ContinueOfferSchema = z.lazy(() => z.discriminatedUnion("offer", [
   z
     .object({
       offer: z.literal(true),
@@ -127,7 +127,7 @@ export const ContinueOfferSchema = z.discriminatedUnion("offer", [
     })
     .strip(),
   z.object({ offer: z.literal(false), why: ContinueRefusalSchema, detail: z.string().max(500) }).strip(),
-])
+]))
 export type ContinueOffer = z.infer<typeof ContinueOfferSchema>
 
 /** A row a continue may take: its owner's Session, on a device. */

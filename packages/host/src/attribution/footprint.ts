@@ -270,7 +270,7 @@ export class Exclusions {
 const ExcludedGroupSchema = z.object({ rule: z.enum(EXCLUSION_RULES), folder: z.string(), count: z.number(), why: z.string().optional() })
 
 /** One turn's footprint as read: the window, what the history returned under its claims, what was kept and what each rule left out. */
-export const FootprintTurnSchema = z.object({
+export const FootprintTurnSchema = z.lazy(() => z.object({
   thread: z.string(),
   session: z.string(),
   turn: z.string().optional(),
@@ -289,7 +289,7 @@ export const FootprintTurnSchema = z.object({
   groups: z.array(ExcludedGroupSchema),
   /** Milliseconds: the history read (in the reader, off the host's thread) and the rules, stats and writes on it. */
   ms: z.object({ read: z.number(), classify: z.number() }),
-})
+}))
 export type FootprintTurn = z.infer<typeof FootprintTurnSchema>
 
 /** Strong bases, for the contract's `evidence`. Only rows written before weak paths stopped being kept are `window`. */

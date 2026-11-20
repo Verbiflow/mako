@@ -33,10 +33,10 @@ export interface ThreadMarkEntry {
 }
 
 /** A change to a Thread's marks: `status` (null clears it) and `unread`, each only when given. */
-export const ThreadMarkChangeSchema = z
+export const ThreadMarkChangeSchema = z.lazy(() => z
   .object({ status: WorkStatusSchema.nullable().optional(), unread: z.boolean().optional() })
   .strict()
-  .refine((change) => change.status !== undefined || change.unread !== undefined, "A mark change changes something")
+  .refine((change) => change.status !== undefined || change.unread !== undefined, "A mark change changes something"))
 export type ThreadMarkChange = z.infer<typeof ThreadMarkChangeSchema>
 
 /** Whether a Done Thread has been Done long enough to fold into its project's "N done" line. */

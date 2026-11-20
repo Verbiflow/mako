@@ -2,10 +2,10 @@ import { problemType, type Problem, type ProblemType } from "@mako/protocol"
 import { z } from "zod"
 
 /** The largest picture a viewer draws, in device pixels. */
-export const ControlVideoBoxSchema = z.object({
+export const ControlVideoBoxSchema = z.lazy(() => z.object({
   width: z.number().int().min(16).max(8192),
   height: z.number().int().min(16).max(8192),
-}).strict()
+}).strict())
 
 /**
  * What a client asks a host for when it watches a conversation's preview through the conversation's Thread: live
@@ -14,11 +14,11 @@ export const ControlVideoBoxSchema = z.object({
  * host takes the new box and sends a fresh picture (a poster, when it has the screencast's, then a key frame) for a
  * viewer that lost what it had.
  */
-export const ControlVideoWatchSchema = z.object({
+export const ControlVideoWatchSchema = z.lazy(() => z.object({
   kind: z.literal("control-video"),
   conversationId: z.string().min(1).max(1024),
   box: ControlVideoBoxSchema.optional(),
-}).strict()
+}).strict())
 export type ControlVideoWatch = z.infer<typeof ControlVideoWatchSchema>
 
 /**

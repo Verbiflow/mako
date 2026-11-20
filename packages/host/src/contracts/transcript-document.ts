@@ -1,10 +1,10 @@
 import { z } from "zod"
 
 /** A Session's history to read: its conversation running here, or its native record. */
-export const TranscriptSourceSchema = z.discriminatedUnion("kind", [
+export const TranscriptSourceSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("live"), id: z.string() }),
   z.object({ kind: z.literal("file"), path: z.string() }),
-])
+]))
 export type TranscriptSource = z.infer<typeof TranscriptSourceSchema>
 
 export const TranscriptDepthSchema = z.enum(["concise", "full"])

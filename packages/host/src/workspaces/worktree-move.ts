@@ -111,7 +111,7 @@ export const MoveOutcomeSchema = z.object({
   backup: z.string().optional(),
 }) satisfies z.ZodType<MoveOutcome>
 
-export const MovePlanSchema = z.object({
+export const MovePlanSchema = z.lazy(() => z.object({
   id: z.string().uuid(),
   thread: z.string(),
   at: z.number(),
@@ -122,7 +122,7 @@ export const MovePlanSchema = z.object({
   adjusting: z.union([z.object({ kind: z.literal("bring") }), z.object({ kind: z.literal("put-back"), paths: z.array(z.string()) })]).optional(),
   repositories: z.array(RepositoryPlanSchema),
   outcome: MoveOutcomeSchema,
-})
+}))
 export type MovePlan = z.infer<typeof MovePlanSchema>
 
 /** What "Bring these" and "Put back" call before they write, and at each step. */

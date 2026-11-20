@@ -15,7 +15,7 @@ const Hex = z.string().regex(/^[0-9a-f]*$/)
 /** A chunk's hash: the SHA-256 of its plain bytes, as hex. */
 export const ChunkHashSchema = z.string().regex(/^[0-9a-f]{64}$/)
 
-export const RecordVersionSchema = z.object({
+export const RecordVersionSchema = z.lazy(() => z.object({
   seq: z.number().int().nonnegative(),
   kind: z.enum(["append", "replace", "delete"]),
   /** When it was written, in ms, by the clock of the store that captured it. */
@@ -28,10 +28,10 @@ export const RecordVersionSchema = z.object({
   detail: z.string().nullable(),
   writer: z.string().nullable(),
   writerSource: z.enum(["record", "observed"]).nullable(),
-})
+}))
 export type RecordVersion = z.infer<typeof RecordVersionSchema>
 
-export const RecordUnitSchema = z.object({
+export const RecordUnitSchema = z.lazy(() => z.object({
   key: z.string().min(1),
   role: z.enum(["file", "row", "schema", "lines"]),
   /** A file's path as its root names it (`claude:projects/x/s1.jsonl`), where a restore writes it; and every place its harness may file it. */
@@ -39,17 +39,17 @@ export const RecordUnitSchema = z.object({
   places: z.string().nullable(),
   /** In order; contiguous from the first `seq` past what the receiving store holds. */
   versions: z.array(RecordVersionSchema),
-})
+}))
 export type RecordUnit = z.infer<typeof RecordUnitSchema>
 
-export const RecordLayoutSchema = z.object({
+export const RecordLayoutSchema = z.lazy(() => z.object({
   home: z.string(),
   roots: z.record(z.string(), z.string()),
   paths: z.record(z.string(), z.record(z.string(), z.array(z.string()))),
-})
+}))
 export type RecordLayout = z.infer<typeof RecordLayoutSchema>
 
-export const RecordBundleSchema = z.object({
+export const RecordBundleSchema = z.lazy(() => z.object({
   harness: z.string().min(1).max(64),
   nativeId: z.string().min(1).max(512),
   /** Where the records were when captured: the machine's home, each root's folder, and the path columns of each database. */
@@ -61,11 +61,11 @@ export const RecordBundleSchema = z.object({
    */
   marks: z.record(z.string(), z.string()),
   units: z.array(RecordUnitSchema),
-})
+}))
 export type RecordBundle = z.infer<typeof RecordBundleSchema>
 
 /** What a store holds of a session: each unit's newest `seq`, by key. A bundle carries only what's past it. */
-export const RecordHoldingsSchema = z.record(z.string(), z.number().int().min(-1))
+export const RecordHoldingsSchema = z.lazy(() => z.record(z.string(), z.number().int().min(-1)))
 export type RecordHoldings = z.infer<typeof RecordHoldingsSchema>
 
 /** The chunk hashes some versions name, each once: a whole bundle's with `bundle.units.flatMap((unit) => unit.versions)`. */
@@ -238,7 +238,7 @@ export function decodeRecordPush(bytes: Uint8Array): RecordPushWith {
 export const RECORD_PUSH_WITH_BYTES = 4 * 1024 * 1024
 
 /** A session a store holds records of, as it lists them: how many versions, and the newest number it gave one. */
-export const RecordSessionSchema = z.object({ harness: z.string(), nativeId: z.string(), units: z.number().int(), versions: z.number().int(), through: z.number().int() })
+export const RecordSessionSchema = z.lazy(() => z.object({ harness: z.string(), nativeId: z.string(), units: z.number().int(), versions: z.number().int(), through: z.number().int() }))
 export type RecordSession = z.infer<typeof RecordSessionSchema>
 
 /** The most hashes one ask names, and the most bytes one pack carries, either way. */
@@ -246,14 +246,14 @@ export const RECORD_ASK_HASHES = 4096
 export const RECORD_PACK_BYTES = 16 * 1024 * 1024
 
 /** A push's answer: what the remote took, or why it refused, said as data. */
-export const RecordPushAnswerSchema = z.discriminatedUnion("ok", [
+export const RecordPushAnswerSchema = z.lazy(() => z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), versions: z.number().int(), held: z.number().int(), through: z.number().int() }),
   z.object({ ok: z.literal(false), conflict: z.enum(["diverged", "gap"]), key: z.string(), seq: z.number().int(), head: z.number().int(), message: z.string() }),
-])
+]))
 export type RecordPushAnswer = z.infer<typeof RecordPushAnswerSchema>
-export const RecordPulledSchema = z.object({ bundle: RecordBundleSchema, through: z.number().int().nonnegative(), more: z.boolean() })
+export const RecordPulledSchema = z.lazy(() => z.object({ bundle: RecordBundleSchema, through: z.number().int().nonnegative(), more: z.boolean() }))
 export type RecordPulled = z.infer<typeof RecordPulledSchema>
-export const RecordHoldingsPageSchema = z.object({ holdings: RecordHoldingsSchema, next: z.string().nullable() })
+export const RecordHoldingsPageSchema = z.lazy(() => z.object({ holdings: RecordHoldingsSchema, next: z.string().nullable() }))
 
 /**
  * What a session's units hold now, in one read: each unit's versions from its newest whole one (`replace`) to its
@@ -261,10 +261,10 @@ export const RecordHoldingsPageSchema = z.object({ holdings: RecordHoldingsSchem
  * wants only a session's current bytes (a reading copy, rewritten whole every few seconds while its Session works)
  * reads this rather than pulling every version since the first: a day's copies of a busy Session are thousands.
  */
-export const RecordHeadSchema = z.object({ through: z.number().int().nonnegative(), units: z.array(RecordUnitSchema) })
+export const RecordHeadSchema = z.lazy(() => z.object({ through: z.number().int().nonnegative(), units: z.array(RecordUnitSchema) }))
 export type RecordHead = z.infer<typeof RecordHeadSchema>
 /** `GET …/sessions/head`'s answer: null for a session the remote holds no records of. */
-export const RecordHeadAnswerSchema = z.object({ head: RecordHeadSchema.nullable() })
+export const RecordHeadAnswerSchema = z.lazy(() => z.object({ head: RecordHeadSchema.nullable() }))
 
 /**
  * The versions a unit's bytes are now, in order: from its newest whole one (`replace`), each `append` after it. The

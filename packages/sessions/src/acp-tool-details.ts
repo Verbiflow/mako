@@ -24,7 +24,7 @@ const acpDetail = z.union([
 ])
 
 /** ACP's `locations`: the files a tool call works on. */
-export const AcpLocationsSchema = z.array(z.object({ path: z.string(), line: z.number().nullish() }))
+export const AcpLocationsSchema = z.lazy(() => z.array(z.object({ path: z.string(), line: z.number().nullish() })))
 export type AcpLocation = z.infer<typeof AcpLocationsSchema>[number]
 
 /** The files a tool call works on, as links after its content. */
@@ -84,25 +84,25 @@ function isFields(value: AcpContentValue | undefined): value is { [key: string]:
 const ResourceSchema = z.object({ uri: z.string(), mimeType: z.string().nullish(), text: z.string().optional(), blob: z.string().optional() })
 
 /** ACP's `ContentBlock`, as a message chunk or a tool's content carries it. */
-export const AcpContentBlockSchema = z.discriminatedUnion("type", [
+export const AcpContentBlockSchema = z.lazy(() => z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), text: z.string() }),
   z.object({ type: z.literal("image"), data: z.string().nullish(), mimeType: z.string().nullish(), uri: z.string().nullish() }),
   z.object({ type: z.literal("audio"), data: z.string().nullish(), mimeType: z.string().nullish() }),
   z.object({ type: z.literal("resource_link"), uri: z.string(), name: z.string(), title: z.string().nullish(), mimeType: z.string().nullish() }),
   z.object({ type: z.literal("resource"), resource: ResourceSchema }),
-])
+]))
 export type AcpContentBlock = z.infer<typeof AcpContentBlockSchema>
 
 /** One part of a tool call's `content`. */
-export const AcpToolContentSchema = z.discriminatedUnion("type", [
+export const AcpToolContentSchema = z.lazy(() => z.discriminatedUnion("type", [
   z.object({ type: z.literal("content"), content: AcpContentBlockSchema }),
   z.object({ type: z.literal("diff"), path: z.string(), oldText: z.string().nullish(), newText: z.string() }),
   z.object({ type: z.literal("terminal"), terminalId: z.string() }),
-])
+]))
 export type AcpToolContent = z.infer<typeof AcpToolContentSchema>
 
 /** A `tool_call` or `tool_call_update` as ACP carries it, live or in a store that kept the wire. */
-export const AcpToolUpdateSchema = z.object({
+export const AcpToolUpdateSchema = z.lazy(() => z.object({
   title: z.string().nullish().catch(undefined),
   kind: z.string().nullish().catch(undefined),
   status: z.string().nullish().catch(undefined),
@@ -111,7 +111,7 @@ export const AcpToolUpdateSchema = z.object({
   rawInput: z.json().optional().catch(undefined),
   rawOutput: z.json().optional().catch(undefined),
   _meta: z.record(z.string(), z.json()).nullish().catch(undefined),
-})
+}))
 export type AcpToolUpdate = z.infer<typeof AcpToolUpdateSchema>
 
 /**

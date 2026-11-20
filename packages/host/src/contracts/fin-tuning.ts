@@ -30,7 +30,7 @@ import {
  */
 
 /** The person's choice of model and options for Fins on each harness; a harness without one runs Fins on what they use. */
-export const FinDefaultsSchema = z.record(z.string().min(1).max(64), SessionSettingsSchema)
+export const FinDefaultsSchema = z.lazy(() => z.record(z.string().min(1).max(64), SessionSettingsSchema))
 export type FinDefaults = z.infer<typeof FinDefaultsSchema>
 
 /** The most rules a person keeps, and the longest one: what every Apex reads must stay short. */
@@ -38,15 +38,15 @@ export const FIN_RULES_LIMIT = 12
 export const FIN_RULE_CHARS = 280
 
 /** Where a rule sends a Fin: a harness, and the model and options to run it on there, or what the person uses there. */
-export const FinTargetSchema = z.object({ harness: z.string().min(1).max(64), settings: SessionSettingsSchema.optional() })
+export const FinTargetSchema = z.lazy(() => z.object({ harness: z.string().min(1).max(64), settings: SessionSettingsSchema.optional() }))
 export type FinTarget = z.infer<typeof FinTargetSchema>
 
 /** One of the person's rules, in their own words: work like `when` goes to `target`. */
-export const FinRuleSchema = z.object({
+export const FinRuleSchema = z.lazy(() => z.object({
   id: z.string().min(1).max(64),
   when: z.string().trim().min(1).max(FIN_RULE_CHARS),
   target: FinTargetSchema,
-})
+}))
 export type FinRule = z.infer<typeof FinRuleSchema>
 
 /** The longest standing rules a person writes for one role: every agent of that role reads them whole. */
@@ -58,12 +58,12 @@ export const ROLE_RULES_CHARS = 2000
  * absent, the Apex's own harness). `forFins` and `forApexes` are their standing rules for every agent of each role, in
  * their own words; absent or empty, there are none.
  */
-export const FinPolicySchema = z.object({
+export const FinPolicySchema = z.lazy(() => z.object({
   rules: z.array(FinRuleSchema).max(FIN_RULES_LIMIT),
   otherwise: FinTargetSchema.optional(),
   forFins: z.string().trim().max(ROLE_RULES_CHARS).optional(),
   forApexes: z.string().trim().max(ROLE_RULES_CHARS).optional(),
-})
+}))
 export type FinPolicy = z.infer<typeof FinPolicySchema>
 
 /** The person's standing rules for one role, as `FinPolicy` keeps them. */

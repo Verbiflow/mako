@@ -20,13 +20,13 @@ const GrokBackgroundTask = z.object({
   exit_code: z.number().nullish(),
   signal: z.string().nullish(),
 })
-export const GrokBackgroundTasksSchema = z.object({
+export const GrokBackgroundTasksSchema = z.lazy(() => z.object({
   sessionId: z.string(),
   update: z.object({
     sessionUpdate: z.literal("background_tasks"),
     tasks: z.array(GrokBackgroundTask),
   }),
-})
+}))
 
 function observation(task: z.infer<typeof GrokBackgroundTask>, id: string): NativeAgentObservation {
   const command = (task.display_command ?? task.command ?? "").slice(0, 8192)

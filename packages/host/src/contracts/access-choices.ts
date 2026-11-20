@@ -9,10 +9,10 @@ import { ACCESS_TIER_NAMES } from "./access.js"
  * `mode` is the harness's own mode ID from its ladder (`HarnessDescriptor.modes`); `access`, that mode's tier, so a
  * surface without the ladder can still say what's in effect.
  */
-export const AccessChoiceSchema = z.object({ mode: z.string().min(1).max(64), access: z.enum(ACCESS_TIER_NAMES).optional() })
+export const AccessChoiceSchema = z.lazy(() => z.object({ mode: z.string().min(1).max(64), access: z.enum(ACCESS_TIER_NAMES).optional() }))
 export type AccessChoice = z.infer<typeof AccessChoiceSchema>
 
-export const AccessChoicesSchema = z.record(z.string(), AccessChoiceSchema)
+export const AccessChoicesSchema = z.lazy(() => z.record(z.string(), AccessChoiceSchema))
 export type AccessChoices = z.infer<typeof AccessChoicesSchema>
 
 /** The mode IDs alone, by harness: what a start reads. */

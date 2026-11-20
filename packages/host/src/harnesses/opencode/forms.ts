@@ -11,8 +11,8 @@ const Field = z.object({
   default: z.union([z.string(), z.number(), z.boolean(), z.array(z.string())]).optional(),
   when: z.array(z.object({ key: z.string(), op: z.enum(["eq", "neq"]), value: z.union([z.string(), z.number(), z.boolean()]) })).optional(),
 })
-export const NativeForm = z.object({ id: z.string().min(1).max(512), sessionID: z.string().min(1).max(512), title: z.string(), fields: z.array(Field).min(1).max(100) })
-export const NativeFormAnswer = z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean(), z.array(z.string())]))
+export const NativeForm = z.lazy(() => z.object({ id: z.string().min(1).max(512), sessionID: z.string().min(1).max(512), title: z.string(), fields: z.array(Field).min(1).max(100) }))
+export const NativeFormAnswer = z.lazy(() => z.record(z.string(), z.union([z.string(), z.number().finite(), z.boolean(), z.array(z.string())])))
 export function openCodeQuestions(form: z.infer<typeof NativeForm>): LiveInputQuestion[] {
   return form.fields.map(field => {
     const options = field.type === "boolean" ? [{ value: "true", label: "Yes" }, { value: "false", label: "No" }] : field.options ?? []

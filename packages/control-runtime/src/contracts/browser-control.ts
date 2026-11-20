@@ -2,14 +2,14 @@ import { RecordingOptionsSchema } from "@mako/control/control/recording"
 import { ControlReadScopeSchema } from "@mako/control/control/scope"
 import { z } from "zod"
 
-export const BrowserStateSchema = z.discriminatedUnion("status", [
+export const BrowserStateSchema = z.lazy(() => z.discriminatedUnion("status", [
   z.object({ status: z.literal("setup-required") }),
   z.object({ status: z.literal("connecting") }),
   z.object({ status: z.literal("disconnected") }),
   z.object({ status: z.literal("awaiting-approval"), startedAt: z.number() }),
   z.object({ status: z.literal("connected"), generation: z.string() }),
   z.object({ status: z.literal("unavailable"), reason: z.string() }),
-])
+]))
 export type BrowserConnectionState = z.infer<typeof BrowserStateSchema>
 export interface BrowserControlStatus {
   id: string
@@ -63,11 +63,11 @@ export const BrowserFaultCodeSchema = z.enum([
   "outcome-unknown",
   "output-limit",
 ])
-export const BrowserFaultSchema = z.object({
+export const BrowserFaultSchema = z.lazy(() => z.object({
   code: BrowserFaultCodeSchema,
   message: z.string(),
   outcome: z.enum(["not-dispatched", "rejected", "unknown"]),
-})
+}))
 export type BrowserFaultData = z.infer<typeof BrowserFaultSchema>
 export class BrowserFault extends Error {
   readonly detail: BrowserFaultData
