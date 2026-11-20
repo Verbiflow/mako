@@ -34,6 +34,7 @@ const SUITES = [
   "test:provider-ui",
   "test:side-rail-ui",
   "test:lazy-pieces-ui",
+  "test:prose-settle-ui",
   "test:fin-transitions-ui",
   "test:terminal-ui",
   "test:follow-ui",

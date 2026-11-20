@@ -180,3 +180,58 @@ for (const path of ["video.mp4", "voice.wav", "report.xlsx", "report.pdf", "trac
   assert.deepEqual(plan.children.flatMap(node => node.type === "element" ? inlineFileLinks(node) : []), [], `Native ${path} does not gain a second automatic preview`)
 }
 console.log("Explicit Markdown/native visuals keep one preview; path citations, distinct files, captions and isolated cache reuse survive")
+
+// A settled answer that streamed is drawn from its whole tree, cut where its text was cut while it streamed
+// (`treePieces`): the parts, drawn one after another, are the answer drawn at once. Where a piece alone reads
+// otherwise (a heading named as one before it, an output folder said a block earlier, a picture of a file cited
+// elsewhere), the part is what the whole answer says.
+{
+  const { parseSettledProse, treePieces } = await import("../src/lib/parsed-markdown")
+  const { streamPieces } = await import("../src/lib/streaming-markdown")
+  const { Fragment } = await import("react")
+  const whole = (text: string) => renderToStaticMarkup(createElement(Markdown, { remarkPlugins: prosePlugins(), rehypePlugins: [rehypeAssetGroups], components }, text))
+  const drawn = (part: Root) => renderToStaticMarkup(createElement(Markdown, { remarkPlugins: [skipMarkdownParse], rehypePlugins: [[reuseParsedProse, part]], components }, ""))
+  const alone = (piece: string) => renderToStaticMarkup(createElement(Markdown, { remarkPlugins: prosePlugins(), rehypePlugins: [rehypeAssetGroups], components }, piece))
+  const rng = (seed: number) => () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32)
+  const words = "the host keeps a copy of each turn so a reload draws the same answer while the runtime streams events".split(" ")
+  const reply = (seed: number) => {
+    const r = rng(seed)
+    const say = () => Array.from({ length: 6 + Math.floor(r() * 10) }, (_, i) => (i === 2 ? "`src/lib/streaming-markdown.ts`" : i === 5 ? "**" + words[Math.floor(r() * words.length)] + "**" : words[Math.floor(r() * words.length)])).join(" ") + "."
+    const blocks = ["# Plan", say()]
+    for (let i = 0; i < 40; i++) {
+      const kind = r()
+      if (i % 6 === 0) blocks.push(`## ${["Plan", "Changes", "Plan", "Risks"][i % 4]}`)
+      else if (kind < 0.3) blocks.push(`${say()} ${say()}`)
+      else if (kind < 0.45) blocks.push(`- ${say()}\n  - ${say()}\n- ${say()}`)
+      else if (kind < 0.55) blocks.push(`1. ${say()}\n\n2. ${say()}`)
+      else if (kind < 0.65) blocks.push("| Path | Lines |\n| --- | ---: |\n| `src/app.ts` | 4 |\n| `src/b.ts` | 9 |")
+      else if (kind < 0.72) blocks.push(`> ${say()}`)
+      else if (kind < 0.8) blocks.push(`Screenshots are saved in \`/tmp/run-${i}/\`\n\n\`shot-${i}.png\` and ${say()}`)
+      else if (kind < 0.88) blocks.push(`![shot](/tmp/run/shot-${i % 3}.png)\n\n![next](/tmp/run/next.png)\n\nThe file is at \`/tmp/run/shot-${(i + 1) % 3}.png\`.`)
+      else blocks.push("```ts\nconst a = 1\n\nconst b = 2\n```")
+    }
+    return blocks.join("\n\n")
+  }
+  const texts = [...cases, outputProse, groupedSource, duplicatedVisual, nativeSource, "# Plan\n\nOne.\n\n## Plan\n\nTwo.\n\n## Plan\n\nThree.", ...Array.from({ length: 12 }, (_, seed) => reply(seed + 1))]
+  let differAlone = 0
+  for (const text of texts) {
+    const pieces = streamPieces(text)
+    const tree = parseSettledProse(text)
+    const original = structuredClone(tree)
+    const parts = treePieces(tree, pieces)
+    assert.equal(parts.length, pieces.length)
+    assert.equal(parts.reduce((count, part) => count + part.children.length, 0), tree.children.length, "every block is in exactly one part")
+    const joined = renderToStaticMarkup(createElement(Fragment, null, ...parts.map((part, index) => createElement(Markdown, { key: index, remarkPlugins: [skipMarkdownParse], rehypePlugins: [[reuseParsedProse, part]], components }, ""))))
+    assert.equal(joined, whole(text), "a settled answer's parts draw what the answer drawn at once draws")
+    assert.deepEqual(tree, original, "drawing the parts leaves the whole tree as the worker sent it")
+    if (pieces.some((piece, index) => drawn(parts[index]!).trim() !== alone(piece).trim())) differAlone += 1
+  }
+  assert.ok(differAlone >= 3, "the fixtures include answers whose pieces alone read otherwise than the whole")
+  // A gallery after prose and a list of files stay one block each, in the part their source starts in.
+  const gallery = "Before.\n\n- /tmp/a.png\n- /tmp/b.png\n\nAfter."
+  assert.equal(treePieces(parseSettledProse(gallery), streamPieces(gallery)).map(drawn).join(""), whole(gallery))
+  // Native visuals the reply already shows are left out of the whole tree as they are from the answer drawn at once.
+  const native = parseSettledProse(nativeSource, ["images/screen one.png"])
+  assert.equal(drawn(native), renderToStaticMarkup(createElement(Markdown, { remarkPlugins: prosePlugins(), rehypePlugins: [[rehypeAssetGroups, { previewedFiles: ["images/screen one.png"] }]], components }, nativeSource)))
+  console.log(`A streamed answer's settled parts draw what the whole answer draws (${texts.length} answers, ${differAlone} whose pieces alone differ)`)
+}
