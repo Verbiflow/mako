@@ -8,12 +8,15 @@
 //   mako-video display [<id>] [options]   a display (the main one without an id)
 //   mako-video window <id> [options]      one window, by its CGWindowID
 //   mako-video frames [options]           the pictures on its input
+//   mako-video overlay <video> [options]  a video's frames, each under the transparent RGBA picture sent for its time
+//                                         (a recording's cursor), at the pictures' size
 //   options: --fps N (30)  --bitrate BPS (from the size)  --box WxH (none)  --keyint N (0: only when asked)
 //            --quality Q (0–100, constant quality for recordings, instead of a bitrate)
 //
 // Its input and output are the Linux helper's: units out as length-prefixed ControlVideoPackets, commands in as a
 // type byte and a big-endian length ('K' key frame, 'B' box, 'R' bitrate, 'F' picture). The end of its input ends
 // it; a source that went away ends it with "ended: <why>" on stderr, and the last line on stderr is a JSON summary.
+import AVFoundation
 import CoreGraphics
 import CoreMedia
 import CoreVideo
@@ -24,7 +27,7 @@ import VideoToolbox
 
 // MARK: Options
 
-enum Source { case display(CGDirectDisplayID?), window(CGWindowID), frames }
+enum Source { case display(CGDirectDisplayID?), window(CGWindowID), frames, overlay(URL) }
 
 struct Options {
   var source = Source.frames
@@ -36,7 +39,7 @@ struct Options {
 }
 
 func usage() -> Never {
-  FileHandle.standardError.write("usage: mako-video display [<id>]|window <id>|frames [--fps N] [--bitrate BPS] [--box WxH] [--keyint N] [--quality Q]\n".data(using: .utf8)!)
+  FileHandle.standardError.write("usage: mako-video display [<id>]|window <id>|frames|overlay <video> [--fps N] [--bitrate BPS] [--box WxH] [--keyint N] [--quality Q]\n".data(using: .utf8)!)
   exit(64)
 }
 
@@ -53,6 +56,10 @@ case "display":
   } else {
     options.source = .display(nil)
   }
+case "overlay":
+  guard let first = arguments.first, !first.hasPrefix("--") else { usage() }
+  options.source = .overlay(URL(fileURLWithPath: first))
+  arguments.removeFirst()
 case "window":
   guard let first = arguments.first, let id = UInt32(first) else { usage() }
   options.source = .window(id)
@@ -131,7 +138,11 @@ final class Encoder {
   private func open(_ width: Int, _ height: Int) -> Bool {
     close()
     var made: VTCompressionSession?
-    let specification = [kVTVideoEncoderSpecification_EnableLowLatencyRateControl: true] as CFDictionary
+    // Live video takes the low-latency rate control, which keeps a bitrate; a recording's constant quality is the
+    // ordinary encoder's (with low-latency rate control and no bitrate it dropped every frame after the first).
+    let specification = (options.quality > 0
+      ? [kVTVideoEncoderSpecification_RequireHardwareAcceleratedVideoEncoder: true]
+      : [kVTVideoEncoderSpecification_EnableLowLatencyRateControl: true]) as CFDictionary
     guard VTCompressionSessionCreate(allocator: nil, width: Int32(width), height: Int32(height), codecType: kCMVideoCodecType_H264,
                                      encoderSpecification: specification, imageBufferAttributes: nil, compressedDataAllocator: nil,
                                      outputCallback: nil, refcon: nil, compressionSessionOut: &made) == noErr, let session = made else { return false }
@@ -140,6 +151,10 @@ final class Encoder {
     _ = set(kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse)
     _ = set(kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_High_AutoLevel)
     _ = set(kVTCompressionPropertyKey_ExpectedFrameRate, options.fps as CFNumber)
+    // Said in the stream, so every decoder turns it back into the same RGB: BT.709, as browsers assume for HD.
+    _ = set(kVTCompressionPropertyKey_ColorPrimaries, kCVImageBufferColorPrimaries_ITU_R_709_2)
+    _ = set(kVTCompressionPropertyKey_TransferFunction, kCVImageBufferTransferFunction_ITU_R_709_2)
+    _ = set(kVTCompressionPropertyKey_YCbCrMatrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2)
     _ = set(kVTCompressionPropertyKey_MaxKeyFrameInterval, (options.keyint > 0 ? options.keyint : Int(Int32.max)) as CFNumber)
     if options.quality > 0 {
       _ = set(kVTCompressionPropertyKey_Quality, (Double(options.quality) / 100) as CFNumber)
@@ -158,8 +173,12 @@ final class Encoder {
     return true
   }
 
+  /** Every frame given is written before the session goes. */
   func close() {
-    if let session { VTCompressionSessionInvalidate(session) }
+    if let session {
+      VTCompressionSessionCompleteFrames(session, untilPresentationTimeStamp: .invalid)
+      VTCompressionSessionInvalidate(session)
+    }
     session = nil
   }
 
@@ -260,15 +279,105 @@ func picture(_ body: Data) {
     if let provider = CGDataProvider(data: pixels as CFData) {
       image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 8 * channels, bytesPerRow: width * channels,
                       space: CGColorSpaceCreateDeviceRGB(),
-                      bitmapInfo: CGBitmapInfo(rawValue: format == 1 ? CGImageAlphaInfo.none.rawValue : CGImageAlphaInfo.premultipliedLast.rawValue),
+                      bitmapInfo: CGBitmapInfo(rawValue: format == 1 ? CGImageAlphaInfo.none.rawValue : CGImageAlphaInfo.last.rawValue),
                       provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
     }
   } else {
     finish("Unknown picture format \(format)")
   }
-  guard let image, let buffer = pixelBuffer(image) else { return }
+  guard let image else { return }
+  if let overlay {
+    guard let buffer = overlay.compose(image, at: capturedAt / 1000) else { return }
+    encoder.encode(buffer, sequence: sequence, capturedAt: capturedAt)
+    return
+  }
+  guard let buffer = pixelBuffer(image) else { return }
   encoder.encode(buffer, sequence: sequence, capturedAt: capturedAt)
 }
+
+// MARK: A video under pictures
+
+/**
+ * A video's frames read in order with AVFoundation, each the one shown at a picture's time (the last one held past
+ * its end), letterboxed into the picture's size on a dark ground, with the picture drawn over it.
+ */
+final class Overlay {
+  private let reader: AVAssetReader
+  private let output: AVAssetReaderTrackOutput
+  /** Decoded frames copied out of the reader's buffers, which it decodes the next frames into. */
+  private var current: CGImage?
+  private var next: (time: Double, image: CGImage?)?
+  private var done = false
+
+  init(_ url: URL) {
+    let asset = AVURLAsset(url: url)
+    let semaphore = DispatchSemaphore(value: 0)
+    var found: AVAssetTrack?
+    Task {
+      found = try? await asset.loadTracks(withMediaType: .video).first
+      semaphore.signal()
+    }
+    semaphore.wait()
+    guard let track = found, let reader = try? AVAssetReader(asset: asset) else { finish("The video can't be read") }
+    output = AVAssetReaderTrackOutput(track: track, outputSettings: [kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA])
+    reader.add(output)
+    guard reader.startReading() else { finish("The video can't be read: \(reader.error?.localizedDescription ?? "unknown")") }
+    self.reader = reader
+    advance()
+  }
+
+  private func advance() {
+    guard !done, let sample = output.copyNextSampleBuffer() else {
+      done = true
+      next = nil
+      return
+    }
+    var image: CGImage?
+    if let buffer = sample.imageBuffer {
+      var wrapped: CGImage?
+      VTCreateCGImageFromCVPixelBuffer(buffer, options: nil, imageOut: &wrapped)
+      if let wrapped, let space = wrapped.colorSpace,
+         let copy = CGContext(data: nil, width: wrapped.width, height: wrapped.height, bitsPerComponent: 8, bytesPerRow: 0, space: space,
+                              bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) {
+        copy.draw(wrapped, in: CGRect(x: 0, y: 0, width: wrapped.width, height: wrapped.height))
+        image = copy.makeImage()
+      }
+    }
+    next = (sample.presentationTimeStamp.seconds, image)
+  }
+
+  func compose(_ picture: CGImage, at time: Double) -> CVPixelBuffer? {
+    while let upcoming = next, upcoming.time <= time + 1e-6 {
+      if let image = upcoming.image { current = image }
+      advance()
+    }
+
+    let width = picture.width & ~1, height = picture.height & ~1
+    var buffer: CVPixelBuffer?
+    let attributes = [kCVPixelBufferIOSurfacePropertiesKey: [:]] as CFDictionary
+    guard CVPixelBufferCreate(nil, width, height, kCVPixelFormatType_32BGRA, attributes, &buffer) == kCVReturnSuccess, let buffer else { return nil }
+    CVPixelBufferLockBaseAddress(buffer, [])
+    defer { CVPixelBufferUnlockBaseAddress(buffer, []) }
+    // Drawn in the video's own color space, so its pixels come out as they went in rather than converted for a screen.
+    let frame = current
+    let space = frame?.colorSpace ?? CGColorSpace(name: CGColorSpace.sRGB) ?? CGColorSpaceCreateDeviceRGB()
+    guard let context = CGContext(data: CVPixelBufferGetBaseAddress(buffer), width: width, height: height, bitsPerComponent: 8,
+                                  bytesPerRow: CVPixelBufferGetBytesPerRow(buffer), space: space,
+                                  bitmapInfo: CGImageAlphaInfo.noneSkipFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue) else { return nil }
+    context.setFillColor(red: 0x17 / 255, green: 0x16 / 255, blue: 0x14 / 255, alpha: 1)
+    context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+    context.interpolationQuality = .high
+    if let frame {
+      let scale = min(Double(width) / Double(frame.width), Double(height) / Double(frame.height))
+      let drawn = CGSize(width: Double(frame.width) * scale, height: Double(frame.height) * scale)
+      context.draw(frame, in: CGRect(x: (Double(width) - drawn.width) / 2, y: (Double(height) - drawn.height) / 2, width: drawn.width, height: drawn.height))
+    }
+    context.draw(picture, in: CGRect(x: 0, y: 0, width: width, height: height))
+    return buffer
+  }
+}
+
+let overlay: Overlay? = { if case .overlay(let url) = options.source { return Overlay(url) } else { return nil } }()
 
 // MARK: ScreenCaptureKit
 
@@ -290,7 +399,7 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
       case .display(let id):
         guard let display = content.displays.first(where: { id == nil || $0.displayID == id }) else { finish("That display is gone") }
         filter = SCContentFilter(display: display, excludingWindows: [])
-      case .frames: return
+      case .frames, .overlay: return
       }
       let scale = Double(filter.pointPixelScale)
       size = (Int(filter.contentRect.width * scale), Int(filter.contentRect.height * scale))
@@ -355,7 +464,9 @@ final class Capture: NSObject, SCStreamOutput, SCStreamDelegate {
 }
 
 let capture = Capture()
-if case .frames = options.source {} else {
+switch options.source {
+case .frames, .overlay: break
+default:
   // ScreenCaptureKit needs this process's window server connection, which nothing else here would open.
   _ = CGMainDisplayID()
   Task { await capture.start() }

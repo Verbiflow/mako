@@ -16,12 +16,13 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import sharp from "sharp"
 import { ControlRecording } from "../packages/control-runtime/src/control-recording.js"
-import { mediaExecutable, recordingVideoEncoding } from "../packages/control-runtime/src/control-media.js"
+import { resolveExecutable } from "../packages/control-runtime/src/executable.js"
 
 const execute = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-continuous-recording-"))
-const ffmpeg = mediaExecutable("ffmpeg"),
-  ffprobe = mediaExecutable("ffprobe")
+// Recording needs no FFmpeg; making the native fixture and inspecting the videos does (a check, not a dependency).
+const ffmpeg = resolveExecutable("ffmpeg") ?? assert.fail("This check needs FFmpeg on PATH"),
+  ffprobe = resolveExecutable("ffprobe") ?? assert.fail("This check needs FFprobe on PATH")
 const target = {
   kind: "page" as const,
   browser: "fixture",
@@ -215,7 +216,7 @@ await execute(ffmpeg, [
   "0.5",
   "-vf",
   "fps=60",
-  ...recordingVideoEncoding().args,
+  "-c:v", "libx264", "-preset", "fast", "-crf", "18",
   "-pix_fmt",
   "yuv420p",
   join(native.directory, "recording.mp4"),

@@ -38,11 +38,12 @@
     "test": "npm run -s build && node test/lifecycle.mjs && node test/media.mjs && node test/driver-broker.mjs"
   },
   "dependencies": {
-    "@mako/lazy": "0.1.0",
     "@mako/control": "0.1.0",
+    "@mako/lazy": "0.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "devtools-protocol": "0.0.1692173",
     "image-size": "2.0.2",
+    "mediabunny": "1.66.2",
     "sharp": "0.35.3",
     "ws": "8.21.3",
     "zod": "4.4.3"

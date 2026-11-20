@@ -746,3 +746,30 @@ frames the app drew. Every unit the helper sent decoded.
 `scripts/test-video-helper.mjs` (Linux) and `scripts/test-video-helper-mac.mjs`
 check them end to end; `scripts/test-video-helper-protocol.ts` checks the Node
 side against a fake.
+
+## November 20: recordings without FFmpeg
+
+A recording's pictures are still drawn in its worker (sharp, with the cursor),
+but encoded by the video helper's `frames` mode: VideoToolbox on a Mac (the
+ordinary encoder at quality 0.85; its low-latency rate control with no bitrate
+dropped every frame after the first), OpenH264 at a constant quantizer on
+Linux, a key frame a second either way. Each unit is written as its own MP4
+fragment the moment the next gives its duration
+([`mp4.ts`](../packages/control-runtime/src/mp4.ts)), laid out as FFmpeg lays a
+one-sample fragment out, so a crash keeps every unit but the newest. The file is
+then read back with Mediabunny (MPL-2.0, pure JavaScript) instead of FFprobe:
+nothing is published because a file exists. A native capture's video is read
+the same way, its idle stretches are cut by writing its packets again at new
+times (no decode), and its pointer is drawn by the Mac helper's `overlay` mode
+(AVFoundation decodes the video, CoreGraphics draws the pointer pictures over
+each frame in the video's own color space, VideoToolbox encodes). A Linux
+driver records through an FFmpeg on PATH, so there that FFmpeg draws the
+pointer; without one the video is kept as it is and the pointer stays in the
+timeline. Every stream says BT.709, so FFmpeg's decoder and a browser's give
+back the colors that went in (they read the Mac's untagged stream as BT.601,
+seven levels off).
+
+A recording needs the helper; without one it is refused before the capture
+starts, with what to install. Checked on a Mac and in a Linux container by the
+recording suite (`npm run test:control-recording`), where an FFmpeg on PATH
+decodes the files as an independent check.

@@ -9,14 +9,14 @@ import sharp from "sharp"
 import { z } from "zod"
 import { RECORDING_IDLE_HOLD_MS } from "../packages/control/src/control/recording.js"
 import { ControlRecording } from "../packages/control-runtime/src/control-recording.js"
-import { mediaExecutable } from "../packages/control-runtime/src/control-media.js"
 import { resolveExecutable } from "../packages/control-runtime/src/executable.js"
+import { readMp4 } from "../packages/control-runtime/src/mp4.js"
 
 // An agent starts a recording, then thinks for seconds between actions. Still
 // stretches longer than a second play for exactly a second; the timeline keeps
 // wall-clock times and every cut, and `idle: "keep"` keeps real time.
 const execute = promisify(execFile)
-// Recording runs on the configured media tools; inspection needs a full FFmpeg.
+// Recording needs no FFmpeg; inspecting its videos does (a check, not a dependency).
 const inspector = resolveExecutable("ffmpeg") ?? assert.fail("Inspecting recordings needs a full FFmpeg on PATH")
 const root = await mkdtemp(join(tmpdir(), "mako-recording-idle-"))
 const page = { kind: "page" as const, browser: "fixture", tab: "one", generation: "one", lease: "one" }
@@ -34,8 +34,8 @@ async function colourAt(video: string, seconds: number) {
   const [r = 0, g = 0, b = 0] = stdout
   return r > g && r > b ? "red" : g > r && g > b ? "green" : "blue"
 }
-const durationOf = async (video: string) =>
-  Number((await execute(mediaExecutable("ffprobe"), ["-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", video])).stdout) * 1000
+// Read as the recording reads its own files: FFmpeg 5.1's probe takes a remuxed file's length from its header.
+const durationOf = async (video: string) => ((await readMp4(video))?.duration ?? 0) * 1000
 const TimelineSchema = z.object({
   idle: z.object({
     mode: z.enum(["trim", "keep"]),
@@ -105,11 +105,23 @@ try {
     "-map", "[o]", "-fps_mode", "vfr", "-c:v", "libx264", "-bf", "2", "-x264-params", "b-adapt=0", "-pix_fmt", "yuv420p",
     "-bsf:v", "setts=duration=if(gte(PTS*TB\\,4.96)\\,3/TB\\,DURATION)", native,
   ])
+  // The same without B-frames, for the cursor's re-encode: AVFoundation, which decodes a native video on a Mac to draw
+  // the pointer on it, reads this FFmpeg-made file's B-frames two frames apart from FFmpeg itself (a driver's
+  // AVFoundation-made video has no such disagreement), which would move the cut's edge, not test it.
+  const nativeWithoutReordering = join(root, "native-no-b.mp4")
+  await execute(inspector, [
+    "-v", "error", "-y",
+    "-f", "lavfi", "-i", "color=c=0xdc1e1e:s=640x360:r=30:d=2.1",
+    "-f", "lavfi", "-i", "color=c=0x1e3cdc:s=640x360:r=30:d=2.9",
+    "-filter_complex", "[0:v][1:v]concat=n=2:v=1[v];[v]select='not(between(t\\,2.1\\,4.6))'[o]",
+    "-map", "[o]", "-fps_mode", "vfr", "-c:v", "libx264", "-bf", "0", "-pix_fmt", "yuv420p",
+    "-bsf:v", "setts=duration=if(gte(PTS*TB\\,4.96)\\,3/TB\\,DURATION)", nativeWithoutReordering,
+  ])
   for (const cursor of [false, true]) {
     let recording: ControlRecording | undefined
     recording = await ControlRecording.create({ kind: "window", pid: 1, window_id: 1 }, { directory: root, fps: 30, cursor }, async () => {
       const path = join(recording!.directory, "recording.mp4")
-      await copyFile(native, path)
+      await copyFile(cursor ? nativeWithoutReordering : native, path)
       await recording!.attachVideo(path)
     })
     // Without pointer events there is nothing to draw, and the video passes through.
@@ -119,21 +131,21 @@ try {
     assert.equal(receipt.status, "finished", JSON.stringify(receipt))
     const timeline = TimelineSchema.parse(JSON.parse(await readFile(receipt.timeline!, "utf8")))
     if (timeline.idle.kept) {
-      assert.match(timeline.idle.kept, /cannot shift packet timestamps/, "Only an FFmpeg without setts keeps native idle time")
-      console.log(`native idle trimming skipped: ${timeline.idle.kept}`)
-      break
+      assert.fail(`native idle time was kept: ${timeline.idle.kept}`)
     }
     const nativeCuts = timeline.idle.trims
-    assert.equal(nativeCuts.length, 2, JSON.stringify(nativeCuts))
+    // The held last frame is a second cut where the fixture's FFmpeg wrote it (Debian's 5.1 ignores setts' duration).
+    const heldLast = ((await readMp4(cursor ? nativeWithoutReordering : native))?.packets.at(-1)?.duration ?? 0) > 1
+    assert.equal(nativeCuts.length, heldLast ? 2 : 1, JSON.stringify(nativeCuts))
     assert.ok(Math.abs(nativeCuts[0]!.trimmedMs - 1500) < 100, JSON.stringify(nativeCuts))
-    assert.ok(Math.abs(nativeCuts[1]!.trimmedMs - 2000) < 60, JSON.stringify(nativeCuts))
+    if (heldLast) assert.ok(Math.abs(nativeCuts[1]!.trimmedMs - 2000) < 60, JSON.stringify(nativeCuts))
     const video = receipt.video!
     const length = await durationOf(video)
     assert.ok(Math.abs(length - (receipt.durationMs - receipt.idleTrimmedMs!)) < 100, `${length} vs ${JSON.stringify(receipt)}`)
     assert.equal(await colourAt(video, 2.9), "red")
     assert.equal(await colourAt(video, 3.2), "blue", "The native gap plays for one hold")
     await execute(inspector, ["-v", "error", "-xerror", "-i", video, "-f", "null", "-"])
-    if (!cursor) assert.equal(z.string().parse((await execute(mediaExecutable("ffprobe"), ["-v", "error", "-select_streams", "v", "-show_entries", "stream=has_b_frames", "-of", "csv=p=0", video])).stdout.trim()), "2",
+    if (!cursor) assert.equal(z.string().parse((await execute(inspector.replace(/ffmpeg$/, "ffprobe"), ["-v", "error", "-select_streams", "v", "-show_entries", "stream=has_b_frames", "-of", "csv=p=0", video])).stdout.trim()), "2",
       "A playable native video is cut by shifting packets, not re-encoded")
   }
   console.log("recording idle: still stretches play for one second in browser and native video, cuts are timestamped, and idle: keep plays in real time")

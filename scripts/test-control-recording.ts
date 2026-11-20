@@ -7,6 +7,7 @@ import { promisify } from "node:util"
 import { setTimeout as delay } from "node:timers/promises"
 import sharp from "sharp"
 import { ControlRecording } from "../packages/control-runtime/src/control-recording.js"
+import { readMp4 } from "../packages/control-runtime/src/mp4.js"
 
 const directory = await mkdtemp(join(tmpdir(), "mako-recording-test-"))
 const target = {
@@ -47,33 +48,21 @@ assert.equal(result.status, "finished", result.error)
 assert.equal(stops, 1, "stop is idempotent")
 assert.ok(result.video)
 assert.equal(result.frames, 2)
-const probe = JSON.parse(
-  (
-    await promisify(execFile)("ffprobe", [
-      "-v",
-      "error",
-      "-show_streams",
-      "-show_format",
-      "-of",
-      "json",
-      result.video!,
-    ])
-  ).stdout
-)
-assert.equal(probe.streams[0].codec_name, "h264")
+// Read back by the MP4 reader recordings check themselves with (no FFmpeg).
+const video = await readMp4(result.video!)
+assert.ok(video, "the recording is a readable MP4")
+assert.match(video.codec ?? "", /^avc1\./, "H.264")
 assert.equal(result.frameRate?.requestedFps, 60, "Browser recording targets 60 fps")
-assert.equal(probe.streams[0].width, 1600)
-assert.equal(probe.streams[0].height, 1000)
-if (process.platform === "darwin") assert.equal(probe.streams[0].has_b_frames, 0)
-assert.ok(Number(probe.format.duration) > 0.25)
+assert.equal(video.width, 1600)
+assert.equal(video.height, 1000)
+assert.ok(video.packets[0]?.key, "it starts at a key frame")
+assert.ok(video.packets.every((packet, index) => index === 0 || packet.timestamp >= video.packets[index - 1]!.timestamp), "no reordered frames")
+assert.ok(video.duration > 0.25)
 const timeline = JSON.parse(await readFile(result.timeline!, "utf8"))
-assert.equal(timeline.videoEncoding.codec, process.platform === "darwin" ? "h264_videotoolbox" : "libx264")
-assert.equal(timeline.videoEncoding.hardwareRequired, process.platform === "darwin")
+assert.equal(timeline.videoEncoding.codec, "h264")
+assert.match(timeline.videoEncoding.encoder, process.platform === "darwin" ? /VideoToolbox/ : /OpenH264/)
 assert.ok(
-  Math.abs(
-    Number(probe.format.duration) -
-      result.durationMs / 1000
-  ) < 0.05,
+  Math.abs(video.duration - result.durationMs / 1000) < 0.05,
   "video duration preserves capture intervals within frame rounding"
 )
 assert.deepEqual(timeline.target, target)
@@ -131,7 +120,7 @@ console.log(
     passed: true,
     video: result.video,
     timeline: result.timeline,
-    duration: probe.format.duration,
+    duration: video.duration,
   })
 )
 
