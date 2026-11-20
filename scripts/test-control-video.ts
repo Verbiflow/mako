@@ -54,6 +54,7 @@ const browser: PreviewBrowser = {
     return async () => { source.stopped = true }
   },
   async previewResized() { resizes++ },
+  async previewPoster() { throw new Error("This test's tabs have their screencast's frames") },
 }
 const live = () => sources.filter((source) => !source.stopped)
 const show = (width = 1280, height = 800, bytes = 2_000) => {
