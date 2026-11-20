@@ -188,7 +188,7 @@ export function openControl(
       return desktop.deskPage(previewId)
     },
   })
-  const unknownPermissions = () => computerPermissions(environment, undefined)
+  const unknownPermissions = () => computerPermissions(environment, undefined, linuxDesktop())
   const readComputerPermissions = async (): Promise<MakoComputerPermissions> =>
     desktop.answers("computer-permissions") ? desktop.ask("computer-permissions", {}).catch(unknownPermissions) : unknownPermissions()
   let defaultBrowserApplication: Promise<string | undefined> | undefined
@@ -309,7 +309,7 @@ export function openControl(
       window: (target) => {
         const desktop = desktopCapture.window(target)
         if (desktop) return desktop
-        const source = videoHelper && helperWindowSource(target.windowId, join(environment.dataRoot, "computer-use"))
+        const source = videoHelper && helperWindowSource(target.windowId, join(environment.dataRoot, "computer-use"), linuxDesktop())
         return source ? helperCapture(videoHelper, source) : undefined
       },
     },

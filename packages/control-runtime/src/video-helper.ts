@@ -6,7 +6,7 @@ import type { CaptureSize } from "./browser-capture.js"
 import type { VideoSource, LiveEncoderFactory } from "./browser-video.js"
 import { CONTROL_VIDEO_DATA_LIMIT, decodeControlVideo, type ControlVideoPacket } from "./contracts/control-video.js"
 import { resolveExecutable } from "./executable.js"
-import { linuxDesktop, onMac, onWindows, type LinuxDesktop } from "./platform.js"
+import { onMac, onWindows, type LinuxDesktop } from "./platform.js"
 import { spawn } from "./processes.js"
 
 /**
@@ -72,7 +72,7 @@ export function videoHelperExecutable(): string | undefined {
 export function helperWindowSource(
   windowId: number,
   folder: string,
-  desktop: LinuxDesktop | undefined = linuxDesktop()
+  desktop: LinuxDesktop | undefined
 ): Extract<VideoHelperSource, { kind: "window" | "portal" }> | undefined {
   if (onMac() || onWindows() || desktop?.session === "x11") return { kind: "window", windowId }
   if (desktop?.session === "wayland") return { kind: "portal", types: "monitor", restore: join(folder, "portal-monitor.token") }

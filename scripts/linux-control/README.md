@@ -11,7 +11,9 @@ Electron. The commands below also support local isolated development.
 
 ## A person's Linux desktop
 
-On a desktop session (`linuxDesktop()`: `DISPLAY` or `WAYLAND_DISPLAY`), the host
+On a desktop session the person logged into (`linuxDesktop()`: `XDG_SESSION_TYPE`
+x11 or wayland with its display, or `MAKO_DESKTOP_CONTROL=1`; a bare `DISPLAY`
+such as `xvfb-run`'s is not one), the host
 starts its embedded driver as it does on a Mac, with `CUA_DRIVER_RS_ENABLE_WAYLAND=1`
 on Wayland, and grants task sessions to it. Without the desktop app, a window's
 live video comes from the video helper: XComposite on X11, and on Wayland the

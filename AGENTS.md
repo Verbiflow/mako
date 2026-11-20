@@ -3126,11 +3126,13 @@ cannot scroll Electron windows in the background and foreground input contends
 with the user, so the desk itself is reached through the browser tools instead.
 
 On a person's Linux desktop (`linuxDesktop()` in `@mako/control-runtime/desktop`:
-a `DISPLAY` or a `WAYLAND_DISPLAY`) the host starts the same embedded driver
+a session they logged into, whose `XDG_SESSION_TYPE` is x11 or wayland, with
+its display; or `MAKO_DESKTOP_CONTROL=1` for a session no login manager
+started; never with `MAKO_SCREENLESS=1`) the host starts the same embedded driver
 (`cua-embedded.ts`, with `CUA_DRIVER_RS_ENABLE_WAYLAND=1` on Wayland) and grants
-task sessions as on a Mac; a Linux machine with no display (a server, a cloud
-machine's host) starts none, and its computer control stays the standalone
-runtime's. Without the desktop app, a window's live video is the video helper's:
+task sessions as on a Mac. A display alone is no desktop: a CI job under
+`xvfb-run`, a container's Xvfb or a cloud machine's host starts no driver, and
+its computer control stays the standalone runtime's. Without the desktop app, a window's live video is the video helper's:
 XComposite on X11, and on Wayland the monitor the person shares through the
 ScreenCast portal and PipeWire, asked once and restored from
 `computer-use/portal-monitor.token`. The machine browser is never saved as a
