@@ -807,8 +807,8 @@ test("a Mac that restarts lists its cloud conversations and follows each from th
   const [threadId] = machine.created
   machine.batch(threadId!, conversationId, 2, "running")
   await until("the first batch", () => first.events.length === 1)
-  await new Promise((resolve) => setTimeout(resolve, 1_200))
-  first.router.dispose()
+  // Stopping at once, as a host can within its save's second: what it relayed is written as it stops.
+  await first.router.dispose()
 
   // While this Mac was away, the turn finished on the machine.
   machine.batch(threadId!, conversationId, 3, "ready")
