@@ -1,5 +1,6 @@
 import type { Options, Settings } from "@anthropic-ai/claude-agent-sdk"
 import { z } from "zod"
+import { installedClaudeBuild } from "./runtime.js"
 
 const TelemetrySettings = z.object({
   env: z.record(z.string(), z.string()).optional(), otelHeadersHelper: z.string().optional(),
@@ -24,7 +25,8 @@ export function hasClaudeTelemetrySettings(settings: Settings): boolean {
 
 export function claudeTelemetryOptionsCompatible(options: Options): boolean {
   const settings = TelemetrySettings.safeParse(options.settings ?? {})
-  return !options.pathToClaudeCodeExecutable &&
+  // The SDK's own build, wherever Mako installed it, is the build it would have chosen.
+  return (!options.pathToClaudeCodeExecutable || installedClaudeBuild(options.pathToClaudeCodeExecutable)) &&
     !hasClaudeTelemetryConfiguration(options.env ?? process.env) &&
     settings.success && !hasClaudeTelemetrySettings(settings.data) &&
     (!options.managedSettings || !hasClaudeTelemetrySettings(options.managedSettings))

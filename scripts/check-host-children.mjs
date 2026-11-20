@@ -12,7 +12,7 @@ import { join } from "node:path"
  */
 const hostApproved = [
   ["application/process-group.ts", "runProcessGroup", "spawn", "combines the host stop signal; kills and reaps the whole build group"],
-  ["application/process-group.ts", "run", "execFile", "bounded ps diagnostic used while the cancelled group is being reaped"],
+  ["application/process-group.ts", "run", "execFile", "bounded ps diagnostic, and Windows' taskkill of the tree, while the cancelled group is being reaped"],
   ["threads/catalog-connection.ts", "connectOnDemandCatalog", "spawn", "shared reader daemon outlives this host; its client is cancelled separately"],
   ["terminals/client.ts", "#spawnDaemon", "spawn", "terminal daemon keeps the person's terminals through host restarts"],
   ["transport/service.ts", "ensureRuntime", "spawn", "launches the independent host this client is connecting to"],

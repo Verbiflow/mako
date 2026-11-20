@@ -47,6 +47,9 @@ export const cursorProcessProbe: ProviderProcessProbe = {
     // the store paths do the filtering.
     const result = await probeOpenFiles({
       processNames: ["node", "cursor-agent", "Cursor"],
+      // Only a process of Cursor's can hold its stores: its desktop, or its CLI's Node, whose command line names
+      // `cursor-agent` (the wrapper execs it as itself). Every Node process, the host's own included, isn't asked.
+      runningIf: ({ comm, args }) => /cursor/i.test(comm) || /cursor/i.test(args),
       sourcePath: source,
       signal,
       accept: (path) =>

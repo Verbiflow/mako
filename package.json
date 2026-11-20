@@ -244,7 +244,7 @@
     "test:control-cli": "npm run build:electron && npm run test:control-cleanup && node scripts/test-control-session-build.mjs && node scripts/test-control-private-socket.mjs && node --import tsx scripts/test-control-input-errors.mjs && node scripts/test-control-cli.mjs && node scripts/test-control-cli-output-faults.mjs && tsx scripts/test-browser-modal.ts && node scripts/test-control-desktop-session.mjs && node scripts/test-control-activation.mjs && tsx scripts/test-control-owner.ts && tsx scripts/test-control-hibernation.ts",
     "test:control-preview": "tsx scripts/test-runtime-response.ts && tsx scripts/test-control-preview-media.ts && tsx scripts/test-control-previews.ts && tsx scripts/test-control-video.ts && tsx scripts/test-desktop-video.ts && tsx scripts/test-video-helper-protocol.ts && tsx --tsconfig tsconfig.app.json scripts/test-live-video-encoder.ts && tsx --tsconfig tsconfig.app.json scripts/test-control-preview-state.ts && tsx --tsconfig tsconfig.app.json scripts/test-control-preview-painter.ts",
     "audit:control-preview": "npm run build:electron && node scripts/audit-control-preview.mjs",
-    "test:control-recording": "tsx scripts/test-browser-focus.ts && tsx scripts/test-browser-capture.ts && tsx scripts/test-browser-video.ts && tsx scripts/test-native-capture.ts && tsx scripts/test-recording-render.ts && tsx scripts/test-control-recording.ts && tsx scripts/test-control-recording-stream.ts && tsx scripts/test-control-recording-failures.ts && tsx scripts/test-control-recording-idle.ts && tsx scripts/test-browser-recording.ts && tsx scripts/test-native-recording.ts",
+    "test:control-recording": "tsx scripts/test-control-executable.ts && tsx scripts/test-browser-focus.ts && tsx scripts/test-browser-capture.ts && tsx scripts/test-browser-video.ts && tsx scripts/test-native-capture.ts && tsx scripts/test-recording-render.ts && tsx scripts/test-control-recording.ts && tsx scripts/test-control-recording-stream.ts && tsx scripts/test-control-recording-failures.ts && tsx scripts/test-control-recording-idle.ts && tsx scripts/test-browser-recording.ts && tsx scripts/test-native-recording.ts",
     "test:control-recording-continuous": "tsx scripts/test-control-recording-continuous.ts",
     "preview": "vite preview",
     "package": "npm run package:mac",
@@ -252,7 +252,7 @@
     "package:mac:local": "npm run build && npm run test:renderer-assets && node scripts/package-mac.mjs --local --dir",
     "test:local-signing": "node scripts/test-local-signing.mjs",
     "test:stop-provider-checks": "node scripts/test-stop-provider-checks.mjs && tsx scripts/test-stop-outside-work.ts && tsx scripts/test-git-stop.ts && tsx scripts/test-process-group-held.ts && tsx scripts/test-command-utf8.ts",
-    "test:application": "node scripts/test-daemon-login.mjs && node scripts/test-isolated-host.mjs && node scripts/test-stop-provider-checks.mjs && tsx scripts/test-stop-outside-work.ts && tsx scripts/test-git-stop.ts && tsx scripts/test-process-group-held.ts && tsx scripts/test-command-utf8.ts && tsx scripts/test-application-lifecycle.ts && tsx scripts/test-window-shutdown.ts && tsx scripts/test-host-idle.ts && tsx scripts/test-local-build-source.ts && npm run -s test:update-source && tsx scripts/test-local-update-install.ts && tsx scripts/test-local-update-startup.ts && node scripts/test-application-runtime.mjs && node scripts/test-checkout-copy.mjs && node scripts/test-application-ui.mjs",
+    "test:application": "node scripts/test-daemon-login.mjs && node scripts/test-isolated-host.mjs && node scripts/test-stop-provider-checks.mjs && tsx scripts/test-stop-outside-work.ts && tsx scripts/test-git-stop.ts && tsx scripts/test-process-group-held.ts && tsx scripts/test-process-group-tree.ts && tsx scripts/test-command-utf8.ts && tsx scripts/test-application-lifecycle.ts && tsx scripts/test-window-shutdown.ts && tsx scripts/test-host-idle.ts && tsx scripts/test-local-build-source.ts && npm run -s test:update-source && tsx scripts/test-local-update-install.ts && tsx scripts/test-local-update-startup.ts && node scripts/test-application-runtime.mjs && node scripts/test-checkout-copy.mjs && node scripts/test-application-ui.mjs",
     "test:provider-ui": "node scripts/test-provider-ui.mjs",
     "test:application-ui": "node scripts/test-application-ui.mjs",
     "test:update-source": "tsx scripts/test-local-update-source.ts && tsx scripts/test-update-behind-dirty.ts && tsx --tsconfig tsconfig.app.json scripts/test-update-checks.ts && tsx scripts/test-local-update-dependencies.mjs && node scripts/test-update-local-cli.mjs && esbuild scripts/test-updates-section-ui.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-updates-section-ui.mjs --log-level=warning && node node_modules/.tmp/test-updates-section-ui.mjs",
@@ -297,7 +297,7 @@
     "test:browser-extension": "npm run build:electron && npm run build:browser-extension && node scripts/test-browser-extension.mjs && node scripts/test-browser-extension-router.mjs && node scripts/test-browser-extension-activity.mjs && node scripts/test-browser-extension-lifecycle.mjs && node scripts/test-browser-extension-downloads.mjs",
     "test:browser-extension-e2e": "npm run test:browser-extension && node scripts/test-browser-extension-e2e.mjs",
     "test:transcript": "tsx scripts/test-tool-identity.ts && tsx scripts/test-tool-words.ts && tsx scripts/test-harness-vocabulary.ts && tsx scripts/test-transcript-tools.ts && tsx --tsconfig tsconfig.app.json scripts/test-turn-changes.ts && tsx scripts/test-renamed-exchanges.ts && tsx scripts/test-resume-account.ts && node scripts/test-cursor-sdk-resume.mjs && tsx scripts/test-transcript-document.ts && tsx scripts/test-content-contract.ts && tsx scripts/test-transcript-persistence.ts && tsx scripts/test-canvas-preview.ts && esbuild scripts/test-media-unavailable.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --splitting --outdir=node_modules/.tmp/media-unavailable --out-extension:.js=.mjs --log-level=warning && node node_modules/.tmp/media-unavailable/test-media-unavailable.mjs",
-    "test:workspace-snapshots": "tsx scripts/test-git-environment.ts && tsx scripts/test-workspace-snapshots.ts && tsx scripts/test-checkpoint-unreadable.ts && tsx scripts/test-checkpoint-reuse.ts && tsx scripts/test-checkpoint-order.ts && tsx scripts/test-live-snapshots.ts && tsx scripts/test-snapshot-retention.ts && tsx scripts/test-snapshot-budget.ts && tsx scripts/test-global-snapshot-budget.ts",
+    "test:workspace-snapshots": "tsx scripts/test-git-environment.ts && tsx scripts/test-folders-overlap.ts && tsx scripts/test-workspace-snapshots.ts && tsx scripts/test-checkpoint-unreadable.ts && tsx scripts/test-checkpoint-reuse.ts && tsx scripts/test-checkpoint-order.ts && tsx scripts/test-live-snapshots.ts && tsx scripts/test-snapshot-retention.ts && tsx scripts/test-snapshot-budget.ts && tsx scripts/test-global-snapshot-budget.ts",
     "benchmark:control": "node --import tsx scripts/benchmark-control-runtime.ts",
     "bench:local-control": "npm run -s build:control-runtime && tsx scripts/bench-local-control.ts",
     "benchmark:snapshots": "node --max-old-space-size=256 --import tsx scripts/benchmark-snapshots.ts",
@@ -307,7 +307,7 @@
     "test:queued-steering": "tsx scripts/test-queued-steering.ts",
     "test:native-approval-reconciliation": "npm run build:electron && node scripts/test-claude-permission-settings.mjs && node scripts/test-native-approval-reconciliation.mjs",
     "test:host-load-memory": "tsx scripts/test-host-load-memory.ts",
-    "test:zod-patch": "node --expose-gc --import tsx scripts/test-zod-patch.ts",
+    "test:zod-patch": "node --expose-gc --allow-natives-syntax --import tsx scripts/test-zod-patch.ts",
     "test:live-approvals": "tsx scripts/test-codex-permission-observer.ts && tsx scripts/test-claude-permission-observer.ts && tsx scripts/test-claude-message-allocations.ts && tsx scripts/test-approval-submission.ts && tsx scripts/test-live-approvals.ts && tsx scripts/test-approval-reconciliation.ts && tsx scripts/test-native-approval-evidence.ts && tsx scripts/test-provider-question-evidence.ts && tsx scripts/test-live-questions.ts && tsx scripts/test-native-question-history.ts && tsx scripts/test-question-retirement.ts",
     "test:compaction-reconciliation": "tsx scripts/test-live-provider-test.ts && tsx scripts/test-compaction-reconciliation.ts && tsx scripts/test-compaction-native.ts",
     "test:compaction-recovery": "npm run test:compaction-reconciliation && tsx scripts/test-compaction-recovery.ts && tsx scripts/test-compaction-scenarios.ts && tsx scripts/test-compaction-crash.ts && tsx scripts/test-compaction-crash-wait.ts && tsx scripts/test-compaction-fences.ts && esbuild scripts/test-compaction-notice.tsx --bundle --platform=node --format=esm --packages=external --jsx=automatic --tsconfig=tsconfig.app.json --outfile=node_modules/.tmp/test-compaction-notice.mjs --log-level=warning && node node_modules/.tmp/test-compaction-notice.mjs",
@@ -360,7 +360,7 @@
     "test:idle-app-marks": "tsx scripts/test-idle-app-marks.ts",
     "test:app-sampler": "tsx scripts/test-app-sampler.ts",
     "test:app-overview-reads": "tsx scripts/test-app-overview-reads.ts",
-    "test:host-probes": "tsx scripts/test-host-probes.ts",
+    "test:host-probes": "tsx scripts/test-host-probes.ts && tsx scripts/test-probe-names.ts",
     "test:probe-child-edges": "tsx scripts/test-probe-child-edges.ts",
     "test:fin-move": "tsx scripts/test-fin-move.ts",
     "test:fins-placed": "tsx scripts/test-fin-source.ts && tsx --tsconfig tsconfig.scripts.json scripts/test-fins-cloud.ts && tsx scripts/test-fins-placed.ts",
@@ -708,6 +708,12 @@
     "win": {
       "target": [
         "nsis"
+      ],
+      "extraFiles": [
+        {
+          "from": "build/mako-video.exe",
+          "to": "mako-video.exe"
+        }
       ]
     },
     "extraResources": [
