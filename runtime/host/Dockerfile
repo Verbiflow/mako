@@ -44,7 +44,10 @@ WORKDIR /opt/mako
 # Root owns the host's code; the machine's user, who runs the host and its
 # agents, can't change it.
 COPY app/ ./
+# The install keeps only what runs (scripts/linux-host/prune-install.mjs): no type declarations, source maps or
+# TypeScript sources. npm's compile cache, which it keeps in /tmp, isn't the image's either.
 RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --workspace @mako/host --no-audit --no-fund \
+    && node scripts/linux-host/prune-install.mjs /opt/mako && rm -rf /tmp/node-compile-cache \
     && ln -s /opt/mako/node_modules/@mako/host/dist/mako-host.js /usr/local/bin/mako-host \
     && chmod 755 /opt/mako/packages/host/dist/mako-host.js \
     && if node -e 'require.resolve("electron")' 2>/dev/null; then echo "electron resolves in the host's install" >&2; exit 1; fi \
@@ -68,7 +71,9 @@ ENTRYPOINT ["mako-host"]
 # The host above with every harness it can install, installed by the host as
 # Settings installs them (scripts/linux-host/install-harnesses.mjs): what a
 # cloud machine runs. npm's download cache, as large as what it installs,
-# stays out of the image. Only the two scripts the install runs are copied
+# stays out of the image, as do the builds for other machines a harness's
+# npm package downloads and never runs, and what the installs leave in /tmp
+# (install-harnesses.mjs). Only the two scripts the install runs are copied
 # first, so a change to the proof doesn't install the harnesses again.
 FROM host AS harnesses
 COPY proof/host-process.mjs proof/install-harnesses.mjs proof/seed-harnesses.mjs /opt/mako/install/

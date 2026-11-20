@@ -67,7 +67,7 @@ import { RecordStore, type RestoreInput } from "./record-store.js"
 import type { RecordRoot } from "./harness-records.js"
 import { ReadingCopies, ReceivedCopies, type CopyPage } from "./reading-copies.js"
 import { FAILURES_SAID, LASTING_MS, ScopedUploads, countTiers, longestFailing, type CatalogSyncStatus, type SyncFailure, type SyncScope } from "./scoped-uploads.js"
-import type { WorkUnderWay } from "./loop-watch.js"
+import { namedWork, type WorkUnderWay } from "./loop-watch.js"
 import { UploadBudget } from "./upload-budget.js"
 import { RecordPushes, RecordSync, RecordsLinkRefusedError, type LinkForm, type PushStatus, type ReceivedRecords, type ReceivingSession, type RecordsLink, type SentRecords, type StagedRecords, type SyncReport } from "./record-sync.js"
 import { LinkCredential } from "./link-credential.js"
@@ -798,7 +798,8 @@ export class SessionCatalog {
    */
   scan(options: { emitChanges?: boolean } = {}): Promise<ThreadRef[]> {
     if (this.stopped) return Promise.resolve(this.list())
-    const task = this.scanOnce(options)
+    // Named, so a hold of the loop during a scan says so (`watchLoop`), and the watch runs while it does.
+    const task = namedWork(this.work, "scan sessions", () => this.scanOnce(options))
     this.scans.add(task)
     void task.then(() => this.scans.delete(task), () => this.scans.delete(task))
     return task
@@ -1479,7 +1480,7 @@ export class SessionCatalog {
   reconcileActive(now = Date.now()): Promise<void> {
     if (this.stopped) return Promise.resolve()
     if (this.reconciling) return this.reconciling
-    this.reconciling = this.reconcileActiveOnce(now).finally(() => {
+    this.reconciling = namedWork(this.work, "reconcile active sessions", () => this.reconcileActiveOnce(now)).finally(() => {
       this.reconciling = null
     })
     return this.reconciling
@@ -2121,8 +2122,8 @@ export class SessionCatalog {
       since,
       timer: setTimeout(() => {
         this.pending.delete(key)
-        if (rescan) void this.rescanProvider(provider)
-        else void this.refresh(provider, target, sidecar)
+        if (rescan) void namedWork(this.work, `rescan ${provider.harness}`, () => this.rescanProvider(provider))
+        else void namedWork(this.work, `refresh ${provider.harness}`, () => this.refresh(provider, target, sidecar))
       }, delay),
     })
   }
