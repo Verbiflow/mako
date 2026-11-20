@@ -261,7 +261,7 @@ async function checkWindow() {
     })}), true)`)
     const mark = (title) => evaluate(`(() => { const row = [...document.querySelectorAll('[data-thread-row]')].find((each) => each.innerText.includes(${literal(title)})); return row ? { place: row.querySelector('[data-elsewhere]')?.dataset.elsewhere ?? null, tip: row.dataset.tip ?? null } : null })()`)
     await until(`[...document.querySelectorAll('[data-thread-row]')].some((each) => each.innerText.includes('Rebuild the search index'))`, "the machine's row")
-    assert.deepEqual(await mark("Rebuild the search index"), { place: "machine", tip: "Rebuild the search index · on build-box" })
+    assert.deepEqual(await mark("Rebuild the search index"), { place: "machine", tip: "Rebuild the search index\non build-box" })
     assert.equal((await mark("Bisect the upload timeout")).place, "device")
     assert.equal((await mark("Reproduce the flaky upload")).place, "cloud")
     await evaluate(`([...document.querySelectorAll('[data-thread-row]')].filter((each) => /Rebuild the search index|Bisect the upload timeout|Reproduce the flaky upload/.test(each.innerText)).forEach((each) => each.setAttribute('data-place-row', '')), true)`)

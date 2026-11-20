@@ -199,12 +199,12 @@ async function check() {
     for (const scene of ["loft", "off"]) {
       for (const theme of ["dark", "light"]) {
         const phone = await open(`${base}/scripts/phone-apex.html?app=apex&placed=${scene}&theme=${theme}`, { width: 390, height: 844, phone: true })
-        await phone.until(`Boolean(document.querySelector('[data-apex-fins="${APEX_THREAD}"] [data-thread="${FIN_THREAD}"][data-under="${APEX_THREAD}"]'))`, "the placed Fin's row under its Apex")
+        await phone.until(`Boolean(document.querySelector('[data-hung-fins="${APEX_THREAD}"] [data-thread="${FIN_THREAD}"][data-under="${APEX_THREAD}"]'))`, "the placed Fin's row under its Apex")
         const others = await phone.evaluate(`[...document.querySelectorAll('[data-thread="${FIN_THREAD}"]')].filter((node) => !node.dataset.under).length`)
         assert.equal(others, 0, `no Thread row of its own (${scene})`)
         assert.equal(await phone.evaluate(`document.querySelectorAll('[data-thread="${FIN_THREAD}"]').length`), 1, `listed once (${scene})`)
         await phone.capture(`phone-list-${scene}-${theme}`)
-        await phone.click(`[data-apex-fins="${APEX_THREAD}"] [data-thread="${FIN_THREAD}"]`)
+        await phone.click(`[data-hung-fins="${APEX_THREAD}"] [data-thread="${FIN_THREAD}"]`)
         await phone.until(`Boolean(document.querySelector('[data-thread-screen="${FIN_THREAD}"]'))`, "the Fin's own screen, on Loft")
         await phone.until("Boolean(document.querySelector('[data-permission-card]'))", "its approval")
         await phone.capture(`phone-open-${scene}-${theme}`)

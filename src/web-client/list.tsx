@@ -1,3 +1,4 @@
+import { observeVisibleAnimation } from "@/lib/visible-animation"
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, MessagesSquareIcon, MoonIcon, ServerIcon, SquarePenIcon } from "lucide-react"
 import { askWords, childLine, childStateOf, childWord, finsAsChildren, rollup, rollupLabel } from "@mako/host/contracts/children"
@@ -362,7 +363,7 @@ function ApexFins({ apex, hung, open, onOpen }: { apex: WebThread; hung: HungFin
   const count = hung.placed.length + hung.fins.length
   const last = (index: number) => index === count - 1 && !hung.finished
   return (
-    <div data-apex-fins={apex.id} data-apex-fins-open={open || undefined}>
+    <div data-hung-fins={apex.id} data-hung-fins-open={open || undefined}>
       {hung.placed.map((thread, index) => (
         <PlacedFinRow key={thread.id} thread={thread} last={last(index)} onOpen={() => onOpen(thread)} />
       ))}
@@ -398,7 +399,7 @@ function FinRow({ agent, ask, last, onOpen }: { agent: NativeAgent; ask: string 
           <WebHarnessIcon harness={agent.provider} />
         </LiveMark>
       </span>
-      <span className={cn("min-w-0 flex-1 truncate text-ui", ask ? "text-foreground" : "text-foreground/65")}>{agent.title}</span>
+      <span data-asking-title className={cn("min-w-0 flex-1 truncate text-ui", ask ? "text-foreground" : "text-foreground/65")}>{agent.title}</span>
       {ask ? (
         <span data-asking-line className="max-w-[48%] shrink truncate text-label text-faint">
           {ask}
@@ -685,7 +686,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, marks
               <ChevronRightIcon className={cn("size-3.5 transition-transform duration-200 ease-[var(--ease-out)]", apex.open && "rotate-90")} />
             </button>
           ) : null}
-          {apex?.finsWorking ? <span data-fins-working className="rail-spin" aria-hidden /> : null}
+          {apex?.finsWorking ? <span ref={observeVisibleAnimation} data-fins-working className="rail-spin spinner" aria-hidden /> : null}
           {Place ? <Place aria-hidden data-move-mark={detail.move} data-place={detail.move ? undefined : thread.quietSince ? "quiet" : detail.place} className={cn("size-3.5 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
           {shown.workStatus ? <WorkGlyph status={shown.workStatus} className="size-3.5" /> : null}
           {thread.standing === "failed" ? (

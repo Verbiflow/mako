@@ -2989,25 +2989,16 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   background: var(--attention);
 }
 
-/* An Apex's Fins at work: a neutral 9 px ring turning in its trailing slot, the fin's own glint being the Thread's. */
+/*
+ * An Apex's Fins at work: a neutral 9 px ring in its trailing slot, turned by `.spinner` on its gate
+ * (`observeVisibleAnimation`), so it rests off screen and stands still under reduced motion.
+ */
 .rail-spin {
   width: 9px;
   height: 9px;
   border-radius: 50%;
   border: 1.5px solid color-mix(in oklab, var(--foreground) 16%, transparent);
   border-top-color: color-mix(in oklab, var(--foreground) 62%, transparent);
-  animation: rail-spin 900ms linear infinite;
-}
-@keyframes rail-spin {
-  to {
-    transform: rotate(360deg);
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .rail-spin {
-    animation: none;
-    border-color: color-mix(in oklab, var(--foreground) 45%, transparent);
-  }
 }
 
 /*

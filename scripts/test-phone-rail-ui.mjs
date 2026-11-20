@@ -153,8 +153,8 @@ async function checkRail() {
       assert.deepEqual(corners, [], `${where}: every corner square`)
 
       // The Apex: its tile, its line, and folded only the Fins that need the person, each with its ask.
-      await until(`Boolean(document.querySelector('[data-apex-fins="${APEX_THREAD}"] [data-fin-row]'))`, `${where}: the Apex's Fins`)
-      const folded = await evaluate(`(() => { const fins = [...document.querySelectorAll('[data-apex-fins="${APEX_THREAD}"] [data-fin-row]')]; return { apex: document.querySelector('${row("apex")}').dataset.apexOpen, tile: Boolean(document.querySelector('${row("apex")} [data-apex-avatar]')), stem: Boolean(document.querySelector('${row("apex")} .web-apex-stem')), fins: fins.length, asking: fins.filter((fin) => fin.dataset.askingFin).length, lines: fins.map((fin) => fin.querySelector('[data-asking-line]')?.textContent ?? ''), branches: fins.map((fin) => fin.querySelector('.rail-branch')?.hasAttribute('data-last') ?? null), counts: document.querySelector('${row("apex")}').dataset.finCounts } })()`)
+      await until(`Boolean(document.querySelector('[data-hung-fins="${APEX_THREAD}"] [data-fin-row]'))`, `${where}: the Apex's Fins`)
+      const folded = await evaluate(`(() => { const fins = [...document.querySelectorAll('[data-hung-fins="${APEX_THREAD}"] [data-fin-row]')]; return { apex: document.querySelector('${row("apex")}').dataset.apexOpen, tile: Boolean(document.querySelector('${row("apex")} [data-apex-avatar]')), stem: Boolean(document.querySelector('${row("apex")} .web-apex-stem')), fins: fins.length, asking: fins.filter((fin) => fin.dataset.askingFin).length, lines: fins.map((fin) => fin.querySelector('[data-asking-line]')?.textContent ?? ''), branches: fins.map((fin) => fin.querySelector('.rail-branch')?.hasAttribute('data-last') ?? null), counts: document.querySelector('${row("apex")}').dataset.finCounts } })()`)
       assert.equal(folded.apex, "false", `${where}: the Apex starts folded`)
       assert.ok(folded.tile && folded.stem, `${where}: the Apex wears its tile, its line running down from it`)
       assert.ok(folded.fins >= 1 && folded.asking === folded.fins, `${where}: folded, only the Fins that need you hang under it: ${JSON.stringify(folded)}`)
@@ -163,7 +163,7 @@ async function checkRail() {
       assert.match(folded.counts, /Fin/, `${where}: the Apex's row carries its Fins' counts`)
       await press(`${row("apex")} [data-row-fold]`)
       await until(`document.querySelector('${row("apex")}').dataset.apexOpen === 'true'`, `${where}: the Apex unfolds`)
-      const open = await evaluate(`({ fins: document.querySelectorAll('[data-apex-fins="${APEX_THREAD}"] [data-fin-row]').length, finished: Number(document.querySelector('[data-apex-fins="${APEX_THREAD}"] [data-fins-finished]')?.dataset.finsFinished ?? 0) })`)
+      const open = await evaluate(`({ fins: document.querySelectorAll('[data-hung-fins="${APEX_THREAD}"] [data-fin-row]').length, finished: Number(document.querySelector('[data-hung-fins="${APEX_THREAD}"] [data-fins-finished]')?.dataset.finsFinished ?? 0) })`)
       assert.ok(open.fins > folded.fins, `${where}: unfolded, every Fin in play hangs under it (${open.fins} of ${folded.fins} folded)`)
       assert.ok(open.finished > 0, `${where}: and the finished as one line`)
       await evaluate(`document.querySelector('${row("apex")}').scrollIntoView({ block: 'start' }), document.querySelector('.web-scroll').scrollBy(0, -60), true`)

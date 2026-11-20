@@ -112,7 +112,7 @@ async function check() {
   await viewport(1440, 900)
   await load("/?mock&app=apex")
   await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the Apex in the rail")
-  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
+  await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]').click(); true")
   await until("Boolean(document.querySelector('[data-shiver]'))", "the Shiver card")
   await until("Boolean(document.querySelector('[data-side-rail]'))", "the right rail")
 
@@ -247,7 +247,7 @@ async function check() {
   const roster = await evaluate("JSON.parse(JSON.stringify(window.apexScene.children()))")
   const spawned = { ...roster[0], nativeId: "spawned", title: "A new Fin", child: { ...roster[0].child, thread: "spawned-thread" } }
   await evaluate(`window.apexScene.setChildren(${JSON.stringify([...roster, spawned])}); true`)
-  await until("document.querySelector('.thread-jump-scope [data-fin-pips]').getAttribute('aria-label').startsWith('13 Fins')", "the new Fin in the roster")
+  await until("document.querySelector('.thread-jump-scope [data-apex-row]').dataset.finCounts.startsWith('13 Fins')", "the new Fin in the roster")
   assert.equal(await fins(), 0, "a Fin spawning opens no tab")
   await evaluate(`window.apexScene.setChildren(${JSON.stringify(roster)}); true`)
   const needing = roster.find((agent) => agent.title === "Sheet motion on iPad").child.thread
@@ -263,7 +263,7 @@ async function check() {
   await viewport(1100, 760)
   await load("/?mock&app=apex")
   await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the Apex at 1100")
-  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
+  await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]').click(); true")
   await until("Boolean(document.querySelector('[data-shiver]')) && Boolean(document.querySelector('[data-side-rail]'))", "the Shiver card and the rail at 1100")
   const narrow = await evaluate(`(() => {
     const rail = document.querySelector('.companion-panel').getBoundingClientRect()
@@ -403,8 +403,8 @@ async function check() {
   // The phone: the Shiver card holds the Fins, the bar counts them, and no chip repeats one.
   await viewport(390, 844)
   await load("/scripts/phone-apex.html?app=apex")
-  await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone's list")
-  await click("[data-thread]")
+  await until("Boolean(document.querySelector('[data-thread][data-apex-row]'))", "the phone's list")
+  await click("[data-thread][data-apex-row]")
   await until("Boolean(document.querySelector('[data-shiver]'))", "the Shiver card on the phone")
   assert.equal(await evaluate("document.querySelector('[data-apex-count]')?.dataset.apexCount"), "12")
   assert.equal(await evaluate("document.querySelectorAll('[data-child-chip], [data-child-chips]').length"), 0, "no chip a Fin")

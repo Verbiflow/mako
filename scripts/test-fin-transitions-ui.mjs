@@ -87,7 +87,8 @@ async function check() {
     await window.loadURL("about:blank")
     await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile })
   }
-  const row = (words) => `[...document.querySelectorAll('.thread-jump-scope [data-flip-key], [data-thread-row]')].find((node) => node.innerText.includes(${JSON.stringify(words)}))`
+  // An Apex's row says how many Fins in its counts (`data-fin-counts`, its tip), not in its text (the calm rail).
+  const row = (words) => `[...document.querySelectorAll('.thread-jump-scope [data-flip-key], [data-thread-row]')].find((node) => node.innerText.includes(${JSON.stringify(words)}) || (node.dataset.finCounts ?? '').includes(${JSON.stringify(words)}))`
   const openThread = async (words) => {
     await until(`Boolean(${row(words)})`, `the row of ${words}`)
     await evaluate(`${row(words)}.click(); true`)
@@ -250,11 +251,11 @@ async function check() {
   await viewport(390, 844, true)
   const phoneList = async () => {
     await load("/scripts/phone-apex.html?app=apex")
-    await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone's list")
+    await until("Boolean(document.querySelector('[data-thread][data-apex-row]'))", "the phone's list")
   }
   const phoneApex = async () => {
     await phoneList()
-    await click("[data-thread]")
+    await click("[data-thread][data-apex-row]")
     await seen("[data-shiver]")
   }
   const phoneFin = () => until("Boolean(document.querySelector('[data-child-of]')) && !document.querySelector('[data-apex-count]')", "the Fin on the phone")
@@ -298,7 +299,7 @@ async function check() {
     await phoneFin()
     await phoneList()
     await until("Boolean(document.querySelector('[data-thread]'))", "the list after a reload")
-    await evaluate("[...document.querySelectorAll('[data-thread]')].find((node) => !node.querySelector('[data-fin-pips]')).click(); true")
+    await evaluate("[...document.querySelectorAll('[data-thread]')].find((node) => !node.hasAttribute('data-apex-row')).click(); true")
     await until("Boolean(document.querySelector('[data-thread-screen]')) && !document.querySelector('[data-child-of]') && !document.querySelector('[data-apex-count]')", "another Thread on the phone")
     console.log(`Phone: the Fin from ${entry}`)
   }

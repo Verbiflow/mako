@@ -39,6 +39,7 @@ import { threadFolderKey } from "@/lib/thread-folders"
 import { checkoutOf, projectFolder } from "@mako/host/contracts/worktree-paths"
 import type { ThreadRef } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { observeVisibleAnimation } from "@/lib/visible-animation"
 import { toggleApexOpen, togglePinned, usePrefs } from "@/state/prefs"
 import { actions, useSession } from "@/state/session"
 import { useTabs, type TabInfo } from "@/state/tabs"
@@ -100,7 +101,7 @@ export const ROW_ACTIONS =
 export function RowEnd({ status, updatedAt, finsWorking, work, children }: { status: ThreadStatus; updatedAt?: string; finsWorking?: boolean; work?: WorkStatus | null; children?: ReactNode }) {
   return (
     <span data-row-end className="flex min-w-7 shrink-0 items-center justify-end gap-1.5">
-      {finsWorking ? <span data-fins-working className="rail-spin" aria-hidden /> : null}
+      {finsWorking ? <span ref={observeVisibleAnimation} data-fins-working className="rail-spin spinner" aria-hidden /> : null}
       {work ? <WorkGlyph status={work} /> : null}
       {status.kind === "failed" ? (
         <span data-status-end="failed" className="text-label text-faint">Failed</span>
@@ -111,9 +112,10 @@ export function RowEnd({ status, updatedAt, finsWorking, work, children }: { sta
 }
 
 /** An Apex's leading mark: its avatar, which turns into the fold's chevron under the pointer or focus. */
-export function ApexFold({ thread, open }: { thread: string; open: boolean }) {
+export function ApexFold({ thread, open, label }: { thread: string; open: boolean; label: string }) {
   return (
-    <span className="relative flex size-[18px] shrink-0 items-center justify-center">
+    // The avatar stands where a Thread's fin does, and says what the fin would: the Apex's state, a Fin's ask first.
+    <span role="img" aria-label={label} className="relative flex size-[18px] shrink-0 items-center justify-center">
       <ApexAvatar seed={thread} className="transition-opacity duration-100 group-hover:opacity-0 [.group:has(:focus-visible)_&]:opacity-0" />
       <button
         type="button"
@@ -343,7 +345,7 @@ export const ThreadRow = memo(function ThreadRow({
         className={ROW_SURFACE}
       >
         {apex && thread ? (
-          <ApexFold thread={thread} open={fins.open} />
+          <ApexFold thread={thread} open={fins.open} label={threadStatusLabel(status, markHarness)} />
         ) : (
           <ThreadMark status={status} state={unreadMark ? "unread" : undefined} harness={markHarness} lit={lit} cut={lit ? "var(--raised)" : undefined} size={18} />
         )}

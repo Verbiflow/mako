@@ -188,10 +188,18 @@ async function checkWindow() {
   console.log("PASS: Done for three days folds into N done")
 
   // 6. ⌘ held 200 ms shows ⌘1–9 where the times were; ⌘2 opens the second row.
+  // When the keys show is timed in the page, from the key going down: a slow runner's round trips can't blur 200 ms.
+  await evaluate(`(() => {
+    window.__hints = {}
+    window.addEventListener("keydown", (event) => { if (event.key === "Meta") window.__hints.down = performance.now() }, { capture: true, once: true })
+    const scope = document.querySelector('.thread-jump-scope')
+    new MutationObserver((_, observer) => { if (scope.hasAttribute('data-jump-hints')) { window.__hints.shown = performance.now(); observer.disconnect() } }).observe(scope, { attributes: true, attributeFilter: ['data-jump-hints'] })
+    return true
+  })()`)
   await key("rawKeyDown", "Meta", "MetaLeft", 4, 91)
-  await pause(80)
-  assert.equal(await evaluate(`document.querySelector('.thread-jump-scope[data-jump-hints]') === null`), true, "not before 200 ms")
   await until(`document.querySelector('.thread-jump-scope[data-jump-hints]') !== null`, "the keys after 200 ms")
+  const held = await evaluate("window.__hints.shown - window.__hints.down")
+  assert.ok(held >= 195, `not before 200 ms: ${held} ms`)
   await until(`${row(0)}.querySelector('[data-jump-cap]')?.textContent === '⌘1' && getComputedStyle(${row(0)}.querySelector('[data-jump-cap]')).display === 'flex'`, "⌘1 on the first row")
   await capture("calm-cmd-held.png")
   await key("keyUp", "Meta", "MetaLeft", 0, 91)
@@ -285,7 +293,7 @@ async function checkWindow() {
   assert.ok(folded.line && folded.branch, "with their asks, hung on the Apex's line")
   await evaluate(`document.querySelector('[data-apex-row]').focus()`)
   await press("ArrowRight", "ArrowRight", 39)
-  await until(`document.querySelector('[data-apex-fins-open]') !== null && document.querySelectorAll('[data-fin-row]').length > ${folded.fins}`, "open: every Fin in play")
+  await until(`document.querySelector('[data-hung-fins-open]') !== null && document.querySelectorAll('[data-fin-row]').length > ${folded.fins}`, "open: every Fin in play")
   assert.equal(await evaluate(`document.querySelector('[data-apex-row]').dataset.apexOpen`), "true")
   await capture("calm-apex-open.png")
   await press("ArrowLeft", "ArrowLeft", 37)

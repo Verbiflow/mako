@@ -457,7 +457,7 @@ async function checkPage({ window, page, shots, base }) {
     "window.apexScene.children().find((agent) => agent.title === 'Sheet motion on iPad').child.thread"
   )
   const railBefore = await evaluate(
-    "document.querySelector('.thread-jump-scope [data-fin-pips]').getAttribute('aria-label')"
+    "document.querySelector('.thread-jump-scope [data-apex-row]').dataset.finCounts"
   )
   // An Apex's rail opens on its Overview, so the chip, which puts the panel away when it's showing, is pressed only when it isn't.
   if (!(await evaluate("Boolean(document.querySelector('[data-apex-fins]'))"))) await click("[data-agents-toggle]")
@@ -482,7 +482,7 @@ async function checkPage({ window, page, shots, base }) {
     "sheet-motion moving to working in the Agents panel"
   )
   const railAfter = await evaluate(
-    "document.querySelector('.thread-jump-scope [data-fin-pips]').getAttribute('aria-label')"
+    "document.querySelector('.thread-jump-scope [data-apex-row]').dataset.finCounts"
   )
   console.log("RAIL", railBefore, "->", railAfter)
   assert.match(
@@ -666,10 +666,10 @@ async function checkPage({ window, page, shots, base }) {
   window.setContentSize(390, 844)
   await navigate(window, `${base}scripts/phone-apex.html?app=apex`)
   await until(
-    "Boolean(document.querySelector('[data-thread] [data-fin-pips]'))",
+    "Boolean(document.querySelector('[data-thread][data-apex-row]'))",
     "the Apex's row on the phone"
   )
-  await click("[data-thread]")
+  await click("[data-thread][data-apex-row]")
   await until(
     "Boolean(document.querySelector('[data-apex-count]'))",
     "the Apex's count on the phone"
@@ -691,8 +691,8 @@ async function checkPage({ window, page, shots, base }) {
   // Through a blank page, as every load here goes (`navigate`): straight from the browser's page to the phone's the
   // renderer crashed in 18 runs of 500.
   await navigate(window, `${base}scripts/phone-apex.html?app=apex`)
-  await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone again")
-  await click("[data-thread]")
+  await until("Boolean(document.querySelector('[data-thread][data-apex-row]'))", "the phone again")
+  await click("[data-thread][data-apex-row]")
   await until("Boolean(document.querySelector('[data-shiver]'))", "the Shiver card on the phone again")
   await evaluate("window.apexScene.setRunning(false); true")
   await settle()
@@ -895,11 +895,11 @@ async function checkPage({ window, page, shots, base }) {
     return [document.querySelector('[data-shiver-settled]').innerText.trim(), count('[data-overview-section=done] [data-child-row]') + ' done · ' + count('[data-overview-section=waiting] [data-child-state=idle]') + ' idle']
   })()`)
   assert.equal(folds[0], folds[1], `the two surfaces count the settled Fins alike: ${JSON.stringify(folds)}`)
-  const deskWords = await evaluate("document.querySelector('.thread-jump-scope [data-fin-pips]')?.innerText.trim()")
+  const deskWords = await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]')?.dataset.finCounts")
   window.setContentSize(390, 844)
   await navigate(window, `${base}scripts/phone-apex.html?app=apex`)
-  await until("Boolean(document.querySelector('[data-fin-pips]'))", "the phone's Apex row")
-  const phoneWords = await evaluate("document.querySelector('[data-fin-pips]').innerText.trim()")
+  await until("Boolean(document.querySelector('[data-apex-row][data-fin-counts]'))", "the phone's Apex row")
+  const phoneWords = await evaluate("document.querySelector('[data-apex-row][data-fin-counts]').dataset.finCounts")
   assert.equal(phoneWords, deskWords, "the phone's list says the desk rail's words")
   await navigate(window, `${base}scripts/phone-apex.html?app=apex&open=1ead1ead-0000-4000-8000-000000001ead`)
   await until("Boolean(document.querySelector('[data-shiver] [data-stop-all]'))", "Stop all on the phone's Shiver card")

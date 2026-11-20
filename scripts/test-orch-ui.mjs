@@ -113,10 +113,11 @@ async function check() {
   const nested = await evaluate(`(() => { const rail = document.querySelector('.thread-jump-scope').cloneNode(true); const asking = [...rail.querySelectorAll('[data-asking-fin]')].map((node) => node.querySelector('[data-asking-title]').textContent); rail.querySelectorAll('[data-asking-fin]').forEach((node) => node.remove()); return { text: rail.innerText, asking } })()`)
   assert.deepEqual(nested.asking.sort(), ["Quiet-hours push wording", "Sheet motion on iPad"], "the Fins that need the person hang under the Apex")
   for (const title of children) assert.ok(!nested.text.includes(title), `the rail lists no other Fin: ${title}`)
-  assert.equal(await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-fin-pips]')].length"), 1, "one Apex row wears the pips")
-  const label = await evaluate("document.querySelector('.thread-jump-scope [data-fin-pips]').getAttribute('aria-label')")
+  // The calm rail: one Apex row, its Fins counted in its tip (`data-fin-counts`), the pips being the Overview's.
+  assert.equal(await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-apex-row]')].length"), 1, "one Apex row")
+  const label = await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]').dataset.finCounts")
   assert.equal(label, "12 Fins: 2 need you · 5 working · 2 queued · 1 idle · 2 done")
-  assert.equal(await evaluate("document.querySelector('.thread-jump-scope [data-fin-pips]').dataset.tip"), label)
+  assert.ok((await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]').dataset.tip")).split("\n").includes(label), "its tip says them")
   await both("rail")
 
   // Recent (the filter menu's choice) and search list no other either; the Apex is there in each.
@@ -143,7 +144,7 @@ async function check() {
   await click('[aria-label="Close search"]')
 
   // The Apex opens from its row.
-  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
+  await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]').click(); true")
   // The strip: the Apex's Sessions, and no tab a Fin didn't earn by being opened, however many it has.
   await until("Boolean(document.querySelector('[data-shiver]'))", "the Apex's Shiver card")
   const strip = await evaluate(`(() => ({ tabs: document.querySelectorAll('[data-child-tab]').length, sessions: document.querySelectorAll('[data-session-tab]').length, count: document.querySelector('[data-apex-count]') !== null }))()`)
@@ -341,19 +342,20 @@ async function check() {
   await evaluate("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })); true")
   await until("!document.querySelector('[data-agents-diagnostics]')", "Settings closing")
 
-  // The phone: the list shows the Apex as one row with the same pips, and each Fin that needs the person as a row of
-  // its own under Needs you, no other; its Shiver card opens a Fin, whose back reads the Apex's name; Stop asks
+  // The phone: the list shows the Apex as one row with the same counts, and each Fin that needs the person hung under
+  // it, no other; its Shiver card opens a Fin, whose back reads the Apex's name; Stop asks
   // first, full width.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
-  await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the Apex's pips in the phone's list")
-  const list = await evaluate(`(() => { const rows = document.querySelector('[data-list]').cloneNode(true); const asking = [...rows.querySelectorAll('[data-fin-row]')].map((node) => node.querySelector('.font-medium').textContent); rows.querySelectorAll('[data-fin-row]').forEach((node) => node.remove()); return { text: rows.innerText, asking, rows: document.querySelectorAll('[data-thread]').length, label: document.querySelector('[data-thread] [data-fin-pips]').getAttribute('aria-label') } })()`)
+  await until("Boolean(document.querySelector('[data-thread][data-apex-row]'))", "the Apex's pips in the phone's list")
+  // The calm list: the Apex is one row, its Fins that need the person hung under it (folded), its counts its own.
+  const list = await evaluate(`(() => { const rows = document.querySelector('[data-list]').cloneNode(true); const asking = [...rows.querySelectorAll('[data-asking-fin]')].map((node) => node.querySelector('[data-asking-title]').textContent); rows.querySelectorAll('[data-fin-row]').forEach((node) => node.remove()); return { text: rows.innerText, asking, apexRows: document.querySelectorAll('[data-thread][data-apex-row]').length, label: document.querySelector('[data-thread][data-apex-row]').dataset.finCounts } })()`)
   assert.deepEqual(list.asking.sort(), ["Quiet-hours push wording", "Sheet motion on iPad"], "the phone lists the Fins that need the person, each a row")
   for (const title of children) assert.ok(!list.text.includes(title), `the phone's list lists no other Fin (${title})`)
-  assert.equal(list.rows, 4)
+  assert.equal(list.apexRows, 1, "the Apex is one row")
   assert.equal(list.label, "12 Fins: 2 need you · 5 working · 2 queued · 1 idle · 2 done")
   await both("phone-list")
-  await click("[data-thread]")
+  await click("[data-thread][data-apex-row]")
   await until("Boolean(document.querySelector('[data-shiver]'))", "the Apex's Shiver card on the phone")
   assert.equal(await evaluate("document.querySelector('[data-apex-count]')?.dataset.apexCount"), "12", "the bar counts the Fins")
   assert.equal(await evaluate("document.querySelectorAll('[data-child-chip]').length"), 0, "no chip a Fin repeating the card")
@@ -440,7 +442,7 @@ async function check() {
   // holds none of them while the card is drawn.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
-  await click("[data-thread]")
+  await click("[data-thread][data-apex-row]")
   await until("document.querySelectorAll('[data-shiver] [data-fin-ask]').length === 2", "the Fins' asks in the phone's Shiver card")
   assert.equal(await evaluate("Boolean(document.querySelector('.web-dock [data-ask=fin]'))"), false, "none in the dock as well")
   await both("phone-ask", "orch-gaps-")

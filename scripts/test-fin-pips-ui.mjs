@@ -177,10 +177,10 @@ async function check() {
   // The phone: the Apex's row counts its Fins as the desk's does; folded, its asking Fins hang under it, once each.
   window.setContentSize(390, 844)
   await load("/scripts/phone-apex.html")
-  await until(`Boolean(document.querySelector('[data-apex-row][data-fin-counts]')) && document.querySelectorAll('[data-apex-fins] [data-asking-fin]').length > 0`, "the phone's Apex row and its asking Fins")
+  await until(`Boolean(document.querySelector('[data-apex-row][data-fin-counts]')) && document.querySelectorAll('[data-hung-fins] [data-asking-fin]').length > 0`, "the phone's Apex row and its asking Fins")
   const phone = await evaluate(`(() => ({
     label: document.querySelector('[data-apex-row][data-fin-counts]').dataset.finCounts,
-    fins: [...document.querySelectorAll('[data-apex-fins] [data-fin-row]')].map((row) => row.dataset.finRow),
+    fins: [...document.querySelectorAll('[data-hung-fins] [data-fin-row]')].map((row) => row.dataset.finRow),
     list: document.querySelector('[data-list]').innerText,
   }))()`)
   assert.equal(phone.label, rollupLabel(counts))

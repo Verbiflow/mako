@@ -22,6 +22,7 @@ import {
   type FoldedThread,
 } from "@/lib/thread-fold"
 import { ThreadMark } from "@/components/rail/thread-status"
+import { threadStatusLabel } from "@/lib/live-mark-state"
 import { threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { acpForThread } from "@/state/acp"
@@ -189,7 +190,7 @@ export const LiveAgentRow = memo(function LiveAgentRow({
         className={cn("pressable", ROW_SURFACE)}
       >
         {apex && thread ? (
-          <ApexFold thread={thread} open={fins.open} />
+          <ApexFold thread={thread} open={fins.open} label={otherSession ? threadStatusLabel(status, markHarness) : label} />
         ) : (
           <ThreadMark
             status={status}

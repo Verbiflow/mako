@@ -259,7 +259,7 @@ async function checkWindow() {
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
   await until(`document.querySelector('[data-list-chips]') !== null && document.querySelectorAll('[data-asking-fin]').length > 0`, "the phone's chips and asking Fins")
-  const phone = await evaluate(`({ chips: [...document.querySelectorAll('[data-list-chip]')].map((node) => node.dataset.listChip), count: Number(document.querySelector('[data-list-chip="inbox"] [data-inbox-count]')?.textContent ?? 0), groups: document.querySelectorAll('[data-project-group]').length, fins: [...document.querySelectorAll('[data-asking-fin]')].map((node) => ({ fin: node.dataset.finRow, text: node.innerText.replace(/\\s+/g, ' '), under: node.closest('[data-apex-fins]')?.dataset.apexFins })) })`)
+  const phone = await evaluate(`({ chips: [...document.querySelectorAll('[data-list-chip]')].map((node) => node.dataset.listChip), count: Number(document.querySelector('[data-list-chip="inbox"] [data-inbox-count]')?.textContent ?? 0), groups: document.querySelectorAll('[data-project-group]').length, fins: [...document.querySelectorAll('[data-asking-fin]')].map((node) => ({ fin: node.dataset.finRow, text: node.innerText.replace(/\\s+/g, ' '), under: node.closest('[data-hung-fins]')?.dataset.hungFins })) })`)
   console.log("PHONE", JSON.stringify(phone))
   assert.deepEqual(phone.chips, ["inbox"], "the phone's chips: the Inbox (pull requests and automations live on a Mac)")
   assert.ok(phone.groups > 0, "Threads stand under their projects")

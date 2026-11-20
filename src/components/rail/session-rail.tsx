@@ -79,29 +79,34 @@ function useLineCount(): [(node: HTMLDivElement | null) => void, number] {
 /**
  * "N to resolve": the problems once stacked over the footer, counted, each opening with the one action that fixes it.
  * Its dot is the attention violet only when the person must act (a server waits on their sign-in); otherwise grey.
- * The lines are also drawn out of sight, so the count is always theirs.
+ * Closed, the lines are drawn out of sight so the count is theirs; open, they're the popover's: never both.
  */
 function RailIssues() {
   const [open, setOpen] = useState(false)
-  const [measure, lines] = useLineCount()
+  const [measureHidden, hiddenLines] = useLineCount()
+  const [measureShown, shownLines] = useLineCount()
   const servers = useMcpSignIns((state) => state.servers.filter((server) => server.way !== "settings" || !mcpServerUnreachable(server)).length)
   const signIns = useMcpSignIns((state) => state.servers.filter((server) => server.way !== "settings").length)
+  const lines = open ? shownLines : hiddenLines
   // The MCP line names its first server and counts the rest: each is a problem of its own.
   const count = lines ? lines + Math.max(0, servers - 1) : 0
   const needsYou = signIns > 0
   return (
     <>
-      <div ref={measure} hidden aria-hidden>
-        <IssueLines />
-      </div>
-      <Popover open={open && count > 0} onOpenChange={setOpen}>
+      {/* Closed, the lines are drawn out of sight, so the count is theirs; open, they're the popover's, drawn once. */}
+      {open ? null : (
+        <div ref={measureHidden} hidden aria-hidden>
+          <IssueLines />
+        </div>
+      )}
+      <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger asChild>
           <button
             type="button"
             data-rail-issues={count || undefined}
             data-needs-you={needsYou || undefined}
             aria-label={`${count} to resolve`}
-            hidden={!count}
+            hidden={!count && !open}
             className="pressable mt-2.5 mr-2 flex h-7 shrink-0 items-center gap-2 px-2 text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground aria-expanded:bg-fill-selected aria-expanded:text-foreground"
           >
             <span aria-hidden className={cn("size-1.5 rounded-full", needsYou ? "bg-attention" : "bg-foreground/35")} />
@@ -109,7 +114,7 @@ function RailIssues() {
           </button>
         </PopoverTrigger>
         <PopoverContent side="top" align="end" sideOffset={6} className="w-72 p-0">
-          <div data-rail-issue-lines className="[&>*:first-child]:border-t-0">
+          <div ref={measureShown} data-rail-issue-lines className="[&>*:first-child]:border-t-0">
             <IssueLines />
           </div>
         </PopoverContent>
