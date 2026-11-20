@@ -299,10 +299,15 @@ function catalogService(
   options: ServeCatalogOptions
 ): CatalogService {
   const startedAt = Date.now()
+  // The loop's delay, sampled every 20 ms: while there's work, where there's a watch on it (`watchLoop`), as an idle
+  // daemon's loop has nothing to delay it, and a sampler woke it 50 times a second for that.
   const eventLoopDelay = monitorEventLoopDelay({ resolution: 20 })
-  eventLoopDelay.enable()
+  const sampled = options.log !== undefined && options.work !== undefined
+  if (!sampled) eventLoopDelay.enable()
   // A hold of this thread is a request answered late, or past the host's timeout: said with what held it.
-  const stopWatch = options.log && options.work ? watchLoop(options.work, (ms, during) => options.log?.("warn", "loop held", { ms, during })) : () => {}
+  const stopWatch = sampled && options.work ? watchLoop(options.work, (ms, during) => options.log?.("warn", "loop held", { ms, during }), {
+    watching: (on) => (on ? eventLoopDelay.enable() : eventLoopDelay.disable()),
+  }) : () => {}
   const clients = new Set<DaemonLink>()
   const follows = new Map<DaemonLink, Map<string, () => void>>()
   const retireListeners = new Set<() => void>()
