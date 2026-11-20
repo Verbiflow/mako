@@ -26,6 +26,7 @@ import type { FileContents, FileReadPurpose, WorkspaceFile } from "../contracts/
 import { WorkspaceGit } from "../git/index.js"
 import { workspaceWrites } from "../base/workspace-writes.js"
 import { FolderIndex, type FolderIndexOptions } from "./file-index.js"
+import { videoPosters } from "./media-renditions.js"
 
 /**
  * The most of a file the viewer will render.
@@ -226,7 +227,8 @@ export class WorkspaceFiles {
         mimeType,
         previewUrl,
         ...size,
-        ...(media?.media === "video" && { posterUrl: `${previewUrl}?rendition=poster` }),
+        // Without a poster a viewer draws the video's own frame.
+        ...(media?.media === "video" && (await videoPosters()) && { posterUrl: `${previewUrl}?rendition=poster` }),
         ...(media?.media === "image" && large && { thumbnailUrl: `${previewUrl}?rendition=thumbnail` }),
       }
     }

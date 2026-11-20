@@ -13,7 +13,7 @@ import { readSignedFile } from "@mako/host/workspaces/file-readers"
 import { fileResponse, localFile } from "@mako/host/workspaces/file-response"
 import { ConversationFiles } from "@mako/host/workspaces/files"
 import { mediaDimensions } from "@mako/host/workspaces/media-dimensions"
-import { MediaRenditions } from "@mako/host/workspaces/media-renditions"
+import { MediaRenditions, pathFfmpeg, videoPosters } from "@mako/host/workspaces/media-renditions"
 
 /**
  * How the host serves what a transcript shows: signed URLs that expire and
@@ -235,46 +235,37 @@ try {
   assert.match(image.thumbnailUrl ?? "", /\?rendition=thumbnail$/)
   const video = await preview(join(elsewhere, "recording.mp4"))
   assert.deepEqual([video.media, video.width, video.height], ["video", 1280, 720])
-  assert.match(video.posterUrl ?? "", /\?rendition=poster$/)
+  // A poster only where FFmpeg is on PATH to take one; without, a viewer draws the video's own frame.
+  if (await videoPosters()) assert.match(video.posterUrl ?? "", /\?rendition=poster$/)
+  else assert.equal(video.posterUrl, undefined)
   const report = await preview(join(elsewhere, "report.html"))
   assert.equal(report.mimeType, "text/html")
   assert.ok(report.previewUrl && (await verifyFilePreview(report.previewUrl)).kind === "file", "a page comes with its folder grant")
 
-  // Posters and thumbnails, once per file version, when this machine has ffmpeg.
-  let ffmpeg: string | undefined
-  try {
-    ffmpeg = execFileSync("sh", ["-c", "command -v ffmpeg"], { encoding: "utf8" }).trim() || undefined
-  } catch {
-    ffmpeg = undefined
-  }
-  if (ffmpeg) {
-    const clip = join(root, "clip.mp4")
-    execFileSync(ffmpeg, ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=10:duration=1", "-pix_fmt", "yuv420p", "-y", clip])
+  // Thumbnails, once per file version, made with sharp; posters where FFmpeg is on PATH.
+  {
+    const sharp = (await import("sharp")).default
+    const picture = (width: number, height: number) => sharp({ create: { width, height, channels: 3, background: { r: 40, g: 90, b: 160 } } }).png().toBuffer()
     const still = join(root, "still.png")
-    execFileSync(ffmpeg, ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=1920x1200", "-frames:v", "1", "-y", still])
+    await writeFile(still, await picture(1920, 1200))
     let runs = 0
-    const renditions = new MediaRenditions({ folder: join(root, "renditions"), ffmpeg: () => { runs += 1; return ffmpeg! } })
-    const posterPath = await renditions.rendition(clip, fileIdentity(await stat(clip)), "poster")
-    assert.ok(posterPath?.endsWith(".jpg"))
-    assert.deepEqual(await dimensionsOf(posterPath!, "image/jpeg"), { width: 640, height: 360 })
+    const renditions = new MediaRenditions({ folder: join(root, "renditions"), ffmpeg: async () => { runs += 1; return pathFfmpeg() } })
     const thumbnail = await renditions.rendition(still, fileIdentity(await stat(still)), "thumbnail")
     assert.deepEqual(await dimensionsOf(thumbnail!, "image/png"), { width: 640, height: 400 }, "a thumbnail keeps its picture's shape")
     const [one, two] = await Promise.all([0, 1].map(async () => renditions.rendition(still, fileIdentity(await stat(still)), "thumbnail")))
     assert.equal(one, thumbnail)
     assert.equal(two, thumbnail)
-    assert.equal(runs, 2, "a kept rendition runs no ffmpeg")
+    assert.equal(runs, 0, "a picture's rendition needs no FFmpeg")
     // A picture alone in the column draws the `inline` rendition, kept by what the picture holds: Mako's copies of
     // one attachment (the staged file, the one a conversation keeps) share it, and a rewritten file gets its own.
     const wide = join(root, "wide.png")
-    execFileSync(ffmpeg, ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=3840x2160", "-frames:v", "1", "-y", wide])
+    await writeFile(wide, await picture(3840, 2160))
     const inline = await renditions.rendition(wide, fileIdentity(await stat(wide)), "inline")
     assert.deepEqual(await dimensionsOf(inline!, "image/png"), { width: 1440, height: 810 }, "sized for a picture's box, in its shape")
-    assert.equal(runs, 3)
     const copy = join(root, "kept-copy-of-wide.png")
     await copyFile(wide, copy)
     const [first, second] = await Promise.all([wide, copy].map(async (path) => renditions.rendition(path, fileIdentity(await stat(path)), "inline")))
     assert.deepEqual([first, second], [inline, inline], "a copy of the same picture draws the same rendition")
-    assert.equal(runs, 3, "and runs no ffmpeg")
     assert.notEqual(await renditions.rendition(wide, fileIdentity(await stat(wide)), "thumbnail"), inline, "each size is its own file")
     await writeFile(copy, await readFile(still))
     assert.notEqual(await renditions.rendition(copy, fileIdentity(await stat(copy)), "inline"), inline, "a rewritten file gets a new one")
@@ -291,10 +282,18 @@ try {
     assert.equal(Number(unknown.headers.get("content-length")), (await stat(wide)).size, "a size nobody makes is the file")
     await unknown.body?.cancel()
     assert.equal((await readSignedFile(new Request(`${signedWide.replace(/\/[a-f0-9]{64}\//, `/${"0".repeat(64)}/`)}?rendition=inline`), renditions)).status, 404, "a URL this host didn't sign gets no rendition either")
-    const none = new MediaRenditions({ folder: join(root, "none"), ffmpeg: () => { throw new Error("no ffmpeg") } })
-    assert.equal(await none.rendition(clip, fileIdentity(await stat(clip)), "poster"), null)
-    assert.equal(await renditions.rendition(join(root, "broken.mp4"), fileIdentity(await stat(join(root, "broken.mp4"))), "poster"), null)
-  } else console.log("ffmpeg isn't on PATH here; posters and thumbnails weren't made")
+    const ffmpeg = await pathFfmpeg()
+    if (ffmpeg) {
+      const clip = join(root, "clip.mp4")
+      execFileSync(ffmpeg, ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=10:duration=1", "-pix_fmt", "yuv420p", "-y", clip])
+      const posterPath = await renditions.rendition(clip, fileIdentity(await stat(clip)), "poster")
+      assert.ok(posterPath?.endsWith(".jpg"))
+      assert.deepEqual(await dimensionsOf(posterPath!, "image/jpeg"), { width: 640, height: 360 })
+      assert.equal(await renditions.rendition(join(root, "broken.mp4"), fileIdentity(await stat(join(root, "broken.mp4"))), "poster"), null)
+      const none = new MediaRenditions({ folder: join(root, "none"), ffmpeg: async () => undefined })
+      assert.equal(await none.rendition(clip, fileIdentity(await stat(clip)), "poster"), null, "no FFmpeg, no poster")
+    } else console.log("FFmpeg isn't on PATH here; no poster was made")
+  }
 
   console.log("Media serving: signed URLs expire and pin the file, page grants serve only their assets, each type carries its policy, pages fit their frames, sizes come from headers, previews outside the Thread's folders stay links")
 } finally {

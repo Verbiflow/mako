@@ -773,3 +773,10 @@ A recording needs the helper; without one it is refused before the capture
 starts, with what to install. Checked on a Mac and in a Linux container by the
 recording suite (`npm run test:control-recording`), where an FFmpeg on PATH
 decodes the files as an independent check.
+
+## November 20: posters and thumbnails
+
+A picture's thumbnail and inline rendition are scaled with sharp. A video gets
+a poster only where an FFmpeg is already on the machine's PATH; otherwise its
+read has no `posterUrl` and the transcript's tile draws the video's own frame
+half a second in (`<video preload="metadata">`), as the player already did.
