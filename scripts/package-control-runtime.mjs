@@ -62,6 +62,8 @@ await copy("runtime/control/package.json", "package.json")
 await copy("runtime/control/package-lock.json", "package-lock.json")
 await copy("docs/local-control-runtime.md", "README.md")
 await copy("LICENSE", "LICENSE")
+// The video helper's source: runtime/control/Dockerfile compiles it against the image's own libraries.
+await copy("native/video-linux/mako-video.c", "video/mako-video.c")
 if (values.driver) {
   const driver = await realpath(resolve(values.driver))
   const provenance = JSON.parse(await readFile(join(driver, "provenance.json"), "utf8"))

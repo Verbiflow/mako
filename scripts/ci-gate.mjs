@@ -440,7 +440,8 @@ export const MAC_STEPS = [
   [25, "tsx scripts/test-native-driver-death.ts"],
   [1, "npm run -s build:electron && node scripts/test-preload.mjs"],
   [2, "tsx scripts/test-providers.ts"],
-  // Native idle trimming shifts packets with setts as the FFmpeg Mako ships (8.0.1) does; Ubuntu's 6.1 drops the held last frame, and native recording is the Mac's.
+  // Native recording is the Mac's: its pointer is drawn by the video helper's AVFoundation overlay, and the fixture's
+  // B-frames and held last frame come from Homebrew's FFmpeg as a driver's video has them (Ubuntu's 6.1 drops the hold).
   [18, "tsx scripts/test-control-recording-idle.ts"],
 ]
 
