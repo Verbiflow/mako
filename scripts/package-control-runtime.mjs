@@ -61,6 +61,8 @@ for (const name of packages) {
 await copy("runtime/control/package.json", "package.json")
 await copy("runtime/control/package-lock.json", "package-lock.json")
 await copy("docs/local-control-runtime.md", "README.md")
+// What runtime/control/Dockerfile runs on its install: no type declarations, source maps or TypeScript sources.
+await copy("scripts/linux-host/prune-install.mjs", "prune-install.mjs")
 await copy("LICENSE", "LICENSE")
 // The video helper's source: runtime/control/Dockerfile compiles it against the image's own libraries.
 await copy("native/video-linux/mako-video.c", "video/mako-video.c")
