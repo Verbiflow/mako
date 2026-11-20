@@ -33,7 +33,7 @@ export async function claudeProbeUsage(
       env,
       persistSession: false,
       settingSources: [],
-      pathToClaudeCodeExecutable: runtime?.kind === "configured" ? runtime.executable : undefined,
+      pathToClaudeCodeExecutable: runtime && runtime.kind !== "bundled" ? runtime.executable : undefined,
     },
   })
   let timer: ReturnType<typeof setTimeout> | undefined
