@@ -14,10 +14,9 @@ import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { setTimeout as delay } from "node:timers/promises"
 import sharp from "sharp"
-import { z } from "zod"
 import { ControlRecording } from "../packages/control-runtime/src/control-recording.js"
 import { RecordingEncoder } from "../packages/control-runtime/src/recording-encoder.js"
-import { mediaExecutable } from "../packages/control-runtime/src/control-media.js"
+import { readMp4 } from "../packages/control-runtime/src/mp4.js"
 
 const execute = promisify(execFile)
 const directory = await mkdtemp(join(tmpdir(), "mako-recording-stream-"))
@@ -28,34 +27,11 @@ const target = {
   generation: "one",
   lease: "lease",
 }
+/** The file as the recording's own MP4 reader sees it, in the shape FFprobe gave. */
 async function inspect(video: string) {
-  return z
-    .object({
-      streams: z.array(
-        z.object({
-          nb_read_frames: z.string(),
-          width: z.number(),
-          height: z.number(),
-        })
-      ),
-      format: z.object({ duration: z.string() }),
-    })
-    .parse(
-      JSON.parse(
-        (
-          await execute(mediaExecutable("ffprobe"), [
-            "-v",
-            "error",
-            "-count_frames",
-            "-show_streams",
-            "-show_format",
-            "-of",
-            "json",
-            video,
-          ])
-        ).stdout
-      )
-    )
+  const read = await readMp4(video)
+  assert.ok(read, `${video} is a readable MP4`)
+  return { streams: [{ nb_read_frames: String(read.packets.length), width: read.width, height: read.height }], format: { duration: String(read.duration) } }
 }
 try {
   const staticRecording = await ControlRecording.create(
@@ -117,7 +93,8 @@ try {
     }
     await Promise.all(pending)
     const result = await ordered.finish()
-    await execute(mediaExecutable("ffmpeg"), [
+    // FFmpeg on PATH decodes it: a check, not a dependency.
+    await execute("ffmpeg", [
       "-v", "error", "-i", result.path, "-vf", "scale=1:1", "-fps_mode", "passthrough", "-f", "image2",
       join(orderedDirectory, "frame-%03d.png"),
     ])
@@ -127,7 +104,7 @@ try {
       const pixel = await sharp(join(orderedDirectory, decoded[index]!)).removeAlpha().raw().toBuffer()
       for (const [channel, value] of color.entries())
         assert.ok(Math.abs(pixel[channel]! - value) <= 4,
-          `Replaced/repeated frame ${index} channel ${channel} changed`)
+          `Replaced/repeated frame ${index} channel ${channel} changed: ${[...pixel.subarray(0, 3)]} for ${color}`)
     }
   } finally {
     ordered.abort("Ordered-frame test complete")
@@ -157,7 +134,7 @@ try {
     await delay(18)
   }
   await dense.stop()
-  // Observe the directory while FFmpeg is consuming frames, not only after cleanup.
+  // Observe the directory while the encoder is consuming frames, not only after cleanup.
   let renderedFiles = 0
   while (dense.receipt().status === "finalizing") {
     renderedFiles += (await readdir(dense.directory)).filter((name) =>
@@ -195,23 +172,21 @@ try {
   assert.equal(refusal.status, "failed")
   assert.match(refusal.error!, /Invalid recording frame geometry/)
   assert.equal(refusal.frames, 0)
-  // A rendering failure after FFmpeg starts must close its stdin and reap it.
+  // A rendering failure after the encoder starts must close its input and reap it.
   const tools = join(directory, "failing-media")
   await mkdir(tools)
   const pidFile = join(tools, "pid")
   await writeFile(
-    join(tools, "ffmpeg"),
+    join(tools, "mako-video"),
     `#!${process.execPath}
-if (process.argv.includes('-encoders')) { console.log(' V..... h264_videotoolbox\\n V..... libx264'); process.exit(0) }
 require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
 process.stdin.resume()
 process.stdin.on('end', () => process.exit(0))
 `,
     { mode: 0o700 }
   )
-  await writeFile(join(tools, "ffprobe"), "fixture")
-  const originalMediaRoot = process.env.MAKO_CONTROL_MEDIA_ROOT
-  process.env.MAKO_CONTROL_MEDIA_ROOT = tools
+  const originalHelper = process.env.MAKO_VIDEO_HELPER
+  process.env.MAKO_VIDEO_HELPER = join(tools, "mako-video")
   try {
     const broken = await ControlRecording.create(
       target,
@@ -234,9 +209,8 @@ process.stdin.on('end', () => process.exit(0))
       "failed encoder must be reaped before settled"
     )
   } finally {
-    if (originalMediaRoot === undefined)
-      delete process.env.MAKO_CONTROL_MEDIA_ROOT
-    else process.env.MAKO_CONTROL_MEDIA_ROOT = originalMediaRoot
+    if (originalHelper === undefined) delete process.env.MAKO_VIDEO_HELPER
+    else process.env.MAKO_VIDEO_HELPER = originalHelper
   }
   console.log(
     JSON.stringify({

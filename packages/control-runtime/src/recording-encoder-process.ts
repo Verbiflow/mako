@@ -1,135 +1,90 @@
-import { command } from "./processes.js"
-import { spawn } from "./processes.js"
 import { rename, stat } from "node:fs/promises"
 import { join } from "node:path"
-import { z } from "zod"
-import { mediaExecutable, recordingVideoEncoding } from "./control-media.js"
-import { MovVideoInput } from "./mov-video-input.js"
+import { Mp4Writer, readMp4 } from "./mp4.js"
+import { onMac } from "./platform.js"
+import { VideoHelper, videoHelperExecutable } from "./video-helper.js"
 
-const execute = command
+/** The quality recordings ask the helper for: VideoToolbox's 0.85, or OpenH264's quantizer 21. */
+const RECORDING_QUALITY = 85
 
-/** One encoder process per recording. A write is complete only after pipe admission;
- * the worker submits one raw frame at a time and the owner bounds source history. */
+/** The helper that encodes recordings here, or why there is none. */
+export function recordingEncoder(): string {
+  const executable = videoHelperExecutable()
+  if (!executable)
+    throw new Error("Recording needs Mako's video helper (mako-video), which isn't installed here. Reinstall a complete Mako build, or set MAKO_VIDEO_HELPER to its path.")
+  return executable
+}
+
+/** How recordings are encoded here, for their timeline. */
+export function recordingVideoEncoding() {
+  return { codec: "h264" as const, encoder: onMac() ? "mako-video (VideoToolbox)" : "mako-video (OpenH264)" }
+}
+
+/**
+ * One recording's encoder: the video helper encodes each rendered picture (VideoToolbox on a Mac, OpenH264 on Linux),
+ * a key frame a second, and its units are written as fragmented MP4 as they come. A write is complete once the helper
+ * has the picture; the worker submits one at a time and the owner bounds source history.
+ */
 export class RecordingEncoderProcess {
-  private readonly input: MovVideoInput
-  private readonly child
-  private readonly closed: Promise<void>
+  private readonly helper: VideoHelper
+  private readonly writer: Mp4Writer
+  private readonly width: number
+  private readonly height: number
   private failure?: string
   private closing = false
-  private finishing?: Promise<{
-    path: string
-    durationMs: number
-    retainedFrames?: number
-    error?: string
-  }>
+  private sequence = 0
+  /** The time each picture was given, by its sequence, until its unit comes. */
+  private readonly times = new Map<number, number>()
+  /** Writes into the file, in order. */
+  private writing: Promise<void> = Promise.resolve()
+  private finishing?: Promise<{ path: string; durationMs: number; retainedFrames?: number; error?: string }>
   private readonly partial: string
   private readonly output: string
 
-  constructor(
-    directory: string,
-    width: number,
-    height: number,
-    fps: number,
-    failed: (reason: string) => void
-  ) {
-    this.input = new MovVideoInput(width, height, fps)
+  constructor(directory: string, width: number, height: number, fps: number, failed: (reason: string) => void) {
+    this.width = width
+    this.height = height
     this.partial = join(directory, "recording.partial.mp4")
     this.output = join(directory, "recording.mp4")
-    this.child = spawn(
-      mediaExecutable("ffmpeg"),
-      [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-n",
-        // One conversion pipeline per recording; bound its pool independently
-        // of the codec's internal encoding work.
-        "-filter_threads",
-        "1",
-        "-analyzeduration",
-        "0",
-        "-probesize",
-        "32",
-        "-f",
-        "mov",
-        "-i",
-        "pipe:0",
-        "-an",
-        ...recordingVideoEncoding().args,
-        // Held images make B-frame reorder delay span real time, shifting the
-        // first presentation time and shortening the reported duration.
-        "-bf",
-        "0",
-        "-enc_time_base",
-        this.input.timeBase,
-        "-fps_mode",
-        "vfr",
-        "-pix_fmt",
-        "yuv420p",
-        "-g",
-        String(fps),
-        "-force_key_frames",
-        "expr:gte(t,n_forced)",
-        "-movflags",
-        "+frag_keyframe+empty_moov+default_base_moof",
-        "-flush_packets",
-        "1",
-        this.partial,
-      ],
-      { stdio: ["pipe", "ignore", "pipe"] }
-    )
-    let tail = ""
+    this.writer = new Mp4Writer(this.partial, 1000 / fps)
     const fail = (reason: string) => {
       if (this.failure) return
       this.failure = reason
       failed(reason)
     }
-    this.child.stderr.on("data", (data: Buffer) => {
-      tail = (tail + data.toString()).slice(-4096)
+    this.helper = new VideoHelper(recordingEncoder(), { kind: "frames" }, { fps, keyint: fps, quality: RECORDING_QUALITY }, {
+      unit: (packet) => {
+        const at = this.times.get(packet.sequence)
+        this.times.delete(packet.sequence)
+        if (at === undefined) return fail("The video helper returned a picture it was never given")
+        this.writing = this.writing.then(() => this.writer.add(packet, at)).catch((error: Error) => fail(`Writing the recording failed: ${error.message}`))
+      },
+      ended: (reason) => fail(`Video encoder ended unexpectedly: ${reason}`),
     })
-    this.child.stdin.on("error", (error) =>
-      fail(`Video encoder input failed: ${error.message}`)
-    )
-    this.child.on("error", (error) =>
-      fail(`Video encoder failed: ${error.message}`)
-    )
-    this.closed = new Promise((resolve) => {
-      this.child.once("close", (code) => {
-        if (code !== 0 || !this.closing)
-          fail(`Video encoder ended unexpectedly: ${tail || `exit ${code}`}`)
-        resolve()
-      })
-    })
-    this.child.stdin.write(this.input.header)
   }
 
+  /** An RGB picture presented `atMs` into the video. */
   async write(frame: Buffer, atMs: number) {
     if (this.failure) throw new Error(this.failure)
     if (this.closing) throw new Error("Video encoder is closed")
-    const header = this.input.frame(atMs, frame.length)
+    const sequence = ++this.sequence
+    this.times.set(sequence, atMs)
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => {
         this.abort("Video encoder stopped consuming frames")
         reject(new Error(this.failure))
       }, 5000)
-      this.child.stdin.cork()
-      this.child.stdin.write(header)
-      this.child.stdin.write(frame, (error) => {
+      this.helper.picture("rgb", sequence, atMs, frame, { width: this.width, height: this.height }, (error) => {
         clearTimeout(timeout)
-        if (!error) return resolve()
-        // A write after the encoder exited fails as a destroyed stream, which says nothing; the encoder's own reason
-        // (its stderr) is recorded as it closes, a moment later.
-        const settled = new Promise<void>((done) => setTimeout(done, 1000).unref())
-        void Promise.race([this.closed, settled]).then(() =>
-          reject(new Error(this.failure ?? `Video encoder input failed: ${error.message}`)))
+        if (error || this.failure) reject(new Error(this.failure ?? `Video encoder input failed: ${error?.message}`))
+        else resolve()
       })
-      this.child.stdin.uncork()
     })
   }
 
   abort(reason: string) {
     this.failure ??= reason
-    this.child.kill("SIGKILL")
+    this.helper.close()
   }
 
   finish() {
@@ -138,61 +93,30 @@ export class RecordingEncoderProcess {
 
   private async finalize() {
     this.closing = true
-    this.child.stdin.end()
-    const timeout = setTimeout(
-      () => this.abort("Video encoder shutdown timed out"),
-      10_000
-    )
+    this.helper.close()
+    const timeout = setTimeout(() => this.abort("Video encoder shutdown timed out"), 10_000)
     try {
-      await this.closed
+      await this.helper.exited
+      await this.writing
+      await this.writer.finish()
+    } catch (error) {
+      this.failure ??= error instanceof Error ? error.message : String(error)
+      await this.writer.cancel()
     } finally {
       clearTimeout(timeout)
     }
-    // Never publish a path merely because a file exists. After a crash, decode
-    // the retained prefix; successful capture is checked by its container metadata.
-    const probe = z
-      .object({
-        streams: z.array(z.object({ nb_read_frames: z.string().optional() })),
-        format: z.object({ duration: z.string() }),
-      })
-      .parse(
-        JSON.parse(
-          (
-            await execute(
-              mediaExecutable("ffprobe"),
-              [
-                "-v",
-                "error",
-                ...(this.failure ? ["-count_frames"] : []),
-                "-show_entries",
-                "stream=nb_read_frames:format=duration",
-                "-of",
-                "json",
-                this.partial,
-              ],
-              { timeout: 20_000, maxBuffer: 65536 }
-            )
-          ).stdout
-        )
-      )
-    const durationMs = Number(probe.format.duration) * 1000
-    if (
-      !Number.isFinite(durationMs) ||
-      durationMs <= 0 ||
-      (this.failure && !(Number(probe.streams[0]?.nb_read_frames) > 0))
-    )
-      throw new Error(
-        this.failure ?? "Video encoder produced no playable frames"
-      )
-    if ((await stat(this.partial)).size === 0)
-      throw new Error("Video encoder produced an empty file")
+    // Never publish a path merely because a file exists: the file is read back, and after a failure its readable
+    // prefix is what's kept.
+    const video = await readMp4(this.partial)
+    const durationMs = (video?.duration ?? 0) * 1000
+    if (!video || !Number.isFinite(durationMs) || durationMs <= 0 || !video.packets.length)
+      throw new Error(this.failure ?? "Video encoder produced no playable frames")
+    if ((await stat(this.partial)).size === 0) throw new Error("Video encoder produced an empty file")
     if (!this.failure) await rename(this.partial, this.output)
     return {
       path: this.failure ? this.partial : this.output,
       durationMs,
-      retainedFrames: this.failure
-        ? Number(probe.streams[0]!.nb_read_frames)
-        : undefined,
+      retainedFrames: this.failure ? video.packets.length : undefined,
       error: this.failure,
     }
   }

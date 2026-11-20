@@ -51,8 +51,8 @@ async function settled(name) {
 }
 async function probe(receipt) {
   assert.ok(receipt.video, receipt.error)
-  const executable = "/Applications/Mako.app/Contents/Resources/control-media/darwin-arm64/ffprobe"
-  const result = JSON.parse((await promisify(execFile)(executable, ["-v", "error", "-count_frames", "-show_streams", "-show_format", "-of", "json", receipt.video])).stdout)
+  // FFprobe on PATH decodes it: a check, not something Mako ships.
+  const result = JSON.parse((await promisify(execFile)("ffprobe", ["-v", "error", "-count_frames", "-show_streams", "-show_format", "-of", "json", receipt.video])).stdout)
   assert.ok(Number(result.streams[0].nb_read_frames) > 0, "Video must decode actual frames")
   return { ...receipt, probe: result }
 }
@@ -121,7 +121,7 @@ try {
       if (pending) return
       pending = true
       void processResources({ installedHostTree: client.hostPid, taskSessionTree: client.sessionPid, nativeFixture: native.pid, nativeViewer: preview.pid })
-        .then(value => { value.hostAndEncoder = value.installedHostTree.filter(row => row.pid === client.hostPid || row.executable.endsWith("/ffmpeg")); resourceSamples.push(value) })
+        .then(value => { value.hostAndEncoder = value.installedHostTree.filter(row => row.pid === client.hostPid || row.executable.endsWith("/mako-video")); resourceSamples.push(value) })
         .catch(error => { report.resourceError = error.message })
         .finally(() => { pending = false })
     }, 500)

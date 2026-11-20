@@ -121,15 +121,16 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      # A shard that records installs ffmpeg from Ubuntu's own .debs kept between runs, with no network: on 2026-11-19 the
+      # A shard that records builds the video helper from Ubuntu's own .debs kept between runs (its libraries, and FFmpeg,
+      # which the recording checks decode their files with), with no network: on 2026-11-19 the
       # runners couldn't reach Ubuntu's mirrors, and every such shard hung on `apt-get update` (`install-apt-cached.sh`).
       - id: needs
         run: echo "needs=$(node scripts/ci-gate.mjs --needs ${{ matrix.shard }} 45)" >> "$GITHUB_OUTPUT"
       - id: apt-debs
-        if: contains(steps.needs.outputs.needs, 'ffmpeg')
+        if: contains(steps.needs.outputs.needs, 'video')
         uses: ./.github/actions/restore-apt-debs
         with:
-          packages: ffmpeg
+          packages: ffmpeg gcc pkg-config libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcomposite-dev libopenh264-dev libyuv-dev libturbojpeg0-dev
       - uses: ./.github/actions/install-dependencies
       - uses: ./.github/actions/build-control-runtime
         with:
@@ -377,13 +378,15 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
-      # Recording needs ffmpeg and ffprobe, which the Mac runner doesn't have.
+      # The recording checks decode their files with FFmpeg, which the Mac runner doesn't have; Mako ships none.
       - run: brew install ffmpeg
         env:
           # Homebrew's own update and cleanup, not ffmpeg, were most of this step (29 s to 105 s).
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
       - uses: ./.github/actions/build-control-runtime
+      # Recordings encode with the video helper (ScreenCaptureKit and VideoToolbox), built from its Swift source.
+      - run: node scripts/build-video-helper.mjs --require
       # One Vite dev server for the job's checks and one for those that reload by hand (#662's `ui-vite-server.mjs`), at
       # the addresses the job's env gives them, where each check started a server of its own and compiled every page it
       # opened cold. A check needing anything else of a dev server still starts its own.
@@ -573,21 +576,6 @@ jobs:
           node-version: 24
           package-manager-cache: false
       - uses: ./.github/actions/install-dependencies
-      # The recording encoder the app ships, built from its pinned sources once per recipe.
-      - id: media
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: vendor/control-media/darwin-arm64
-          key: control-media-darwin-arm64-${{ hashFiles('vendor/control-media/sources.json', 'scripts/build-control-media.mjs') }}
-      - if: steps.media.outputs.cache-hit != 'true'
-        uses: ./.github/actions/control-media-sources
-      - if: steps.media.outputs.cache-hit != 'true'
-        run: npm run prepare:control-media
-      - if: steps.media.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: vendor/control-media/darwin-arm64
-          key: ${{ steps.media.outputs.cache-primary-key }}
       - name: Package the app and check it
         # Under the job's own 45: a hang here fails this step, never reaching `ci` as a cancel it takes for a newer
         # commit's (the build, packaging and its checks take about 4 minutes).

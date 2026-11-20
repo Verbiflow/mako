@@ -4,7 +4,6 @@ import { createHash } from "node:crypto"
 import { lstat, mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import { dirname, join, resolve } from "node:path"
 import { parseArgs, promisify } from "node:util"
-import { downloadsDirectory, fetchSources, readManifest } from "../lib/control-media-sources.mjs"
 import { buildsDirectory, buildsFile, fetchBuilds, readBuilds } from "../lib/harness-builds.mjs"
 
 /**
@@ -16,8 +15,6 @@ import { buildsDirectory, buildsFile, fetchBuilds, readBuilds } from "../lib/har
  *   proof/  the kit in scripts/linux-host that installs the harnesses and proves the host,
  *           and in proof/measure, scripts/measure-host.mjs with the fixtures it runs
  *   video/  the video helper's source (native/video-linux), which the image compiles against Debian's libraries
- *   media/  the FFmpeg recipe, its manifest and the source archives it pins, each checked by its hash, which the
- *           image builds as the Mac does, with no network
  *   harnesses/  the harness builds Mako keeps (vendor/harness-builds/sources.json) and that list, each archive checked
  *           by its sha256, which the image lays out before the host installs the rest (proof/seed-harnesses.mjs)
  *
@@ -58,11 +55,6 @@ for (const file of ["host-process.mjs", "install-harnesses.mjs", "seed-harnesses
 for (const file of ["measure-host.mjs", "lib/scratch-git.mjs", "fixtures/acp-stream-agent.mjs", "fixtures/host-measure-preload.cjs"])
   await copy(join("scripts", file), join("proof/measure/scripts", file))
 await copy("native/video-linux/mako-video.c", "video/mako-video.c")
-for (const file of ["scripts/build-control-media.mjs", "scripts/lib/control-media-sources.mjs", "vendor/control-media/sources.json"])
-  await copy(file, join("media", file))
-const media = await readManifest(".")
-await fetchSources(media, downloadsDirectory("."))
-for (const { archive } of media.sources) await copy(join(downloadsDirectory("."), archive), join("media", downloadsDirectory("."), archive))
 const builds = await readBuilds(".")
 await fetchBuilds(builds, buildsDirectory("."))
 await copy(buildsFile("."), join("harnesses", "sources.json"))

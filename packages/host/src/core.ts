@@ -15,7 +15,6 @@ import { listedFins } from "./contracts/children.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
 import { stat, writeFile } from "node:fs/promises"
-import { mediaExecutable } from "@mako/control-runtime/media"
 import { controlArtifactsRoot, controlRecordingsRoot } from "@mako/control/program"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -416,7 +415,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
    * reach the handlers. Background tabs keep streaming; they just take no orders.
    */
   const withHost = async <T>(run: (host: AgentHost) => T | Promise<T>): Promise<T> => run((await ready()).active)
-  const renditions = new MediaRenditions({ folder: join(environment.dataRoot, "thumbnails"), ffmpeg: () => mediaExecutable("ffmpeg") })
+  const renditions = new MediaRenditions({ folder: join(environment.dataRoot, "thumbnails") })
   // Pictures and pages a cloud Thread, another device or another host here read: fetched from it, kept here.
   const ownerFiles = new OwnerFiles({ gateway: () => late.cloud?.gateway(), token: async () => late.cloud?.token() })
   const owned = new OwnedFiles({ folder: join(environment.dataRoot, "owned-files"), fetch: (owner, url, init) => ownerFiles.fetch(owner, url, init) })

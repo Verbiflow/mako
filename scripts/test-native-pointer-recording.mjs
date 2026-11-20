@@ -16,7 +16,8 @@ import { snapshotControlRuntime } from "./lib/control-runtime-snapshot.mjs"
 import { CuaEmbedded } from "@mako/host/control/cua-embedded"
 const cua = new CuaEmbedded()
 import { environmentForExecutable } from "@mako/host/base/executable"
-import { mediaExecutable } from "../packages/control-runtime/dist/control-media.js"
+// FFmpeg on PATH decodes the recording: a check, not something Mako ships.
+const mediaExecutable = (name) => name
 
 const run = promisify(execFile)
 const manifest = JSON.parse(await readFile("vendor/cua-driver/release.json", "utf8"))

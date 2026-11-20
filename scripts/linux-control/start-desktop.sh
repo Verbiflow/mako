@@ -4,6 +4,10 @@ mkdir -p "$HOME"
 . /repo/scripts/linux-control/identity.sh
 export DISPLAY=:91
 export NODE_PATH=/opt/mako-test/node_modules
+# Mako's video helper, compiled here from the payload against the image's libraries: recordings encode with it.
+gcc -O2 -o /tmp/mako-video /repo/native/video-linux/mako-video.c \
+  $(pkg-config --cflags --libs x11 xext xdamage xfixes xcomposite openh264 libturbojpeg) -lyuv -lm
+export MAKO_VIDEO_HELPER=/tmp/mako-video
 # Native image dependencies are installed at image build time. Desktop tests
 # can run with --network none and never download code while accepting input.
 export CUA_DRIVER_RS_TELEMETRY_ENABLED=0

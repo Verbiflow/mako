@@ -79,6 +79,19 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
               style={pixels && { maxWidth: pixels.width, maxHeight: pixels.height }}
               className="block size-full object-cover"
             />
+          ) : format === "video" && url ? (
+            // No poster where the host has no FFmpeg to take one: the video's own frame half a second in, as a poster
+            // would be, decoded here once the tile is near.
+            <video
+              src={`${url}#t=0.5`}
+              preload="metadata"
+              muted
+              playsInline
+              aria-hidden
+              tabIndex={-1}
+              onError={onMediaError}
+              className="pointer-events-none block size-full object-cover"
+            />
           ) : format === "image" || !file ? (
             <Skeleton className="block size-full" />
           ) : null}

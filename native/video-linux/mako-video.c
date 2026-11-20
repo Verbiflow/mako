@@ -9,7 +9,7 @@
 //   mako-video window <xid> [options]   one window, by its X id
 //   mako-video frames [options]         the pictures on its input
 //   options: --fps N (30)  --bitrate BPS (from the size)  --box WxH (none)  --keyint N (0: only when asked)
-//            --quality QP (constant quantizer, for recordings, instead of a bitrate)  --threads N (from the size)
+//            --quality Q (0–100: a constant quantizer for recordings, instead of a bitrate)  --threads N (from the size)
 //            --content screen (OpenH264's screen-content tools: fewer bits, more CPU; default camera)
 //
 // stdout: each unit as a 4-byte big-endian length, then a ControlVideoPacket (packages/control-runtime/src/contracts/
@@ -199,7 +199,9 @@ static int open_encoder(int width, int height) {
     // A recording: the same quantizer throughout, so a still picture costs nothing and motion keeps its detail.
     p.iRCMode = RC_OFF_MODE;
     p.bEnableFrameSkip = false;
-    layer->iDLayerQp = options.quality;
+    // 0–100, as VideoToolbox's quality on a Mac: 85 is QP 21, about what x264's CRF 18 spends on a screen.
+    int qp = (int)lround(51 - options.quality * 0.35);
+    layer->iDLayerQp = qp < 10 ? 10 : qp > 51 ? 51 : qp;
   } else {
     // Live: the bitrate is a ceiling the encoder keeps by skipping a frame rather than overshooting, which over a
     // reliable link would queue behind the viewer instead. The quantizer's range keeps text readable.
@@ -555,7 +557,7 @@ static void summary(void) {
 }
 
 static int usage(void) {
-  fprintf(stderr, "usage: mako-video display|window <xid>|frames [--fps N] [--bitrate BPS] [--box WxH] [--keyint N] [--quality QP] [--threads N] [--content screen|camera]\n");
+  fprintf(stderr, "usage: mako-video display|window <xid>|frames [--fps N] [--bitrate BPS] [--box WxH] [--keyint N] [--quality Q] [--threads N] [--content screen|camera]\n");
   return 64;
 }
 

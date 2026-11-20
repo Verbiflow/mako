@@ -9,6 +9,7 @@
     "ajv",
     "sharp",
     "ws",
+    "mediabunny",
     "yaml",
     "file-type",
     "@napi-rs/keyring"

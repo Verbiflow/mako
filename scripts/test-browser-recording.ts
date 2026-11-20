@@ -108,29 +108,30 @@ for (const failStop of [false, true]) {
   )
   assert.ok(result.video)
 }
-for (const advertisesEncoder of [false, true]) {
-  const tools = join(directory, `refused-encoder-${advertisesEncoder}`)
+// No video helper: refused before the capture starts. A helper that can't start: refused, the capture stopped, and
+// no fallback.
+for (const installed of [false, true]) {
+  const tools = join(directory, `refused-encoder-${installed}`)
   await mkdir(tools)
-  await writeFile(join(tools, "ffmpeg"), `#!${process.execPath}
-if (process.argv.includes('-encoders')) { console.log(${JSON.stringify(advertisesEncoder ? ' V..... h264_videotoolbox\n V..... libx264' : 'Encoders:')}); process.exit(0) }
+  if (installed)
+    await writeFile(join(tools, "mako-video"), `#!${process.execPath}
 process.stderr.write('Injected encoder startup failure')
 process.exit(1)
 `, { mode: 0o700 })
-  await writeFile(join(tools, "ffprobe"), "fixture")
-  const previous = process.env.MAKO_CONTROL_MEDIA_ROOT
-  process.env.MAKO_CONTROL_MEDIA_ROOT = tools
+  const previous = process.env.MAKO_VIDEO_HELPER
+  process.env.MAKO_VIDEO_HELPER = join(tools, "mako-video")
   try {
     const manager = new BrowserRecordings(), source = fixture()
     await assert.rejects(manager.start("owner", target, source.connection, "session",
       { directory }, new AbortController().signal, new BrowserCapture(source.connection, "session")),
-    /encoder|EPIPE|missing from this FFmpeg/)
-    assert.equal(source.calls.filter(method => method === "Page.startScreencast").length, advertisesEncoder ? 1 : 0,
-      "Missing codec refuses before capture; hardware initialization failure never falls back")
-    assert.equal(source.calls.filter(method => method === "Page.stopScreencast").length, advertisesEncoder ? 1 : 0,
+    /encoder|EPIPE|video helper/)
+    assert.equal(source.calls.filter(method => method === "Page.startScreencast").length, installed ? 1 : 0,
+      "A missing helper refuses before capture; a failing one never falls back")
+    assert.equal(source.calls.filter(method => method === "Page.stopScreencast").length, installed ? 1 : 0,
       "A received JPEG alone cannot acknowledge recording startup after encoder failure")
   } finally {
-    if (previous === undefined) delete process.env.MAKO_CONTROL_MEDIA_ROOT
-    else process.env.MAKO_CONTROL_MEDIA_ROOT = previous
+    if (previous === undefined) delete process.env.MAKO_VIDEO_HELPER
+    else process.env.MAKO_VIDEO_HELPER = previous
   }
 }
 {

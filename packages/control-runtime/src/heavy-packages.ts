@@ -11,6 +11,8 @@ export const heavy = {
   /** sharp, and the native image library it opens as it loads, at the first image. */
   sharp: lazyPackage("sharp", () => import("sharp").then((module) => module.default)),
   ws: lazyPackage("ws", () => import("ws")),
+  /** Mediabunny's MP4 reader and writer, for recordings' files (`mp4.ts`). */
+  mediabunny: lazyPackage("mediabunny", () => import("mediabunny")),
   mcpTypes: lazyPackage("@modelcontextprotocol/sdk/types.js", () => import("@modelcontextprotocol/sdk/types.js")),
   /** MCP's client, its stdio transport and the driver schema's validator (ajv): a driver needs all three. */
   mcpClient: lazyPackage("@modelcontextprotocol/sdk client (driver-schema.ts)", () =>

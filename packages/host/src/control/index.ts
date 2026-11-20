@@ -8,6 +8,7 @@ import {
   MachineBrowser,
   MachineTabVideo,
   helperCapture,
+  helperLiveEncoder,
   localBrowsers,
   publishDeskBrowserRegistration,
   videoHelperExecutable,
@@ -18,7 +19,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { hostClient } from "../base/host-client.js"
 import { Appshots } from "./appshots.js"
 import { DesktopChannel } from "./desktop-channel.js"
-import { desktopPreviewCapture } from "./desktop-video.js"
+import { desktopLiveEncoder, desktopPreviewCapture } from "./desktop-video.js"
 import { machineCaptureExtension } from "./machine-video.js"
 import { AgentViewsApp } from "./agent-views.js"
 import { AGENT_VIEWS_CLIENT, clientRoot } from "../transport/index.js"
@@ -38,7 +39,7 @@ import { CuaDriverVersions } from "./cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "../application/index.js"
 import { computerPermissions } from "./computer-permissions.js"
 import type { MachineCapability } from "../base/machine.js"
-import { nodePlatform, onLinux, onMac } from "../base/platform.js"
+import { onLinux, onMac } from "../base/platform.js"
 import type { CuaDriverStatus, MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
 import type { AppshotFrontRequest, AppshotTarget } from "@mako/control-runtime/contracts"
 import type { HostEvent } from "../contracts/host-events-boot.js"
@@ -191,13 +192,9 @@ export function openControl(
   const preferredBrowserApplication = () => {
     return (defaultBrowserApplication ??= machine.kind === "present" ? machine.defaultBrowser() : Promise.resolve(undefined))
   }
-  // The application owns checkout resources; the reusable Node runtime does not
-  // infer workspace paths. Child control servers receive the same explicit root.
-  const developmentMedia = join(environment.appRoot, "vendor/control-media", `${nodePlatform()}-${process.arch}`)
-  if (!environment.packaged && existsSync(developmentMedia))
-    process.env.MAKO_CONTROL_MEDIA_ROOT ??= developmentMedia
   // The video helper (`mako-video`): a packaged Mac app's beside its executable, a checkout's where `build:electron`
-  // built it; a Linux machine's is on PATH.
+  // built it; a Linux machine's is on PATH. The application owns these paths; the reusable Node runtime and the child
+  // control servers read the same one from the environment.
   const bundledVideoHelper = environment.packaged
     ? join(dirname(dirname(environment.appRoot)), "MacOS", "mako-video")
     : join(environment.appRoot, "build", "mako-video")
@@ -285,11 +282,17 @@ export function openControl(
       )
     : undefined
   // Tabs and windows are encoded where their pixels are: the desktop app's tab or window capture into WebCodecs, the
-  // machine browser's own, or the video helper's. A screencast still goes through FFmpeg. Encoding screencast JPEGs in the desktop
-  // instead (desktopLiveEncoder) measured no cheaper and twice the latency, so it isn't the default.
+  // machine browser's own, or the video helper's.
   const videoHelper = videoHelperExecutable()
   const desktopCapture = desktopPreviewCapture(desktop, (id, tab) => (id === deskBrowser.definition.id && deskBrowser.hasPage(tab) ? tab : undefined))
   const previews = new ControlPreviews(browser, previewThumbnail, (activity) => emit({ type: "control-activity", activity }), {
+    // A screencast's JPEGs: the video helper encodes them where it's installed, else the desktop app's WebCodecs.
+    encoder: videoHelper
+      ? helperLiveEncoder(videoHelper)
+      : desktopLiveEncoder(desktop, (_size, _fps, _unit, _drained, failed) => {
+          queueMicrotask(() => failed("Live video of this tab needs Mako's desktop app open, or its video helper"))
+          return { ready: () => false, submit() {}, close() {} }
+        }),
     capture: {
       tab: (target) => (machineVideo && target.browser === MACHINE_BROWSER_ID ? machineVideo.source(target.tab) : desktopCapture.tab(target)),
       // Without the desktop app, a window is captured by the video helper: ScreenCaptureKit on a Mac, an X display's.

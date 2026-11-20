@@ -5,6 +5,10 @@ mkdir -p "$HOME"
 export DISPLAY=:92
 export MAKO_RECORDING_DRIVER=${MAKO_RECORDING_DRIVER:-/target/debug/cua-driver}
 export NODE_PATH=/opt/mako-test/node_modules
+# Mako's video helper, compiled here from the payload against the image's libraries: recordings encode with it.
+gcc -O2 -o /tmp/mako-video /repo/native/video-linux/mako-video.c \
+  $(pkg-config --cflags --libs x11 xext xdamage xfixes xcomposite openh264 libturbojpeg) -lyuv -lm
+export MAKO_VIDEO_HELPER=/tmp/mako-video
 export CUA_DRIVER_RS_TELEMETRY_ENABLED=0
 export CUA_DRIVER_REQUIRE_FOCUSED_TARGET=1
 export CUA_DRIVER_PERMISSION_MODE=unrestricted

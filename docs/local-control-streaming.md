@@ -746,3 +746,56 @@ frames the app drew. Every unit the helper sent decoded.
 `scripts/test-video-helper.mjs` (Linux) and `scripts/test-video-helper-mac.mjs`
 check them end to end; `scripts/test-video-helper-protocol.ts` checks the Node
 side against a fake.
+
+## November 20: recordings without FFmpeg
+
+A recording's pictures are still drawn in its worker (sharp, with the cursor),
+but encoded by the video helper's `frames` mode: VideoToolbox on a Mac (the
+ordinary encoder at quality 0.85; its low-latency rate control with no bitrate
+dropped every frame after the first), OpenH264 at a constant quantizer on
+Linux, a key frame a second either way. Each unit is written as its own MP4
+fragment the moment the next gives its duration
+([`mp4.ts`](../packages/control-runtime/src/mp4.ts)), laid out as FFmpeg lays a
+one-sample fragment out, so a crash keeps every unit but the newest. The file is
+then read back with Mediabunny (MPL-2.0, pure JavaScript) instead of FFprobe:
+nothing is published because a file exists. A native capture's video is read
+the same way, its idle stretches are cut by writing its packets again at new
+times (no decode), and its pointer is drawn by the Mac helper's `overlay` mode
+(AVFoundation decodes the video, CoreGraphics draws the pointer pictures over
+each frame in the video's own color space, VideoToolbox encodes). A Linux
+driver records through an FFmpeg on PATH, so there that FFmpeg draws the
+pointer; without one the video is kept as it is and the pointer stays in the
+timeline. Every stream says BT.709, so FFmpeg's decoder and a browser's give
+back the colors that went in (they read the Mac's untagged stream as BT.601,
+seven levels off).
+
+A recording needs the helper; without one it is refused before the capture
+starts, with what to install. Checked on a Mac and in a Linux container by the
+recording suite (`npm run test:control-recording`), where an FFmpeg on PATH
+decodes the files as an independent check.
+
+## November 20: posters and thumbnails
+
+A picture's thumbnail and inline rendition are scaled with sharp. A video gets
+a poster only where an FFmpeg is already on the machine's PATH; otherwise its
+read has no `posterUrl` and the transcript's tile draws the video's own frame
+half a second in (`<video preload="metadata">`), as the player already did.
+
+## November 20: no FFmpeg ships
+
+Nothing Mako builds or ships contains FFmpeg any more: the GPL FFmpeg/x264
+recipe (`build-control-media.mjs`, `vendor/control-media`, its source cache and
+workflow), the Mac app's `Resources/control-media`, the host image's FFmpeg
+stage, `control-media.ts`, the MOV input and the FLV reader are gone. A
+screencast's JPEGs (a tab in a person's Chrome) are encoded by the video
+helper's `frames` mode where it's installed (every Mac app and Linux image),
+else by the desktop app's WebCodecs (`desktopLiveEncoder`, Windows); with
+neither, its live video says so when a viewer joins. Recording refuses before
+capture without the helper.
+
+FFmpeg remains only where it isn't Mako's: a Linux driver records a native
+window through the FFmpeg on PATH (the control runtime's `native-os` image keeps
+Debian's for it, and Mako draws that video's pointer with it), a host with an
+FFmpeg on PATH makes video posters, and the checks decode their results with an
+FFmpeg the CI runner installs. `scripts/linux-host/prove.mjs` checks the host
+image has the helper and no FFmpeg.

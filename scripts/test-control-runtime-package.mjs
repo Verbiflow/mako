@@ -30,6 +30,7 @@ try {
   await put("runtime/control/package-lock.json", JSON.stringify(lock))
   await put("docs/local-control-runtime.md", "Fixture documentation")
   await put("LICENSE", "Fixture license")
+  await put("native/video-linux/mako-video.c", "/* fixture helper */")
   for (const path of [".env", ".git/config", "node_modules/private-token", "dist-electron/unreferenced.js"]) await put(path, "CREDENTIAL_CANARY_DO_NOT_COPY")
   await build("release")
   const manifest = JSON.parse(await readFile(join(temporary,"release/manifest.json")))
@@ -38,6 +39,7 @@ try {
   assert.ok(manifest.files.some(file => file.path === "packages/control-runtime/dist/recording-encoder-worker.js"))
   assert.ok(manifest.files.some(file => file.path === "packages/control/dist/program/worker.js"))
   assert.ok(manifest.files.some(file => file.path === "packages/lazy/dist/index.js"), "The runtime's own lazy-loading package ships with it")
+  assert.ok(manifest.files.some(file => file.path === "video/mako-video.c"), "The video helper's source goes with it, for the image to compile")
   for (const file of manifest.files) {
     const bytes = await readFile(join(temporary,"release",file.path))
     assert.ok(!bytes.includes("CREDENTIAL_CANARY_DO_NOT_COPY"))

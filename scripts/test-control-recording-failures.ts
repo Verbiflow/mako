@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { spawn, execFile } from "node:child_process"
 import { randomBytes } from "node:crypto"
-import { mkdtemp, mkdir, readFile, readdir, writeFile, symlink } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, readdir, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -10,7 +10,8 @@ import { setTimeout as delay } from "node:timers/promises"
 import sharp from "sharp"
 import { z } from "zod"
 import { ControlRecording } from "../packages/control-runtime/src/control-recording.js"
-import { mediaExecutable } from "../packages/control-runtime/src/control-media.js"
+import { readMp4 } from "../packages/control-runtime/src/mp4.js"
+import { videoHelperExecutable } from "../packages/control-runtime/src/video-helper.js"
 
 const execute = promisify(execFile)
 const target = {
@@ -28,6 +29,8 @@ const image = (
     .toBuffer()
 )
 
+const second = await sharp({ create: { width: 640, height: 480, channels: 3, background: "#603040" } }).jpeg().toBuffer()
+
 async function owner(directory: string) {
   const recording = await ControlRecording.create(
     target,
@@ -35,6 +38,9 @@ async function owner(directory: string) {
     async () => {}
   )
   await recording.frame(image, 640, 480)
+  // A unit is written once the next gives its duration: a second picture puts the first on disk.
+  await delay(300)
+  await recording.frame(second, 640, 480)
   assert.equal(
     recording.receipt().status,
     "recording",
@@ -43,20 +49,26 @@ async function owner(directory: string) {
   console.log(JSON.stringify({ directory: recording.directory }))
 }
 
+/** Each packet's presentation and duration, as the file says them (FFmpeg 5.1's probe leaves a fragment's durations out). */
+async function packetsOf(video: string) {
+  const read = await readMp4(video)
+  assert.ok(read, `${video} is a readable MP4`)
+  return read.packets.map((packet) => ({ pts_time: String(packet.timestamp), duration_time: String(packet.duration) }))
+}
+
 async function test() {
   const root = await mkdtemp(join(tmpdir(), "mako-recording-failures-"))
-  const ffmpeg = mediaExecutable("ffmpeg"),
-    ffprobe = mediaExecutable("ffprobe")
+  const helper = videoHelperExecutable()
+  assert.ok(helper, "the video helper is built (npm run build:electron, or scripts/build-video-helper.mjs)")
   const tools = join(root, "tools"),
     pidFile = join(root, "encoder.pid")
   await mkdir(tools)
-  await symlink(ffprobe, join(tools, "ffprobe"))
   const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
   await writeFile(
-    join(tools, "ffmpeg"),
+    join(tools, "mako-video"),
     `#!/bin/sh
-if [ "$2" != "-encoders" ]; then printf '%s\\n' "$$" > ${quote(pidFile)}; fi
-exec ${quote(ffmpeg)} "$@"
+printf '%s\\n' "$$" > ${quote(pidFile)}
+exec ${quote(helper)} "$@"
 `,
     { mode: 0o700 }
   )
@@ -65,7 +77,7 @@ exec ${quote(ffmpeg)} "$@"
     ["--import", "tsx", fileURLToPath(import.meta.url), "--fixture", root],
     {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, MAKO_CONTROL_MEDIA_ROOT: tools },
+      env: { ...process.env, MAKO_VIDEO_HELPER: join(tools, "mako-video") },
     }
   )
   const closed = new Promise<void>((resolve, reject) => {
@@ -99,21 +111,10 @@ exec ${quote(ffmpeg)} "$@"
     const partial = join(directory, "recording.partial.mp4")
     const encoderPid = Number(await readFile(pidFile, "utf8"))
     await delay(3000)
-    const inspect = async () =>
-      JSON.parse(
-        (
-          await execute(ffprobe, [
-            "-v",
-            "error",
-            "-count_frames",
-            "-show_entries",
-            "stream=nb_read_frames:format=duration",
-            "-of",
-            "json",
-            partial,
-          ])
-        ).stdout
-      )
+    const inspect = async () => {
+      const video = await readMp4(partial)
+      return { streams: [{ nb_read_frames: String(video?.packets.length ?? 0) }], format: { duration: String(video?.duration ?? 0) } }
+    }
     assert.ok(Number((await inspect()).streams[0].nb_read_frames) > 0)
     child.kill("SIGKILL")
     await closed
@@ -155,8 +156,8 @@ exec ${quote(ffmpeg)} "$@"
 
   // Pause the actual encoder while distinct source states arrive. A latest-only
   // recorder loses these states even when the encoder subsequently catches up.
-  const previous = process.env.MAKO_CONTROL_MEDIA_ROOT
-  process.env.MAKO_CONTROL_MEDIA_ROOT = tools
+  const previous = process.env.MAKO_VIDEO_HELPER
+  process.env.MAKO_VIDEO_HELPER = join(tools, "mako-video")
   let shortStallResult
   let pausedPid: number | undefined
   const shortStall = await ControlRecording.create(
@@ -207,13 +208,10 @@ exec ${quote(ffmpeg)} "$@"
     // every actual sample and inspect its presentation interval instead.
     const decoded = join(root, "short-stall-decoded")
     await mkdir(decoded)
-    await execute(ffmpeg, ["-v", "error", "-i", shortStallResult.video!,
+    await execute("ffmpeg", ["-v", "error", "-i", shortStallResult.video!,
       "-fps_mode", "passthrough", join(decoded, "%03d.png")])
     const files = (await readdir(decoded)).sort()
-    const packets = z.array(z.object({ pts_time: z.string(), duration_time: z.string() }))
-      .parse(JSON.parse((await execute(ffprobe, ["-v", "error", "-show_packets",
-        "-show_entries", "packet=pts_time,duration_time", "-of", "json",
-        shortStallResult.video!])).stdout).packets)
+    const packets = await packetsOf(shortStallResult.video!)
     assert.equal(files.length, packets.length)
     for (let index = 0; index < colors.length; index++) {
       const seconds = (timeline.frames[index + 1]!.at + 60) / 1000
@@ -242,13 +240,13 @@ exec ${quote(ffmpeg)} "$@"
     if (pausedPid !== undefined) process.kill(pausedPid, "SIGCONT")
     await shortStall.stop()
     await shortStall.settled()
-    if (previous === undefined) delete process.env.MAKO_CONTROL_MEDIA_ROOT
-    else process.env.MAKO_CONTROL_MEDIA_ROOT = previous
+    if (previous === undefined) delete process.env.MAKO_VIDEO_HELPER
+    else process.env.MAKO_VIDEO_HELPER = previous
   }
 
   // A stalled encoder reduces temporal sampling within a bounded source queue.
   // Resume the actual process and require complete, correctly timed output.
-  process.env.MAKO_CONTROL_MEDIA_ROOT = tools
+  process.env.MAKO_VIDEO_HELPER = join(tools, "mako-video")
   let backlogResult
   const backlog = await ControlRecording.create(
     target,
@@ -305,11 +303,7 @@ exec ${quote(ffmpeg)} "$@"
     const timeline = JSON.parse(await readFile(backlogResult.timeline!, "utf8"))
     assert.ok(timeline.encodingTiming.maxQueuedBytes <= 32 * 1024 * 1024)
     assert.ok(timeline.encodingTiming.maxQueuedBytes > 24 * 1024 * 1024)
-    const probe = JSON.parse((await execute(ffprobe, ["-v", "error",
-      "-show_packets", "-show_entries", "packet=pts_time,duration_time",
-      "-of", "json", backlogResult.video!])).stdout)
-    const packets = z.array(z.object({ pts_time: z.string(), duration_time: z.string() }))
-      .parse(probe.packets)
+    const packets = await packetsOf(backlogResult.video!)
     assert.ok(packets.some(packet => Number(packet.duration_time) > 0.5),
       "The video must hold an image during the actual encoder stall")
     assert.ok(packets.every((packet, index) => index === 0 ||
@@ -317,7 +311,7 @@ exec ${quote(ffmpeg)} "$@"
       "Presentation timestamps must remain ordered")
     const backlogPixels = join(root, "backlog-decoded")
     await mkdir(backlogPixels)
-    await execute(ffmpeg, ["-v", "error", "-i", backlogResult.video!,
+    await execute("ffmpeg", ["-v", "error", "-i", backlogResult.video!,
       "-vf", "scale=1:1", "-fps_mode", "passthrough", join(backlogPixels, "%04d.png")])
     const lastPixel = (await readdir(backlogPixels)).sort().at(-1)!
     const pixel = await sharp(join(backlogPixels, lastPixel)).removeAlpha().raw().toBuffer()
@@ -329,13 +323,13 @@ exec ${quote(ffmpeg)} "$@"
     if (pausedPid !== undefined) process.kill(pausedPid, "SIGCONT")
     await backlog.stop()
     await backlog.settled()
-    if (previous === undefined) delete process.env.MAKO_CONTROL_MEDIA_ROOT
-    else process.env.MAKO_CONTROL_MEDIA_ROOT = previous
+    if (previous === undefined) delete process.env.MAKO_VIDEO_HELPER
+    else process.env.MAKO_VIDEO_HELPER = previous
   }
 
   // Throttle the actual encoder below capture rate for longer than the retained
   // history. The video must lose temporal samples evenly, never freeze.
-  process.env.MAKO_CONTROL_MEDIA_ROOT = tools
+  process.env.MAKO_VIDEO_HELPER = join(tools, "mako-video")
   let sustainedResult
   let throttling = false
   let throttled: Promise<void> | undefined
@@ -354,8 +348,10 @@ exec ${quote(ffmpeg)} "$@"
     throttling = true
     throttled = (async () => {
       while (throttling) {
+        // Stopped 120 ms of every 125: the video helper encodes a 640×480 picture in a few milliseconds, so less
+        // pressure than this never fills the retained history this checks.
         process.kill(encoderPid, "SIGSTOP")
-        await delay(80)
+        await delay(120)
         process.kill(encoderPid, "SIGCONT")
         await delay(5)
       }
@@ -373,10 +369,7 @@ exec ${quote(ffmpeg)} "$@"
     const timeline = JSON.parse(await readFile(sustainedResult.timeline!, "utf8"))
     assert.ok(timeline.encodingTiming.maxScheduleLagMs > 1900,
       `This test must fill the retained encoder history: ${JSON.stringify(timeline.encodingTiming)}`)
-    const packets = z.array(z.object({ pts_time: z.string(), duration_time: z.string() }))
-      .parse(JSON.parse((await execute(ffprobe, ["-v", "error", "-show_packets",
-        "-show_entries", "packet=pts_time,duration_time", "-of", "json",
-        sustainedResult.video!])).stdout).packets)
+    const packets = await packetsOf(sustainedResult.video!)
     const longest = Math.max(...packets.map(packet => Number(packet.duration_time)))
     assert.ok(longest < 0.5, `Sustained pressure froze the video for ${longest}s`)
     assert.ok(sustainedResult.frameRate!.skippedFrameSlots > 0 &&
@@ -386,23 +379,22 @@ exec ${quote(ffmpeg)} "$@"
     await throttled
     await sustained.stop()
     await sustained.settled()
-    if (previous === undefined) delete process.env.MAKO_CONTROL_MEDIA_ROOT
-    else process.env.MAKO_CONTROL_MEDIA_ROOT = previous
+    if (previous === undefined) delete process.env.MAKO_VIDEO_HELPER
+    else process.env.MAKO_VIDEO_HELPER = previous
   }
 
   // Accept part of a raw frame, then stop reading. The worker must detect lack
   // of pipe progress, kill/reap this child and preserve an explicit failure.
   await writeFile(
-    join(tools, "ffmpeg"),
+    join(tools, "mako-video"),
     `#!${process.execPath}
-if (process.argv.includes('-encoders')) { console.log(' V..... h264_videotoolbox\\n V..... libx264'); process.exit(0) }
 require('node:fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))
 process.stdin.once('data', () => process.stdin.pause())
 setInterval(() => {}, 1000)
 `,
     { mode: 0o700 }
   )
-  process.env.MAKO_CONTROL_MEDIA_ROOT = tools
+  process.env.MAKO_VIDEO_HELPER = join(tools, "mako-video")
   let stalledResult
   try {
     const recording = await ControlRecording.create(
@@ -423,8 +415,8 @@ setInterval(() => {}, 1000)
     const encoderPid = Number(await readFile(pidFile, "utf8"))
     assert.throws(() => process.kill(encoderPid, 0), { code: "ESRCH" })
   } finally {
-    if (previous === undefined) delete process.env.MAKO_CONTROL_MEDIA_ROOT
-    else process.env.MAKO_CONTROL_MEDIA_ROOT = previous
+    if (previous === undefined) delete process.env.MAKO_VIDEO_HELPER
+    else process.env.MAKO_VIDEO_HELPER = previous
   }
   const result = {
     root,

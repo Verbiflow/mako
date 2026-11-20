@@ -1,7 +1,10 @@
-import { command } from "./processes.js"
 import { z } from "zod"
-import { mediaExecutable, recordingVideoEncoding } from "./control-media.js"
+import { Mp4Writer, readMp4, retimeMp4 } from "./mp4.js"
+import { resolveExecutable } from "./executable.js"
+import { onMac } from "./platform.js"
+import { VideoHelper } from "./video-helper.js"
 import { RecordingEncoder } from "./recording-encoder.js"
+import { recordingEncoder, recordingVideoEncoding } from "./recording-encoder-process.js"
 import { spawn } from "./processes.js"
 import { Readable } from "node:stream"
 import { pipeline } from "node:stream/promises"
@@ -33,12 +36,6 @@ import {
 } from "@mako/control/control"
 import { controlRecordingsRoot } from "@mako/control/program"
 
-const execute = command
-/** Whether this FFmpeg can rewrite packet timestamps without decoding. */
-function streamTimestampFilter() {
-  return execute(mediaExecutable("ffmpeg"), ["-hide_banner", "-bsfs"], { timeout: 5000, maxBuffer: 65536 })
-    .then(({ stdout }) => /^setts$/m.test(stdout), () => false)
-}
 function recordingImageSize(bytes: Buffer) {
   try {
     return imageSize(bytes)
@@ -189,13 +186,7 @@ export class ControlRecording {
       throw new Error("Recording directory must be absolute")
     // Preflight before the capture stream starts; no silent screenshots-only fallback.
     const encoding = recordingVideoEncoding()
-    const encoders = await execute(mediaExecutable("ffmpeg"), ["-hide_banner", "-encoders"], {
-      timeout: 5000,
-      maxBuffer: 131_072,
-    })
-    if (!encoders.stdout.split("\n").some((line) => line.trim().split(/\s+/)[1] === encoding.codec))
-      throw new Error(`Recording requires ${encoding.codec}, which is missing from this FFmpeg build. Install the current Mako recording tools. No software fallback was started.`)
-    mediaExecutable("ffprobe")
+    if (target.kind === "page") recordingEncoder()
     await mkdir(root, { recursive: true, mode: 0o700 })
     const directory = await mkdtemp(join(await realpath(root), "recording-"))
     const recording = new ControlRecording(target, directory, options, onStop)
@@ -261,52 +252,13 @@ export class ControlRecording {
   async attachVideo(path: string) {
     if (path !== join(this.directory, "recording.mp4"))
       throw new Error("Native video path does not match this recording")
-    const probe = z
-      .object({
-        streams: z.array(
-          z.object({
-            codec_type: z.string(),
-            codec_name: z.string().optional(),
-            r_frame_rate: z.string().optional(),
-            width: z.number().optional(),
-            height: z.number().optional(),
-            nb_frames: z.string().optional(),
-          })
-        ),
-        format: z.object({ duration: z.string() }),
-      })
-      .parse(
-        JSON.parse(
-          (
-            await execute(
-              mediaExecutable("ffprobe"),
-              [
-                "-v",
-                "error",
-                "-show_streams",
-                "-show_format",
-                "-of",
-                "json",
-                path,
-              ],
-              { timeout: 5000, maxBuffer: 65536 }
-            )
-          ).stdout
-        )
-      )
-    const stream = probe.streams.find((s) => s.codec_type === "video")
-    const width = z.number().int().positive().max(16_384).parse(stream?.width)
-    const height = z.number().int().positive().max(16_384).parse(stream?.height)
-    this.endedAt = z
-      .number()
-      .positive()
-      .max(610_000)
-      .parse(Number(probe.format.duration) * 1000)
-    this.sourceFrames = z
-      .number()
-      .int()
-      .nonnegative()
-      .parse(Number(stream?.nb_frames))
+    // Read back as it is: its size, length and frame count, without decoding it.
+    const video = await readMp4(path)
+    if (!video) throw new Error("The native capture's video isn't a readable MP4")
+    const width = z.number().int().positive().max(16_384).parse(video.width)
+    const height = z.number().int().positive().max(16_384).parse(video.height)
+    this.endedAt = z.number().positive().max(610_000).parse(video.duration * 1000)
+    this.sourceFrames = video.packets.length
     // These points are emitted at the native event-posting boundary, independent
     // of AX/screenshot capture. Pre-action element centers are never substituted.
     if (this.options.cursor) {
@@ -354,7 +306,7 @@ export class ControlRecording {
     const playable =
       !this.pointers.length &&
       Math.max(width, height) <= this.options.maxSide &&
-      stream?.codec_name === "h264"
+      video.codec?.startsWith("avc1.") === true
     this.sourceVideo = join(this.directory, "source.mp4")
     await rename(path, this.sourceVideo)
     if (this.options.idle === "trim") {
@@ -897,7 +849,8 @@ export class ControlRecording {
               })
             if (
               reportProgress &&
-              (await stat(join(this.directory, "recording.partial.mp4"))).size >
+              // The file starts with the encoder's first written unit, a moment after its first picture.
+              (await stat(join(this.directory, "recording.partial.mp4")).then((file) => file.size, () => 0)) >
                 512 * 1024 * 1024
             )
               void this.stop(
@@ -932,9 +885,9 @@ export class ControlRecording {
    * Cuts still stretches from a native video without re-encoding it. The
    * driver writes no frame while a window is still, so each stretch is a gap
    * in presentation times; packets after it move back, and the last frame is
-   * held at most one hold. Presentation and decode times are cut at their own
-   * gaps, and every packet is checked to stay decodable before FFmpeg runs.
-   * Anything unexpected keeps the wall-clock video and says why.
+   * held at most one hold. The packets are written again unchanged at their
+   * new times, and the result is read back. Anything unexpected keeps the
+   * wall-clock video and says why.
    */
   private async trimNativeIdle(source: string, output: string): Promise<boolean> {
     const keep = (reason: string) => {
@@ -942,58 +895,25 @@ export class ControlRecording {
       return false
     }
     try {
-      const { stdout } = await execute(mediaExecutable("ffprobe"), [
-        "-v", "error", "-select_streams", "v:0",
-        "-show_entries", "packet=pts_time,dts_time:format=duration",
-        "-of", "json", source,
-      ], { timeout: 20_000, maxBuffer: 16 * 1024 * 1024 })
-      const probe = z.object({
-        packets: z.array(z.object({ pts_time: z.string(), dts_time: z.string() })).max(40_000),
-        format: z.object({ duration: z.string() }),
-      }).parse(JSON.parse(stdout))
-      const packets = probe.packets.map((packet) => ({ pts: Number(packet.pts_time), dts: Number(packet.dts_time) }))
-      if (!packets.length || packets.some((packet) => !Number.isFinite(packet.pts) || !Number.isFinite(packet.dts)))
-        return keep("The native video has packets without timestamps; idle time was kept")
+      const video = await readMp4(source, 40_000)
+      if (!video?.packets.length) return keep("The native video has no packets to trim; idle time was kept")
       const hold = RECORDING_IDLE_HOLD_MS / 1000
-      const steps = (times: number[]) => {
-        const found: { from: number; to: number; removed: number }[] = []
-        for (let index = 1; index < times.length; index++) {
-          const gap = times[index]! - times[index - 1]!
-          if (gap > hold) found.push({ from: times[index - 1]!, to: times[index]!, removed: gap - hold })
-        }
-        return found
+      const times = video.packets.map((packet) => packet.timestamp).sort((a, b) => a - b)
+      const presentation: { from: number; to: number; removed: number }[] = []
+      for (let index = 1; index < times.length; index++) {
+        const gap = times[index]! - times[index - 1]!
+        if (gap > hold) presentation.push({ from: times[index - 1]!, to: times[index]!, removed: gap - hold })
       }
-      const presentation = steps(packets.map((packet) => packet.pts).sort((a, b) => a - b))
-      const decode = steps(packets.map((packet) => packet.dts))
-      const last = Math.max(...packets.map((packet) => packet.pts))
-      const tail = Math.max(0, Number(probe.format.duration) - last - hold)
+      const last = times.at(-1)!
+      const tail = Math.max(0, video.duration - last - hold)
       if (!presentation.length && !tail) return false
-      if (!(await streamTimestampFilter()))
-        return keep("This FFmpeg build cannot shift packet timestamps; idle time was kept")
       if (presentation.length > 500) return keep("The native video has too many still stretches to trim; idle time was kept")
-      const shift = (cuts: typeof presentation, time: number) =>
-        cuts.reduce((total, cut) => total + (time >= (cut.from + cut.to) / 2 ? cut.removed : 0), 0)
-      let previous = -Infinity
-      for (const packet of packets) {
-        const dts = packet.dts - shift(decode, packet.dts)
-        if (dts <= previous || dts > packet.pts - shift(presentation, packet.pts) + 1e-6)
-          return keep("Trimming would make the native video undecodable; idle time was kept")
-        previous = dts
-      }
-      const expression = (variable: string, cuts: typeof presentation) =>
-        `${variable}-(${cuts.map((cut) => `gte(${variable}*TB\\,${(cut.from + cut.to) / 2})*${cut.removed}`).join("+") || "0"})/TB`
-      const filters = [`pts=${expression("PTS", presentation)}`, `dts=${expression("DTS", decode)}`]
-      if (tail) filters.push(`duration=if(gte(PTS*TB\\,${last - 0.0005})\\,min(DURATION\\,${hold}/TB)\\,DURATION)`)
-      await execute(mediaExecutable("ffmpeg"), [
-        "-hide_banner", "-loglevel", "error", "-n", "-i", source,
-        "-map", "0:v", "-c", "copy", "-bsf:v", `setts=${filters.join(":")}`,
-        "-movflags", "+faststart", output,
-      ], { timeout: 60_000, maxBuffer: 65536 })
+      const shift = (time: number) =>
+        presentation.reduce((total, cut) => total + (time >= (cut.from + cut.to) / 2 ? cut.removed : 0), 0)
+      await retimeMp4(source, output, shift, tail ? hold : undefined)
       const removed = presentation.reduce((total, cut) => total + cut.removed, 0) + tail
-      const duration = Number(z.object({ format: z.object({ duration: z.string() }) }).parse(JSON.parse((await execute(mediaExecutable("ffprobe"), [
-        "-v", "error", "-show_entries", "format=duration", "-of", "json", output,
-      ], { timeout: 5000, maxBuffer: 65536 })).stdout)).format.duration)
-      if (Math.abs(duration - (Number(probe.format.duration) - removed)) > 0.1) {
+      const trimmed = await readMp4(output, 40_000)
+      if (!trimmed || trimmed.packets.length !== video.packets.length || Math.abs(trimmed.duration - (video.duration - removed)) > 0.1) {
         await rm(output, { force: true })
         return keep("The trimmed native video had an unexpected length; idle time was kept")
       }
@@ -1030,42 +950,77 @@ export class ControlRecording {
         (width * (metadata.height ?? 1000)) / (metadata.width ?? 1600) / 2
       ) * 2
     )
-    this.dimensions = { width, height }
     const output = join(this.directory, "recording.mp4")
+    const frames = this.renderNativeOverlayFrames({ ...frame, file: frame.file }, width, height)
+    const ffmpeg = onMac() ? undefined : resolveExecutable("ffmpeg")
+    if (onMac()) await this.overlayWithHelper(this.sourceVideo, output, frames, width, height)
+    else if (ffmpeg) await this.overlayWithFfmpeg(ffmpeg, this.sourceVideo, output, frames, width, height)
+    else {
+      // A Linux driver records through an FFmpeg on PATH; without one there is nothing here to decode its video
+      // with, so it is kept as it is and the pointer stays in the timeline.
+      await rename(this.sourceVideo, output)
+      const video = await readMp4(output)
+      this.dimensions = { width: video?.width ?? width, height: video?.height ?? height }
+      this.video = output
+      return
+    }
+    this.dimensions = { width, height }
     this.videoEncoding = recordingVideoEncoding()
+    if ((await stat(output)).size === 0)
+      throw new Error("Video encoder produced an empty file")
+    this.video = output
+  }
+
+  /** The native video under the pointer pictures, through the Mac video helper's VideoToolbox. */
+  private async overlayWithHelper(source: string, output: string, frames: AsyncGenerator<Buffer>, width: number, height: number) {
+    const writer = new Mp4Writer(output, 1000 / this.options.fps)
+    let failure: string | undefined
+    let writing: Promise<void> = Promise.resolve()
+    const helper = new VideoHelper(recordingEncoder(), { kind: "overlay", video: source }, { fps: this.options.fps, keyint: this.options.fps, quality: 85 }, {
+      unit: (packet) => {
+        writing = writing.then(() => writer.add(packet, packet.capturedAt)).catch((error: Error) => void (failure ??= error.message))
+      },
+      ended: (reason) => void (failure ??= `Video encoding failed: ${reason}`),
+    })
+    const timeout = setTimeout(() => {
+      failure ??= "Video encoding timed out"
+      helper.close()
+    }, 120_000)
+    try {
+      let index = 0
+      for await (const picture of frames) {
+        if (failure) break
+        const at = (index * 1000) / this.options.fps
+        await new Promise<void>((resolve, reject) => helper.picture("rgba", index++, at, picture, { width, height }, (error) => (error ? reject(error) : resolve())))
+      }
+      helper.close()
+      await helper.exited
+      await writing
+      if (failure) throw new Error(failure)
+      await writer.finish()
+    } catch (error) {
+      await writer.cancel()
+      throw error
+    } finally {
+      clearTimeout(timeout)
+    }
+  }
+
+  /** The native video under the pointer pictures, through an FFmpeg already on PATH (a Linux driver records with it). */
+  private async overlayWithFfmpeg(ffmpeg: string, source: string, output: string, frames: AsyncGenerator<Buffer>, width: number, height: number) {
     const child = spawn(
-      mediaExecutable("ffmpeg"),
+      ffmpeg,
       [
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-n",
-        "-filter_threads",
-        "1",
-        "-filter_complex_threads",
-        "1",
-        "-i",
-        this.sourceVideo,
-        "-f",
-        "rawvideo",
-        "-pixel_format",
-        "rgba",
-        "-video_size",
-        `${width}x${height}`,
-        "-framerate",
-        String(this.options.fps),
-        "-i",
-        "pipe:0",
+        "-hide_banner", "-loglevel", "error", "-n",
+        "-filter_threads", "1", "-filter_complex_threads", "1",
+        "-i", source,
+        "-f", "rawvideo", "-pixel_format", "rgba", "-video_size", `${width}x${height}`, "-framerate", String(this.options.fps), "-i", "pipe:0",
         "-filter_complex",
         // A native video holds its last frame until stop, but a filter graph
         // ends that stream where the frame starts; the overlay frames set the length.
         `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,tpad=stop=-1:stop_mode=clone[base];[base][1:v]overlay=shortest=1,fps=${this.options.fps}`,
-        ...this.videoEncoding.args,
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "+faststart",
-        output,
+        "-c:v", "libx264", "-preset", "fast", "-tune", "zerolatency", "-crf", "18",
+        "-pix_fmt", "yuv420p", "-movflags", "+faststart", output,
       ],
       { cwd: this.directory, stdio: ["pipe", "ignore", "pipe"] }
     )
@@ -1087,19 +1042,11 @@ export class ControlRecording {
     }, 120_000)
     // pipeline bounds queued buffers and waits for stdin backpressure. No rendered
     // images accumulate on disk, even for a dense full-resolution recording.
-    const frames = Readable.from(
-      this.renderNativeOverlayFrames({ ...frame, file: frame.file }, width, height),
-      { objectMode: false, highWaterMark: 1 }
-    )
-    const streaming = pipeline(frames, child.stdin, {
-      signal: controller.signal,
-    })
+    const streaming = pipeline(Readable.from(frames, { objectMode: false, highWaterMark: 1 }), child.stdin, { signal: controller.signal })
     try {
       await Promise.all([streaming, encoding])
     } catch (error) {
-      const failure = controller.signal.aborted
-        ? controller.signal.reason
-        : error
+      const failure = controller.signal.aborted ? controller.signal.reason : error
       controller.abort()
       child.kill("SIGKILL")
       await Promise.allSettled([streaming, encoding])
@@ -1107,9 +1054,6 @@ export class ControlRecording {
     } finally {
       clearTimeout(timeout)
     }
-    if ((await stat(output)).size === 0)
-      throw new Error("Video encoder produced an empty file")
-    this.video = output
   }
 
   private async *renderNativeOverlayFrames(

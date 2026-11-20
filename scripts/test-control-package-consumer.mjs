@@ -10,6 +10,10 @@ import { setTimeout as delay } from "node:timers/promises"
 import { browserFixture } from "./browser-control-fixture.ts"
 import { controlSessionBuild } from "@mako/control-runtime/session"
 const run = promisify(execFile)
+// The packed runtime records with the video helper, which a consumer installs beside it (Mako's app carries its own):
+// this checkout's build, made here if it's missing, named the way a consumer names it.
+await run(process.execPath, ["scripts/build-video-helper.mjs", "--require", "--if-fresh"])
+process.env.MAKO_VIDEO_HELPER ??= resolve("build/mako-video")
 const directory = await mkdtemp(join(tmpdir(), "mako-control-consumer-"))
 const fixture = await browserFixture()
 const npm = process.platform === "win32" ? "npm.cmd" : "npm"
