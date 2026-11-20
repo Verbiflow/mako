@@ -99,7 +99,7 @@ const edge = installed.find(({ browser }) => browser.product === "Microsoft Edge
 console.log(`discovery: ${installed.map(({ browser, version }) => `${browser.product} ${version}`).join(", ")} in ${results.latencies.discoveryMs} ms`)
 
 // A launcher names paths with spaces and percent signs, and switches to UTF-8 only for a path outside ASCII.
-const launcher = windowsLauncher({ node: "C:\\Program Files\\Mako\\Mako.exe", entry: "C:\\a%b\\entry.js", product: "Google Chrome", application: "C:\\x.exe", userData: "C:\\Users\\Zoë\\Data" })
+const launcher = windowsLauncher({ node: "C:\\Program Files\\Mako\\Mako.exe", entry: "C:\\a%b\\entry.js", product: "Google Chrome", application: "C:\\x.exe", userData: "C:\\Users\\Ana\\Zoë Data" })
 assert.match(launcher, /^@echo off\r\nchcp 65001 >nul\r\n/)
 assert.match(launcher, /\r\n"C:\\Program Files\\Mako\\Mako\.exe" "C:\\a%%b\\entry\.js" %\*\r\n$/)
 assert.doesNotMatch(windowsLauncher({ node: "C:\\n.exe", entry: "C:\\e.js", product: "Microsoft Edge", application: "C:\\x.exe" }), /chcp/)
