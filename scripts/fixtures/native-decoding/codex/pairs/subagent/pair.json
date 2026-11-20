@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.170.0"
+    "version": "0.171.0"
   },
   "about": "Start one subagent to read notes.md and docs/plan.md and report which day the release ships and when the branch freezes. Don't read the files yourself; answer with what it reports. A subagent that reads two files and reports back, whose own calls are its progress while it runs, then the answer from its report.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/18/rollout-2026-11-18T15-41-53-01a1ef52-594f-7b23-9183-cb70d128d624.jsonl",
+      "path": ".codex/sessions/2026/11/20/rollout-2026-11-20T15-29-48-01a1f994-006a-7330-9425-2862e951a674.jsonl",
       "known": []
     }
   ]

@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.170.0"
+    "version": "0.171.0"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / /compact / Without reading anything, which day did notes.md name? A turn, a manual compaction, then a turn that leans on the summary.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/18/rollout-2026-11-18T15-41-18-01a1ef51-cde9-7ea1-a1c7-aecaa27cf597.jsonl",
+      "path": ".codex/sessions/2026/11/20/rollout-2026-11-20T15-29-13-01a1f993-7638-7e50-8a6f-a34f525ed9c6.jsonl",
       "known": []
     }
   ]
