@@ -120,8 +120,9 @@ export function openHarnesses({ host, appRoot, userRoot, catalog, live, emit, jo
     label: (provider) => harnessLabel(host, provider),
   })
   host.launchReadings.bind((provider) => updates.launchVersion(provider))
-  // When each harness published its releases, for the record store's evidence pass: read hourly at most once a day, never waited on.
-  const releases = new ReleaseTimelines({ evidence: join(makoRecords(userRoot), "evidence"), sources: () => host.updateSources.list() })
+  // When each harness published its releases, for the record store's evidence pass: read hourly at most once a day, never
+  // waited on, and only for a harness this machine holds a session of.
+  const releases = new ReleaseTimelines({ evidence: join(makoRecords(userRoot), "evidence"), sources: () => host.updateSources.list(), wanted: (source) => catalog.list({ harness: source.provider }).length > 0 })
   jobs.every("release-timelines", 60 * 60_000, () => releases.refresh(), { firstAfterMs: 60_000 })
   const { accounts } = host
   accounts.usage.onChange((harness, name, usage) => emit({ type: "account-usage", harness, name, usage }))

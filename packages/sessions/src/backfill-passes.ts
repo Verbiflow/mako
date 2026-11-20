@@ -17,6 +17,11 @@ export interface BackfillPasses {
 export function backfillPasses(options: {
   spawnPass: () => ChildProcess
   everyMs: number
+  /**
+   * Whether a pass has anything to do. One that hasn't starts no process and asks again `everyMs` later: a pass is a
+   * whole Node process, its catalog and a scan, every 10 minutes on a machine with no session to backfill.
+   */
+  due?: () => boolean
   say: (level: LogLevel, message: string, fields?: LogFields) => void
 }): BackfillPasses {
   let child: ChildProcess | undefined
@@ -26,6 +31,11 @@ export function backfillPasses(options: {
   const run = () => {
     timer = undefined
     if (stopped) return
+    if (options.due?.() === false) {
+      timer = setTimeout(run, options.everyMs)
+      timer.unref?.()
+      return
+    }
     const pass = options.spawnPass()
     child = pass
     const at = Date.now()

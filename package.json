@@ -360,7 +360,7 @@
     "test:idle-app-marks": "tsx scripts/test-idle-app-marks.ts",
     "test:app-sampler": "tsx scripts/test-app-sampler.ts",
     "test:app-overview-reads": "tsx scripts/test-app-overview-reads.ts",
-    "test:host-probes": "tsx scripts/test-host-probes.ts",
+    "test:host-probes": "tsx scripts/test-host-probes.ts && tsx scripts/test-probe-names.ts",
     "test:probe-child-edges": "tsx scripts/test-probe-child-edges.ts",
     "test:fin-move": "tsx scripts/test-fin-move.ts",
     "test:fins-placed": "tsx scripts/test-fin-source.ts && tsx --tsconfig tsconfig.scripts.json scripts/test-fins-cloud.ts && tsx scripts/test-fins-placed.ts",
