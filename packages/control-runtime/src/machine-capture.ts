@@ -3,7 +3,7 @@ import { mkdir, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
 import { BrowserConnection, type BrowserProtocolEvent } from "./browser-connection.js"
-import type { EncodedVideoSource } from "./browser-video.js"
+import type { VideoSource } from "./browser-video.js"
 import { decodeControlVideo, type ControlVideoPacket } from "./contracts/control-video.js"
 
 /**
@@ -111,7 +111,7 @@ export class MachineTabVideo {
   }
 
   /** The tab, by its DevTools target id, as a source of encoded units. */
-  source(tab: string): EncodedVideoSource {
+  source(tab: string): VideoSource {
     return async (consumer) => {
       const session = `tab-${++this.#sessions}`
       const box = () => consumer.size() ?? null
@@ -132,6 +132,7 @@ export class MachineTabVideo {
       }
       return {
         key: () => void this.#call(link, "key", [session]).catch(() => {}),
+        rate: (bitrate) => void this.#call(link, "rate", [session, bitrate]).catch(() => {}),
         resized: async () => {
           await this.#call(link, "resize", [session, box()])
         },
@@ -144,7 +145,7 @@ export class MachineTabVideo {
     }
   }
 
-  async #call(link: Link, method: "open" | "key" | "resize" | "close", args: unknown[]): Promise<void> {
+  async #call(link: Link, method: "open" | "key" | "rate" | "resize" | "close", args: unknown[]): Promise<void> {
     const reply = evaluated.parse(await link.connection.send("Runtime.evaluate", {
       expression: `makoCapture.${method}(...${JSON.stringify(args)})`,
       awaitPromise: true,

@@ -60,6 +60,7 @@ export const DESKTOP_METHODS = [
   "live-video-open",
   "live-video-frame",
   "live-video-key",
+  "live-video-rate",
   "live-video-resize",
   "live-video-close",
 ] as const
@@ -113,6 +114,8 @@ export const DESKTOP_CALLS = {
   "live-video-frame": { params: LiveVideoFrameSchema, result: z.null() },
   /** The session's next unit, or the picture it shows now if nothing changes, comes as a key unit. */
   "live-video-key": { params: z.object({ session: LiveVideoSessionSchema }).strict(), result: z.null() },
+  /** The bits a second the session's viewers take now: its encoder keeps under it from its next unit. */
+  "live-video-rate": { params: z.object({ session: LiveVideoSessionSchema, bitrate: z.number().int().min(50_000).max(50_000_000) }).strict(), result: z.null() },
   "live-video-resize": { params: z.object({ session: LiveVideoSessionSchema, box: ControlVideoBoxSchema.nullable() }).strict(), result: z.null() },
   "live-video-close": { params: z.object({ session: LiveVideoSessionSchema }).strict(), result: z.null() },
 } as const satisfies Record<DesktopMethod, { params: z.ZodType; result: z.ZodType }>

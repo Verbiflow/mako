@@ -18,6 +18,7 @@ import { CaptureSession, captureTrack, type Box } from "./capture-session"
 export interface MachineCapture {
   open(session: string, tab: string, fps: number, box: Box): Promise<string>
   key(session: string): void
+  rate(session: string, bitrate: number): void
   resize(session: string, box: Box): Promise<void>
   close(session: string): void
 }
@@ -40,7 +41,7 @@ function base64(bytes: Uint8Array): string {
 }
 
 /** Each session's capture, and what it captures, so a new box can capture it again. */
-const sessions = new Map<string, { capture: CaptureSession; tab: string; fps: number; box: Box }>()
+const sessions = new Map<string, { capture: CaptureSession; tab: string; fps: number; box: Box; bitrate?: number }>()
 
 function emit(event: LiveVideoPageEvent): void {
   if (event.type === "ended") {
@@ -60,12 +61,15 @@ function emit(event: LiveVideoPageEvent): void {
 /** The tab's capture at most `box`'s size, as the session's encode from now on: its first unit is a key frame. */
 async function capture(session: string, tab: string, fps: number, box: Box): Promise<void> {
   // Chromium names no new stream for a tab while another captures it.
+  const bitrate = sessions.get(session)?.bitrate
   sessions.get(session)?.capture.close()
   sessions.delete(session)
   const named = await chrome.runtime.sendMessage({ tab })
   if (!named?.id) throw new Error(named?.error ?? "The capture extension didn't name the tab's stream")
   const track = await captureTrack("tab", named.id, fps, box)
-  sessions.set(session, { capture: new CaptureSession(session, fps, track, false, emit), tab, fps, box })
+  const made = new CaptureSession(session, fps, track, false, emit)
+  if (bitrate !== undefined) made.rate(bitrate)
+  sessions.set(session, { capture: made, tab, fps, box, bitrate })
 }
 
 window.makoCapture = {
@@ -79,6 +83,12 @@ window.makoCapture = {
     return encoder
   },
   key: (session) => sessions.get(session)?.capture.key(),
+  rate(session, bitrate) {
+    const open = sessions.get(session)
+    if (!open) return
+    open.bitrate = bitrate
+    open.capture.rate(bitrate)
+  },
   // A tab capture's track never settles `applyConstraints` (Chromium 156, headless), so a new box is a new capture.
   async resize(session, box) {
     const open = sessions.get(session)

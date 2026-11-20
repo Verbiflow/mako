@@ -2,7 +2,7 @@
  * Live video the desktop app encodes, as the host sees it, with the desktop channel scripted
  * (`packages/host/src/control/desktop-video.ts`): the screencast's frames sent to the desktop's encoder, at most four
  * out, and the fallback taking over when no desktop answers or its encoder won't open; a capture the
- * desktop encodes (`EncodedVideoSource`) joined by `BrowserVideo`, which asks it for key frames rather than restarting
+ * desktop encodes (`VideoSource`) joined by `BrowserVideo`, which asks it for key frames rather than restarting
  * an encoder, and falls back to the screencast when the capture can't start or stops; and an app window's preview
  * streamed to a remote viewer through the capture, which only a desktop app can make.
  * The desktop's real page runs in `test-live-video-electron.mjs`.
@@ -11,7 +11,7 @@ import assert from "node:assert/strict"
 import {
   BrowserVideo,
   type BrowserVideoViewer,
-  type EncodedVideoSource,
+  type VideoSource,
   type LiveEncoderFactory,
   type VideoSourceFrame,
 } from "@mako/control-runtime/browser"
@@ -190,7 +190,7 @@ const frame = (sequence: number, width = 640, height = 360): VideoSourceFrame =>
 interface ScriptedCapture { unit: (packet: ControlVideoPacket) => void; ended: (reason: string) => void; keys: number; stopped: boolean; resizes: number }
 const captures: ScriptedCapture[] = []
 let refuseCapture: string | undefined
-const encoded: EncodedVideoSource = async (consumer) => {
+const encoded: VideoSource = async (consumer) => {
   if (refuseCapture) throw new Error(refuseCapture)
   const capture: ScriptedCapture = { unit: consumer.unit, ended: consumer.ended, keys: 0, stopped: false, resizes: 0 }
   captures.push(capture)

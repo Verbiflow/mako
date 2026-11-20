@@ -16,6 +16,7 @@ export type Emit = (event: LiveVideoPageEvent) => void
 export interface Session {
   frame?(data: Uint8Array<ArrayBuffer>, tag: LiveFrameTag): Promise<void>
   key(): void
+  rate(bitrate: number): void
   resize(box: Box): void
   close(): void
 }
@@ -101,6 +102,10 @@ export class CaptureSession implements Session {
     this.#last?.close()
     this.#last = frame.clone()
     this.#encoder.encode(frame, { sequence: ++this.#sequence, capturedAt: Date.now() })
+  }
+
+  rate(bitrate: number): void {
+    this.#encoder.rate(bitrate)
   }
 
   key(): void {
