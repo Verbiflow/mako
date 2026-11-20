@@ -22,6 +22,7 @@ import { useReviewNotes } from "./review-notes"
 import { CommentSheet, FinishSheet, UndoSheet } from "./review-sheets"
 import { useSessionDiagnosis } from "./thread-trouble"
 import { useThread } from "./use-thread"
+import { WebSideRail } from "./side-rail"
 import type { WebSession } from "./threads"
 
 /*
@@ -116,6 +117,8 @@ export function ReviewScreen({ open, onClose }: { open: ReviewOpen; onClose: () 
           </div>
         ) : null}
       </header>
+      {/* The panel's tabs, as on a laptop: Files is a tap away without going back to the Thread. */}
+      <WebSideRail active="changes" conversation={conversation} touch />
       <div role="tablist" aria-label="What to review" className="rv-scopes">
         <button type="button" role="tab" aria-selected={scope.kind === "turn"} disabled={!turns.length} onClick={() => turn && choose({ kind: "turn", requestId: turn.request.id })} className="rv-scope">
           This turn

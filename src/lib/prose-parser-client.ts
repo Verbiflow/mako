@@ -1,5 +1,5 @@
 import type { Root } from "hast"
-import type { ProseParseReply } from "./parsed-markdown"
+import type { ProseParseReply, ProseParseRequest } from "./parsed-markdown"
 import { KeptResults } from "./kept-results"
 
 interface Work {
@@ -9,6 +9,8 @@ interface Work {
   canceled: boolean
   /** Parsed ahead of a turn's mounting (`warmProse`): it waits behind every piece that's streaming on screen. */
   ahead: boolean
+  /** A whole answer that has settled, drawn as `parseSettledProse` draws it. */
+  settled?: ProseParseRequest["settled"]
 }
 let worker: Worker | null = null
 let unavailable = false
@@ -19,9 +21,10 @@ export function requestProse(
   owner: string,
   text: string,
   receive: Work["receive"],
-  ahead = false
+  ahead = false,
+  settled?: Work["settled"]
 ): void {
-  const work: Work = { owner, text, receive, canceled: false, ahead }
+  const work: Work = { owner, text, receive, canceled: false, ahead, settled }
   if (!globalThis.Worker || unavailable) {
     receive(null)
     return
@@ -79,7 +82,8 @@ function pump(): void {
       failed()
     }
     worker.onmessageerror = failed
-    worker.postMessage({ text: work.text }, [channel.port2])
+    const request: ProseParseRequest = { text: work.text, settled: work.settled }
+    worker.postMessage(request, [channel.port2])
   } catch (error) {
     console.error("Markdown worker could not start:", error)
     failed()

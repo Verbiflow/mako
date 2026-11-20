@@ -256,6 +256,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   lending,
   waitingForAccount,
   watched,
+  media,
 }: {
   environment: Pick<HostEnvironment, "dataRoot" | "version" | "build">
   secrets: DomainSecrets
@@ -288,6 +289,11 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   preferences?: { heard(answer: PreferencesAnswer): void; again(): void }
   /** What this Mac lends under borrowing's leases, as its runtime's link carries it (`CloudAccountOptions.lending`). */
   lending?: CloudAccountOptions["lending"]
+  /**
+   * The live streams the account's other devices watch on this Mac's link: a preview's video of a tab or an app's
+   * window, encoded by the desktop app (`controlVideoMedia`). Without it, every watch ends at once.
+   */
+  media?: GatewayHostOptions["media"]
 }): CloudAccount {
   let status: string | undefined
   /** What the sign-ins depend on in the account: who it is and whether it has the cloud. */
@@ -399,6 +405,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
         }
         if (watch) options.watch = watch
         if (lent) options.lending = lent
+        if (media) options.media = media
         // A phone opening a Thread's website reaches it through this link, and only the ports this Mac's apps serve on.
         options.ports = new PortRelay({ allowed: () => appPorts((channel, args, client, history) => methods.invoke(channel, args, client, history)), signedFiles })
         return serveHostThroughGateway(link, options)

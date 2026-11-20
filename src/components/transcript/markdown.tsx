@@ -6,16 +6,18 @@ import { embeddedCheck, keptEmbed, markdownMedia, previewableMediaUrl } from "@/
 import { useMediaAnswers } from "@/state/turn-media"
 import type { AttachmentContent } from "@mako/sessions"
 import { Paragraph } from "./paragraph"
-import { useParsedProse } from "./use-parsed-prose"
+import { useParsedProse, useSettledProse } from "./use-parsed-prose"
 import { useStreamReveal } from "./stream-reveal"
 import { useStreamedText } from "./use-live-answer"
-import { forgetWarmedProse, warmedProse } from "@/lib/prose-parser-client"
+import { forgetWarmedProse, WARM_PROSE_CHARS, warmedProse } from "@/lib/prose-parser-client"
 import { rememberSettledProse, settledProse } from "./settled-prose"
 import {
   skipMarkdownParse,
   reuseParsedProse,
   prosePlugins,
+  treePieces,
 } from "@/lib/parsed-markdown"
+import type { Root } from "hast"
 import {
   ContextItemChip,
   FileChip,
@@ -77,8 +79,10 @@ import { ReviewFence } from "./review-card"
  * That piece is rate-limited rather than parsed per token: the first token of
  * a burst paints at once, then at most every 50 ms, longer for a long piece
  * (`StreamFrames`), which caps the cost at a fixed share of the renderer
- * regardless of answer length, and the whole answer settles in one parse the
- * moment the message finishes. Nobody reads faster than the refresh, so the
+ * regardless of answer length. When the message finishes, the pieces stay as
+ * drawn and the whole answer is parsed once in the prose worker, its tree then
+ * drawn into the same pieces (`useSettledProse`, `treePieces`), so what settles
+ * is what the answer parsed whole draws. Nobody reads faster than the refresh, so the
  * throttle is invisible. What it draws stops short of half-built structure
  * (`streamingMarkdown`): a table arrives a row at a time and a fence once its
  * opening line is whole, so neither flashes as a paragraph of pipes or
@@ -139,26 +143,40 @@ export const Prose = memo(function Prose({
     return entries.length > 0 ? new Map(entries.map((entry) => [entry.name, entry])) : EMPTY_SKILLS
   }, [sent])
   // A reply being written takes its words from its conversation as they land, not from the turn's paced draw.
+  const { shown: throttled, parsed: parsedChars } = useStreamedText(text, Boolean(streaming), sent ? undefined : answerId)
   // A streaming answer draws only whole structure, and keeps the pieces
   // before the last as parsed (`streamPieces`); the last piece is the one that grows.
-  const pieced = Boolean(streaming) && !sent && !urlTransform
-  const { shown: throttled, parsed: parsedChars } = useStreamedText(text, Boolean(streaming), sent ? undefined : answerId)
+  const pieceable = !sent && !urlTransform
+  const live = Boolean(streaming) && pieceable
+  // An answer that streamed here stays in its pieces once it settles: the pieces already drawn stay drawn, and the
+  // whole answer is parsed in the worker (`useSettledProse`), its tree then drawn into the same pieces
+  // (`treePieces`). Drawing the settled answer anew, parsed on the page, held it for as long as the answer was long.
+  const [streamed, setStreamed] = useState(live)
+  if (live && !streamed) setStreamed(true)
+  const previewKey = previewedFiles?.join("\0") ?? ""
+  const previewList = useMemo(() => (previewKey ? previewKey.split("\0") : undefined), [previewKey])
+  const settles = streamed && !streaming && pieceable && throttled.length >= WARM_PROSE_CHARS
+  const whole = useSettledProse(throttled, settles, previewList)
+  const settling = settles && whole !== "failed"
   const pieces = useMemo(
-    () => (pieced ? streamPieces(streamingMarkdown(throttled)) : [throttled]),
-    [pieced, throttled]
+    () => (live ? streamPieces(streamingMarkdown(throttled)) : settling ? streamPieces(throttled) : [throttled]),
+    [live, settling, throttled]
   )
+  const wholeTree = whole === "failed" ? undefined : (whole ?? undefined)
+  const parts = useMemo(() => (wholeTree ? treePieces(wholeTree, pieces) : undefined), [wholeTree, pieces])
   const growing = pieces.at(-1) ?? ""
   // The next paint waits by what this one parsed: the piece being written, not the whole answer.
   useEffect(() => parsedChars(growing.length), [parsedChars, growing])
   const kept = pieces.slice(0, -1)
   const keptChars = kept.reduce((total, piece) => total + piece.length, 0)
-  const parsed = useParsedProse(growing, Boolean(streaming) && !sent)
+  // A long last piece of a settling answer is parsed in the worker as it was while it streamed, until the whole tree lands.
+  const parsed = useParsedProse(growing, (Boolean(streaming) || (settling && !parts)) && !sent)
   const source = parsed?.text ?? growing
   // A settled answer's tree, where it was parsed before this turn mounted (`warmSettledProse`): read once per text,
   // so prose drawn without one isn't drawn again when its tree arrives late.
   const ahead = useMemo(
-    () => (streaming || sent || urlTransform || settledProse.has(growing) ? undefined : warmedProse(growing)),
-    [growing, streaming, sent, urlTransform]
+    () => (streaming || settling || sent || urlTransform || settledProse.has(growing) ? undefined : warmedProse(growing)),
+    [growing, streaming, settling, sent, urlTransform]
   )
   const tree = parsed?.tree ?? ahead
   const hasTree = Boolean(tree)
@@ -175,18 +193,20 @@ export const Prose = memo(function Prose({
   )
   // Sections are rebuilt on every streamed batch, so the list arrives as a new
   // array each time; keyed by its contents, unchanged prose is not reparsed.
-  const previewKey = previewedFiles?.join("\0") ?? ""
   const assets = useMemo<AssetPlugin>(
-    () => [rehypeAssetGroups, { previewedFiles: previewKey ? previewKey.split("\0") : undefined }],
-    [previewKey]
+    () => [rehypeAssetGroups, { previewedFiles: previewList }],
+    [previewList]
   )
   const rehypePlugins = useMemo<RehypePlugins>(
     () => (tree ? [[reuseParsedProse, tree], assets] : [assets]),
     [tree, assets]
   )
 
-  const settled = !streaming && !referenceInput && !urlTransform && !parsed && !previewedFiles?.length
+  const settled = !streaming && !settling && !referenceInput && !urlTransform && !parsed && !previewedFiles?.length
+  const lastPart = parts?.at(-1)
   const rendered = useMemo(() => {
+    // The whole answer's tree has landed: its last part, already grouped (`parseSettledProse`).
+    if (lastPart) return treeMarkdown(lastPart)
     const cached = settled ? settledProse.get(source) : undefined
     if (cached) {
       settledProse.delete(source)
@@ -208,7 +228,13 @@ export const Prose = memo(function Prose({
       forgetWarmedProse(source)
     }
     return element
-  }, [source, plugins, referenceMap, urlTransform, rehypePlugins, settled])
+  }, [lastPart, source, plugins, referenceMap, urlTransform, rehypePlugins, settled])
+  // Once drawn from the whole tree, the answer is kept as any settled answer is, for this prose mounting again.
+  useEffect(() => {
+    if (!parts || !pieceable || previewKey) return
+    rememberSettledProse(throttled, <>{parts.map((part, index) => <KeptPiece key={index} text="" tree={part} assets={assets} />)}</>)
+    forgetWarmedProse(throttled)
+  }, [parts, pieceable, previewKey, throttled, assets])
 
   // A streaming answer's newest words are revealed at a steady pace and fade in (`useStreamReveal`).
   const root = useRef<HTMLDivElement>(null)
@@ -220,14 +246,14 @@ export const Prose = memo(function Prose({
       className={cn("mako-prose", className)}
       data-answer={answerId}
       data-rendered-chars={keptChars + source.length}
-      data-prose-worker={Boolean(parsed) || undefined}
+      data-prose-worker={Boolean(parsed || parts) || undefined}
     >
       <ProseStreamingContext value={Boolean(streaming)}>
         <AnswerMediaContext value={keeps}>
         <PromptReferencesContext value={referenceMap}>
           <PromptSkillsContext value={skillMap}>
             {kept.map((piece, index) => (
-              <KeptPiece key={index} text={piece} assets={assets} />
+              <KeptPiece key={index} text={piece} tree={parts?.[index]} assets={assets} />
             ))}
             {rendered}
           </PromptSkillsContext>
@@ -251,21 +277,38 @@ const ANSWER_PLUGINS = prosePlugins()
 /**
  * A piece of a streaming answer before its last cut (`streamPieces`). Its text no
  * longer changes, so it is parsed once and React skips it on every later
- * frame of the stream.
+ * frame of the stream. Once the answer settles and its whole tree lands, the piece
+ * draws its part of that tree (`treePieces`) over what it drew, element for element.
  */
-const KeptPiece = memo(function KeptPiece({ text, assets }: { text: string; assets: AssetPlugin }) {
+const KeptPiece = memo(function KeptPiece({ text, tree, assets }: { text: string; tree?: Root; assets: AssetPlugin }) {
   return useMemo(
     () =>
-      Markdown({
-        remarkPlugins: ANSWER_PLUGINS,
-        rehypePlugins: [assets],
-        components,
-        urlTransform: (url) => (keptUrl(url) ? url : defaultUrlTransform(url)),
-        children: text,
-      }),
-    [text, assets]
+      tree
+        ? treeMarkdown(tree)
+        : Markdown({
+            remarkPlugins: ANSWER_PLUGINS,
+            rehypePlugins: [assets],
+            components,
+            urlTransform: keptUrlTransform,
+            children: text,
+          }),
+    [text, tree, assets]
   )
 })
+
+const keptUrlTransform = (url: string) => (keptUrl(url) ? url : defaultUrlTransform(url))
+const TREE_PLUGINS = [skipMarkdownParse]
+
+/** A part of a settled answer's whole tree (`parseSettledProse`), already grouped: drawn as the tree says. */
+function treeMarkdown(tree: Root) {
+  return Markdown({
+    remarkPlugins: TREE_PLUGINS,
+    rehypePlugins: [[reuseParsedProse, tree]],
+    components,
+    urlTransform: keptUrlTransform,
+    children: "",
+  })
+}
 
 const components = {
   p: Paragraph,

@@ -20,8 +20,8 @@ try {
   process.env.MAKO_CONTROL_MEDIA_ROOT = configured
   const resources = join(directory, "Mako.app/Contents/Resources")
   const modules = join(resources, "app.asar/node_modules/@mako/control-runtime/dist")
-  await mkdir(modules, {recursive:true})
-  for (const name of ["control-media", "executable", "platform"])
+  await mkdir(join(modules, "contracts"), {recursive:true})
+  for (const name of ["control-media", "executable", "platform", "contracts/control-video"])
     await copyFile(new URL(`../dist/${name}.js`, import.meta.url), join(modules, `${name}.js`))
   await writeFile(join(modules, "package.json"), '{"type":"module"}')
   const packaged = await import(pathToFileURL(join(modules, "control-media.js")).href)

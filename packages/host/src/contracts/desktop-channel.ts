@@ -1,6 +1,8 @@
 import { z } from "zod"
 import { ControlImageSchema } from "@mako/control-runtime/contracts"
 import { UpdateStateSchema } from "./automations-usage-updates.js"
+import { ControlVideoBoxSchema } from "./control-video.js"
+import { LiveVideoFrameEventSchema, LiveVideoFrameSchema, LiveVideoOpenSchema, LiveVideoOpenedSchema, LiveVideoSessionSchema } from "./live-video.js"
 
 /**
  * What a host asks the desktop app on `POST /desktop`, its private socket's
@@ -55,6 +57,11 @@ export const DESKTOP_METHODS = [
   "desk-page-destroy",
   "update-check",
   "update-install",
+  "live-video-open",
+  "live-video-frame",
+  "live-video-key",
+  "live-video-resize",
+  "live-video-close",
 ] as const
 export type DesktopMethod = (typeof DESKTOP_METHODS)[number]
 
@@ -100,6 +107,14 @@ export const DESKTOP_CALLS = {
    * stopped its work and is leaving.
    */
   "update-install": { params: NoParams, result: z.null() },
+  /** Start one live video encode; answered once its encoder is configured or its capture runs. */
+  "live-video-open": { params: LiveVideoOpenSchema, result: LiveVideoOpenedSchema },
+  /** One picture of a `frames` session; answered once it's in the encoder, or held for it. */
+  "live-video-frame": { params: LiveVideoFrameSchema, result: z.null() },
+  /** The session's next unit, or the picture it shows now if nothing changes, comes as a key unit. */
+  "live-video-key": { params: z.object({ session: LiveVideoSessionSchema }).strict(), result: z.null() },
+  "live-video-resize": { params: z.object({ session: LiveVideoSessionSchema, box: ControlVideoBoxSchema.nullable() }).strict(), result: z.null() },
+  "live-video-close": { params: z.object({ session: LiveVideoSessionSchema }).strict(), result: z.null() },
 } as const satisfies Record<DesktopMethod, { params: z.ZodType; result: z.ZodType }>
 
 export type DesktopParams<Method extends DesktopMethod> = z.infer<(typeof DESKTOP_CALLS)[Method]["params"]>
@@ -116,8 +131,8 @@ export type DesktopAsk = z.infer<typeof DesktopAskSchema>
 
 /**
  * Desktop to host: who answers, each answer, what the desk windows it made
- * say on their own, and where its updater is, sent after the hello and on
- * every change.
+ * say on their own, where its updater is, sent after the hello and on
+ * every change, and the units of the live video it encodes.
  */
 export const DesktopFrameSchema = z.union([
   z.object({ kind: z.literal("hello"), pid: z.number().int(), methods: z.array(z.string().max(100)).max(64) }),
@@ -127,6 +142,7 @@ export const DesktopFrameSchema = z.union([
   z.object({ kind: z.literal("page"), page: PageIdSchema, state: z.object({ url: z.string(), title: z.string() }) }),
   z.object({ kind: z.literal("page"), page: PageIdSchema, destroyed: z.literal(true) }),
   z.object({ kind: z.literal("update"), state: UpdateStateSchema }),
+  ...LiveVideoFrameEventSchema.options,
 ])
 export type DesktopFrame = z.infer<typeof DesktopFrameSchema>
 

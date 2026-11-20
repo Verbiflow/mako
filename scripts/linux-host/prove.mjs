@@ -115,10 +115,12 @@ try {
     const { navigation, ...opened } = await command({ action: "open", browser: MACHINE_BROWSER_ID, url: `data:text/html,${encodeURIComponent(page)}` })
     assert.ok(!navigation?.fault, `the page loads: ${JSON.stringify(navigation?.fault)}`)
     const target = BrowserTargetSchema.parse(opened)
-    const video = new BrowserVideo(async ({ frame, ended, size }) => ({
-      stop: await browser.previewStream("proof", target, () => {}, frame, ended, size),
-      resized: () => browser.previewResized("proof", target),
-    }))
+    const video = new BrowserVideo({
+      frames: async ({ frame, ended, size }) => ({
+        stop: await browser.previewStream("proof", target, () => {}, frame, ended, size),
+        resized: () => browser.previewResized("proof", target),
+      }),
+    })
     const packets = []
     const joined = performance.now()
     const leave = await video.join({
