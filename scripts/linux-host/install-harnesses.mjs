@@ -1,8 +1,9 @@
 import assert from "node:assert/strict"
+import { execFileSync } from "node:child_process"
 import { existsSync } from "node:fs"
-import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, open, readdir, realpath, rm, writeFile } from "node:fs/promises"
 import { homedir, tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, relative, sep } from "node:path"
 import { othersRunning, startHost, until } from "./host-process.mjs"
 
 /**
@@ -23,7 +24,12 @@ assert.ok(record, "Pass where to record what was installed")
 // in this home, so the proof's host starts as on a fresh machine.
 const makoHome = join(homedir(), ".mako")
 assert.ok(!existsSync(makoHome), `${makoHome} exists: this prepares a fresh home, never one Mako has used`)
+// What the harnesses leave in the temporary folder as they install and start (extracted libraries, logs, caches)
+// isn't the image's: what wasn't there before goes with the install's other scratch.
+const tmpBefore = new Set(await readdir(tmpdir()))
 const scratch = await mkdtemp(join(tmpdir(), "mako-install-"))
+/** Each harness as installed, or found present: its binary, its version and how. */
+const installed = {}
 const host = await startHost({ dataRoot: join(scratch, "data"), output: join(scratch, "host-output.log") })
 try {
   const known = (await host.call("mako:harness-descriptors")).map((harness) => harness.provider)
@@ -31,7 +37,6 @@ try {
   const providers = only.length ? only : known
   // The first read starts a check of every runtime and answers what it holds so far.
   const before = await until(() => host.call("mako:harness-updates"), (updates) => providers.every((provider) => updates[provider]?.checkedAt), "every harness's runtime read")
-  const installed = {}
   for (const provider of providers) {
     const reading = before[provider]
     if (reading.binary) {
@@ -60,3 +65,47 @@ try {
 // Its shared daemons leave on their own, and must before their state goes.
 await until(othersRunning, (rows) => rows.length === 0, "the host's daemons leaving", 30_000)
 await rm(makoHome, { recursive: true, force: true })
+for (const [provider, { binary, version }] of Object.entries(installed)) await dropUnusedBuilds(provider, binary, version)
+// Last, after every harness has run here: what they left in the temporary folder goes.
+for (const name of await readdir(tmpdir())) if (!tmpBefore.has(name)) await rm(join(tmpdir(), name), { recursive: true, force: true })
+
+/**
+ * The builds for other machines an npm-installed harness downloaded and doesn't run. A launcher that is itself the
+ * native executable, which its postinstall copied or linked out of one of the platform packages nested under it
+ * (OpenCode's: four Linux x64 builds of some 250 MB each, one picked by the CPU and C library), never reads those
+ * packages again; a launcher that is a script may resolve them as it runs, so those stay. The harness must still
+ * report the version recorded after, or the image's build fails.
+ */
+async function dropUnusedBuilds(provider, binary, version) {
+  const executable = await realpath(binary)
+  const prefix = join(homedir(), ".local", "lib", "node_modules") + sep
+  if (!executable.startsWith(prefix) || !(await nativeExecutable(executable))) return
+  const [scope, name] = relative(prefix, executable).split(sep)
+  const pkg = scope.startsWith("@") ? `${scope}/${name}` : scope
+  const nested = join(prefix, pkg, "node_modules")
+  const candidates = pkg.startsWith("@") ? [pkg.split("/")[0]] : ["."]
+  let dropped = 0
+  for (const parent of candidates)
+    for (const entry of await readdir(join(nested, parent)).catch(() => [])) {
+      const full = parent === "." ? entry : `${parent}/${entry}`
+      const folder = join(nested, full)
+      if (!full.startsWith(`${pkg}-`) || executable.startsWith(folder + sep)) continue
+      await rm(folder, { recursive: true, force: true })
+      dropped++
+    }
+  if (!dropped) return
+  const reported = execFileSync(binary, ["--version"], { encoding: "utf8", timeout: 30_000 }).trim()
+  assert.ok(reported.includes(version), `${provider} reports ${reported} once its unused builds went, not ${version}`)
+  console.log(`${provider}: dropped ${dropped} builds for other machines that ${pkg} doesn't run`)
+}
+
+/** An ELF executable, rather than a script that may load what's beside it. */
+async function nativeExecutable(path) {
+  const file = await open(path, "r")
+  try {
+    const { buffer } = await file.read(Buffer.alloc(4), 0, 4, 0)
+    return buffer.equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))
+  } finally {
+    await file.close()
+  }
+}
