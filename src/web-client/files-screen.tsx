@@ -43,6 +43,7 @@ export function FilesScreen({ open, touch }: { open: FilesOpen; touch: boolean }
           </button>
         ) : null}
       </div>}
+      {touch && !open.path ? <WebSideRail active="files" conversation={open.conversation} touch /> : null}
       {/* The tree stays mounted under a file, so Back lands where it was. */}
       <div className={open.path ? "hidden" : "flex min-h-0 flex-1 flex-col"}>
         <FilesBrowser source={source} open={openSet} onOpenChange={setFolders} active={open.path} onOpenFile={onOpenFile} changed={changed} touch={touch} />
