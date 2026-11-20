@@ -21,6 +21,11 @@ export interface ReleaseTimelinesOptions {
   /** The record store's evidence folder. */
   evidence: string
   sources: () => ProviderUpdateSource[]
+  /**
+   * Whether a harness's dates would be used: the evidence pass bounds only sessions this machine holds, so a harness
+   * with none (every one, on a new machine) isn't read, rather than a 400 KB packument a day nothing looks at.
+   */
+  wanted?: (source: ProviderUpdateSource) => boolean
   /** When the registry says each version of a package was published, injectable for tests. */
   packument?: (npmPackage: string) => Promise<NpmTimes>
   now?: () => number
@@ -45,7 +50,7 @@ export class ReleaseTimelines {
   private async read(): Promise<void> {
     const now = this.options.now?.() ?? Date.now()
     const kept = readReleaseTimelines(this.options.evidence)
-    const packages = new Set(this.options.sources().flatMap((source) => source.versions?.releases?.npm ?? []))
+    const packages = new Set(this.options.sources().filter((source) => this.options.wanted?.(source) ?? true).flatMap((source) => source.versions?.releases?.npm ?? []))
     for (const npmPackage of packages) {
       const key = npmTimelineKey(npmPackage)
       const held = kept[key]

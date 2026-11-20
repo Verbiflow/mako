@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { hostStopping } from "../../base/host-stopping.js"
 import { hostProbe } from "../../base/host-command.js"
 import { readdir, readFile, stat } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -35,6 +36,9 @@ export function parseDevinProcesses(output: string): DevinProcess[] {
  * 600 s run (2026-11-12).
  */
 async function runningDevins(signal: AbortSignal): Promise<DevinProcess[]> {
+  // Where the host reads the process names without starting one (Linux), no `devin` among them is no pgrep at all.
+  const names = await hostStopping()?.probes?.commands?.().catch(() => undefined)
+  if (names && !names.some(({ comm }) => comm === "devin")) return []
   const found = await printed(hostProbe("pgrep", ["-x", "devin"], { timeout: 2_000, signal }))
   const pids = found.split("\n").map(Number).filter((pid) => Number.isSafeInteger(pid) && pid > 0)
   if (!pids.length) return []
