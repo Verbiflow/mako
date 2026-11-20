@@ -130,6 +130,10 @@ export type ThreadItem = {
       type: "mcpToolCall"
       id: string
       server: string
+      /**
+       * Registration scope, not necessarily the server's execution environment.
+       */
+      environmentId: string | null
       tool: string
       status: McpToolCallStatus
       arguments: JsonValue

@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.170.0"
+    "version": "0.171.0"
   },
   "about": "In one code cell, run `cat notes.md`, patch Friday to Monday, then run `wc -l notes.md`, and tell me what happened. One JavaScript cell that reads, patches and counts a file through the harness's own tools, then the answer.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/18/rollout-2026-11-18T15-41-13-01a1ef51-bcfb-7710-a95c-d7d77f44515b.jsonl",
+      "path": ".codex/sessions/2026/11/20/rollout-2026-11-20T15-29-09-01a1f993-66aa-7312-b2df-c5353d124074.jsonl",
       "known": []
     }
   ]
