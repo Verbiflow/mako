@@ -1,0 +1,149 @@
+name: Windows video helper
+
+# The Windows video helper (native/video-windows) built with MSVC and checked end to end on a hosted Windows runner:
+# Windows Graphics Capture of a window and the display, Media Foundation's H.264 encoder, frames into an MP4. FFmpeg
+# is installed on the runner only to decode what the helper made.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/windows-video.yml
+      - native/video-windows/**
+      - native/video-linux/**
+      - packages/control-runtime/src/video-helper.ts
+      - packages/control-runtime/src/recording-encoder-process.ts
+      - packages/control-runtime/src/mp4.ts
+      - scripts/build-video-helper.mjs
+      - scripts/test-video-helper*.mjs
+      - scripts/fixtures/win-anim.ps1
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-video-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: The runner's session, GPU and media
+        shell: pwsh
+        run: |
+          [System.Environment]::OSVersion.VersionString
+          (Get-CimInstance Win32_OperatingSystem).Caption
+          "Interactive: $([Environment]::UserInteractive); session $((Get-Process -Id $PID).SessionId)"
+          query session 2>$null
+          Get-CimInstance Win32_VideoController | Select-Object Name, AdapterCompatibility, CurrentHorizontalResolution, CurrentVerticalResolution | Format-List
+          Get-CimInstance Win32_Processor | Select-Object Name, NumberOfCores, NumberOfLogicalProcessors | Format-List
+          "mfplat: $(Test-Path $env:WINDIR\System32\mfplat.dll); msmpeg2venc: $(Test-Path $env:WINDIR\System32\msmpeg2venc.dll)"
+          exit 0
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
+      - name: Build the control runtime and the helper
+        shell: bash
+        run: |
+          npm run build:control-runtime
+          node scripts/build-video-helper.mjs --require
+          ls -l build/mako-video.exe
+      - name: Install FFmpeg (to check the output only)
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress | Select-Object -Last 3
+          "$env:ProgramData\chocolatey\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+      - name: The helper's protocol against a fake
+        shell: bash
+        run: npx tsx scripts/test-video-helper-protocol.ts
+      - name: The helper end to end
+        shell: bash
+        run: node scripts/test-video-helper-windows.mjs --json windows-video-results.json
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: windows-video
+          path: |
+            windows-video-results.json
+            build/mako-video.exe
+          if-no-files-found: ignore
+
+  # The typecheck and the live video checks on Windows and Linux alike.
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
+      - name: Typecheck
+        if: always()
+        shell: bash
+        run: npm run typecheck
+      # The whole suite on Linux; on Windows its video parts, since its runtime-response check listens on a Unix socket
+      # path, which Windows refuses (the host's own socket, a known gap).
+      - name: The control preview suite
+        if: always()
+        shell: bash
+        run: |
+          npm run build:control-runtime
+          if [ "$RUNNER_OS" = Linux ]; then npm run test:control-preview; else
+            npx tsx scripts/test-control-video.ts
+            npx tsx scripts/test-desktop-video.ts
+            npx tsx scripts/test-video-helper-protocol.ts
+            npx tsx --tsconfig tsconfig.app.json scripts/test-live-video-encoder.ts
+          fi
+
+  # The same protocol on Linux, for parity: the X11 helper end to end and the recording suite, which encodes with it.
+  linux-helper:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
+      - name: The helper's libraries, Xvfb and FFmpeg (to check the output only)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends xvfb ffmpeg gcc pkg-config libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcomposite-dev libopenh264-dev libyuv-dev libturbojpeg0-dev
+      - run: |
+          npm run build:control-runtime
+          node scripts/build-video-helper.mjs --require
+      - name: The Linux helper end to end
+        run: node scripts/test-video-helper.mjs
+      - name: Recordings
+        run: |
+          failed=0
+          # control-recording-idle is left out: its native-video fixture is cut by the FFmpeg on PATH, and Ubuntu 24.04's
+          # 6.1 holds the last frame differently from the Debian 5.1 it expects (it fails the same on main's code here).
+          for test in browser-focus browser-capture browser-video native-capture recording-render control-recording control-recording-stream control-recording-failures browser-recording native-recording; do
+            npx tsx scripts/test-$test.ts > "$RUNNER_TEMP/$test.log" 2>&1 && echo "passed $test" || { echo "FAILED $test"; tail -25 "$RUNNER_TEMP/$test.log"; failed=1; }
+          done
+          exit $failed

@@ -28,15 +28,17 @@ export function processesUsingSync(folder, includeSelf = false) {
         if (statSync(`/proc/${pid}`).uid !== process.getuid()) continue
         const args = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ").trim()
         if (args.includes(folder)) { found.set(pid, args); continue }
-        let home
+        let home, files
         try {
           home = readFileSync(`/proc/${pid}/environ`, "utf8").split("\0").find((entry) => entry.startsWith("HOME="))?.slice(5)
+          files = [readlinkSync(`/proc/${pid}/cwd`), ...readdirSync(`/proc/${pid}/fd`).map((fd) => { try { return readlinkSync(`/proc/${pid}/fd/${fd}`) } catch (error) { if (error?.code === "ENOENT") return ""; throw error } })]
         } catch (error) {
-          // Linux exposes some process rows whose environment we are not permitted to inspect.
+          // A process of this user that isn't dumpable (a setuid exec, a sandbox's prctl, one exiting) refuses its
+          // environment, `cwd` and `fd` though `/proc` still shows our uid: a CI job's inspection failed on
+          // `/proc/<pid>/fd` mid-run. Its command line was matched above, so a harness its scratch names is still found.
           if (error?.code === "EACCES" || error?.code === "EPERM") continue
           throw error
         }
-        const files = [readlinkSync(`/proc/${pid}/cwd`), ...readdirSync(`/proc/${pid}/fd`).map((fd) => { try { return readlinkSync(`/proc/${pid}/fd/${fd}`) } catch (error) { if (error?.code === "ENOENT") return ""; throw error } })]
         if ((home && inside(home)) || files.some(inside)) found.set(pid, args)
       } catch (error) {
         if (error?.code !== "ENOENT" && error?.code !== "ESRCH") throw new Error("Scratch process inspection was incomplete.", { cause: error })
