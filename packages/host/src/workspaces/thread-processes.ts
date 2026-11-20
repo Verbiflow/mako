@@ -12,6 +12,7 @@ import { inside, workingDirectories } from "./app-probe.js"
 import { STEPS_FOLDER_VARIABLE, stepsOf, type StepRecord } from "./check-steps.js"
 import { belowAgents } from "../base/background-priority.js"
 import { signalProcessTree } from "../base/process-tree.js"
+import { windowsComSpec } from "../base/system-tools.js"
 import { FIT_RUNS } from "../contracts/thread-app.js"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
 import { ContainerEngine, containersBy, type Container, type ContainerLook } from "./container-runtime.js"
@@ -85,8 +86,9 @@ const [command, exitFile] = process.argv.slice(1)
 delete process.env.ELECTRON_RUN_AS_NODE
 let input = ""
 const run = () => {
-  const shell = process.env.ComSpec || process.env.COMSPEC || "cmd.exe"
-  const child = require("node:child_process").spawn(shell, ["/d", "/s", "/c", '"' + command + '"'], { stdio: ["ignore", "inherit", "inherit"], windowsVerbatimArguments: true, windowsHide: true })
+  const named = process.env.ComSpec || process.env.COMSPEC || ""
+  const shell = require("node:path").win32.isAbsolute(named) ? named : require("node:path").win32.join(process.env.SystemRoot || "C:\\\\Windows", "System32", "cmd.exe")
+  const child = require("node:child_process").spawn(shell, ["/d", "/v:off", "/s", "/c", '"' + command + '"'], { stdio: ["ignore", "inherit", "inherit"], windowsVerbatimArguments: true, windowsHide: true })
   child.on("error", () => process.exit(127))
   child.on("exit", (code) => {
     const value = code ?? 1
@@ -122,7 +124,7 @@ interface ShellCommand {
 /** A run's `ready` check as a command line: `/bin/sh -c` elsewhere, ComSpec on Windows. */
 function readyCommand(ready: string): ShellCommand {
   if (!onWindows()) return { file: "/bin/sh", args: ["-c", ready], windowsVerbatimArguments: false }
-  return { file: process.env.ComSpec || process.env.COMSPEC || "cmd.exe", args: ["/d", "/s", "/c", `"${ready}"`], windowsVerbatimArguments: true }
+  return { file: windowsComSpec(), args: ["/d", "/v:off", "/s", "/c", `"${ready}"`], windowsVerbatimArguments: true }
 }
 
 /**
@@ -1358,7 +1360,7 @@ export class ThreadProcesses {
         }
         child.stdout?.on("data", keep)
         child.stderr?.on("data", keep)
-        const timer = setTimeout(() => signalProcessTree(child.pid!, "SIGKILL", { orProcess: false }), READY_TRY_MS)
+        const timer = setTimeout(() => signalProcessTree(child.pid!, "SIGKILL", { orProcess: false, held: true }), READY_TRY_MS)
         child.once("error", (error) => {
           clearTimeout(timer)
           done({ code: null, output: error.message })

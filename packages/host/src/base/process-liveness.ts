@@ -3,6 +3,7 @@ import { hostStopping } from "./host-stopping.js"
 import { readFile, readlink, realpath } from "node:fs/promises"
 import { basename, isAbsolute } from "node:path"
 import { onLinux, onMac, onWindows } from "./platform.js"
+import { windowsPowerShell } from "./system-tools.js"
 
 const run = hostCommand
 const START_TOLERANCE_MS = 30_000
@@ -78,7 +79,7 @@ async function processExecutables(
  */
 async function windowsProcess(pid: number, signal: AbortSignal): Promise<{ startedAt: number; executable: string }> {
   const script = `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${Math.trunc(pid)}"; if ($p) { [Console]::Out.Write([string]([DateTimeOffset]$p.CreationDate).ToUnixTimeMilliseconds() + "|" + $p.ExecutablePath) }`
-  const { stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", script], { maxBuffer: 16_384, timeout: 10_000, signal, windowsHide: true })
+  const { stdout } = await run(windowsPowerShell(), ["-NoProfile", "-NonInteractive", "-Command", script], { maxBuffer: 16_384, timeout: 10_000, signal, windowsHide: true })
   const cut = stdout.indexOf("|")
   const startedAt = Number(stdout.slice(0, cut))
   if (cut < 0 || !Number.isSafeInteger(startedAt) || startedAt <= 0) throw new Error("Process start time is unreadable")

@@ -364,7 +364,7 @@ export class GitHelper {
     this.#lostWhy.set(helper, `it stopped answering: ${why}`)
     this.#down(`it stopped answering: ${why}`)
     // What it ran is settled when it has closed (its `close` above), once what it had said before is read.
-    if (helper.pid) signalProcessTree(helper.pid, "SIGKILL", { orProcess: false })
+    if (helper.pid) signalProcessTree(helper.pid, "SIGKILL", { orProcess: false, held: true })
     void this.#direct.close(helper, "SIGKILL").catch(() => {})
   }
 

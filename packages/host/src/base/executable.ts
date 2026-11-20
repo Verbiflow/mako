@@ -57,7 +57,8 @@ function candidatesIn(command: string, env: NodeJS.ProcessEnv, home: string, nvm
   const names = commandNames(command, env)
   if (isAbsolute(command)) return names
   return [
-    ...(environmentVariable(env, "PATH") ?? "").split(delimiter).filter(Boolean),
+    // A relative folder on Windows' PATH (`.`, or empty) is the working folder: never looked in.
+    ...(environmentVariable(env, "PATH") ?? "").split(delimiter).filter((folder) => folder && (!onWindows() || isAbsolute(folder))),
     env.NVM_BIN,
     join(home, ".local", "bin"),
     join(home, ".codex", "bin"),

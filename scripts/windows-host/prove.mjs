@@ -3,22 +3,22 @@ import { execFile, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
-import { createServer, request } from "node:http"
+import { request } from "node:http"
 import { connect } from "node:net"
 import { tmpdir } from "node:os"
 import { delimiter, join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 import { invokeRuntime, probeRuntime } from "@mako/host/transport/connection"
-import { HOST_PROOF_HEADER, HostImpostorError, hostPipeProof } from "@mako/host/transport/pipe"
 import { runtimeLocation } from "@mako/host/transport/service"
 import { GROK_VERSIONS } from "@mako/host/harnesses/grok/versions"
 
 /**
  * The host on Windows, from a built checkout (`npm run build:control-runtime`): `mako-host` started by hand with no
- * socket named, as on a machine, answers /health on the named pipe its profile keeps, with its proof; another account
- * can't write to that pipe or add an instance of it, and a connection that writes nothing hears nothing; something
- * else answering on a profile's pipe is refused as an impostor. Then both clients: `mako-host inspect` and the
+ * socket named, as on a machine, answers /health on the named pipe it drew for this start and published, through the
+ * handshake both ends prove themselves with; HTTP without it is answered nothing, and once the host has narrowed the
+ * pipe's DACL another account can't open it at all (`scripts/test-windows-pipes.ts` runs every client against an
+ * impostor holding the name). Then both clients: `mako-host inspect` and the
  * headless `mako` client, which find the pipe themselves. A conversation on a stand-in for Grok's CLI, an npm-style
  * `grok.cmd` found by PATHEXT and started through ComSpec, streams a turn, is stopped mid-turn, and is closed, which
  * ends the stand-in's whole tree (its grandchild included). A terminal opens on PowerShell and runs a command.
@@ -85,31 +85,30 @@ try {
   host = spawn(process.execPath, [join(repo, "packages", "host", "dist", "mako-host.js")], { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
   host.stdout.on("data", (chunk) => (hostOutput = (hostOutput + chunk).slice(-8_000)))
   host.stderr.on("data", (chunk) => (hostOutput = (hostOutput + chunk).slice(-8_000)))
-  const { socket, directory } = runtimeLocation(dataRoot)
+  // The pipe this start drew for itself, read where it publishes it once it listens.
+  const { directory } = runtimeLocation(dataRoot)
   runtimeFolders.push(directory)
-  assert.match(socket, /^\\\\\.\\pipe\\mako-host-[0-9a-f]{16}-[0-9a-f]{32}$/, "the host's pipe is its profile's random name")
-  assert.ok(directory.startsWith(process.env.LOCALAPPDATA), `its name is kept in local app data: ${directory}`)
+  assert.ok(directory.startsWith(process.env.LOCALAPPDATA), `its name is published in local app data: ${directory}`)
+  let socket
   const ready = await until(async () => {
     assert.equal(host.exitCode, null, `the host exited while starting:\n${hostOutput}`)
+    socket = runtimeLocation(dataRoot).socket
     return probeRuntime(socket, { timeoutMs: 2_000 }).catch(() => undefined)
-  }, (probe) => probe?.state === "ready", `the host's /health on ${socket}`, 90_000)
-  passed("/health on the named pipe", `${Math.round(performance.now() - began)} ms after spawn, ${ready.info.methods.length} methods, pid ${ready.info.pid}`)
+  }, (probe) => probe?.state === "ready", "the host's /health on its published pipe", 90_000)
+  assert.match(socket, /^\\\\\.\\pipe\\mako-host-[0-9a-f]{16}-[0-9a-f]{32}$/, "the host's pipe is a random name")
+  passed("/health on the named pipe, through the handshake", `${Math.round(performance.now() - began)} ms after spawn, ${ready.info.methods.length} methods, pid ${ready.info.pid}`)
 
-  // The proof, as a raw request reads it.
-  const proof = hostPipeProof(socket)
-  assert.ok(proof, "the profile keeps a proof beside the name")
-  const said = await new Promise((done, fail) => {
-    const asked = request({ socketPath: socket, path: "/health", agent: false }, (response) => {
-      response.resume()
-      done(response.headers[HOST_PROOF_HEADER])
-    })
-    asked.on("error", fail)
+  // A client that skips the handshake is answered nothing.
+  const skipped = await new Promise((done) => {
+    const asked = request({ socketPath: socket, path: "/health", agent: false }, (response) => done(`answered ${response.statusCode}`))
+    asked.on("error", (error) => done(`refused: ${error.code ?? error.message}`))
+    asked.setTimeout(10_000, () => asked.destroy(new Error("no answer")))
     asked.end()
   })
-  assert.equal(said, proof, "/health says the profile's proof")
-  passed("the host says its profile's proof")
+  assert.match(skipped, /^refused/, `HTTP without the handshake: ${skipped}`)
+  passed("HTTP without the handshake is answered nothing", skipped)
 
-  // A connection that writes nothing hears nothing: what another account may open (to read) gets no byte.
+  // A connection that writes nothing hears nothing.
   const silent = connect(socket)
   let heard = 0
   silent.on("data", (chunk) => (heard += chunk.length))
@@ -119,29 +118,15 @@ try {
   assert.equal(heard, 0, "the host writes nothing on a connection before it asks")
   passed("a connection that asks nothing hears nothing")
 
-  // Another account, made for the check: it may open the pipe to read, never to write, and can't add an instance.
+  // Another account, made for the check, once the host has narrowed its pipe's DACL: it can't open it at all, and
+  // network logons are denied outright.
+  await until(() => readFile(join(dataRoot, "logs", "host.log"), "utf8").catch(() => ""), (log) => /pipes (made private to this user|a pipe kept Windows' default access)[^\n]*host's pipe/.test(log), "the host's pipe DACL", 60_000)
   const { stdout: access } = await run("pwsh", ["-NoProfile", "-File", join(repo, "scripts", "windows-host", "pipe-access.ps1"), "-Pipe", socket], { timeout: 60_000 })
   const seen = JSON.parse(access.trim().split("\n").at(-1))
   report.pipeAccess = seen
-  for (const key of ["readWrite", "writeOnly", "newInstance"]) assert.match(seen[key], /^denied 5$/, `another account's ${key}: ${seen[key]}`)
-  assert.match(seen.sddl, /^O:/, `the pipe's descriptor reads: ${seen.sddl}`)
-  // Full control only for SYSTEM, administrators and a user's own SID; everyone and anonymous only read.
-  for (const [, rights, sid] of seen.sddl.matchAll(/\(A;[^;]*;([^;]*);[^;]*;[^;]*;([^)]*)\)/g))
-    assert.ok(["SY", "BA"].includes(sid) || sid.startsWith("S-1-5-21-") || (["WD", "AN"].includes(sid) && rights === "FR"), `${sid} may ${rights}: ${seen.sddl}`)
-  passed("another account can't write to the pipe or take an instance of it", `${seen.sddl}; read-only open ${seen.readOnly}`)
-
-  // Something else on a profile's pipe: refused, never taken for the host.
-  const otherRoot = join(scratch, "other-data")
-  const other = runtimeLocation(otherRoot)
-  runtimeFolders.push(other.directory)
-  const impostor = createServer((_, response) => response.writeHead(200, { "content-type": "application/json" }).end("{}"))
-  await new Promise((done) => impostor.listen(other.socket, done))
-  try {
-    await assert.rejects(probeRuntime(other.socket), HostImpostorError, "an answer without the proof is an impostor's")
-  } finally {
-    impostor.close()
-  }
-  passed("an answer on a profile's pipe without its proof is refused")
+  for (const key of ["readWrite", "writeOnly", "readOnly", "newInstance"]) assert.match(seen[key], /^denied 5$/, `another account's ${key}: ${seen[key]}`)
+  assert.match(seen.sddl, /D:P\(D;;FA;;;NU\)\(A;;FA;;;SY\)\(A;;FA;;;[^)]+\)$/, `the pipe's DACL is its owner's alone: ${seen.sddl}`)
+  passed("another account can't open the pipe at all; network logons are denied", seen.sddl)
 
   // The host's own CLI, finding the pipe by the data root.
   const { stdout: inspected } = await run(process.execPath, [join(repo, "packages", "host", "dist", "mako-host.js"), "inspect", "--data-root", dataRoot, "--json"], { env, timeout: 30_000 })

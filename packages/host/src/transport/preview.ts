@@ -1,3 +1,4 @@
+import { runtimeConnection } from "./pipe.js"
 import { request, type IncomingMessage } from "node:http"
 import {
   CONTROL_VIDEO_BATCH_LIMIT,
@@ -40,7 +41,7 @@ function requestRuntimeMedia<Value>(
       {
         // Its own connection, as every call's (`OWN_CONNECTION`, `connection.ts`): a kept one the host closed while held is no outage.
         agent: false,
-        socketPath: socket,
+        ...runtimeConnection(socket),
         path: "/rpc",
         method: "POST",
         headers: {

@@ -1,6 +1,6 @@
 import type { spawn, fork, ChildProcess, ExecFileException, ExecFileOptions, SpawnOptions } from "node:child_process"
 import { processRunner } from "@mako/git/process-runner"
-import { basename } from "node:path"
+import { basename, win32 } from "node:path"
 import { resolveExecutable } from "./executable.js"
 import { hostStopping, type ProbeOptions } from "./host-stopping.js"
 import { onWindows } from "./platform.js"
@@ -93,14 +93,17 @@ const hostSpawn = ((...args: Parameters<typeof spawn>) => {
  * ComSpec (`windowsLaunch`), since Node refuses to spawn one itself.
  */
 function windowsSpawn(args: Parameters<typeof spawn>): Parameters<typeof spawn> {
-  const [file, second, third] = args
-  if (!isBatchFile(file)) return args
+  const [named, second, third] = args
   const words = Array.isArray(second) ? second : []
   // SAFETY: spawn's second argument is its words when an array, otherwise its options, as Node reads it.
   const options = (Array.isArray(second) ? third : second) as SpawnOptions | undefined
   const env = options?.env ?? process.env
-  const launch = windowsLaunch(file, words, env, resolveExecutable("node", env) ?? process.execPath)
-  return [launch.file, launch.args, { ...options, windowsVerbatimArguments: launch.verbatim || options?.windowsVerbatimArguments }]
+  // A bare name is looked for by Windows in the working folder before PATH: a project holding a `git.exe` would run
+  // it. It's found here instead, on PATH's whole-path folders only, and started by its whole path.
+  const file = win32.isAbsolute(named) || /[\\/]/.test(named) ? named : (resolveExecutable(named, env) ?? named)
+  if (!isBatchFile(file)) return file === named ? args : [file, words, options ?? {}]
+  const launch = windowsLaunch(file, words, env, resolveExecutable("node", env))
+  return [launch.file, launch.args, { ...options, env: launch.env ?? options?.env, windowsVerbatimArguments: launch.verbatim || options?.windowsVerbatimArguments }]
 }
 
 // SAFETY: the underlying runner preserves Node's fork overloads; this wrapper only registers ownership.

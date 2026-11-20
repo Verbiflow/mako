@@ -24,6 +24,10 @@ on:
       - scripts/check-host-children.mjs
       - scripts/windows-host/**
       - scripts/test-windows-launch.ts
+      - scripts/test-windows-pipes.ts
+      - electron/secret-key-link.ts
+      - electron/desktop-link.ts
+      - packages/git/src/run.ts
       - scripts/test-runtime-response.ts
       - scripts/test-host-paths.ts
       - package.json
@@ -64,6 +68,9 @@ jobs:
       - name: The runtime's replies, over a named pipe
         if: success() || failure()
         run: npx tsx scripts/test-runtime-response.ts
+      - name: An impostor on each pipe hears nothing; no planted program runs
+        if: success() || failure()
+        run: npx tsx scripts/test-windows-pipes.ts
       - name: The host, its clients, a conversation and a terminal
         if: success() || failure()
         run: node scripts/windows-host/prove.mjs --evidence "${{ runner.temp }}/evidence"

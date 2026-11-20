@@ -1,7 +1,6 @@
 import {
   createServer,
   type IncomingMessage,
-  type OutgoingHttpHeaders,
   type ServerResponse,
 } from "node:http"
 import { randomUUID } from "node:crypto"
@@ -16,7 +15,9 @@ import { CORRELATION_HEADER, CorrelationIdSchema, LIVE_FORM_HEADER, RuntimeCallS
 import { encodeRuntimeEvent, payloadFor, runtimeEventLine, runtimeSuccessBody, type EncodedValue, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
 import { historyChangedNotice } from "./gateway.js"
-import { HOST_PROOF_HEADER, hostPipeProof, isPipePath } from "./pipe.js"
+import { isPipePath } from "./pipe.js"
+import { requireProof } from "../base/pipe-handshake.js"
+import { restrictPipe } from "../base/pipe-restriction.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { topic } from "../base/topic.js"
 import { failedCallWords } from "./failed-calls.js"
@@ -137,13 +138,15 @@ export async function startWebHost(
   /** Every event for all clients, as encoded once for them: a cloud machine's runtime sends them on as its Thread's. */
   outlet?: (channel: RuntimeEventChannel, event: RuntimeEvent) => void,
   /** A preview's live video for one viewer (`mako:control-video`), as the bytes of a `ControlVideoBatch`. */
-  video?: (args: unknown[], client: string) => Promise<Uint8Array>
+  video?: (args: unknown[], client: string) => Promise<Uint8Array>,
+  /**
+   * On Windows, the secret drawn with this start's pipe (`pipe.ts`): every connection proves it knows it, and is
+   * answered with this host's proof, before HTTP crosses it.
+   */
+  pipeSecret?: string
 ) {
   const info = () => (runtime instanceof Function ? runtime() : runtime)
   // On a profile's pipe (Windows), what tells its clients this is its host and not a program holding its name.
-  const proof = hostPipeProof(socket)
-  const healthHeaders: OutgoingHttpHeaders = { "content-type": "application/json" }
-  if (proof) healthHeaders[HOST_PROOF_HEADER] = proof
   /** Each subscriber, and the live form it reads (`x-mako-live`, `live-form.ts`): one that says none reads form 1. */
   const streams = new Map<ServerResponse, EventStream>()
   // A cloud machine's Thread hears every event through the outlet, so the work done for subscribers runs for it too.
@@ -206,7 +209,7 @@ export async function startWebHost(
     }
     if (request.method === "GET" && request.url === "/health" && runtime) {
       if (process.env.MAKO_RUNTIME_TRACE === "1") console.info("[mako-runtime] health requested")
-      response.writeHead(200, healthHeaders).end(JSON.stringify(info()))
+      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(info()))
       return
     }
     if (request.method === "GET" && request.url === "/packages") {
@@ -377,12 +380,14 @@ export async function startWebHost(
   })
   // The desktop's `/desktop` request stays open for the host's life; nothing on this private socket needs a deadline.
   server.requestTimeout = 0
+  if (pipeSecret) requireProof(server, () => pipeSecret)
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject)
     server.listen(socket, resolve)
   })
-  // A pipe has no mode; who may write to it is its DACL's to say (`pipe.ts`).
+  // A pipe has no mode: its DACL is narrowed to its owner once it listens, and its handshake keeps its clients safe.
   if (!isPipePath(socket)) await chmod(socket, 0o600)
+  else if (pipeSecret) void restrictPipe([socket], "the host's pipe")
   const stopHeartbeat = jobs.every("keep event streams alive", 15_000, () => {
     for (const stream of streams.keys()) stream.write("\n")
   }, { needs: [subscribed] })

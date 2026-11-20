@@ -406,11 +406,11 @@ export class AgentRuns {
       if (identity === "other" && (signalable(process.pid) || !groupRuns(process.pid))) break
       const now = this.now()
       if (identity === "same") {
-        if (!termed) signalGroup(process.pid, "SIGTERM")
+        if (!termed) signalGroup(process.pid, "SIGTERM", startedMs(process.startedAt))
         termed = true
         if (!killed && now >= killAt) {
           killed = true
-          signalGroup(process.pid, "SIGKILL")
+          signalGroup(process.pid, "SIGKILL", startedMs(process.startedAt))
         }
       }
       if (unconfirmed !== (identity === "unknown")) {
@@ -1003,11 +1003,21 @@ function signalable(pid: number): boolean {
 }
 
 /** Whether any process of the tree `pid` leads still runs; false for one that leads none. */
+/** A run's recorded start as milliseconds, however it was recorded. */
+function startedMs(startedAt: number | string | undefined): number | undefined {
+  if (startedAt === undefined) return undefined
+  const ms = Number.isFinite(Number(startedAt)) ? Number(startedAt) : Date.parse(String(startedAt))
+  return Number.isFinite(ms) ? (ms < 1_000_000_000_000 ? ms * 1_000 : ms) : undefined
+}
+
 function groupRuns(pid: number): boolean {
   return processTreeAlive(pid)
 }
 
-/** Its process group when it leads one, else the process alone; on Windows the tree under it. */
-function signalGroup(pid: number, signal: NodeJS.Signals): void {
-  signalProcessTree(pid, signal)
+/**
+ * Its process group when it leads one, else the process alone; on Windows the tree under it, once its start is read
+ * again as the one recorded: a run isn't this host's child, so its pid may be another's by then.
+ */
+function signalGroup(pid: number, signal: NodeJS.Signals, startedAt: number | undefined): void {
+  signalProcessTree(pid, signal, { held: false, ...(startedAt !== undefined && { startedAt }) })
 }

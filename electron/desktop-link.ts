@@ -1,3 +1,4 @@
+import { runtimeConnection } from "@mako/host/transport/pipe"
 import { request, type ClientRequest } from "node:http"
 import { setTimeout as delay } from "node:timers/promises"
 import { LineAssembler } from "@mako/sessions"
@@ -91,7 +92,7 @@ export class DesktopLink {
     return new Promise((resolve) => {
       let attached = false
       const req = request({
-        socketPath: this.options.socket(),
+        ...runtimeConnection(this.options.socket()),
         path: DESKTOP_PATH,
         method: "POST",
         headers: { "content-type": "application/x-ndjson", [DESKTOP_ROLE_HEADER]: this.options.role },

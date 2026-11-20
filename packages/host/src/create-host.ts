@@ -4,7 +4,8 @@ import { lstat, mkdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname } from "node:path"
 import type { HostConfig } from "./host-config.js"
-import { HostMethods, runtimeInfo, startWebHost } from "./transport/index.js"
+import { HostMethods, publishHostPipe, runtimeInfo, startWebHost } from "./transport/index.js"
+import { ensurePrivateDirectory } from "./base/private-directory.js"
 import { HostJobs, type JobDemand } from "./base/host-jobs.js"
 import { HostDomains, hostDomainOptions, type Domain } from "./base/host-domains.js"
 import { EventLoopWatch } from "./base/event-loop.js"
@@ -220,7 +221,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     // The runtime directory is this host's; leaving it behind is how fifty of them piled up in the temp folder. Leases
     // a live launcher holds stay for the profile's next host.
     try {
-      removeRuntimeDirectory(dirname(config.socket))
+      removeRuntimeDirectory(config.runtimeDirectory)
     } catch {
       /* best effort */
     }
@@ -373,7 +374,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       },
     })
     jobs.every("profile host idle watch", 5_000, async () => {
-      leases = (await activeHostLeases(dirname(config.socket))).length
+      leases = (await activeHostLeases(config.runtimeDirectory)).length
       idle.tick()
     })
   }
@@ -412,9 +413,11 @@ interface ListenParts {
  * since that's when an agent's output is decoded and a terminal's drawn.
  */
 async function listen(config: HostConfig, methods: HostMethods, handover: SecretKeyHandover | undefined, { domains, jobs, subscribed, loop }: ListenParts, handlers: ListenHandlers) {
-  const { socket, environment } = config
-  await mkdir(dirname(socket), { recursive: true, mode: 0o700 })
-  const stale = await lstat(socket).catch((error: NodeJS.ErrnoException) => {
+  const { socket, environment, pipe } = config
+  // On Windows the pipe's name is this start's own and nothing is there before it: its folder holds what's published.
+  if (pipe) await ensurePrivateDirectory(config.runtimeDirectory, "Mako host")
+  else await mkdir(dirname(socket), { recursive: true, mode: 0o700 })
+  const stale = pipe ? null : await lstat(socket).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return null
     throw error
   })
@@ -426,7 +429,7 @@ async function listen(config: HostConfig, methods: HostMethods, handover: Secret
   const runtime: RuntimeInfo = {
     protocol: RUNTIME_PROTOCOL,
     instanceId: crypto.randomUUID(),
-    storageScope: basename(dirname(socket)),
+    storageScope: basename(config.runtimeDirectory),
     pid: process.pid,
     version: environment.version,
     devBuild: config.development?.build,
@@ -446,8 +449,11 @@ async function listen(config: HostConfig, methods: HostMethods, handover: Secret
     jobs,
     subscribed,
     handlers.outlet,
-    (args, client) => methods.invokeVideo(args, client)
+    (args, client) => methods.invokeVideo(args, client),
+    pipe?.proof
   )
+  // Clients find this start's pipe, and its secret, only now that it listens; a launcher waiting reads it next.
+  if (pipe) publishHostPipe(config.runtimeDirectory, pipe)
   return {
     ...web,
     event: (...args: Parameters<typeof web.event>) => {

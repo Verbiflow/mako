@@ -7,7 +7,7 @@
 import assert from "node:assert/strict"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { expandPath, trimmedPath, typedWholePath, wholePathAdvice } from "@mako/host/workspaces/project-folders"
+import { expandPath, trimmedPath, typedWholePath, wholePathAdvice, windowsSharePath } from "@mako/host/workspaces/project-folders"
 
 for (const typed of ["/Users/one/app", "~/app"]) {
   assert.ok(typedWholePath(typed, false), typed)
@@ -17,7 +17,8 @@ for (const typed of ["C:\\Users\\one\\app", "c:/work/app", "~\\app", "\\\\server
   assert.ok(typedWholePath(typed, true), `${typed} is whole on Windows`)
   assert.ok(!typedWholePath(typed, false), `${typed} isn't elsewhere`)
 }
-for (const typed of ["app", "C:app", "..\\app", "\\\\server"]) assert.ok(!typedWholePath(typed, true), `${typed} isn't whole`)
+for (const typed of ["app", "C:app", "..\\app", "\\\\server", "\\\\?\\C:\\work", "\\\\.\\pipe\\x", "//?/C:/work", "//./C:/work"]) assert.ok(!typedWholePath(typed, true), `${typed} isn't whole`)
+assert.ok(windowsSharePath("\\\\server\\share") && windowsSharePath("//server/share") && !windowsSharePath("C:\\work"))
 assert.equal(trimmedPath("C:\\work\\app\\\\", true), "C:\\work\\app")
 assert.equal(trimmedPath("C:\\", true), "C:\\", "a drive keeps its own separator")
 assert.equal(trimmedPath("/work/app//", false), "/work/app")

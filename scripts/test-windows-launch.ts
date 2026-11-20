@@ -16,7 +16,7 @@ import { conptyCommand } from "@mako/host/base/conpty-command"
 import { commandNames, environmentVariable, resolveExecutable } from "@mako/host/base/executable"
 import { hostSpawn } from "@mako/host/base/host-command"
 import { processTreeAlive, signalProcessTree } from "@mako/host/base/process-tree"
-import { cmdArgument, npmShimScript, windowsLaunch } from "@mako/host/base/windows-launch"
+import { BatchLaunchError, cmdArgument, npmShimScript, windowsLaunch } from "@mako/host/base/windows-launch"
 
 const windows = process.platform === "win32"
 const scratch = await mkdtemp(join(tmpdir(), "mako-windows-launch-"))
@@ -53,6 +53,13 @@ try {
   assert.equal(cmdArgument("%PATH%"), '^^^"^^^%PATH^^^%^^^"')
   const plain = windowsLaunch("C:\\tools\\grok.exe", ["a b"], {}, "node")
   assert.deepEqual(plain, { file: "C:\\tools\\grok.exe", args: ["a b"], verbatim: false }, "a program is started as it is")
+  // A batch file only by its whole path, never with a word cmd.exe would end its line at, and delayed expansion off.
+  assert.throws(() => windowsLaunch("grok.cmd", [], {}, "node"), BatchLaunchError, "a bare batch file is refused")
+  for (const word of ["two\nlines", "carriage\rreturn", "nul\0byte"])
+    assert.throws(() => windowsLaunch("C:\\tools\\grok.cmd", ["fine", word], { ComSpec: "C:\\Windows\\System32\\cmd.exe" }, "node"), BatchLaunchError, `${JSON.stringify(word)} is refused`)
+  const batch = windowsLaunch("C:\\tools\\grok.cmd", ["a"], { ComSpec: "cmd.exe" }, "node")
+  assert.deepEqual(batch.args.slice(0, 4), ["/d", "/v:off", "/s", "/c"])
+  assert.match(batch.file, /^[A-Za-z]:\\.*cmd\.exe$/i, "a relative ComSpec is never run: the system's cmd.exe by its whole path")
   console.log("ok   command names, npm shims and cmd.exe quoting")
 
   if (windows) {
@@ -124,6 +131,13 @@ try {
   const all = [...tree, ...descendants]
   assert.ok(all.every(alive), "the whole tree runs")
   assert.ok(processTreeAlive(parent.pid!), "the tree is alive")
+  if (windows) {
+    // A pid only heard of, not held: ended only when its start, read again, is the one recorded.
+    signalProcessTree(parent.pid!, "SIGKILL", { held: false })
+    signalProcessTree(parent.pid!, "SIGKILL", { held: false, startedAt: 1_000 })
+    await delay(4_000)
+    assert.ok(all.every(alive), "a pid neither held nor proved by its start is left alone")
+  }
   signalProcessTree(parent.pid!, "SIGKILL")
   for (const deadline = Date.now() + 10_000; all.some(alive) && Date.now() < deadline; ) await delay(100)
   assert.deepEqual(all.filter(alive), [], "every process of the tree ended")

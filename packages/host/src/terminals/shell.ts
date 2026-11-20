@@ -1,4 +1,5 @@
-import { environmentVariable, resolveExecutable } from "../base/executable.js"
+import { resolveExecutable } from "../base/executable.js"
+import { windowsComSpec } from "../base/system-tools.js"
 import { onWindows } from "../base/platform.js"
 
 /** A shell to start: its program and the words it starts with. */
@@ -17,5 +18,5 @@ export function terminalShell(env: NodeJS.ProcessEnv = process.env): TerminalShe
     const found = resolveExecutable(name, env)
     if (found) return { file: found, args: ["-NoLogo"] }
   }
-  return { file: environmentVariable(env, "COMSPEC") ?? "cmd.exe", args: [] }
+  return { file: windowsComSpec(env), args: [] }
 }

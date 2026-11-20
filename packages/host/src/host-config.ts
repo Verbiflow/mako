@@ -1,6 +1,9 @@
-import { basename, resolve } from "node:path"
+import { basename, dirname, resolve } from "node:path"
 import { devHostBuild } from "./base/dev-host-build.js"
 import { processHostEnvironment, type HostEnvironment } from "./base/host-environment.js"
+import { onWindows } from "./base/platform.js"
+import type { KeptPipe } from "./base/kept-pipe.js"
+import { drawHostPipe, publishedHostPipe, runtimeIdentity, windowsRuntimeDirectory } from "./transport/index.js"
 
 /** Set by a cloud machine's agent, which starts the host with its channel on this descriptor (`contracts/machine-agent.ts`). */
 export const MACHINE_AGENT_FD_ENV = "MAKO_MACHINE_AGENT_FD"
@@ -16,8 +19,17 @@ export interface HostConfig {
    * names any other, for a second checkout or a throwaway test instance.
    */
   environment: HostEnvironment
-  /** Every client reaches the host here: the desktop, the agent views app, browsers through the gateway. */
+  /**
+   * Every client reaches the host here: the desktop, the agent views app, browsers through the gateway. On Windows a
+   * pipe this start drew for itself (`transport/pipe.ts`), published once it listens.
+   */
   socket: string
+  /** On Windows, this start's pipe and its secret, published in `runtimeDirectory` once it listens. */
+  pipe?: KeptPipe
+  /** Where a host already serving this data root answers: `socket`, or on Windows the pipe published now. */
+  answeredOn: string
+  /** The host's own folder beside its socket: its leases, and on Windows its published pipe. */
+  runtimeDirectory: string
   /** What `hostCommand` starts this host with again: Mako's Electron executable, or plain Node. */
   executable: string
   /**
@@ -67,9 +79,16 @@ export function processHostConfig(env: NodeJS.ProcessEnv = process.env): HostCon
   const executable = env.MAKO_HOST_EXECUTABLE ?? process.execPath
   const agentFd = env[MACHINE_AGENT_FD_ENV]
   if (agentFd !== undefined && !/^[3-9]$/.test(agentFd)) return { refused: `${MACHINE_AGENT_FD_ENV} names the agent's channel, a descriptor from 3 to 9`, code: 64 }
+  // Windows: a pipe drawn for this start alone, whatever its launcher named; it is published once it listens.
+  const identity = runtimeIdentity(environment.dataRoot)
+  const pipe = onWindows() ? drawHostPipe(identity) : undefined
+  const runtimeDirectory = pipe ? windowsRuntimeDirectory(identity) : dirname(socket)
   return {
     environment,
-    socket,
+    socket: pipe?.pipe ?? socket,
+    ...(pipe && { pipe }),
+    answeredOn: pipe ? publishedHostPipe(runtimeDirectory, identity) : socket,
+    runtimeDirectory,
     executable,
     desktopExecutable: process.versions.electron ? executable : undefined,
     fixtureDesk,

@@ -1,3 +1,4 @@
+import { runtimeConnection } from "@mako/host/transport/pipe"
 import { request as hostRequest } from "node:http"
 import { z } from "zod"
 
@@ -110,7 +111,7 @@ export function webHostProxy(socket, { refuse, clients } = {}) {
             {
               // Its own connection to the host: a kept one the host closed while its event loop was held reset the call, which read as an outage.
               agent: false,
-              socketPath: socket,
+              ...runtimeConnection(socket),
               path,
               method: request.method,
               headers,

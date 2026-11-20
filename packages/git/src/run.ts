@@ -2,12 +2,12 @@ import type { spawn, ChildProcess } from "node:child_process"
 import { processRunner, type ProcessRunner } from "./process-runner.js"
 import { existsSync, readlinkSync } from "node:fs"
 import { availableParallelism } from "node:os"
-import { delimiter, join } from "node:path"
+import { delimiter, join, win32 } from "node:path"
 import { Readable } from "node:stream"
 import { forgetStartingRepository } from "./environment.js"
 import { GitError } from "./errors.js"
 import { Repositories } from "./open.js"
-import { onMac } from "./platform.js"
+import { onMac, onWindows } from "./platform.js"
 import type { Repository } from "./repository.js"
 import { commonDirOf, REF_LOCK_WAIT, subcommandOf, writesShared } from "./shared-writes.js"
 
@@ -534,6 +534,9 @@ function trackProcesses(runner: Pick<ProcessRunner, "spawn" | "close">, signal: 
 }
 
 function resolveGit(): string {
+  // Windows looks for a bare name in the working folder first: a repository holding a `git.exe` would run it. Git is
+  // only ever the one on PATH, by its whole path, from PATH's whole-path folders.
+  if (onWindows()) return windowsGit() ?? "git"
   if (!onMac()) return "git"
   const first = (process.env.PATH ?? "").split(delimiter).map((dir) => join(dir, "git")).find((path) => existsSync(path))
   if (first && first !== "/usr/bin/git") return first
@@ -546,4 +549,15 @@ function resolveGit(): string {
   })()
   const tools = join(developer, "usr", "bin", "git")
   return existsSync(tools) ? tools : first ?? "git"
+}
+
+function windowsGit(): string | undefined {
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH")
+  const folders = (pathKey ? process.env[pathKey] ?? "" : "").split(delimiter).filter((dir) => win32.isAbsolute(dir))
+  for (const dir of folders)
+    for (const name of ["git.exe", "git.cmd"]) {
+      const path = win32.join(dir, name)
+      if (existsSync(path)) return path
+    }
+  return undefined
 }

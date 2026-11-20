@@ -76,9 +76,17 @@ interface RunningClone {
  * on Windows also `~\`, a drive (`C:\` or `C:/`) or a share (`\\server\share`).
  */
 export function typedWholePath(typed: string, windows = onWindows()): boolean {
-  if (typed.startsWith("/") || typed.startsWith("~/")) return true
+  if (typed.startsWith("/") || typed.startsWith("~/")) return windows ? !windowsDevicePath(typed) : true
+  // `\\?\` and `\\.\` name devices and raw paths past Windows' own checks: never a project's.
+  if (windows && windowsDevicePath(typed)) return false
   return windows && (typed.startsWith("~\\") || /^[a-zA-Z]:[\\/]/.test(typed) || /^\\\\[^\\]+\\[^\\]+/.test(typed))
 }
+
+/** A Windows device or raw path (`\\?\`, `\\.\`, in either slash). */
+export const windowsDevicePath = (path: string): boolean => /^[\\/]{2}[?.][\\/]/.test(path)
+
+/** A Windows share (`\\server\share`): reading one hands the server this user's NTLM credentials. */
+export const windowsSharePath = (path: string): boolean => /^[\\/]{2}/.test(path)
 
 /** What to write when a path isn't whole, in the platform's own words. */
 export function wholePathAdvice(windows = onWindows()): string {
@@ -169,6 +177,8 @@ export class ProjectFolders {
     let listed = true
     let names: Dirent[] = []
     try {
+      // Typing isn't asking: a share's folders aren't listed as its path is typed, which would sign in to its server.
+      if (onWindows() && (windowsSharePath(target.folder) || windowsDevicePath(target.folder))) throw new Error("not listed")
       names = await readdir(target.folder, { withFileTypes: true })
     } catch {
       listed = false

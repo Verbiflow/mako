@@ -487,7 +487,7 @@ async function start() {
   opening.catch(() => undefined)
   runtime = await attaching
   // Before any window reads a secret: the host runs as Node and has no `safeStorage` of its own.
-  secretKeys = new SecretKeyLink(runtime.socket, dataKeyPath(userRootFor({ dataRoot, appData: app.getPath("appData"), home: homedir() })), electronSecretEncryption())
+  secretKeys = new SecretKeyLink(() => runtime.socket, dataKeyPath(userRootFor({ dataRoot, appData: app.getPath("appData"), home: homedir() })), electronSecretEncryption())
   await secretKeys.attached()
   attachHost()
   bootEarly(first)

@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process"
 import { onWindows } from "./platform.js"
+import { processStartedAt, processStartMatches } from "./process-liveness.js"
+import { windowsTaskkill } from "./system-tools.js"
 
 /**
  * A process and everything it started, as one thing to signal or ask after. On macOS and Linux that is the process
@@ -10,16 +12,26 @@ import { onWindows } from "./platform.js"
  */
 export interface TreeSignalOptions {
   /**
-   * When `pid` leads no group (it shares its parent's), signal it alone. Off for a caller that knows the pid led its
-   * own group, where a group gone means the process is too and the pid may be another's by now.
+   * Whether `pid` is surely the process meant: true where its caller holds it (its child, unreaped, so Node holds its
+   * handle and the pid can be no other's). On macOS and Linux, a pid that leads no group (it shares its parent's) is
+   * then signalled alone. False where the pid was only heard of, and may be another's by now: there only its group is
+   * signalled, and on Windows nothing unless `startedAt` proves it the same process.
    */
   orProcess?: boolean
+  /**
+   * The caller holds the process as its own unreaped child, so its pid is no other's: on Windows its tree is ended
+   * even where `orProcess` is false. Defaults to `orProcess`.
+   */
+  held?: boolean
+  /** When the process started (ms), as `processStartedAt` read it: on Windows, read again just before taskkill. */
+  startedAt?: number
 }
 
 /** Signals `pid`'s tree; on Windows any signal ends it. */
-export function signalProcessTree(pid: number, signal: NodeJS.Signals, { orProcess = true }: TreeSignalOptions = {}): void {
+export function signalProcessTree(pid: number, signal: NodeJS.Signals, { orProcess = true, held = orProcess, startedAt }: TreeSignalOptions = {}): void {
   if (onWindows()) {
-    taskkillTree(pid)
+    if (held) taskkillTree(pid)
+    else if (startedAt !== undefined) void verifiedTaskkill(pid, startedAt)
     return
   }
   try {
@@ -49,18 +61,16 @@ export function processTreeAlive(pid: number): boolean {
   }
 }
 
+/** taskkill only once the pid is seen to be the process that started at `startedAt`: one recycled since is left alone. */
+async function verifiedTaskkill(pid: number, startedAt: number): Promise<void> {
+  const actual = await processStartedAt(pid, AbortSignal.timeout(10_000)).catch(() => undefined)
+  if (actual !== undefined && processStartMatches(startedAt, actual, 2_000)) taskkillTree(pid)
+}
+
 /**
- * `taskkill /T /F` of `pid`'s tree, in the background. It runs outside the host's stop scope, since a stop is when it is
- * needed; it answers 128 for a process already gone, which is the outcome asked for. Where it can't run, the process
- * alone is ended, as Node's own `kill` does.
+ * `taskkill /T /F` of `pid`'s tree, by its whole path, in the background. It runs outside the host's stop scope, since
+ * a stop is when it is needed; it answers 128 for a process already gone, which is the outcome asked for.
  */
 function taskkillTree(pid: number): void {
-  execFile("taskkill", ["/PID", String(pid), "/T", "/F"], { timeout: 5_000, windowsHide: true }, (error) => {
-    if (!error || !processTreeAlive(pid)) return
-    try {
-      process.kill(pid, "SIGKILL")
-    } catch {
-      // Gone between the two.
-    }
-  })
+  execFile(windowsTaskkill(), ["/PID", String(pid), "/T", "/F"], { timeout: 5_000, windowsHide: true }, () => undefined)
 }
