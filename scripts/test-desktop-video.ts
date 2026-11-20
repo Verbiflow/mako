@@ -286,6 +286,37 @@ const browserFrame = (): BrowserFrame => ({ bytes: Buffer.from([0xff, 0xd8]), wi
   video.close()
 }
 {
+  // A capture with a poster: the viewer paints the tab's picture while the first key frame is made, the poster asked
+  // beside the capture's start at the viewers' box; one that comes after the key frame is never sent.
+  let askedAt: { width: number; height: number } | undefined
+  let releasePoster!: (frame: BrowserFrame) => void
+  let posters = 0
+  const poster = (size: () => { width: number; height: number } | undefined) => {
+    posters++
+    askedAt = size()
+    return new Promise<BrowserFrame>((resolve) => (releasePoster = resolve))
+  }
+  const video = new BrowserVideo({ encoded, poster }, { fps: 1000 })
+  const watcher = viewer()
+  const joining = video.join(watcher.handle)
+  assert.equal(posters, 1, "the poster is asked for at once, before the capture has started")
+  const leave = await joining
+  assert.deepEqual(askedAt, { width: 640, height: 360 }, "at the viewers' box")
+  releasePoster(browserFrame())
+  await settle()
+  captures.at(-1)!.unit(packet(1, "key"))
+  captures.at(-1)!.unit(packet(2, "delta"))
+  assert.deepEqual(watcher.received.map((unit) => unit.kind), ["poster", "key", "delta"])
+  const late = viewer()
+  await video.join(late.handle)
+  captures.at(-1)!.unit(packet(3, "key"))
+  releasePoster(browserFrame())
+  await settle()
+  assert.deepEqual(late.received.map((unit) => unit.kind), ["key"], "a poster after the key frame isn't sent")
+  await leave()
+  video.close()
+}
+{
   refuseCapture = "Mako's desktop app isn't open to capture this."
   const video = new BrowserVideo({ frames, encoded }, { fps: 1000, encoder: fakeEncoder })
   const watcher = viewer()
@@ -311,7 +342,7 @@ const browserFrame = (): BrowserFrame => ({ bytes: Buffer.from([0xff, 0xd8]), wi
 
 // An app window's preview streams to a remote viewer through the desktop's capture; without one it's refused.
 {
-  const browser: PreviewBrowser = { previewStream: async () => async () => {}, previewResized: async () => {} }
+  const browser: PreviewBrowser = { previewStream: async () => async () => {}, previewResized: async () => {}, previewPoster: async () => { throw new Error("no poster here") } }
   const windows: number[] = []
   const previews = new ControlPreviews(browser, async () => null, () => {}, {
     fps: 1000,

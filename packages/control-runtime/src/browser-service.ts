@@ -32,6 +32,7 @@ import { localBrowsers, type LocalBrowser } from "./browser-discovery.js"
 import { DESK_OUTSIDE_ORIGIN } from "./desk-browser-registration.js"
 import { EXTENSION_SESSION_GONE } from "./browser-extension-protocol.js"
 import { InstalledBrowsers } from "./browser-installed.js"
+import { MACHINE_CAPTURE_PAGES } from "./machine-capture.js"
 import { inScope, isExactName, scopeLabel } from "@mako/control/control/scope"
 import {
   BrowserFault,
@@ -1398,6 +1399,32 @@ export class BrowserService {
     })
   }
 
+  /**
+   * The tab's picture now, as one JPEG at most `size`, for a viewer to paint while a video that encodes for itself (the
+   * machine browser's tab capture) makes its first key frame: the shared screencast's first frame, which comes sooner
+   * than a screenshot (35–65 ms against 75–105 ms on a two-CPU machine), after which this consumer leaves it.
+   */
+  async previewPoster(owner: string, target: BrowserTarget, authorize: () => void, size?: () => CaptureSize | undefined): Promise<BrowserFrame> {
+    authorize()
+    const capture = this.binding(owner, target).capture
+    let timer: NodeJS.Timeout | undefined
+    const first = new Promise<BrowserFrame>((resolve, reject) => {
+      timer = setTimeout(() => reject(new Error("The tab sent no picture")), 3_000)
+      // Left as soon as its frame came, even when that was before the subscription settled.
+      void capture.subscribe({ frame: resolve, ended: (reason) => reject(new Error(reason)), size }).then(
+        (stop) => void first.finally(() => stop().catch(() => {})).catch(() => {}),
+        reject
+      )
+    })
+    try {
+      const frame = await first
+      authorize()
+      return frame
+    } finally {
+      clearTimeout(timer)
+    }
+  }
+
   /** A preview's viewers now draw another size. */
   async previewResized(owner: string, target: BrowserTarget): Promise<void> {
     await this.binding(owner, target).capture.resized()
@@ -1525,7 +1552,8 @@ export class BrowserService {
           signal
         )
       )
-      return result.targetInfos.map((tab) => ({
+      // The machine browser's capture extension is Mako's own, not a tab.
+      return result.targetInfos.filter((tab) => !tab.url.startsWith(MACHINE_CAPTURE_PAGES)).map((tab) => ({
         ...tab,
         selectable: PAGE_TARGET_TYPES.has(tab.type),
         claimed:
