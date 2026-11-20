@@ -18,17 +18,21 @@ export interface DeskPageAnswers {
   handlers: DesktopHandlers
   /** Close the windows made for a host that went away; it no longer drives them. */
   forget(): void
+  /** A window's web contents, by the page id the host knows it by, for live video to capture. */
+  contents(page: string): Electron.WebContents | undefined
 }
 
 /** The hidden desk windows agents drive, which the desktop and the agent views app both make (`desktop-link.ts`). */
 export function deskPageAnswers({ agentView, frame }: DeskPageAnswersInput): DeskPageAnswers {
   const pages = new Map<string, DeskPage>()
+  const windows = new Map<string, BrowserWindow>()
   return {
     handlers: {
       "desk-page-create": async ({ previewId }) => {
         const window = await agentView(previewId)
         const page = deskPageForWindow(window)
         pages.set(page.id, page)
+        windows.set(page.id, window)
         page.onMessage((method, params) => frame({ kind: "page", page: page.id, message: { method, params } }))
         const state = () => frame({ kind: "page", page: page.id, state: { url: page.url(), title: page.title() } })
         window.webContents.on("did-navigate", state)
@@ -36,6 +40,7 @@ export function deskPageAnswers({ agentView, frame }: DeskPageAnswersInput): Des
         window.webContents.on("page-title-updated", state)
         page.onDestroyed(() => {
           pages.delete(page.id)
+          windows.delete(page.id)
           frame({ kind: "page", page: page.id, destroyed: true })
         })
         return { page: page.id, url: page.url(), title: page.title() }
@@ -53,6 +58,11 @@ export function deskPageAnswers({ agentView, frame }: DeskPageAnswersInput): Des
     forget: () => {
       for (const page of pages.values()) page.destroy()
       pages.clear()
+      windows.clear()
+    },
+    contents: (page) => {
+      const window = windows.get(page)
+      return window && !window.isDestroyed() ? window.webContents : undefined
     },
   }
 }

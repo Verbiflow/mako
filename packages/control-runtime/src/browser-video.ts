@@ -15,7 +15,9 @@ export interface VideoSourceFrame {
 }
 
 /** One encoder for one frame size. `submit` is called only while `ready()`;
- * every submitted frame comes back as exactly one unit, in order. */
+ * every submitted frame comes back as one unit, in order, or, from an encoder
+ * whose rate control drops frames, as a `drained` with no unit. Its first
+ * unit is a key frame. */
 export interface LiveEncoder {
   ready(): boolean
   submit(frame: VideoSourceFrame): void
@@ -159,6 +161,34 @@ export type BrowserVideoSource = (consumer: {
   size: () => CaptureSize | undefined
 }) => Promise<{ stop: () => Promise<void>; resized: () => Promise<void> }>
 
+/**
+ * A capture that encodes where its pixels are (a Chromium page with WebCodecs) and hands over units, paced to `fps`
+ * on its own: no JPEG crosses to the host and no encoder runs here. Its first unit is a key frame.
+ */
+export type EncodedVideoSource = (consumer: {
+  unit: (packet: ControlVideoPacket) => void
+  ended: (reason: string) => void
+  size: () => CaptureSize | undefined
+  fps: number
+}) => Promise<EncodedVideoCapture>
+
+export interface EncodedVideoCapture {
+  stop(): Promise<void>
+  /** Its viewers draw another size (`size`). */
+  resized(): Promise<void>
+  /** The next unit comes as a key frame: of the next picture, or, while nothing changes, of the one shown now. */
+  key(): void
+}
+
+/**
+ * Where a live video's pictures come from: an encoded capture when one is there, else the screencast's frames
+ * through this host's encoder. A capture that can't start, or ends while viewers watch, gives way to the frames.
+ */
+export interface BrowserVideoSources {
+  frames?: BrowserVideoSource
+  encoded?: EncodedVideoSource
+}
+
 export interface BrowserVideoOptions {
   /** The most frames a second sent to viewers. */
   fps?: number
@@ -167,23 +197,39 @@ export interface BrowserVideoOptions {
   encoder?: LiveEncoderFactory
 }
 
+type Capture =
+  | { kind: "frames"; stop: () => Promise<void>; resized: () => Promise<void> }
+  | ({ kind: "encoded" } & EncodedVideoCapture)
+
+/** How long a key frame asked of an encoded capture is waited for before it's asked again. */
+const KEY_WAIT_MS = 2000
+
 interface ViewerState {
   awaitingKey: boolean
   /** It has painted something: a poster or a key frame. */
   painted: boolean
 }
 
-/** A browser tab as live H.264 for remote viewers: one encode for every
- * viewer, running only while one watches. A viewer that joins paints the
- * newest frame at once as a poster, then gets a key frame of the current
- * picture, even while the page is still. One that falls behind skips to a
- * fresh key frame instead of queueing old ones. */
+/** A browser tab or a window as live H.264 for remote viewers: one encode
+ * for every viewer, running only while one watches. A viewer that joins
+ * paints the newest frame at once as a poster (when the source has frames
+ * here), then gets a key frame of the current picture, even while the page is
+ * still. One that falls behind skips to a fresh key frame instead of queueing
+ * old ones. */
 export class BrowserVideo {
   private readonly viewers = new Map<BrowserVideoViewer, ViewerState>()
   private readonly fps: number
   private readonly backlogLimit: number
   private readonly createEncoder: LiveEncoderFactory
-  private source?: Promise<{ stop: () => Promise<void>; resized: () => Promise<void> }>
+  private source?: Promise<Capture>
+  /** The source once it started. */
+  private capture?: Capture
+  /** Counts sources started; a replaced source's late units and endings are ignored. */
+  private captures = 0
+  /** The encoded capture failed once: the frames carry this video from now on. */
+  private encodedFailed = false
+  /** When a key frame was last asked of an encoded capture and hasn't come. */
+  private keyAskedAt?: number
   private encoder?: { instance: LiveEncoder; size: CaptureSize; keyed: boolean }
   /** Counts encoders started, failed and stopped; a replaced encoder's late callbacks are ignored. */
   private generation = 0
@@ -197,7 +243,7 @@ export class BrowserVideo {
   private failures = 0
   private closed = false
 
-  constructor(private readonly subscribe: BrowserVideoSource, options: BrowserVideoOptions = {}) {
+  constructor(private readonly sources: BrowserVideoSources, options: BrowserVideoOptions = {}) {
     this.fps = options.fps ?? 30
     this.backlogLimit = options.backlog ?? 512 * 1024
     this.createEncoder = options.encoder ?? ffmpegLiveEncoder
@@ -207,13 +253,7 @@ export class BrowserVideo {
     if (this.closed) throw new Error("Live video ended")
     this.viewers.set(viewer, { awaitingKey: true, painted: false })
     try {
-      if (!this.source) {
-        this.source = this.subscribe({
-          frame: (frame) => this.frame(frame),
-          ended: (reason) => this.end(reason),
-          size: () => this.demand(),
-        })
-      }
+      this.source ??= this.open()
       const source = await this.source
       await source.resized()
     } catch (error) {
@@ -231,6 +271,62 @@ export class BrowserVideo {
       if (!this.viewers.size) await this.stop()
       else await (await this.source)?.resized()
     }
+  }
+
+  /** The encoded capture if there is one and it starts, else the frames. */
+  private async open(): Promise<Capture> {
+    const generation = ++this.captures
+    const current = () => this.captures === generation
+    const { encoded, frames } = this.sources
+    if (encoded && !this.encodedFailed) {
+      try {
+        const capture: Capture = {
+          kind: "encoded",
+          ...await encoded({
+            unit: (packet) => { if (current()) this.unit(packet) },
+            ended: (reason) => { if (current()) this.encodedEnded(reason) },
+            size: () => this.demand(),
+            fps: this.fps,
+          }),
+        }
+        if (current()) {
+          this.capture = capture
+          // Its first unit is a key frame: a viewer joining now needs no other.
+          this.keyAskedAt = this.keyedAt = performance.now()
+        }
+        return capture
+      } catch (error) {
+        if (!frames) throw error
+        this.encodedFailed = true
+      }
+    }
+    if (!frames) throw new Error("This live video has no source")
+    const capture: Capture = {
+      kind: "frames",
+      ...await frames({
+        frame: (frame) => { if (current()) this.frame(frame) },
+        ended: (reason) => { if (current()) this.end(reason) },
+        size: () => this.demand(),
+      }),
+    }
+    if (current()) this.capture = capture
+    return capture
+  }
+
+  /** The encoded capture stopped while viewers watch: the frames take over, or the video ends without them. */
+  private encodedEnded(reason: string) {
+    if (this.closed || !this.sources.frames) return this.end(reason)
+    this.encodedFailed = true
+    const previous = this.source
+    this.capture = undefined
+    this.keyAskedAt = undefined
+    void previous?.then((capture) => capture.stop()).catch(() => {})
+    for (const state of this.viewers.values()) state.awaitingKey = true
+    const next = (this.source = this.open())
+    next.then((capture) => capture.resized()).then(
+      () => this.requestKey(),
+      (error: Error) => { if (this.source === next) this.end(error.message) }
+    )
   }
 
   /** A viewer now draws another size. */
@@ -314,6 +410,7 @@ export class BrowserVideo {
     this.failures = 0
     const key = packet.kind === "key"
     if (key && this.encoder) this.encoder.keyed = true
+    if (key) this.keyAskedAt = undefined
     let bytes: Uint8Array | undefined
     for (const [viewer, state] of this.viewers) {
       if (state.awaitingKey && !key) continue
@@ -350,7 +447,26 @@ export class BrowserVideo {
   /** A new encoder's first unit is a key frame. Without a frame yet, or with an
    * encoder that hasn't sent its first, that key frame is already coming. */
   private requestKey() {
-    if (this.closed || !this.latest || (this.encoder && !this.encoder.keyed)) return
+    if (this.closed) return
+    const capture = this.capture
+    if (capture?.kind === "encoded") {
+      const now = performance.now()
+      const waited = this.keyAskedAt === undefined ? Infinity : now - this.keyAskedAt
+      if (waited < KEY_WAIT_MS) {
+        // One is coming; the timer below asks again if it doesn't.
+        this.recoverTimer ??= setTimeout(() => this.recover(), Math.ceil(KEY_WAIT_MS - waited))
+        this.recoverTimer.unref()
+        return
+      }
+      this.keyAskedAt = this.keyedAt = now
+      capture.key()
+      // Asked again if it doesn't come: a still picture sends nothing else that would.
+      clearTimeout(this.recoverTimer)
+      this.recoverTimer = setTimeout(() => this.recover(), KEY_WAIT_MS)
+      this.recoverTimer.unref()
+      return
+    }
+    if (!this.latest || (this.encoder && !this.encoder.keyed)) return
     this.keyedAt = performance.now()
     this.restart({ width: this.latest.width, height: this.latest.height })
     this.pending ??= this.latest
@@ -375,7 +491,8 @@ export class BrowserVideo {
     this.encoder = undefined
     this.latest = this.pending = undefined
     const source = this.source
-    this.source = undefined
+    this.source = this.capture = this.keyAskedAt = undefined
+    this.captures++
     await (await source?.catch(() => undefined))?.stop()
   }
 

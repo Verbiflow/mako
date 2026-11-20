@@ -39,6 +39,7 @@ import { SecretKeyLink } from "./secret-key-link.js"
 import { electronSecretEncryption } from "./secure-storage-electron.js"
 import { DesktopLink } from "./desktop-link.js"
 import { deskPageAnswers, machineAnswers } from "./desktop-answers-electron.js"
+import { liveVideoAnswers } from "./live-video-electron.js"
 import { desktopUpdates, type DesktopUpdates } from "./desktop-updates-electron.js"
 import { packagedDistribution } from "@mako/host/application/distribution"
 import { deskUrlPolicy } from "@mako/host/control/desk-policy"
@@ -531,17 +532,22 @@ async function start() {
   })
   // What only this process can do for the host: Mako.app's grants, window capture, agents' windows and its own update.
   const pages = deskPageAnswers({ agentView: (previewId) => openWindow({ agentView: previewId }), frame: (frame) => desktopLink?.frame(frame) })
+  const video = liveVideoAnswers({ directory, frame: (frame) => desktopLink?.frame(frame), page: pages.contents })
   desktopLink = new DesktopLink({
     socket: () => runtime.socket,
     role,
     handlers: {
       ...machineAnswers(focusForPermission),
       ...pages.handlers,
+      ...video.handlers,
       "update-check": () => updater.check(),
       "update-install": async () => { updater.install(); return null },
     },
     attached: () => desktopLink?.frame({ kind: "update", state: updater.state() }),
-    detached: pages.forget,
+    detached: () => {
+      video.forget()
+      pages.forget()
+    },
   })
   desktopLink.start()
   await opening
@@ -564,11 +570,15 @@ async function startAgentViews() {
   closeOnSignals()
   await serveWindows()
   const pages = deskPageAnswers({ agentView: (previewId) => openWindow({ agentView: previewId }), frame: (frame) => desktopLink?.frame(frame) })
+  const video = liveVideoAnswers({ directory, frame: (frame) => desktopLink?.frame(frame), page: pages.contents })
   desktopLink = new DesktopLink({
     socket: () => runtime.socket,
     role,
-    handlers: pages.handlers,
-    detached: pages.forget,
+    handlers: { ...pages.handlers, ...video.handlers },
+    detached: () => {
+      video.forget()
+      pages.forget()
+    },
     finished: () => leaveAgentViews("its host let it go"),
   })
   desktopLink.start()

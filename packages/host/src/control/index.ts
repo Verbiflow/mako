@@ -8,6 +8,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { hostClient } from "../base/host-client.js"
 import { Appshots } from "./appshots.js"
 import { DesktopChannel } from "./desktop-channel.js"
+import { desktopPreviewCapture } from "./desktop-video.js"
 import { AgentViewsApp } from "./agent-views.js"
 import { AGENT_VIEWS_CLIENT, clientRoot } from "../transport/index.js"
 import { ControlPreviews, previewThumbnail } from "./previews.js"
@@ -263,7 +264,12 @@ export function openControl(
         (registration) => void configureDevRenderer(registration)
       )
     : undefined
-  const previews = new ControlPreviews(browser, previewThumbnail, (activity) => emit({ type: "control-activity", activity }))
+  // Tabs and windows the desktop app can capture are encoded where their pixels are (tab or window capture into
+  // WebCodecs); a screencast still goes through FFmpeg. Encoding screencast JPEGs in the desktop instead
+  // (desktopLiveEncoder) measured no cheaper and twice the latency, so it isn't the default.
+  const previews = new ControlPreviews(browser, previewThumbnail, (activity) => emit({ type: "control-activity", activity }), {
+    capture: desktopPreviewCapture(desktop, (id, tab) => (id === deskBrowser.definition.id && deskBrowser.hasPage(tab) ? tab : undefined)),
+  })
   const elementPicks = new ElementPicks(browser, previews, onMac() ? "mac" : "other")
   const sessions = new ControlSessions(
     async (bindingId) => (resolveExecutable("cua-driver") && onMac() ? driver.grant(`agent ${bindingId}`) : undefined),

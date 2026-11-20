@@ -4,7 +4,10 @@ import { CONTROL_VIDEO_ENDINGS, ControlVideoWatchSchema } from "../contracts/con
 import { hostWarn } from "../base/host-log.js"
 import type { ControlPreviews } from "./previews.js"
 
-/** A cloud machine's previews, as the live video its Threads' clients watch (`contracts/control-video.ts`). */
+/**
+ * A host's previews as the live video clients watch through its link (`contracts/control-video.ts`): a cloud
+ * machine's for its Threads' clients, and a Mac's for the account's other devices.
+ */
 export function controlVideoMedia(previews: ControlPreviews): MediaHandler {
   return {
     watch(stream, _threadId, request, sender) {

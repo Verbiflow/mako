@@ -1076,6 +1076,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   finCapacity.subscribe(() => buildSlots.changed())
   late.cloud = declareCloudAccountMethods(methods, {
     watched: shell.subscribed,
+    // A phone or another Mac watching a preview here gets live video of it, as a cloud machine's clients do.
+    media: controlVideoMedia(control.previews),
     waitingForAccount: () => cloudConversations?.waitingForAccount() === true || late.awayNotes?.any() === true,
     finLimitsChanged: () => {
       const reading = finCapacity.reading()

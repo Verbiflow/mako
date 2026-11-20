@@ -3,6 +3,8 @@ import { imageSize } from "image-size"
 import type {
   BrowserService,
   BrowserFrame,
+  BrowserVideoOptions,
+  EncodedVideoSource,
 } from "@mako/control-runtime/browser"
 import type {
   AppshotTarget,
@@ -51,6 +53,21 @@ export interface PreviewBox {
 }
 
 type Thumbnail = (image: ControlImage) => Promise<ControlImage | null>
+
+/**
+ * Where a preview's pictures can be captured and encoded beside them (`desktop-video.ts`): a tab of Mako's own
+ * without its screencast's JPEGs, and an app's window, which has no screencast at all. None for a tab or window the
+ * desktop app can't capture.
+ */
+export interface PreviewCapture {
+  tab(target: BrowserTarget): EncodedVideoSource | undefined
+  window(target: AppshotTarget): EncodedVideoSource | undefined
+}
+
+/** How a preview's remote viewers are sent video: the encoder for a tab's frames, and the captures beside them. */
+export interface PreviewVideoOptions extends BrowserVideoOptions {
+  capture?: PreviewCapture
+}
 /** The part of the browser a preview reads: its tab's screencast. */
 export type PreviewBrowser = Pick<BrowserService, "previewStream" | "previewResized">
 
@@ -73,17 +90,20 @@ export class ControlPreviews {
   private readonly scaled = new WeakMap<PreviewFrame, Map<string, Promise<PreviewFrame>>>()
   /** Each remote viewer's stream, by the conversation it watches. */
   private readonly videoStreams = new Map<string, string>()
-  private readonly videoOptions: ConstructorParameters<typeof PreviewVideo>[1]
+  private readonly videoOptions: BrowserVideoOptions
+  private readonly videoCapture: PreviewCapture | undefined
   constructor(
     browser: PreviewBrowser,
     thumbnail: Thumbnail,
     changed: (activity: ControlActivity) => void,
-    videoOptions?: ConstructorParameters<typeof PreviewVideo>[1]
+    videoOptions: PreviewVideoOptions = {}
   ) {
     this.browser = browser
     this.thumbnail = thumbnail
     this.changed = changed
-    this.videoOptions = videoOptions
+    const { capture, ...options } = videoOptions
+    this.videoOptions = options
+    this.videoCapture = capture
   }
 
   /**
@@ -188,8 +208,8 @@ export class ControlPreviews {
       return sender.end({ kind: "failed", reason: "This stream watches another conversation" })
     const entry = this.entries.get(conversationId)
     if (!entry) return sender.end({ kind: "gone", reason: "Nothing is shown for this conversation" })
-    if (entry.preview.activity.kind !== "browser")
-      return sender.end({ kind: "failed", reason: "Only a browser tab's preview streams as video" })
+    if (entry.preview.activity.kind !== "browser" && !(entry.preview.activity.kind === "computer" && this.videoCapture))
+      return sender.end({ kind: "failed", reason: "Only a browser tab's preview streams as video here; an app's window needs Mako's desktop app" })
     const video = (entry.video ??= new PreviewVideo(() => this.paused(entry), this.videoOptions))
     this.videoStreams.set(stream, conversationId)
     video.watch(stream, box, {
@@ -224,21 +244,31 @@ export class ControlPreviews {
     }
   }
 
-  /** The tab the preview shows, for its remote viewers. */
+  /** The tab or window the preview shows, for its remote viewers. */
   private showVideo(entry: PreviewEntry) {
     const video = entry.video
     if (!video?.watched) return
+    if (entry.preview.activity.kind === "computer") {
+      const window = entry.preview.window
+      if (!window || !entry.authorize) return video.show(undefined)
+      const encoded = this.videoCapture?.window(window)
+      if (!encoded) return video.end({ kind: "failed", reason: "An app's window streams as video only while Mako's desktop app is open" })
+      return video.show({ key: JSON.stringify(["window", window.pid, window.windowId]), sources: { encoded } })
+    }
     const { target } = entry
     const owner = entry.owner ?? entry.preview.activity.conversationId
     if (!target || !entry.authorize) return video.show(undefined)
     video.show({
       key: JSON.stringify([owner, target]),
-      source: async (consumer) => {
-        const stop = await this.browser.previewStream(owner, target, () => {
-          if (entry.target !== target) throw new Error("Preview target changed")
-          entry.authorize?.()
-        }, consumer.frame, consumer.ended, consumer.size)
-        return { stop, resized: () => this.browser.previewResized(owner, target) }
+      sources: {
+        frames: async (consumer) => {
+          const stop = await this.browser.previewStream(owner, target, () => {
+            if (entry.target !== target) throw new Error("Preview target changed")
+            entry.authorize?.()
+          }, consumer.frame, consumer.ended, consumer.size)
+          return { stop, resized: () => this.browser.previewResized(owner, target) }
+        },
+        encoded: this.videoCapture?.tab(target),
       },
     })
   }
@@ -252,6 +282,7 @@ export class ControlPreviews {
     if (!entry || entry.preview.activity.kind !== "computer") return
     entry.preview.window = target
     entry.authorize = authorize
+    this.showVideo(entry)
   }
 
   /** The browser tab a conversation's preview shows, for a person to pick in. */
