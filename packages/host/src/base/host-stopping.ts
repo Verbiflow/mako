@@ -38,6 +38,17 @@ export interface HostProbes {
   run(file: string, args: readonly string[], options: ProbeOptions): Promise<{ stdout: string; stderr: string }>
   /** When `pid` started, as `ps -o lstart` says; every pid asked about in one turn is read by one `ps`. */
   startedAt(pid: number, signal?: AbortSignal): Promise<number>
+  /**
+   * Every running process's command name, as `lsof -c` matches it, read once for every probe that asks within a beat;
+   * undefined where it isn't read this way (only Linux reads it, from /proc, with no process started).
+   */
+  commands?(): Promise<RunningCommand[] | undefined>
+}
+
+/** A running process as `HostProbes.commands` reads it: its command name (`comm`) and the start of its command line. */
+export interface RunningCommand {
+  comm: string
+  args: string
 }
 
 /**
