@@ -17,7 +17,8 @@ const packageRoot = app ? join(app, "Contents/Resources/app.asar") : resolve("."
 const runtimeRoot = app ? join(packageRoot, "node_modules/@mako/control-runtime/dist") : join(packageRoot, "packages/control-runtime/dist")
 const { BrowserService } = await import(pathToFileURL(join(runtimeRoot, "browser-service.js")).href)
 const { extensionBrowsers } = await import(pathToFileURL(join(runtimeRoot, "browser-extension-registration.js")).href)
-const { mediaExecutable } = await import(pathToFileURL(join(runtimeRoot, "control-media.js")).href)
+// FFmpeg on PATH decodes the recording: a check, not something Mako ships.
+const mediaExecutable = (name) => name
 const hostRoot = app ? join(packageRoot, "node_modules/@mako/host/dist") : join(packageRoot, "packages/host/dist")
 const { startControlService } = await import(pathToFileURL(join(hostRoot, "control/service.js")).href)
 const root = await mkdtemp(join(tmpdir(), "mako-installed-browser-"))

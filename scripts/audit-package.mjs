@@ -34,10 +34,9 @@ export async function auditPackage(app, target, output) {
   await walk(app)
   const generated = entries.filter(({ path }) => /(^|\/)(__pycache__|\.git)(\/|$)|\.py[co]$/.test(path))
   assert.deepEqual(generated, [], "Generated development files leaked into the bundle")
-  for (const name of ["ffmpeg", "ffprobe"]) {
-    const binary = join(resources, "control-media", target, name)
-    assert.ok((await stat(binary)).isFile(), `Missing recording executable for ${target}: ${name}`)
-  }
+  // The video helper records and streams; no FFmpeg ships.
+  if (target.startsWith("darwin-")) assert.ok((await stat(join(app, "Contents/MacOS/mako-video"))).isFile(), `Missing the video helper for ${target}`)
+  assert.deepEqual(entries.filter(({ path }) => /(^|\/)(ffmpeg|ffprobe)$/.test(path)), [], "FFmpeg must not ship")
   const report = { target, app, bytes: entries.reduce((sum, file) => sum + file.bytes, 0), files: entries.length, largest: entries.sort((a, b) => b.bytes - a.bytes).slice(0, 25) }
   if (output) await writeFile(output, JSON.stringify(report, null, 2) + "\n")
   return report

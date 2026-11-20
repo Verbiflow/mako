@@ -3,7 +3,7 @@ import { existsSync } from "node:fs"
 import { isAbsolute } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { CaptureSize } from "./browser-capture.js"
-import type { EncodedVideoSource } from "./browser-video.js"
+import type { EncodedVideoSource, LiveEncoderFactory } from "./browser-video.js"
 import { CONTROL_VIDEO_DATA_LIMIT, decodeControlVideo, type ControlVideoPacket } from "./contracts/control-video.js"
 import { resolveExecutable } from "./executable.js"
 import { onLinux } from "./platform.js"
@@ -229,6 +229,32 @@ export function helperCapture(executable: string, source: Extract<VideoHelperSou
       key: () => helper.key(),
       resized: async () => helper.box(consumer.size()),
       stop: async () => helper.close(),
+    }
+  }
+}
+
+/**
+ * The screencast's JPEGs encoded by the helper's `frames` mode (VideoToolbox on a Mac, OpenH264 on Linux): one
+ * process per encoder, a unit back for each picture with its sequence and capture time.
+ */
+export function helperLiveEncoder(executable: string): LiveEncoderFactory {
+  return (size, fps, unit, drained, failed) => {
+    const helper = new VideoHelper(executable, { kind: "frames" }, { fps, box: size }, {
+      unit: (packet) => {
+        unit(packet)
+        drained()
+      },
+      ended: failed,
+    })
+    return {
+      ready: () => helper.ready,
+      submit(frame) {
+        helper.picture("jpeg", frame.sequence, frame.capturedAt, frame.bytes, undefined, (error) => {
+          if (error) return failed(error.message)
+          drained()
+        })
+      },
+      close: () => helper.close(),
     }
   }
 }

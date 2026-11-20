@@ -21,19 +21,15 @@ export async function installedControlAudit(sessionFile) {
   const descriptor = await readControlSession(sessionFile)
   const call = command => invokeControlSession(descriptor, { method: "call", command }, AbortSignal.timeout(30000))
   const modules = {}
-  for (const name of ["control-media", "control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process", "mov-video-input"]) {
+  for (const name of ["video-helper", "mp4", "control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process"]) {
     const path = `node_modules/@mako/control-runtime/dist/${name}.js`
     const bytes = extractFile(`${app}/Contents/Resources/app.asar`, path)
     assert.ok(bytes.equals(await readFile(`packages/control-runtime/dist/${name}.js`)), `Installed ${name} must match reviewed build`)
     modules[name] = createHash("sha256").update(bytes).digest("hex")
   }
-  const mediaRoot = `${app}/Contents/Resources/control-media/darwin-arm64`
-  const media = JSON.parse(await readFile(`${mediaRoot}/provenance.json`, "utf8"))
-  // Signing changes Mach-O bytes. Provenance records pre-sign hashes; the strict
-  // bundle signature above verifies deployed bytes. Record both, never equate them.
-  const signedMediaHashes = {}
-  for (const name of Object.keys(media.binaries))
-    signedMediaHashes[name] = createHash("sha256").update(await readFile(`${mediaRoot}/${name}`)).digest("hex")
+  // The video helper records; signing changes its Mach-O bytes, so its deployed hash is recorded, never equated to a build's.
+  const media = { helper: createHash("sha256").update(await readFile(`${app}/Contents/MacOS/mako-video`)).digest("hex") }
+  const signedMediaHashes = { "mako-video": media.helper }
   let ownedTarget
   return {
     socket: runtime.socket, client,

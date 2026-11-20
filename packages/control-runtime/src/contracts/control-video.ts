@@ -25,7 +25,7 @@ const HEADER = 24
 export const CONTROL_VIDEO_DESCRIPTION_LIMIT = 4096
 export const CONTROL_VIDEO_DATA_LIMIT = 4 * 1024 * 1024
 
-/** The most bits a second live video spends at a size and rate, whichever encoder makes it: FFmpeg's cap and WebCodecs' target. */
+/** The most bits a second live video spends at a size and rate, whichever encoder makes it: the helper's cap and WebCodecs' target. */
 export function liveVideoBitrate(size: { width: number; height: number }, fps: number): number {
   return Math.round(Math.min(8_000_000, Math.max(400_000, size.width * size.height * fps * 0.08)))
 }

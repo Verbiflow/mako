@@ -46,12 +46,11 @@ if (process.versions.electron) {
   }
   const root = await mkdtemp(join(tmpdir(), "mako-preview-latency-"))
   const identityPaths = [
-    ...(runtimeApp ? [join(runtimeApp, "Contents/Resources/app.asar"),
-      ...["ffmpeg", "ffprobe"].map(name => join(runtimeApp, "Contents/Resources/control-media/darwin-arm64", name))] : []),
-    ...["control-media", "control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process", "mov-video-input"].flatMap(name => [
+    ...(runtimeApp ? [join(runtimeApp, "Contents/Resources/app.asar"), join(runtimeApp, "Contents/MacOS/mako-video")] : []),
+    ...["video-helper", "mp4", "control-recording", "recording-render", "recording-encoder", "recording-encoder-worker", "recording-encoder-process"].flatMap(name => [
       `packages/control-runtime/src/${name}.ts`, `packages/control-runtime/dist/${name}.js`,
     ]),
-    ...(process.env.MAKO_CONTROL_MEDIA_ROOT ? [join(process.env.MAKO_CONTROL_MEDIA_ROOT, "ffmpeg"), join(process.env.MAKO_CONTROL_MEDIA_ROOT, "ffprobe")] : []),
+    ...(process.env.MAKO_VIDEO_HELPER ? [process.env.MAKO_VIDEO_HELPER] : []),
     "src/components/inspector/control-preview-image.tsx",
     "src/lib/control-preview-painter.ts", "src/lib/control-preview-decoder.ts",
     "packages/host/dist/control/previews.js", "packages/host/dist/transport/connection.js",
@@ -626,8 +625,8 @@ async function audit() {
         hostEventLoopMs: host?.eventLoopMs,
       })
       const resources = await processResources(resourceRoots)
-      resources.encoder = (resources.installedHostTree ?? resources.hostAndEncoder ?? resources.fixtureIncludingHost).filter((row) => row.executable.endsWith("/ffmpeg"))
-      if (installed) resources.installedHostAndEncoder = resources.installedHostTree.filter(row => row.pid === installed.hostPid || row.executable.endsWith("/ffmpeg"))
+      resources.encoder = (resources.installedHostTree ?? resources.hostAndEncoder ?? resources.fixtureIncludingHost).filter((row) => row.executable.endsWith("/mako-video"))
+      if (installed) resources.installedHostAndEncoder = resources.installedHostTree.filter(row => row.pid === installed.hostPid || row.executable.endsWith("/mako-video"))
       resourceSamples.push(resources)
     }
     await sampleMemory()

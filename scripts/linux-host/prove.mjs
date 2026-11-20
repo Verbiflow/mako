@@ -4,12 +4,12 @@ import { randomUUID } from "node:crypto"
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises"
 import { createRequire } from "node:module"
 import { arch, homedir, release } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 import { BrowserService, BrowserVideo } from "@mako/control-runtime/browser"
 import { BrowserCommandSchema, BrowserTargetSchema, decodeControlVideo } from "@mako/control-runtime/contracts"
-import { MACHINE_BROWSER_ID, MachineBrowser } from "@mako/control-runtime/desktop"
+import { MACHINE_BROWSER_ID, MachineBrowser, MachineTabVideo, writeMachineCaptureExtension } from "@mako/control-runtime/desktop"
 import { classifyStartFailure } from "@mako/host/contracts/provider-failure"
 import { othersRunning, sharedDaemon, startHost, until } from "./host-process.mjs"
 
@@ -103,10 +103,15 @@ try {
   assert.ok(launched.length && !launched.some(({ args }) => args.includes("--no-sandbox")), "Chromium runs in its sandbox")
   passed("the machine's browser starts on an agent's first connect", { ms: connectMs, note: `connected in ${connectMs} ms, sandboxed` })
 
-  // A page in that browser as remote viewers see it, through the FFmpeg the image built, as the host finds it.
-  const media = join(program, "../../../../vendor/control-media/linux-x64")
-  process.env.MAKO_CONTROL_MEDIA_ROOT = media
-  const machine = new MachineBrowser({ executable: "/usr/bin/chromium", profile: join(dataRoot, "proof-browser") })
+  // A page in that browser as remote viewers see it, as the host streams it: encoded inside that Chromium by the capture
+  // extension the host builds, with the screencast's first frame as the poster. No FFmpeg is installed.
+  const capturePage = await readFile(join(dirname(program), "control/machine-capture.page.mjs"), "utf8")
+  const machine = new MachineBrowser({
+    executable: "/usr/bin/chromium",
+    profile: join(dataRoot, "proof-browser"),
+    captureExtension: () => writeMachineCaptureExtension(join(dataRoot, "proof-browser-capture"), capturePage),
+  })
+  const capture = new MachineTabVideo(() => machine.definition.endpoint())
   const browser = new BrowserService([machine.definition])
   const command = (input) => browser.execute("proof", BrowserCommandSchema.parse(input), AbortSignal.timeout(30_000))
   try {
@@ -116,10 +121,8 @@ try {
     assert.ok(!navigation?.fault, `the page loads: ${JSON.stringify(navigation?.fault)}`)
     const target = BrowserTargetSchema.parse(opened)
     const video = new BrowserVideo({
-      frames: async ({ frame, ended, size }) => ({
-        stop: await browser.previewStream("proof", target, () => {}, frame, ended, size),
-        resized: () => browser.previewResized("proof", target),
-      }),
+      encoded: capture.source(target.tab),
+      poster: (size) => browser.previewPoster("proof", target, () => {}, size),
     })
     const packets = []
     const joined = performance.now()
@@ -133,14 +136,21 @@ try {
     await leave()
     video.close()
     const key = packets.find((packet) => packet.kind === "key")
-    assert.equal(packets[0].kind, "poster", "a viewer paints the screencast's picture first")
+    assert.equal(packets[0].kind, "poster", "a viewer paints the tab's picture first")
     assert.ok(key && key.width <= 640 && key.height <= 400, `the video fits the viewer: ${key?.width}x${key?.height}`)
-    passed("a page in that browser streams as H.264", { note: `poster in ${Math.round(packets[0].at)} ms, key frame ${key.width}x${key.height} in ${Math.round(key.at)} ms, then deltas` })
+    passed("a page in that browser streams as H.264 from its own WebCodecs", { note: `poster in ${Math.round(packets[0].at)} ms, key frame ${key.width}x${key.height} in ${Math.round(key.at)} ms, then deltas` })
   } finally {
+    capture.close()
     browser.close()
     machine.close()
   }
   await until(() => chromium("proof-browser"), (left) => left.length === 0, "the proof's Chromium to exit", 10_000)
+
+  // The video helper, on PATH, linked against the image's libraries, and no FFmpeg beside it.
+  const usage = await promisify(execFile)("mako-video", []).then(() => "", (error) => String(error.stderr))
+  assert.match(usage, /usage: mako-video/, "the video helper runs")
+  assert.equal(await promisify(execFile)("sh", ["-c", "command -v ffmpeg ffprobe"]).then(({ stdout }) => stdout.trim(), () => ""), "", "no FFmpeg is installed")
+  passed("the video helper is installed, and no FFmpeg")
 
   // Each harness, started as a window starts one, to ready or signed out.
   const installed = JSON.parse(await readFile(join(homedir(), "harnesses.json"), "utf8"))

@@ -7,9 +7,22 @@ COPY . .
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
     && test -x node_modules/.bin/mako-control
 
-FROM node:24-bookworm-slim AS base
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certificates fonts-noto-cjk fonts-noto-color-emoji \
+# Mako's video helper (native/video-linux/mako-video.c, which the release
+# context carries as video/mako-video.c): recordings and live video, encoded
+# with Debian's OpenH264 rather than FFmpeg.
+FROM node:24-bookworm-slim AS video
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config \
+      libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcomposite-dev libopenh264-dev libyuv-dev libturbojpeg0-dev \
     && rm -rf /var/lib/apt/lists/*
+COPY video/mako-video.c /build/
+RUN gcc -O2 -Wall -Werror -o /build/mako-video /build/mako-video.c \
+      $(pkg-config --cflags --libs x11 xext xdamage xfixes xcomposite openh264 libturbojpeg) -lyuv -lm
+
+FROM node:24-bookworm-slim AS base
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates fonts-noto-cjk fonts-noto-color-emoji \
+      libopenh264-7 libyuv0 libturbojpeg0 libx11-6 libxext6 libxdamage1 libxfixes3 libxcomposite1 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=video /build/mako-video /usr/local/bin/mako-video
 WORKDIR /opt/mako-control
 ENTRYPOINT ["node", "/opt/mako-control/node_modules/@mako/control-runtime/dist/cloud-control-main.js"]
 
@@ -17,8 +30,9 @@ FROM base AS browser-os
 RUN apt-get update && apt-get install -y --no-install-recommends chromium \
     && rm -rf /var/lib/apt/lists/*
 
+# The shared driver records a native window through an FFmpeg on PATH on Linux; Mako draws its pointer with it too.
 FROM base AS native-os
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     libxkbcommon0 libx11-6 libxi6 libxtst6 libxext6 libssl3 libgtk-3-0 \
     dbus-x11 xvfb openbox xauth at-spi2-core \
     && rm -rf /var/lib/apt/lists/*

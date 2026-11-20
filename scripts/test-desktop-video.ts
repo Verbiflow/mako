@@ -1,7 +1,7 @@
 /**
  * Live video the desktop app encodes, as the host sees it, with the desktop channel scripted
  * (`packages/host/src/control/desktop-video.ts`): the screencast's frames sent to the desktop's encoder, at most four
- * out, and FFmpeg taking over when no desktop answers or its encoder won't open; a capture the
+ * out, and the fallback taking over when no desktop answers or its encoder won't open; a capture the
  * desktop encodes (`EncodedVideoSource`) joined by `BrowserVideo`, which asks it for key frames rather than restarting
  * an encoder, and falls back to the screencast when the capture can't start or stops; and an app window's preview
  * streamed to a remote viewer through the capture, which only a desktop app can make.
@@ -86,7 +86,7 @@ const frame = (sequence: number, width = 640, height = 360): VideoSourceFrame =>
   const units: ControlVideoPacket[] = []
   let drained = 0
   const failures: string[] = []
-  const encoder = desktopLiveEncoder(channel, () => assert.fail("FFmpeg encoded though the desktop could"))({ width: 640, height: 360 }, 30, (unit) => units.push(unit), () => drained++, (reason) => failures.push(reason))
+  const encoder = desktopLiveEncoder(channel, () => assert.fail("the fallback encoded though the desktop could"))({ width: 640, height: 360 }, 30, (unit) => units.push(unit), () => drained++, (reason) => failures.push(reason))
   assert.equal(encoder.ready(), false, "nothing is sent before the encoder opened")
   await settle()
   assert.deepEqual(channel.sessions("live-video-open")[0]?.params, { session: channel.session, source: { kind: "frames" }, fps: 30, box: null })
@@ -117,7 +117,7 @@ const frame = (sequence: number, width = 640, height = 360): VideoSourceFrame =>
   assert.equal(channel.sessions("live-video-close").length, 0, "an ended session isn't closed again")
 }
 
-// No desktop answering, or its encoder not opening: FFmpeg encodes, and the video never hears of it.
+// No desktop answering, or its encoder not opening: the fallback encodes, and the video never hears of it.
 {
   const fallbackUnits: ControlVideoPacket[] = []
   let fallbacks = 0
@@ -145,13 +145,13 @@ const frame = (sequence: number, width = 640, height = 360): VideoSourceFrame =>
   let drained = 0
   const encoder = factory({ width: 640, height: 360 }, 30, (unit) => fallbackUnits.push(unit), () => drained++, () => assert.fail("a refused open isn't a failure"))
   await settle()
-  assert.equal(fallbacks, 2, "FFmpeg takes over the encode")
+  assert.equal(fallbacks, 2, "the fallback takes over the encode")
   assert.equal(drained, 1, "and the video is told it can send")
   assert.ok(encoder.ready())
   encoder.submit(frame(7))
   assert.deepEqual(fallbackUnits.map((unit) => unit.sequence), [7])
   factory({ width: 640, height: 360 }, 30, () => {}, () => {}, () => {})
-  assert.equal(fallbacks, 3, "for a while after, FFmpeg encodes without asking the desktop again")
+  assert.equal(fallbacks, 3, "for a while after, the fallback encodes without asking the desktop again")
   assert.equal(refusing.sessions("live-video-open").length, 1)
 }
 
@@ -392,4 +392,4 @@ const browserFrame = (): BrowserFrame => ({ bytes: Buffer.from([0xff, 0xd8]), wi
   without.close()
 }
 
-console.log("Desktop video: frames to the desktop's encoder with backpressure and drops, FFmpeg when it can't, captures opened, keyed, resized and closed, BrowserVideo over a capture with key asks, recovery and the screencast taking over, and app windows streamed to remote viewers passed")
+console.log("Desktop video: frames to the desktop's encoder with backpressure and drops, the fallback when it can't, captures opened, keyed, resized and closed, BrowserVideo over a capture with key asks, recovery and the screencast taking over, and app windows streamed to remote viewers passed")

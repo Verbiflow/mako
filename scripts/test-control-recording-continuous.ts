@@ -9,7 +9,6 @@ import {
   readFile,
   readdir,
   stat,
-  symlink,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -17,6 +16,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import sharp from "sharp"
 import { ControlRecording } from "../packages/control-runtime/src/control-recording.js"
 import { resolveExecutable } from "../packages/control-runtime/src/executable.js"
+import { videoHelperExecutable } from "../packages/control-runtime/src/video-helper.js"
 
 const execute = promisify(execFile)
 const root = await mkdtemp(join(tmpdir(), "mako-continuous-recording-"))
@@ -138,17 +138,17 @@ const tools = join(root, "tools")
 await mkdir(tools)
 const pidFile = join(tools, "encoder.pid")
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'"
+const helper = videoHelperExecutable() ?? assert.fail("This check needs the video helper (scripts/build-video-helper.mjs)")
 await writeFile(
-  join(tools, "ffmpeg"),
+  join(tools, "mako-video"),
   `#!/bin/sh
-if [ "$2" != "-encoders" ]; then printf '%s\\n' "$$" > ${quote(pidFile)}; fi
-exec ${quote(ffmpeg)} "$@"
+printf '%s\\n' "$$" > ${quote(pidFile)}
+exec ${quote(helper)} "$@"
 `,
   { mode: 0o700 }
 )
-await symlink(ffprobe, join(tools, "ffprobe"))
-const previousRoot = process.env.MAKO_CONTROL_MEDIA_ROOT
-process.env.MAKO_CONTROL_MEDIA_ROOT = tools
+const previousHelper = process.env.MAKO_VIDEO_HELPER
+process.env.MAKO_VIDEO_HELPER = join(tools, "mako-video")
 let crashResult
 try {
   const crashed = await ControlRecording.create(
@@ -157,7 +157,10 @@ try {
     async () => {}
   )
   await crashed.frame(frame, width, height)
-  await delay(3500)
+  // A unit is on disk once the next gives its duration.
+  await delay(500)
+  await crashed.frame(await sharp(pixels, { raw: { width, height, channels: 3 } }).negate().jpeg().toBuffer(), width, height)
+  await delay(3000)
   const beforeKill = JSON.parse(
     (
       await execute(ffprobe, [
@@ -192,8 +195,8 @@ try {
   assert.equal(journal[0].version, 4)
   assert.equal(journal.at(-1).end.status, "interrupted")
 } finally {
-  if (previousRoot === undefined) delete process.env.MAKO_CONTROL_MEDIA_ROOT
-  else process.env.MAKO_CONTROL_MEDIA_ROOT = previousRoot
+  if (previousHelper === undefined) delete process.env.MAKO_VIDEO_HELPER
+  else process.env.MAKO_VIDEO_HELPER = previousHelper
 }
 
 // No-transform native output must survive byte-for-byte, not merely look similar.

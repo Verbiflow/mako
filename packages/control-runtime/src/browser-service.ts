@@ -1981,7 +1981,7 @@ export class BrowserService {
                 ? "emulated for the tab lease; never activates the tab"
                 : "emulated during capture; disabled after the last consumer; never activates the tab",
             cursor: "dispatched-pointer",
-            requires: ["ffmpeg", "ffprobe"],
+            requires: ["mako-video"],
             completion: "record().stop() then recording.status()",
           },
           taskGroups: extension,

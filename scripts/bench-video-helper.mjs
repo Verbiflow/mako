@@ -1,6 +1,6 @@
 // The Linux video helper (native/video-linux/mako-video.c) against FFmpeg's x11grab and libx264 (Mako's live video
 // arguments), on an Xvfb screen with a plain Xlib app. Runs on Linux with the helper's build dependencies, Xvfb and,
-// for the `ffmpeg` mode and the decode check, FFmpeg; scripts/bench-video-helper.sh runs it in a container. One JSON
+// for the `ffmpeg` mode and the decode check, FFmpeg; run it in a container with the helper's build dependencies. One JSON
 // line per case.
 //
 //   node scripts/bench-video-helper.mjs '{"mode":"helper|window|ffmpeg|none","width":1280,"height":800,"fps":30,"seconds":12,"scene":"moving|still"}'
@@ -62,7 +62,11 @@ if (mode === "helper" || mode === "window") {
     return JSON.parse(summary.trim().split("\n").at(-1))
   }
 } else if (mode === "ffmpeg") {
-  const { liveVideoEncoding } = await import("../packages/control-runtime/dist/control-media.js")
+  // The arguments Mako's FFmpeg live encoder used before the helper replaced it.
+  const liveVideoEncoding = (size, rate) => {
+    const bits = String(liveVideoBitrate(size, rate))
+    return ["-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency", "-pix_fmt", "yuv420p", "-x264-params", "keyint=infinite", "-crf", "23", "-maxrate", bits, "-bufsize", bits]
+  }
   encoder = spawn("ffmpeg", ["-hide_banner", "-loglevel", "error", "-nostdin", "-f", "x11grab", "-draw_mouse", "0", "-framerate", String(fps), "-video_size", `${width}x${height}`, "-i", ":99",
     ...(box ? ["-vf", `scale=${box.width}:${box.height}:force_original_aspect_ratio=decrease`] : []), ...liveVideoEncoding(box ?? { width, height }, fps), "-f", "h264", "pipe:1"], { env, stdio: ["ignore", "pipe", "inherit"] })
   encoder.stdout.on("data", (data) => (bytes += data.length))
