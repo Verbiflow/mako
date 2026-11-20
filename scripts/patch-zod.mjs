@@ -7,6 +7,13 @@
 // `zod/mini`'s; the host's import heap from 137 MB to 87 MB, the same schemas. A method is still each schema's own
 // function once it's asked for, so detached use (`const { parse } = schema`) works as it did.
 //
+// Then (`LAZY`) what still made each schema large: V8 kept every one as a dictionary, several times the size of an
+// object with a shared shape, as each had accessors of its own with closures of its own (zod's lazy properties,
+// `description`, and the `~standard` the first part redefined). Those accessors move to prototypes, each object's
+// getters kept beside it; a schema's `_zod` gets a prototype of its own to hold its lazy ones; `~standard` takes its
+// JSON schema methods as it's made; and the closures a schema's construction ran aren't kept after. A `z.string()` goes
+// from 2.0 KB to 1.2 KB, and every schema stays a fast object; what each reads, parses and says is as before.
+//
 // Only the ES module build changes: nothing here requires zod's CommonJS one, and a package that does gets zod as it
 // shipped. The patch is for one version: another prints why it's skipped, and `test:zod-patch` fails until it's ported.
 import { lstatSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
@@ -35,9 +42,14 @@ if (version !== VERSION) {
   console.warn(`patch-zod: zod ${version} isn't ${VERSION}, which this patch was written for; schemas keep their per-instance methods`)
   process.exit(0)
 }
-const file = join(root, "v4/classic/schemas.js")
-const source = readFileSync(file, "utf8")
-if (source.startsWith(MARK)) process.exit(0)
+/** Writes `file` as `head`, `LAZY` and `source` changed by `change`, unless it carries `LAZY` already. */
+function patchFile(path, head, source, change) {
+  if (source.startsWith(`${LAZY}\n`)) {
+    if (`${head}${source}` !== readFileSync(path, "utf8")) writeFileSync(path, `${head}${source}`)
+    return
+  }
+  writeFileSync(path, `${head}${LAZY}\n${change(source)}`)
+}
 
 /** `source` with `before` replaced, which must be there exactly once. */
 function replaceOnce(text, before, after) {
@@ -54,6 +66,8 @@ const ALIAS = /^ {4}inst\.([A-Za-z0-9]+) = inst\.([A-Za-z0-9]+);$/
 const LOCAL = /(?<![.\w])(def|bag|c)\b/
 const CONSTRUCTOR = /^export const \w+ = \/\*@__PURE__\*\/ core\.\$constructor\("(\w+)"/
 
+/** The classic schemas with zod's methods bound on first use, as its builder methods are. */
+function bindMethods(source) {
 const out = []
 let name
 let methods = []
@@ -165,4 +179,203 @@ patched = replaceOnce(patched, `    Object.assign(inst["~standard"], {
         toJSONSchema(params) { return createToJSONSchemaMethod(this, {})(params); },
     });`)
 if (moved < 75) throw new Error(`patch-zod: only ${moved} methods matched; zod ${VERSION}'s classic schemas aren't as this patch expects`)
-writeFileSync(file, `${MARK}\n${patched}`)
+return patched
+}
+
+
+/** What `bindMethods` made `~standard`: its accessor redefined on every schema, which left each a dictionary. */
+const STANDARD_REDEFINED = `    const standard = Object.getOwnPropertyDescriptor(inst, "~standard");
+    if (standard && standard.get) {
+        const made = standard.get;
+        let value;
+        Object.defineProperty(inst, "~standard", {
+            configurable: true,
+            enumerable: false,
+            get() {
+                if (value === undefined) {
+                    value = made.call(inst);
+                    if (value)
+                        Object.assign(value, { jsonSchema: { input: createStandardJSONSchemaMethod(inst, "input"), output: createStandardJSONSchemaMethod(inst, "output") } });
+                }
+                return value;
+            },
+            set: standard.set,
+        });
+    }
+`
+
+/** Classic: `~standard`'s JSON schema methods added as zod's core makes it (`lazyStandard`), and `description` and a literal's `value` read on the prototype. */
+function lazyClassic(source) {
+  let patched = replaceOnce(source, STANDARD_REDEFINED, "")
+  patched = replaceOnce(patched, `export const ZodType = /*@__PURE__*/ core.$constructor("ZodType", (inst, def) => {`, `// Each schema's \`~standard\` with its JSON schema methods, added as core makes it on first read.
+core.$standardExtras.add = (inst, value) => Object.assign(value, { jsonSchema: { input: createStandardJSONSchemaMethod(inst, "input"), output: createStandardJSONSchemaMethod(inst, "output") } });
+export const ZodType = /*@__PURE__*/ core.$constructor("ZodType", (inst, def) => {`)
+  // A literal's \`value\`, read from the schema's own definition by one getter on its prototype.
+  patched = replaceOnce(patched, `    Object.defineProperty(inst, "value", {
+        get() {
+            if (def.values.length > 1) {
+                throw new Error("This schema contains multiple valid literal values. Use \`.values\` instead.");
+            }
+            return def.values[0];
+        },
+    });`, `    const proto = Object.getPrototypeOf(inst);
+    if (!Object.prototype.hasOwnProperty.call(proto, "value"))
+        Object.defineProperty(proto, "value", {
+            get() {
+                const values = this._zod.def.values;
+                if (values.length > 1) {
+                    throw new Error("This schema contains multiple valid literal values. Use \`.values\` instead.");
+                }
+                return values[0];
+            },
+        });`)
+  return replaceOnce(patched, `    Object.defineProperty(inst, "description", {
+        get() {
+            return core.globalRegistry.get(inst)?.description;
+        },
+        configurable: true,
+    });
+    return inst;`, `    // One getter on the schema's prototype for every schema of it, rather than one for each.
+    const proto = Object.getPrototypeOf(inst);
+    if (!Object.prototype.hasOwnProperty.call(proto, "description"))
+        Object.defineProperty(proto, "description", {
+            get() {
+                return core.globalRegistry.get(this)?.description;
+            },
+            configurable: true,
+        });
+    return inst;`)
+}
+
+/**
+ * Core's `defineLazy`: the accessor on the object's prototype, made once for each key there, and each object's getter
+ * and value kept beside it in a WeakMap, read as the accessor of its own read them: once, `undefined` read again, a
+ * getter reading itself `undefined`, a set value the object's own. An object whose prototype isn't one of its kind's
+ * (a plain object, an array), or that has the key already, gets its own accessor as before.
+ */
+function lazyUtil(source) {
+  return replaceOnce(source, `export function defineLazy(object, key, getter) {
+    let value = undefined;`, `const lazyGetters = new WeakMap();
+const lazyKeys = new WeakMap();
+const sharedPrototype = (proto) => proto === null || proto === Object.prototype || proto === Function.prototype || proto === Array.prototype;
+export function defineLazy(object, key, getter) {
+    const proto = Object.getPrototypeOf(object);
+    if (sharedPrototype(proto) || Object.prototype.hasOwnProperty.call(object, key))
+        return defineOwnLazy(object, key, getter);
+    let keys = lazyKeys.get(proto);
+    if (!keys) {
+        keys = new Set();
+        lazyKeys.set(proto, keys);
+    }
+    if (!keys.has(key)) {
+        if (Object.prototype.hasOwnProperty.call(proto, key))
+            return defineOwnLazy(object, key, getter);
+        keys.add(key);
+        Object.defineProperty(proto, key, {
+            get() {
+                const table = lazyGetters.get(this);
+                const entry = table?.[key];
+                if (entry === undefined || entry === EVALUATING)
+                    return undefined;
+                if (typeof entry !== "function")
+                    return entry.value;
+                table[key] = EVALUATING;
+                const value = entry();
+                table[key] = value === undefined ? entry : { value };
+                return value;
+            },
+            set(v) {
+                Object.defineProperty(this, key, {
+                    value: v,
+                });
+            },
+            configurable: true,
+        });
+    }
+    let table = lazyGetters.get(object);
+    if (!table) {
+        table = Object.create(null);
+        lazyGetters.set(object, table);
+    }
+    table[key] = getter;
+}
+function defineOwnLazy(object, key, getter) {
+    let value = undefined;`)
+}
+
+/** Core's constructor: every schema's \`_zod\` on one prototype, which holds their lazy properties; and its run closures let go. */
+function lazyCore(source) {
+  let patched = replaceOnce(source, `export /*@__NO_SIDE_EFFECTS__*/ function $constructor(name, initializer, params) {`, `/** The prototype of every schema's \`_zod\`, where its lazy properties are (\`defineLazy\`). */
+export const $internals = {};
+/** What a wrapping build adds to each schema's \`~standard\` as it's made: classic's JSON schema methods. */
+export const $standardExtras = {};
+export /*@__NO_SIDE_EFFECTS__*/ function $constructor(name, initializer, params) {`)
+  patched = replaceOnce(patched, `            Object.defineProperty(inst, "_zod", {
+                value: {
+                    def,
+                    constr: _,
+                    traits: new Set(),
+                },
+                enumerable: false,
+            });`, `            const internals = Object.create($internals);
+            internals.def = def;
+            internals.constr = _;
+            internals.traits = new Set();
+            Object.defineProperty(inst, "_zod", {
+                value: internals,
+                enumerable: false,
+            });`)
+  return replaceOnce(patched, `        for (const fn of inst._zod.deferred) {
+            fn();
+        }
+        return inst;`, `        for (const fn of inst._zod.deferred) {
+            fn();
+        }
+        // Only a schema's construction runs them, and they've run: their closures needn't stay with it.
+        inst._zod.deferred.length = 0;
+        return inst;`)
+}
+
+/** Core's \`~standard\`, with what a wrapping build adds to it (\`$standardExtras\`), made on first read as before. */
+function lazyStandard(source) {
+  return replaceOnce(source, `    util.defineLazy(inst, "~standard", () => ({
+        validate: (value) => {
+            try {
+                const r = safeParse(inst, value);
+                return r.success ? { value: r.data } : { issues: r.error?.issues };
+            }
+            catch (_) {
+                return safeParseAsync(inst, value).then((r) => (r.success ? { value: r.data } : { issues: r.error?.issues }));
+            }
+        },
+        vendor: "zod",
+        version: 1,
+    }));
+});`, `    util.defineLazy(inst, "~standard", () => {
+        const standard = {
+            validate: (value) => {
+                try {
+                    const r = safeParse(inst, value);
+                    return r.success ? { value: r.data } : { issues: r.error?.issues };
+                }
+                catch (_) {
+                    return safeParseAsync(inst, value).then((r) => (r.success ? { value: r.data } : { issues: r.error?.issues }));
+                }
+            },
+            vendor: "zod",
+            version: 1,
+        };
+        return core.$standardExtras.add ? core.$standardExtras.add(inst, standard) : standard;
+    });
+});`)
+}
+
+const LAZY = "/* mako: lazy properties on prototypes (scripts/patch-zod.mjs) */"
+const file = join(root, "v4/classic/schemas.js")
+const installed = readFileSync(file, "utf8")
+/** The classic schemas with their methods bound on first use: as zod ships them, moved, or as an earlier run left them. */
+const methodsBound = installed.startsWith(MARK) ? installed.slice(MARK.length + 1) : bindMethods(installed)
+patchFile(file, `${MARK}\n`, methodsBound, lazyClassic)
+patchFile(join(root, "v4/core/util.js"), "", readFileSync(join(root, "v4/core/util.js"), "utf8"), lazyUtil)
+patchFile(join(root, "v4/core/core.js"), "", readFileSync(join(root, "v4/core/core.js"), "utf8"), lazyCore)
+patchFile(join(root, "v4/core/schemas.js"), "", readFileSync(join(root, "v4/core/schemas.js"), "utf8"), lazyStandard)
