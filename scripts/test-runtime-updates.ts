@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { updateFailureWords, type HarnessUpdates } from "@mako/host/contracts/harness-updates"
@@ -529,6 +529,46 @@ try {
   assert.equal(unsupported.result?.outcome, "failed")
   assert.match(unsupported.result?.message ?? "", /does not support this installed version/)
   retiredService.stop()
+
+  // The builds an installer left beside the executable that it never runs go once it exits cleanly, before the
+  // executable is read again (OpenCode's npm package downloads every one for the OS and CPU and runs one).
+  const builds = await mkdtemp(join(tmpdir(), "mako-unused-builds-"))
+  const leftBehind = [join(builds, "cli-linux-x64-baseline"), join(builds, "cli-linux-x64-musl")]
+  const pruned = fake()
+  pruned.onRun = () => {
+    pruned.binaries.devin = devinBinary
+    pruned.versions[devinBinary] = "devin 3000.11.3"
+    pruned.stats[devinBinary] = { mtimeMs: 4, size: 4 }
+  }
+  let readAfterDrop: boolean | undefined
+  const prunedService = new RuntimeUpdates({
+    processes,
+    sources: () => [{ ...devin, binary: () => pruned.binaries.devin, unusedBuilds: (executable) => (executable === devinBinary ? leftBehind : []) }],
+    path: join(dir, "pruned.json"),
+    env: () => ({ PATH: "/usr/bin" }),
+    emit: () => undefined,
+    version: async (binary) => {
+      if (pruned.binaries.devin) readAfterDrop ??= !(await Promise.all(leftBehind.map((folder) => readFile(join(folder, "build"), "utf8").then(() => true, () => false)))).some(Boolean)
+      return pruned.versions[binary] ?? Promise.reject(new Error("missing"))
+    },
+    run: async () => {
+      for (const folder of leftBehind) {
+        await mkdir(folder, { recursive: true })
+        await writeFile(join(folder, "build"), "an unused build")
+      }
+      pruned.onRun?.()
+      return { code: 0, output: "installed" }
+    },
+    stat: async (path) => pruned.stats[path] ?? Promise.reject(new Error("ENOENT")),
+    realpath: async (path) => path,
+    now: () => pruned.clock,
+  })
+  await prunedService.refresh()
+  const prunedInstall = await prunedService.install("devin")
+  assert.equal(prunedInstall.result?.outcome, "installed")
+  assert.equal(readAfterDrop, true, "the executable is read after its unused builds went")
+  prunedService.stop()
+  await rm(builds, { recursive: true, force: true })
 
   // A pinned build its vendor withdrew: the install says which harness and version, and what to do, never the
   // installer's bare HTTP error. A failure that names no withdrawn build keeps the installer's words.
