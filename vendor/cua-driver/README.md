@@ -3,9 +3,46 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.26`. +26 is +25 with `0004-stable-wayland-seat-pointer.patch`
+`0.28.2+mako.27`. +27 is +26 with `0005-windows-driver.patch` and the
+version. +26 is +25 with `0004-stable-wayland-seat-pointer.patch`
 and the version. +25 is +24 with `0003-transport-scoped-snapshots.patch`
 and the version.
+
+### 0005: the Windows driver
+
+Upstream's `platform-windows` is the same driver on Windows: the same tools,
+daemon protocol, element tokens, transport-scoped snapshots and embedded
+mode, with UI Automation for the tree and actions, Windows Graphics Capture
+and PrintWindow for pictures, PostMessage for background input and SendInput
+for foreground input. Mako had never built it. Four changes make it build and
+meet Mako's contract; none touches macOS or Linux code.
+
+- The patch's switch of the X11 recorder to `X11VideoBackendFactory` had also
+  replaced the Windows recorder, which does not compile on Windows. Windows
+  records with upstream's FFmpeg backend again.
+- Exact values, as `0001-lossless-values.patch` gives the Mac and the Linux
+  build gives AT-SPI: a ValuePattern control's value is sent as UI Automation
+  holds it, empty and whitespace included, with `value_exact: true`, and Mako's
+  runtime compares it with what it wrote. Without it every `expect({value})`
+  was refused as display-normalized text. A Win32 edit or rich edit without a
+  ValuePattern (Windows 11 Notepad's editor) is read whole through TextPattern,
+  up to 100,000 UTF-16 units, the AT-SPI limit; a longer text is cut and not
+  exact. A browser's Document is never read this way. Password fields are never
+  read.
+- A foreground `hotkey` to a XAML host (Notepad, Terminal, Calculator) is sent
+  through SendInput as the caller asked. It used to take the background
+  accelerator scan, which refuses any chord the window has no named button for.
+- Background typing posts a character past U+FFFF (an emoji, a CJK
+  extension) as its UTF-16 surrogate pair, as a keyboard does. Its whole code
+  point in one `WM_CHAR` was dropped by every Unicode window.
+
+`node scripts/package-control-driver-windows.mjs <checkout>` builds
+`release/control-driver/<version>/windows-x64/` on Windows: one
+`cua-driver.exe` with the C runtime linked in (`+crt-static`, so it imports no
+`vcruntime`/`ucrtbase`), its x64 machine type and imports checked, every linked
+crate's license checked for GPL, and the hashes in `provenance.json`. The
+`Windows computer control` workflow builds it on `windows-latest` and drives
+it; see [Local Control on Windows](../../docs/local-control-windows.md).
 
 ### 0004: a stable Wayland seat pointer
 

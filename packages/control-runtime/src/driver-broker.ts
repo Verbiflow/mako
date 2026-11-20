@@ -33,6 +33,7 @@ import {
 } from "./driver-daemon.js"
 import type { JsonObject } from "./json.js"
 import { warmAppshots, type AppshotRead } from "./native-appshot.js"
+import { onWindows } from "./platform.js"
 import { createControlDirectory, createPrivateControlSocket } from "./private-socket.js"
 
 /**
@@ -570,6 +571,7 @@ export class DriverBroker {
   }
 
   private async listen() {
+    if (onWindows()) return this.listenPipe()
     const directory = await createControlDirectory("mako-driver-")
     const endpoint = await createPrivateControlSocket(directory, "broker.sock")
     const server = createServer((connection) => this.serve(connection))
@@ -597,6 +599,32 @@ export class DriverBroker {
         server.close()
         await endpoint.close()
         await rm(directory, { recursive: true, force: true })
+      },
+    }
+  }
+
+  /**
+   * Windows has no Unix sockets: tasks reach the broker on a named pipe. The name is unguessable and every lease
+   * still needs its grant's token, as on a socket whose folder only this user can open.
+   */
+  private async listenPipe() {
+    const path = `\\\\.\\pipe\\mako-driver-${process.pid}-${randomBytes(8).toString("hex")}`
+    const server = createServer((connection) => this.serve(connection))
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject)
+      server.listen(path, () => {
+        server.off("error", reject)
+        resolve()
+      })
+    })
+    this.endpointPath = path
+    return {
+      path,
+      server,
+      close: () => {
+        this.endpointPath = null
+        server.close()
+        return Promise.resolve()
       },
     }
   }

@@ -6,7 +6,7 @@ import { packagedDistribution } from "../application/index.js"
 import { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES } from "../application/index.js"
 import type { MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
 import type { HostEnvironment } from "../base/host-environment.js"
-import { onMac } from "../base/platform.js"
+import { onMac, onWindows } from "../base/platform.js"
 
 const execute = hostCommand
 
@@ -27,6 +27,11 @@ export type GrantedApp = Pick<HostEnvironment, "packaged" | "appRoot">
 
 /** With no `readings`, nothing is known yet: the desktop app that can read them isn't attached. */
 export function computerPermissions(app: GrantedApp, readings: PrivacyReadings | undefined): MakoComputerPermissions {
+  // Windows asks no app's leave to capture windows or drive UI Automation: there is nothing to grant, and the driver
+  // works from the start. Its limit is integrity, not consent: a window of an elevated process ignores a process of a
+  // lower one (UIPI), which the driver reports per window rather than as a grant.
+  if (onWindows())
+    return { supported: false, persistentAcrossUpdates: true, accessibility: true, screenRecording: "granted" }
   if (!onMac()) {
     return {
       supported: false,

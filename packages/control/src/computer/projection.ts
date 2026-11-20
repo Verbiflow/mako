@@ -44,9 +44,24 @@ const nativeRoles = new Map([
   ["scroll bar", "ScrollBar"], ["separator", "Separator"], ["image", "Image"], ["link", "Link"],
 ])
 
-/** AT-SPI and AX names projected into the same agent-facing vocabulary. */
+/**
+ * UI Automation's control types, which the Windows driver names as Windows does (`Edit`, `Text`, `Pane`), where
+ * they differ from the AX name for the same thing. Case decides: AT-SPI's names are lower case, so its `text` (an
+ * editable area) is not UI Automation's `Text` (a label). The rest (`Button`, `CheckBox`, `List`, `MenuItem`,
+ * `Window`…) are AX's names already.
+ */
+const automationRoles = new Map([
+  ["Edit", "TextField"], ["Document", "TextArea"], ["Text", "StaticText"], ["Hyperlink", "Link"],
+  ["Pane", "Group"], ["Custom", "Group"], ["Header", "Group"], ["TitleBar", "Group"], ["StatusBar", "Group"],
+  ["SemanticZoom", "Group"], ["Calendar", "Group"], ["Tab", "TabGroup"], ["TabItem", "Tab"],
+  ["DataGrid", "Table"], ["DataItem", "Row"], ["HeaderItem", "Cell"], ["Tree", "Outline"], ["TreeItem", "Row"],
+  ["SplitButton", "MenuButton"], ["Spinner", "Incrementor"], ["ProgressBar", "ProgressIndicator"],
+  ["ToolBar", "Toolbar"], ["AppBar", "Toolbar"], ["ToolTip", "Help"], ["Thumb", "Unknown"],
+])
+
+/** AT-SPI, UI Automation and AX names projected into the same agent-facing vocabulary. */
 export function nativeRole(role: string): string {
-  return nativeRoles.get(role.toLowerCase()) ?? role.replace(/^AX/, "")
+  return automationRoles.get(role) ?? nativeRoles.get(role.toLowerCase()) ?? role.replace(/^AX/, "")
 }
 
 const VALUE_LENGTH = 80

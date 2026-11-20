@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
-index a91f724..c6d0942 100644
+index a91f724..4e9ec2c 100644
 --- a/libs/cua-driver/rust/Cargo.lock
 +++ b/libs/cua-driver/rust/Cargo.lock
 @@ -1151,7 +1151,7 @@ dependencies = [
@@ -7,7 +7,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "cua-driver"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -16,7 +16,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "cua-driver-bindgen"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "cbindgen",
   "uniffi",
@@ -25,7 +25,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "cua-driver-contract"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "schemars",
   "serde",
@@ -34,7 +34,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "cua-driver-core"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -43,7 +43,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "cua-driver-sdk"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "async-trait",
   "core-foundation",
@@ -52,7 +52,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "cua-driver-testkit"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "core-foundation",
   "image",
@@ -61,7 +61,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "cua-driver-uia"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "anyhow",
   "cua-driver-core",
@@ -70,7 +70,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "cursor-overlay"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "anyhow",
   "cua-driver-contract",
@@ -79,7 +79,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "cursor-theme-cli"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "anyhow",
   "cursor-overlay",
@@ -88,7 +88,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "pip-preview"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "serde_json",
  ]
@@ -97,7 +97,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "platform-linux"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "anyhow",
   "ashpd",
@@ -106,7 +106,7 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "platform-macos"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -115,12 +115,12 @@ index a91f724..c6d0942 100644
  [[package]]
  name = "platform-windows"
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  dependencies = [
   "anyhow",
   "async-trait",
 diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
-index 351b086..671fd9d 100644
+index 351b086..75dcf2c 100644
 --- a/libs/cua-driver/rust/Cargo.toml
 +++ b/libs/cua-driver/rust/Cargo.toml
 @@ -17,7 +17,7 @@ members = [
@@ -128,7 +128,7 @@ index 351b086..671fd9d 100644
  
  [workspace.package]
 -version = "0.28.2"
-+version = "0.28.2+mako.26"
++version = "0.28.2+mako.27"
  edition = "2021"
  authors = ["trycua"]
  license = "MIT"
@@ -2553,18 +2553,9 @@ index 3445e64..bfc223f 100644
          assert!(validate_metadata(&metadata, 42, "com.example.host").is_ok());
          assert!(validate_metadata(&metadata, 43, "com.example.host").is_err());
 diff --git a/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs b/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs
-index bc860cd..edceabe 100644
+index bc860cd..22d91fe 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs
-@@ -650,7 +650,7 @@ fn configure_windows_runtime() {
-         platform_windows::recording_hooks::element_window_local_xy(window_id, pid, index)
-     });
-     cua_driver_core::video::set_video_backend_factory(Box::new(
--        cua_driver_core::video_ffmpeg::FfmpegVideoBackendFactory,
-+        platform_linux::video_window::X11VideoBackendFactory,
-     ));
- }
- 
 @@ -684,7 +684,7 @@ fn configure_linux_runtime(prepare_desktop_environment: bool) {
          ));
      } else {
@@ -10926,11 +10917,122 @@ index ce3841e..d8694a1 100644
 +            })?
      }
  }
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/browser_consent_ui.rs b/libs/cua-driver/rust/crates/platform-windows/src/browser_consent_ui.rs
+index 11dd682..62f4aa6 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/browser_consent_ui.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/browser_consent_ui.rs
+@@ -482,6 +482,7 @@ mod tests {
+             control_type: control_type.to_owned(),
+             name: Some(name.to_owned()),
+             value: None,
++            value_exact: false,
+             automation_id: None,
+             help_text: None,
+             actions: actions.iter().map(|value| (*value).to_owned()).collect(),
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/browser_setup_ui.rs b/libs/cua-driver/rust/crates/platform-windows/src/browser_setup_ui.rs
+index 7f42fa7..99d8194 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/browser_setup_ui.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/browser_setup_ui.rs
+@@ -727,6 +727,7 @@ mod tests {
+             control_type: control_type.to_owned(),
+             name: Some(name.to_owned()),
+             value: value.map(str::to_owned),
++            value_exact: false,
+             automation_id: None,
+             help_text: None,
+             actions: actions.iter().map(|value| (*value).to_owned()).collect(),
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs b/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs
+index 1a1d2e5..ec876bc 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/input/keyboard.rs
+@@ -229,9 +229,15 @@ pub fn post_char(hwnd: u64, ch: char) -> Result<()> {
+     // don't forward WM_CHAR to embedded editor children (Scintilla, RichEdit).
+     let h_parent = HWND(hwnd as *mut _);
+     let h = focused_descendant(h_parent).unwrap_or(h_parent);
+-    let code = ch as u32 as usize;
+-    unsafe {
+-        PostMessageW(h, WM_CHAR, WPARAM(code), LPARAM(1))?;
++    unsafe { post_char_units(h, ch) }
++}
++
++/// A Unicode window's WM_CHAR carries one UTF-16 unit: a character past U+FFFF (an emoji, a CJK extension) goes as
++/// its surrogate pair, high then low, as a keyboard's input does. Its whole code point in one message is dropped.
++unsafe fn post_char_units(h: HWND, ch: char) -> Result<()> {
++    let mut units = [0u16; 2];
++    for unit in ch.encode_utf16(&mut units) {
++        PostMessageW(h, WM_CHAR, WPARAM(*unit as usize), LPARAM(1))?;
+     }
+     Ok(())
+ }
+@@ -319,9 +325,8 @@ pub fn post_type_text_with_delay(hwnd: u64, text: &str, inter_char_ms: u64) -> R
+             }
+             _ => {
+                 prev_was_cr = false;
+-                let code = ch as u32 as usize;
+                 unsafe {
+-                    PostMessageW(h, WM_CHAR, WPARAM(code), LPARAM(1))?;
++                    post_char_units(h, ch)?;
+                 }
+                 sleep(Duration::from_millis(KEY_DELAY_MS + inter_char_ms));
+             }
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/msaa.rs b/libs/cua-driver/rust/crates/platform-windows/src/msaa.rs
+index a1ed48d..ed25bf3 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/msaa.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/msaa.rs
+@@ -189,6 +189,7 @@ unsafe fn walk(
+                 control_type: control_type.clone(),
+                 name: name.clone(),
+                 value: None,
++                value_exact: false,
+                 automation_id: None,
+                 help_text: None,
+                 actions: actions.clone(),
+@@ -209,6 +210,7 @@ unsafe fn walk(
+                 control_type: control_type.clone(),
+                 name: name.clone(),
+                 value: None,
++                value_exact: false,
+                 automation_id: None,
+                 help_text: None,
+                 actions: Vec::new(),
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-index 9d0d4cf..84b3d0b 100644
+index 9d0d4cf..dd95297 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-@@ -1637,6 +1637,8 @@ impl Tool for GetWindowStateTool {
+@@ -1073,6 +1073,7 @@ mod get_window_state_actions_tests {
+             control_type: "Button".to_owned(),
+             name: Some("OK".to_owned()),
+             value: None,
++            value_exact: false,
+             automation_id: None,
+             help_text: None,
+             actions,
+@@ -1129,7 +1130,7 @@ fn build_element_entry(
+     let label = n
+         .name
+         .clone()
+-        .or_else(|| n.value.clone())
++        .or_else(|| n.value.clone().filter(|v| !v.trim().is_empty()))
+         .or_else(|| n.automation_id.clone())
+         .or_else(|| n.help_text.clone());
+     let mut entry = json!({
+@@ -1151,7 +1152,14 @@ fn build_element_entry(
+     // (a ValuePattern edit holding typed content) would otherwise hide the
+     // text from a caller reading the structured side. See the macOS
+     // get_window_state builder for the rationale.
+-    if let Some(value) = n.value.clone().filter(|v| !v.is_empty()) {
++    // An exact value goes out as it is, even empty, and says so: Mako's runtime compares it with what it wrote
++    // (the Mac and Linux drivers' `value_exact`). Display text keeps its old shape.
++    if n.value_exact {
++        if let Some(value) = &n.value {
++            entry["value"] = json!(value);
++            entry["value_exact"] = json!(true);
++        }
++    } else if let Some(value) = n.value.clone().filter(|v| !v.is_empty()) {
+         entry["value"] = json!(value);
+     }
+     if let Some(enabled) = n.enabled {
+@@ -1637,6 +1645,8 @@ impl Tool for GetWindowStateTool {
                      is_error: None,
                      structured_content: Some(structured),
                      action_record: None,
@@ -10939,7 +11041,18 @@ index 9d0d4cf..84b3d0b 100644
                  }
              }
              Err(e) => ToolResult::error(format!("Error: {e}")),
-@@ -7897,6 +7899,8 @@ impl Tool for GetDesktopStateTool {
+@@ -5721,7 +5731,9 @@ impl Tool for HotkeyTool {
+             }
+         };
+ 
+-        if !px_focus && crate::input::is_xaml_host_hwnd(hwnd) {
++        // The accelerator scan stands in for posted keys, which a XAML host ignores. A foreground hotkey is real
++        // system-queue input, which XAML handles like a person's keys: it goes the SendInput way below.
++        if !px_focus && !delivery.is_foreground() && crate::input::is_xaml_host_hwnd(hwnd) {
+             let mut accelerator_keys = mods.clone();
+             accelerator_keys.push(key.clone());
+             let accelerator_combo = accelerator_keys.join("+");
+@@ -7897,6 +7909,8 @@ impl Tool for GetDesktopStateTool {
              is_error: None,
              structured_content: Some(structured),
              action_record: None,
@@ -10948,7 +11061,7 @@ index 9d0d4cf..84b3d0b 100644
          }
      }
  }
-@@ -8849,6 +8853,8 @@ impl Tool for ZoomTool {
+@@ -8849,6 +8863,8 @@ impl Tool for ZoomTool {
                          "mime_type": "image/jpeg"
                      })),
                      action_record: None,
@@ -10957,6 +11070,142 @@ index 9d0d4cf..84b3d0b 100644
                  }
              }
              Ok(Err(e)) => ToolResult::error(format!("Zoom failed: {e}")),
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs b/libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs
+index 193d898..df2423e 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/uia/mod.rs
+@@ -16,7 +16,8 @@ use windows::Win32::System::Com::{
+ use windows::Win32::UI::Accessibility::{
+     CUIAutomation, IUIAutomation, IUIAutomationCacheRequest, IUIAutomationElement,
+     IUIAutomationExpandCollapsePattern, IUIAutomationInvokePattern,
+-    IUIAutomationSelectionItemPattern, IUIAutomationTogglePattern, ToggleState_Off, ToggleState_On,
++    IUIAutomationSelectionItemPattern, IUIAutomationTextPattern, IUIAutomationTogglePattern,
++    ToggleState_Off, ToggleState_On, UIA_ClassNamePropertyId, UIA_IsPasswordPropertyId,
+     TreeScope_Children, TreeScope_Subtree, UIA_AutomationIdPropertyId,
+     UIA_BoundingRectanglePropertyId, UIA_ControlTypePropertyId, UIA_ExpandCollapsePatternId,
+     UIA_HelpTextPropertyId, UIA_InvokePatternId, UIA_IsEnabledPropertyId,
+@@ -57,6 +58,10 @@ pub struct UiaNode {
+     pub control_type: String,
+     pub name: Option<String>,
+     pub value: Option<String>,
++    /// `value` is the control's whole value as its provider holds it: ValuePattern's string unchanged (empty and
++    /// whitespace included), or a Win32 edit's complete TextPattern text. False for display text, a password field,
++    /// or text cut at the read limit.
++    pub value_exact: bool,
+     pub automation_id: Option<String>,
+     pub help_text: Option<String>,
+     pub actions: Vec<String>,
+@@ -277,6 +282,8 @@ unsafe fn walk_tree_unsafe(
+         UIA_ControlTypePropertyId,
+         UIA_NamePropertyId,
+         UIA_ValueValuePropertyId,
++        UIA_IsPasswordPropertyId,
++        UIA_ClassNamePropertyId,
+         UIA_AutomationIdPropertyId,
+         UIA_HelpTextPropertyId,
+         UIA_IsEnabledPropertyId,
+@@ -668,7 +675,7 @@ unsafe fn walk_cached_bounded(
+ 
+     let control_type = read_cached_control_type(element);
+     let name = read_cached_bstr_name(element);
+-    let value = read_cached_bstr_value(element);
++    let (value, value_exact) = read_cached_value(element, &control_type);
+     let automation_id = read_cached_bstr(element, UIA_AutomationIdPropertyId);
+     let help_text = read_cached_bstr(element, UIA_HelpTextPropertyId);
+     let enabled = read_cached_bool(element, UIA_IsEnabledPropertyId);
+@@ -703,6 +710,7 @@ unsafe fn walk_cached_bounded(
+                 control_type: control_type.clone(),
+                 name: name.clone(),
+                 value: value.clone(),
++                value_exact,
+                 automation_id: automation_id.clone(),
+                 help_text: help_text.clone(),
+                 actions: actions.clone(),
+@@ -723,6 +731,7 @@ unsafe fn walk_cached_bounded(
+                 control_type: control_type.clone(),
+                 name: name.clone(),
+                 value: value.clone(),
++                value_exact,
+                 automation_id: automation_id.clone(),
+                 help_text: help_text.clone(),
+                 actions: vec![],
+@@ -791,6 +800,76 @@ fn read_cached_bstr_value(element: &IUIAutomationElement) -> Option<String> {
+     read_cached_bstr(element, UIA_ValueValuePropertyId)
+ }
+ 
++/// The most text a Win32 edit's TextPattern read returns, as the Linux driver's AT-SPI text read.
++const MAX_EDIT_TEXT: i32 = 100_000;
++
++/// The element's value and whether it is exact. A ValuePattern control's value is read as it is, empty and
++/// whitespace included; a password field's never is. A Win32 edit or rich edit that has no ValuePattern (Notepad's
++/// editor) holds its text in TextPattern, read whole up to `MAX_EDIT_TEXT`. Anything else keeps the display reading.
++fn read_cached_value(element: &IUIAutomationElement, control_type: &str) -> (Option<String>, bool) {
++    if read_cached_bool(element, UIA_IsPasswordPropertyId) == Some(true) {
++        return (None, false);
++    }
++    unsafe {
++        if element.GetCachedPattern(UIA_ValuePatternId).is_ok() {
++            if let Some(raw) = read_cached_bstr_raw(element, UIA_ValueValuePropertyId) {
++                return (Some(raw), true);
++            }
++        } else if is_win32_edit(element, control_type) {
++            if let Some((text, exact)) = read_edit_text(element) {
++                return (Some(text), exact);
++            }
++        }
++    }
++    (read_cached_bstr_value(element), false)
++}
++
++/// An Edit control, or a Document that is a Win32 edit or rich edit: never a browser's page, whose Document holds the
++/// whole page's text.
++fn is_win32_edit(element: &IUIAutomationElement, control_type: &str) -> bool {
++    match control_type {
++        "Edit" => true,
++        "Document" => read_cached_bstr(element, UIA_ClassNamePropertyId)
++            .is_some_and(|class| class.eq_ignore_ascii_case("Edit") || class.to_ascii_lowercase().starts_with("richedit")),
++        _ => false,
++    }
++}
++
++/// The text of an edit through its TextPattern: one cross-process read, made only for edits without a ValuePattern.
++unsafe fn read_edit_text(element: &IUIAutomationElement) -> Option<(String, bool)> {
++    let pattern = element
++        .GetCachedPattern(UIA_TextPatternId)
++        .ok()?
++        .cast::<IUIAutomationTextPattern>()
++        .ok()?;
++    let range = pattern.DocumentRange().ok()?;
++    let text = range.GetText(MAX_EDIT_TEXT + 1).ok()?.to_string();
++    let length = text.encode_utf16().count() as i32;
++    if length > MAX_EDIT_TEXT {
++        let cut: String = String::from_utf16_lossy(&text.encode_utf16().take(MAX_EDIT_TEXT as usize).collect::<Vec<u16>>());
++        return Some((cut, false));
++    }
++    Some((text, true))
++}
++
++/// A BSTR property as the provider gave it, empty and whitespace included.
++fn read_cached_bstr_raw(
++    element: &IUIAutomationElement,
++    property_id: windows::Win32::UI::Accessibility::UIA_PROPERTY_ID,
++) -> Option<String> {
++    unsafe {
++        let variant = element.GetCachedPropertyValue(property_id).ok()?;
++        if variant.as_raw().Anonymous.Anonymous.vt == 8 {
++            let bstr = BSTR::from_raw(variant.as_raw().Anonymous.Anonymous.Anonymous.bstrVal);
++            let s = bstr.to_string();
++            std::mem::forget(bstr);
++            Some(s)
++        } else {
++            None
++        }
++    }
++}
++
+ fn read_cached_bstr(
+     element: &IUIAutomationElement,
+     property_id: windows::Win32::UI::Accessibility::UIA_PROPERTY_ID,
 diff --git a/libs/cua-driver/wayland-helper/README.md b/libs/cua-driver/wayland-helper/README.md
 index 8e9c373..e7d6735 100644
 --- a/libs/cua-driver/wayland-helper/README.md

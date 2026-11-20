@@ -109,11 +109,17 @@ assert.deepEqual(
 
 console.log("control contract ok")
 
-for (const platform of ["linux", "win32", undefined]) {
+for (const platform of ["linux", undefined]) {
   const capabilities = windowCapabilities({ target: { pid: 7, window_id: 70 }, platform, documentWindows: 1, onScreen: true })
   for (const route of ["window-pointer", "pid-keyboard", "menu"])
     assert.equal(capabilities.routes.find((entry) => entry.route === route).status, "unavailable")
 }
+// Windows: window pixels are verified in the background (scripts/test-control-driver-windows.ts); keys and menus are not.
+const windows = windowCapabilities({ target: { pid: 7, window_id: 70 }, platform: "win32", documentWindows: 1, onScreen: true })
+assert.equal(windows.routes.find((entry) => entry.route === "window-pointer").status, "available")
+for (const route of ["pid-keyboard", "menu"]) assert.equal(windows.routes.find((entry) => entry.route === route).status, "unavailable")
+const hiddenWindows = windowCapabilities({ target: { pid: 7, window_id: 70 }, platform: "win32", documentWindows: 1, onScreen: false })
+assert.equal(hiddenWindows.routes.find((entry) => entry.route === "window-pointer").status, "unavailable", "a hidden window has no pixels")
 
 // Native traversal limits cannot silently become browser options or invalid depths.
 const { ControlObserveRequestSchema } = await import("../dist/control/index.js")
