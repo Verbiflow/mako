@@ -563,6 +563,7 @@ export class ThreadWorktreeService {
    * conversation a hundred times.
    * `looking`, whether a window shows a worktree now and whether a tree watch covers it: a shown worktree's landing is
    * read ahead of the others' when the main checkout moves, and its files' events read its status.
+   * `chosenBase`, the branch the person chose for a repository's new Threads in Settings › Projects.
    */
   constructor(
     git: Git,
@@ -579,6 +580,7 @@ export class ThreadWorktreeService {
     pullsChanged: (repoRoot: string) => Promise<void> = async () => {},
     watch: WatchBackend = childBackend(),
     looking: WorktreeLooking = {},
+    chosenBase: (repoRoot: string) => Promise<string | undefined> = async () => undefined,
   ) {
     this.looking = looking
     this.watch = watch
@@ -605,7 +607,7 @@ export class ThreadWorktreeService {
         this.points.set(repoRoot, { ...this.points.get(repoRoot), ...point })
         this.keep()
       },
-    })
+    }, chosenBase)
     this.spares = new WorktreeSpares(git, root, (repoRoot) => this.projectFolder(repoRoot), setup)
   }
 
@@ -767,6 +769,16 @@ export class ThreadWorktreeService {
     }
     return found.filter((branch) => !branch.remote || !local.has(branch.short)).slice(0, LISTED_BRANCHES)
       .map(({ name, remote, at, checkedOut }) => ({ name, remote, at, checkedOut }))
+  }
+
+  /** Where a new Thread of the repository would start by Mako's own rule, whatever the person chose in Settings › Projects. */
+  automaticStart(repoRoot: string): Promise<WorktreeStartPoint> {
+    return this.starts.automatic(repoRoot, false)
+  }
+
+  /** Whether `ref` names a commit in the repository. */
+  resolves(repoRoot: string, ref: string): Promise<boolean> {
+    return this.starts.resolves(repoRoot, ref)
   }
 
   /** Where a new Thread's branch in this folder's project would start now; null outside Git or before a first commit. */

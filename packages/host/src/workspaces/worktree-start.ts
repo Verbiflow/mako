@@ -57,15 +57,74 @@ export class WorktreeStarts {
   private readonly held: HeldPoints
   /** Reads under way, by repository and key: those who ask while one runs share it. */
   private readonly reading = new Map<string, Promise<WorktreeStartPoint>>()
+  /** The branch the person chose for the repository's new Threads in Settings › Projects, if they did. */
+  private readonly chosen: (repoRoot: string) => Promise<string | undefined>
 
-  constructor(git: Git, now: () => number = Date.now, held: HeldPoints = new Map()) {
+  constructor(git: Git, now: () => number = Date.now, held: HeldPoints = new Map(), chosen: (repoRoot: string) => Promise<string | undefined> = async () => undefined) {
     this.git = git
     this.now = now
     this.held = held
+    this.chosen = chosen
   }
 
-  /** `fetch` refreshes the upstream first when its last fetch is a minute old, waiting no longer than the fetch's timeout. */
+  /**
+   * Where a new Thread's branch starts: the branch the person chose for the project when it's there, else Mako's own
+   * rule (`automatic`). `fetch` refreshes what it starts from first when its last fetch is a minute old, waiting no
+   * longer than the fetch's timeout.
+   */
   async point(repoRoot: string, fetch: boolean): Promise<WorktreeStartPoint> {
+    const base = await this.chosen(repoRoot).catch(() => undefined)
+    const chosen = base ? await this.chosenPoint(repoRoot, base, fetch).catch(() => undefined) : undefined
+    return chosen ?? this.automatic(repoRoot, fetch)
+  }
+
+  /** Whether `ref` names a commit in the repository. */
+  async resolves(repoRoot: string, ref: string): Promise<boolean> {
+    return (await this.commitOf(repoRoot, ref)) !== undefined
+  }
+
+  /**
+   * The chosen branch's commit, read from Git's files where they hold it (a local branch, then a remote one), so a
+   * summaries pass starts no process for it; undefined when the repository has no such branch, and Mako's rule applies.
+   * A remote branch is fetched first, as an upstream is.
+   */
+  private async chosenPoint(repoRoot: string, base: string, fetch: boolean): Promise<WorktreeStartPoint | undefined> {
+    const remote = await this.remoteOf(repoRoot, base)
+    const tracked = remote ? { remote, ref: `refs/heads/${base.slice(remote.length + 1)}` } : null
+    if (fetch && tracked) await this.fetch(repoRoot, tracked)
+    const commit = await this.commitOf(repoRoot, base)
+    if (!commit) return undefined
+    return { from: base, commit, branch: null, upstream: null, standing: { kind: "level" }, fetched: tracked ? this.fetched(repoRoot, tracked) : null }
+  }
+
+  /** The remote `ref` is a branch of (`origin` for `origin/main`), when there's no local branch of that name. */
+  private async remoteOf(repoRoot: string, ref: string): Promise<string | undefined> {
+    const common = commonDirOf(repoRoot)
+    if (await storedRef(common, `refs/heads/${ref}`).catch(() => undefined)) return undefined
+    const slash = ref.indexOf("/")
+    if (slash < 1) return undefined
+    const config = parseGitConfig((await gitFileText(join(common, "config")).catch(() => undefined)) ?? "")
+    const remote = ref.slice(0, slash)
+    return config.has(`remote.${remote}.url`) ? remote : undefined
+  }
+
+  private async commitOf(repoRoot: string, ref: string): Promise<string | undefined> {
+    const common = commonDirOf(repoRoot)
+    let unknown = false
+    for (const full of [`refs/heads/${ref}`, `refs/remotes/${ref}`]) {
+      const stored = await storedRef(common, full).catch(() => undefined)
+      if (stored) return stored
+      if (stored === undefined) unknown = true
+    }
+    // Git's files say neither branch is there: no process asked. Only what they can't say (a reftable, a tag, a
+    // commit) is asked of Git.
+    if (!unknown && /^[\w./-]+$/.test(ref) && !/^[0-9a-f]{7,64}$/.test(ref)) return undefined
+    const read = await this.git.readOutput(repoRoot, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${ref}^{commit}`]).catch(() => "")
+    return read || undefined
+  }
+
+  /** Where a new Thread's branch starts by Mako's own rule, whatever the person chose: see the class's comment. */
+  async automatic(repoRoot: string, fetch: boolean): Promise<WorktreeStartPoint> {
     const at = await this.pointKey(repoRoot).catch(() => undefined)
     const key = at?.key
     const known = this.held.get(repoRoot)
@@ -74,7 +133,7 @@ export class WorktreeStarts {
       const tracked = current ? current.tracked : await this.tracked(repoRoot, await this.git.readOutput(repoRoot, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => ""))
       if (tracked) await this.fetch(repoRoot, tracked)
       // The fetch may have moved the upstream: the point is whatever the refs say now.
-      return this.point(repoRoot, false)
+      return this.automatic(repoRoot, false)
     }
     if (current) return { ...current.point, fetched: current.tracked ? this.fetched(repoRoot, current.tracked) : null }
     if (!at || key === undefined) return (await this.read(repoRoot)).point

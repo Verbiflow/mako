@@ -3916,6 +3916,17 @@ chip second, and what still overflows scrolls behind a faded edge instead of
 being cut off silently. The model and its reasoning are what people read
 there and are never shortened.
 
+Settings › Projects is one page per project (`projects-section.tsx`, opened by `openProjectSettings`, the rail's
+project menu and the palette's "Project settings: <name>"), the list grouped Active and Hidden (`hiddenProjects`).
+It shows the folder, the branch new Threads start from, the recipe's setup and run commands, its values and carried
+files, and the GitHub repository cloud Threads use (the folder's `origin`). The branch is the host's
+(`<user root>/project-settings.json`, `ProjectSettingsStore`, by repository) and `WorktreeStarts.point` honors it
+everywhere a start point is read, falling back to Mako's own rule while the branch is gone. A script edited there
+goes, like every recipe change, to a new Thread as a request with the recipe attached (`changeWithAgent`); nothing
+writes `.mako/*` from Settings. What every project shares goes above the list (`PROJECTS_DEFAULTS`). Open settings
+file (Settings' footer, the palette) opens `<user root>/preferences.json` (`mako:preferences-file`) in the person's
+editor. `scripts/test-project-settings.ts` and `test-project-settings-ui.mjs` cover them.
+
 Setup is what each place a project's Threads run in has for the project:
 Settings › Apps › a project › Setup, a Setup tab in a Thread's side panel
 showing that Thread's own place, and the phone's Settings › Setup. A

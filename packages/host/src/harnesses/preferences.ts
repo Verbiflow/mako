@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { readFileSync, statSync } from "node:fs"
+import { existsSync, readFileSync, statSync } from "node:fs"
 import { z } from "zod"
 import { laterEdit, PreferencesSchema, type PreferenceEntry, type Preferences } from "@mako/protocol/preferences"
 import { publishFileSync } from "../base/published-files.js"
@@ -79,6 +79,15 @@ export class PreferenceStore {
       if (value !== undefined) Object.assign(values, { [name]: value })
     }
     return values
+  }
+
+  /**
+   * The file they're kept in, written first when nothing has been kept yet, so there's always one to open. It holds
+   * what's in effect (`held`, the account's) and what this Mac changed that the account hasn't taken yet (`unsent`).
+   */
+  file(): string {
+    if (!existsSync(this.#deps.file)) this.#write(this.#read())
+    return this.#deps.file
   }
 
   /** `name` as it's in effect, or undefined for Mako's default. */
@@ -235,6 +244,8 @@ export function declarePreferenceMethods(methods: MethodTable, store: Preference
     if (parsed === undefined) throw new Error(`That isn't a value ${name} takes`)
     return store.set(name, parsed)
   })
+  // Settings' Open settings file: where these are kept, made when nothing is yet.
+  methods.handle("mako:preferences-file", (): string => store.file())
   // What a window kept before the account kept it, offered once with when it was edited there (0: unknown).
   methods.handle("mako:preference-offer", (name: string, value: JsonValue, at: number) => {
     if (!isPreferenceName(name)) throw new Error(`No preference ${name}`)

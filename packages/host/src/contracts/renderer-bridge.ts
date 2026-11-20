@@ -34,6 +34,7 @@ import type { PlanBuild, PlanBuildClaim, PlanBuildTarget, PlanBuilds } from "./p
 import type { AccessChoices } from "./access-choices.js"
 import type { JsonValue } from "./json.js"
 import type { PreferenceName, PreferenceValues } from "./preferences.js"
+import type { ProjectSettingsChange, ProjectSettingsView } from "./project-settings.js"
 import type { FinChoicesReading, FinPolicy, RoleRules } from "./fin-tuning.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, AppSamplingDemand, AppSamplingReply, RoomView, ThreadAppView } from "./thread-app.js"
@@ -223,6 +224,9 @@ export function createMakoBridge(transport: BridgeTransport) {
     wantWorktree: (cwd: string) => invokeTrustedHost<void>("mako:worktree-want", cwd),
     worktreeStartPoint: (cwd: string, fetch: boolean) => invokeTrustedHost<WorktreeStartPoint | null>("mako:worktree-start-point", cwd, fetch),
     worktreeBranches: (cwd: string) => invokeTrustedHost<WorktreeBranch[]>("mako:worktree-branches", cwd),
+    /** Settings › Projects: what the person set for one project, and what it reads from Git. */
+    projectSettings: (folder: string) => invokeTrustedHost<ProjectSettingsView>("mako:project-settings", folder),
+    saveProjectSettings: (folder: string, change: ProjectSettingsChange) => invokeTrustedHost<ProjectSettingsView>("mako:project-settings-save", folder, change),
     worktreePulls: (cwd: string) => invokeTrustedHost<WorktreePull[] | null>("mako:worktree-pulls", cwd),
     // What the host holds, at once, with what it's still reading; `focus` when the window asks because it came to
     // the front. A host from before that form takes no argument: it refuses the call for having one, which this
@@ -280,6 +284,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     adoptAccessChoices: (modes: Record<string, string>) => invokeTrustedHost<AccessChoices>("mako:access-adopt", modes),
     /** The preferences that follow the person's account (`contracts/preferences.ts`), as they're in effect now. */
     preferences: () => invokeTrustedHost<PreferenceValues>("mako:preferences"),
+    /** The file the preferences are kept in (`<user root>/preferences.json`), made when nothing is kept yet: Settings' Open settings file. */
+    preferencesFile: () => invokeTrustedHost<string>("mako:preferences-file"),
     /** The person changed one here (null: back to Mako's default): in effect at once, and the account's once it takes it. */
     setPreference: (name: PreferenceName, value: JsonValue | null) => invokeTrustedHost<PreferenceValues>("mako:preference-set", name, value),
     /** What a window kept before the account kept it, offered once with when it was edited (0: unknown). */

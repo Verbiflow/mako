@@ -24,6 +24,7 @@ import type { AccessChoices } from "@mako/host/contracts/access-choices"
 import type { PreferenceValues } from "@mako/host/contracts/preferences"
 import type { FinChoicesReading } from "@mako/host/contracts/fin-tuning"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
+import type { ProjectSettingsChange, ProjectSettingsView } from "@mako/host/contracts/project-settings"
 import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
 import { mockStorage } from "./mock-storage"
@@ -759,6 +760,13 @@ export function installMockBridge() {
   const making = "location" in window ? new URLSearchParams(window.location.search).get("making") : null
   const madeWorktrees: ThreadWorktree[] = []
   const worktreeSkips = new Map<string, () => void>()
+  /** Settings › Projects: the branch each project's new Threads start from, as chosen here. */
+  const projectBases = new Map<string, string>()
+  const projectSettingsOf = (folder: string): ProjectSettingsView => {
+    const baseBranch = projectBases.get(folder) ?? null
+    const cloud = folder === "/Users/you/api" ? "acme/api" : folder === "/Users/you/mako" ? "acme/mako" : null
+    return { folder, repository: folder, baseBranch, automatic: "origin/main", missing: false, cloud }
+  }
   const makeWorktree = async (conversationId: string, cwd: string, thread: ThreadId, name: string | undefined, start: WorktreeStart | undefined): Promise<ThreadWorktree | undefined> => {
     const began = performance.now()
     let skipped = false
@@ -1117,6 +1125,12 @@ export function installMockBridge() {
     },
     wantWorktree: async () => {},
     worktreeStartPoint: async () => mockStartPoint(),
+    projectSettings: async (folder: string) => projectSettingsOf(folder),
+    saveProjectSettings: async (folder: string, change: ProjectSettingsChange) => {
+      if (change.baseBranch === null) projectBases.delete(folder)
+      else projectBases.set(folder, change.baseBranch)
+      return projectSettingsOf(folder)
+    },
     skipWorktree: async (conversationId: string) => worktreeSkips.get(conversationId)?.(),
     worktreeBranches: async () => {
       const hours = (count: number) => Date.now() - count * 3_600_000
@@ -1241,6 +1255,7 @@ export function installMockBridge() {
     },
     // The account's preferences, kept in memory: a theme chosen here is the one every mock window applies.
     preferences: async () => preferenceValues,
+    preferencesFile: async () => "/Users/you/.mako/preferences.json",
     setPreference: async (name, value) => {
       preferenceValues = { ...preferenceValues, [name]: value ?? undefined }
       emit({ type: "preferences", values: preferenceValues })

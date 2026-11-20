@@ -2559,7 +2559,14 @@ const inputs = {
   "mako:preference-offer": () => z.tuple([z.string(), z.json(), z.number()]),
   "mako:preference-set": () => z.tuple([z.string(), z.json()]),
   "mako:preferences": () => z.tuple([]),
+  "mako:preferences-file": () => z.tuple([]),
   "mako:project-app-setup": () => z.tuple([z.string()]),
+  "mako:project-settings": () => z.tuple([z.string()]),
+  "mako:project-settings-save": () =>
+    z.tuple([
+      z.string(),
+      z.object({ baseBranch: z.union([z.null(), z.string()]) }),
+    ]),
   "mako:prompt": () =>
     z.tuple([
       z.string(),
@@ -3900,7 +3907,10 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:preference-offer", "harnesses"],
   ["mako:preference-set", "harnesses"],
   ["mako:preferences", "harnesses"],
+  ["mako:preferences-file", "harnesses"],
   ["mako:project-app-setup", "workspaces"],
+  ["mako:project-settings", "workspaces"],
+  ["mako:project-settings-save", "workspaces"],
   ["mako:prompt", "workspaces"],
   ["mako:provider-connection-action", "harnesses"],
   ["mako:provider-connections", "harnesses"],
