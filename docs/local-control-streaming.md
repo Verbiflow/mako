@@ -684,3 +684,65 @@ extension 42–48 / 114–149 ms; 1920×1080, 43–53 / 115–136 ms against 41�
 152–187 ms (`scripts/bench-machine-tab-video.mjs`). A screenshot instead of
 the screencast's frame took 76–105 ms. `scripts/test-machine-tab-video.mjs`
 checks it end to end against a real Chromium.
+
+## November 20: the video helper, for windows and displays without the desktop app
+
+`mako-video` is a small native program with one protocol and two
+implementations ([`video-helper.ts`](../packages/control-runtime/src/video-helper.ts)
+is its Node side). Units come out as length-prefixed `ControlVideoPacket`s, so
+nothing in Node parses H.264; commands go in as a type byte and a length (`K` key
+frame, `B` viewer box, `R` bitrate, `F` a picture to encode).
+
+- **Linux** ([`native/video-linux/mako-video.c`](../native/video-linux/mako-video.c)):
+  an X display, or one window through XComposite (whatever covers it never
+  shows), read with XShm only when XDamage says it changed, scaled and converted
+  by libyuv, encoded by OpenH264. With nothing changing it sleeps in `poll`.
+  Debian's OpenH264, libyuv and libjpeg-turbo are BSD-style; the machine image
+  compiles it in its own stage and adds about 4 MB of libraries.
+- **macOS** ([`native/video-macos/main.swift`](../native/video-macos/main.swift)):
+  ScreenCaptureKit in the encoder's own NV12, VideoToolbox's low-latency rate
+  control. ScreenCaptureKit repeats a still window as `complete` frames, each
+  with one dirty rectangle, so the helper compares the planes themselves and
+  encodes only a changed picture: a still window cost 2 units in 3 s, a 30 fps
+  one about 5% CPU and 42 MB resident. Shipped in `Contents/MacOS` beside the
+  sleep watch.
+- **Windows** (not built): Windows Graphics Capture for a window or a display
+  (`Direct3D11CaptureFramePool`, which also sends only changed frames) into a
+  Media Foundation H.264 encoder (`CLSID_MSH264EncoderMFT`, or the GPU's
+  hardware MFT) in `MFT_ENUM_FLAG_HARDWARE` low-latency mode, behind the same
+  protocol. Until then, a Windows window streams only while the desktop app is
+  open.
+
+The host captures an app's window with the desktop app where it's open, else with
+the helper (a Mac, or Linux with `DISPLAY`). A Wayland session needs the
+portal's PipeWire stream, which the helper doesn't read yet.
+
+OpenH264's screen-content mode finds scrolls and spends about a third of the
+bits, but runs on one thread at two to three times the cost (21 ms a 2560×1600
+frame against 7 ms). Live video uses its real-time camera mode with one slice
+and thread per 0.6 megapixels (at most four), which is what fixed the spike's
+2560×1600 throughput (26 fps, 33 ms an encode). Frame skipping keeps the bitrate
+a ceiling: asked for 0.6 and 1.5 Mbit/s on moving text, it sent 0.49–0.50 and
+1.0, where the spike's settings overshot 2.5–8 Mbit/s targets with 6.4–11.6.
+
+Measured in a 2-CPU container (arm64, no GPU), an Xvfb screen with a plain Xlib
+app drawing as fast as it could (about 25 fps at 30 and 48 at 60), 10 s per case
+(`scripts/bench-video-helper.mjs`), encoder process CPU against FFmpeg's x11grab
+with Mako's libx264 arguments:
+
+| Screen, cap | FFmpeg x11grab + libx264 | Helper (fps, encode p50, capture to unit p50) |
+| --- | ---: | ---: |
+| 1280×800, 30 | 99.9% | 21.1% (24.7, 5.1 ms, 6 ms) |
+| 1280×800, 60 | 131.1% | 38.6% (47.5, 4.8 ms, 6 ms) |
+| 1920×1080, 30 | 116.0% | 33.2% (24.7, 6.3 ms, 9 ms) |
+| 2560×1600, 30 | 135.6% | 44.4% (24.6, 7.5 ms, 11 ms) |
+| 2560×1600, 60 | 185.9% | 48.0% (48.0, 4.0 ms, 6 ms) |
+| 2560×1600 into a 1280×800 box, 30 | 141.1% | 17.8% (24.1, 4.0 ms, 7 ms) |
+| 1280×800, 30, still screen | 102.8% | 0% (one unit) |
+| One 1280×800 window, 30 | — | 17.0% (24.3, 4.0 ms, 5 ms) |
+
+FFmpeg encodes 30 or 60 frames a second whatever changes; the helper encodes the
+frames the app drew. Every unit the helper sent decoded.
+`scripts/test-video-helper.mjs` (Linux) and `scripts/test-video-helper-mac.mjs`
+check them end to end; `scripts/test-video-helper-protocol.ts` checks the Node
+side against a fake.

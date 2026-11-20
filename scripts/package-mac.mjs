@@ -69,6 +69,7 @@ const inputs = [
   "build/entitlements.mac.plist",
   "build/mako-notification-status",
   "build/mako-sleep-watch",
+  "build/mako-video",
   "vendor/control-media/darwin-arm64",
 ]
 async function digest(path) {
@@ -112,6 +113,7 @@ try {
   execFileSync(process.execPath, [join(project, "scripts/build-notification-status.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
   // The sleep watch, which holds the Mac's sleep while agents at work are handed to the cloud, ships beside it.
   execFileSync(process.execPath, [join(project, "scripts/build-sleep-watch.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
+  execFileSync(process.execPath, [join(project, "scripts/build-video-helper.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
   const mediaRoot = join(project, "vendor/control-media/darwin-arm64")
   const mediaRecipe = await readManifest(project)
   // The archives' identities, not the URLs they were fetched from: a mirror added or removed builds the same bytes.
@@ -239,7 +241,7 @@ try {
         }),
         { from: join(stage, "vendor/control-media"), to: "control-media" },
       ],
-      extraFiles: [...(buildConfig.extraFiles ?? []), { from: join(stage, "build/mako-notification-status"), to: "MacOS/mako-notification-status" }, { from: join(stage, "build/mako-sleep-watch"), to: "MacOS/mako-sleep-watch" }],
+      extraFiles: [...(buildConfig.extraFiles ?? []), { from: join(stage, "build/mako-notification-status"), to: "MacOS/mako-notification-status" }, { from: join(stage, "build/mako-sleep-watch"), to: "MacOS/mako-sleep-watch" }, { from: join(stage, "build/mako-video"), to: "MacOS/mako-video" }],
       mac: {
         ...buildConfig.mac,
         binaries: [
@@ -248,6 +250,7 @@ try {
           "Contents/Resources/control-media/darwin-arm64/ffprobe",
           "Contents/MacOS/mako-notification-status",
           "Contents/MacOS/mako-sleep-watch",
+          "Contents/MacOS/mako-video",
         ],
         icon: join(stage, "build/Mako.icns"),
         entitlements: join(stage, "build/entitlements.mac.plist"),

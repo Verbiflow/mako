@@ -2,7 +2,17 @@ import { existsSync, readlinkSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { BrowserService } from "@mako/control-runtime/browser"
 import { DriverBroker, type DriverBrokerStatus } from "@mako/control-runtime/host"
-import { InstalledBrowsers, MACHINE_BROWSER_ID, MachineBrowser, MachineTabVideo, localBrowsers, publishDeskBrowserRegistration } from "@mako/control-runtime/desktop"
+import {
+  InstalledBrowsers,
+  MACHINE_BROWSER_ID,
+  MachineBrowser,
+  MachineTabVideo,
+  helperCapture,
+  localBrowsers,
+  publishDeskBrowserRegistration,
+  videoHelperExecutable,
+  x11Display,
+} from "@mako/control-runtime/desktop"
 import type { MethodTable } from "../base/methods.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { hostClient } from "../base/host-client.js"
@@ -186,6 +196,12 @@ export function openControl(
   const developmentMedia = join(environment.appRoot, "vendor/control-media", `${nodePlatform()}-${process.arch}`)
   if (!environment.packaged && existsSync(developmentMedia))
     process.env.MAKO_CONTROL_MEDIA_ROOT ??= developmentMedia
+  // The video helper (`mako-video`): a packaged Mac app's beside its executable, a checkout's where `build:electron`
+  // built it; a Linux machine's is on PATH.
+  const bundledVideoHelper = environment.packaged
+    ? join(dirname(dirname(environment.appRoot)), "MacOS", "mako-video")
+    : join(environment.appRoot, "build", "mako-video")
+  if (existsSync(bundledVideoHelper)) process.env.MAKO_VIDEO_HELPER ??= bundledVideoHelper
   // A Linux machine has no person's browser for Mako to connect to, so it runs its own.
   const chromium = onLinux() ? resolveExecutable("chromium") : undefined
   const machineBrowser = chromium
@@ -268,14 +284,16 @@ export function openControl(
         (registration) => void configureDevRenderer(registration)
       )
     : undefined
-  // Tabs and windows are encoded where their pixels are: the desktop app's tab or window capture into WebCodecs, or
-  // the machine browser's own. A screencast still goes through FFmpeg. Encoding screencast JPEGs in the desktop
+  // Tabs and windows are encoded where their pixels are: the desktop app's tab or window capture into WebCodecs, the
+  // machine browser's own, or the video helper's. A screencast still goes through FFmpeg. Encoding screencast JPEGs in the desktop
   // instead (desktopLiveEncoder) measured no cheaper and twice the latency, so it isn't the default.
+  const videoHelper = videoHelperExecutable()
   const desktopCapture = desktopPreviewCapture(desktop, (id, tab) => (id === deskBrowser.definition.id && deskBrowser.hasPage(tab) ? tab : undefined))
   const previews = new ControlPreviews(browser, previewThumbnail, (activity) => emit({ type: "control-activity", activity }), {
     capture: {
       tab: (target) => (machineVideo && target.browser === MACHINE_BROWSER_ID ? machineVideo.source(target.tab) : desktopCapture.tab(target)),
-      window: (target) => desktopCapture.window(target),
+      // Without the desktop app, a window is captured by the video helper: ScreenCaptureKit on a Mac, an X display's.
+      window: (target) => desktopCapture.window(target) ?? (videoHelper && (onMac() || x11Display()) ? helperCapture(videoHelper, { kind: "window", windowId: target.windowId }) : undefined),
     },
   })
   const elementPicks = new ElementPicks(browser, previews, onMac() ? "mac" : "other")
