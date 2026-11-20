@@ -24,7 +24,7 @@ export function Launcher({ chat = false }: { chat?: boolean }) {
     return (
       <IfCanChooseFolder>
         <div className="mt-6 flex flex-col gap-0.5">
-          <LauncherRow index={0} icon={FolderOpenIcon} title="Open a project folder instead" keys={formatChord("mod+o")} onRun={() => runCommand("workspace.open")} />
+          <LauncherRow index={0} icon={FolderOpenIcon} title="Open a project instead" keys={formatChord("mod+o")} onRun={() => runCommand("workspace.open")} />
         </div>
       </IfCanChooseFolder>
     )
@@ -49,7 +49,7 @@ export function Launcher({ chat = false }: { chat?: boolean }) {
         <LauncherRow
           index={SUGGESTIONS.length}
           icon={FolderOpenIcon}
-          title="Open another folder"
+          title="Open a project"
           keys={formatChord("mod+o")}
           onRun={() => runCommand("workspace.open")}
         />

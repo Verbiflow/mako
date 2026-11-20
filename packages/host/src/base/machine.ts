@@ -33,8 +33,8 @@ export interface Machine {
   /** Opens an address in the default browser, or the app registered for its scheme. */
   openUrl(url: string): Promise<void>
   copy(text: string): Promise<void>
-  /** The folder the person picks, or null if they cancel. */
-  chooseFolder(prompt: string): Promise<string | null>
+  /** The folder the person picks, or null if they cancel; the chooser opens at `defaultPath` when it's given. */
+  chooseFolder(prompt: string, defaultPath?: string): Promise<string | null>
   /** The default browser's application path, when the machine says. */
   defaultBrowser(): Promise<string | undefined>
   /** A PNG rendering of a document, at most `size` pixels on its longer side, or null if the system can't render it. */
@@ -120,11 +120,14 @@ export function macMachine(run: RunCommand = runCommand): Machine {
     open: async (path, app) => (await run("open", app ? ["-a", app, path] : [path])).code === 0,
     openUrl: async (url) => { await succeed(run, "open", [url]) },
     copy: async (text) => { await succeed(run, "pbcopy", [], { input: text }) },
-    chooseFolder: async (prompt) => {
+    chooseFolder: async (prompt, defaultPath) => {
       // -128 is AppleScript's "user cancelled"; osascript exits 1 for it.
+      const choose = defaultPath
+        ? "POSIX path of (choose folder with prompt (item 1 of argv) default location (POSIX file (item 2 of argv)))"
+        : "POSIX path of (choose folder with prompt (item 1 of argv))"
       const result = await run(
         "osascript",
-        ["-e", "on run argv", "-e", "POSIX path of (choose folder with prompt (item 1 of argv))", "-e", "end run", prompt],
+        ["-e", "on run argv", "-e", choose, "-e", "end run", prompt, ...(defaultPath ? [defaultPath] : [])],
         { timeoutMs: 30 * 60_000 }
       )
       if (result.code !== 0) return null
@@ -229,12 +232,14 @@ export function linuxMachine({ env, run = runCommand, find = commandsOnPath(env)
       if (!command) throw new MachineAbsentError("This machine has no clipboard command (wl-copy, xclip or xsel).")
       await succeed(run, command[0], [...command[1]], { input: text })
     },
-    async chooseFolder(prompt) {
+    async chooseFolder(prompt, defaultPath) {
       const command = await chooser()
       if (!command) return refuse()
       const result = await run(
         command,
-        command === "zenity" ? ["--file-selection", "--directory", `--title=${prompt}`] : ["--getexistingdirectory", env.HOME ?? "/", "--title", prompt],
+        command === "zenity"
+          ? ["--file-selection", "--directory", `--title=${prompt}`, ...(defaultPath ? [`--filename=${defaultPath}/`] : [])]
+          : ["--getexistingdirectory", defaultPath ?? env.HOME ?? "/", "--title", prompt],
         { timeoutMs: 30 * 60_000 }
       )
       // Both exit 1 when the person cancels.

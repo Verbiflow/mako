@@ -9,6 +9,9 @@ export const section = {
   group: "Project",
   icon: GitBranchIcon,
   keywords: [
+    "clone",
+    "clone into",
+    "projects folder",
     "changes",
     "review",
     "files",

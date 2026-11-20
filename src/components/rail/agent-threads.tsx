@@ -81,6 +81,9 @@ import { cn } from "@/lib/utils"
 import { Blank } from "@/components/ui/kit"
 import { formatChord } from "@/extend/commands"
 import { DraftThreads } from "@/components/rail/draft-threads"
+import { FirstProject } from "@/components/rail/first-project"
+import { FolderDrop } from "@/components/shell/folder-drop"
+import { openProjectPalette } from "@/state/open-project"
 import { RailTop } from "@/components/rail/rail-top"
 import { useInboxView } from "@/state/inbox"
 import { archivedLive, archivedThread, useThreadArchives } from "@/state/thread-lifecycle"
@@ -561,6 +564,7 @@ export function AgentThreads() {
   }, [folders, held, jumpHints, shownRefs, shownLive, pages, showAllPinned, showAllFolders, collapsed, showHidden])
 
   return (
+    <FolderDrop className="flex min-h-0 flex-1 flex-col" data-rail-drop>
     <div
       ref={rail}
       data-jump-hints={jumpHints || undefined}
@@ -615,6 +619,8 @@ export function AgentThreads() {
               </p>
             ) : grouping === "archived" ? (
               <Blank icon={<MessagesSquareIcon />} title="No archived threads" body="Archived threads stay available here. Restore them whenever you need them." hints={[{ label: "Back to projects", onSelect: () => setPref("railGrouping", "project") }]} />
+            ) : canChooseFolder ? (
+              <FirstProject />
             ) : (
               <Blank
                 icon={<MessagesSquareIcon />}
@@ -629,11 +635,6 @@ export function AgentThreads() {
                         new CustomEvent("mako:focus-composer")
                       ),
                   },
-                  ...(canChooseFolder ? [{
-                    label: "Open a folder",
-                    keys: formatChord("mod+o"),
-                    onSelect: () => void actions.pickWorkspace(),
-                  }] : []),
                 ]}
               />
             )
@@ -718,6 +719,7 @@ export function AgentThreads() {
         <RailTip scroller={scroller} />
       </div>
     </div>
+    </FolderDrop>
   )
 }
 
@@ -781,10 +783,10 @@ function RailHeader({
   return (
     <div className="flex h-8 shrink-0 items-center pr-2 pl-3.5">
       {grouping === "project" ? (
-        <h2 data-rail-threads-heading className="text-label font-medium text-faint">Threads</h2>
+        <h2 data-rail-threads-heading className="text-label font-medium text-faint">Projects</h2>
       ) : (
         // Recent and Archived are the filter menu's choices; the heading names the one showing and leads back.
-        <button type="button" data-rail-threads-heading onClick={() => setPref("railGrouping", "project")} title="Back to threads by project" className="pressable -ml-1.5 flex h-6 items-center gap-1 px-1.5 text-label font-medium text-foreground transition-colors hover:bg-fill-hover">
+        <button type="button" data-rail-threads-heading onClick={() => setPref("railGrouping", "project")} title="Back to projects" className="pressable -ml-1.5 flex h-6 items-center gap-1 px-1.5 text-label font-medium text-foreground transition-colors hover:bg-fill-hover">
           {grouping === "archived" ? "Archived" : "Recent"}
           <XIcon aria-hidden className="size-3 text-faint" />
         </button>
@@ -794,9 +796,10 @@ function RailHeader({
       <IfCanChooseFolder>
         <button
           type="button"
-          aria-label="Open a folder"
-          title="Open a folder"
-          onClick={() => void actions.pickWorkspace()}
+          aria-label="Open project…"
+          title={`Open project… ${formatChord("mod+o").join("")}`}
+          data-rail-open-project
+          onClick={() => openProjectPalette()}
           className="pressable p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
         >
           <FolderPlusIcon className="size-3.5" />

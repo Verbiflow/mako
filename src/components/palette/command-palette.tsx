@@ -7,7 +7,10 @@ import {
   type DeskCommand,
 } from "@/extend/commands"
 import { fuzzy, rank } from "@/lib/fuzzy"
-import { actions, useSession } from "@/state/session"
+import { actions, useCanChooseFolder, useSession } from "@/state/session"
+import { asksForProject } from "@/lib/project-query"
+import { githubRepository } from "@mako/host/contracts/projects"
+import { openProjectPalette } from "@/state/open-project"
 import { threads, useThreads } from "@/state/threads"
 import { modelKey, noteModelUse, usePrefs } from "@/state/prefs"
 import { useWorkspaceFiles } from "@/state/files"
@@ -74,6 +77,7 @@ export function CommandPalette() {
   const models = useSession((state) => state.models)
   const piCommands = useSession((state) => state.capabilities.commands)
   const activeModel = useSession((state) => state.meta?.model)
+  const canChooseFolder = useCanChooseFolder()
 
   const close = useCallback(() => {
     setOpen(false)
@@ -198,8 +202,12 @@ export function CommandPalette() {
       if (match) scored.push({ entry, score: match.score })
     }
     scored.sort((a, b) => b.score - a.score)
-    return scored.slice(0, 60).map((item) => item.entry)
-  }, [entries, fileEntries, mode, query])
+    const ranked = scored.slice(0, 60).map((item) => item.entry)
+    // A path or a GitHub address is a project to open: Open project takes it from here, as typed.
+    if (canChooseFolder && asksForProject(term))
+      return [{ id: "project:typed", section: "Open project", title: term, hint: githubRepository(term) ? "Clone or open" : "Browse folders", run: () => openProjectPalette({ query: term }) }, ...ranked]
+    return ranked
+  }, [entries, fileEntries, mode, query, canChooseFolder])
 
   const [lastQuery, setLastQuery] = useState(query)
   if (lastQuery !== query) {

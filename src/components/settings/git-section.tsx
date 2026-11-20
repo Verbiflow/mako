@@ -14,6 +14,9 @@ import { PullRequestsAsMe } from "./pull-requests-as-me"
 import { desktopGitHubTokens } from "@/state/github-token"
 import { desktopGitHubAuthorships } from "@/state/github-authorship"
 import { useGitHub } from "@/state/github"
+import { IfCanChooseFolder } from "@/components/ui/machine-gate"
+import { tildePath } from "@/lib/project-query"
+import { chooseCloneInto, cloneDirectory, loadFound, useOpenProject, useRecentProjects } from "@/state/open-project"
 
 /** Settings › Git: how Changes looks, what writes commit messages, who cloud commits and pull requests are from, and worktrees. */
 export function GitSection() {
@@ -24,11 +27,47 @@ export function GitSection() {
       <ChangesView />
       <CommitMessages />
       <PullRequestsAsMe tokens={desktopGitHubTokens} authorships={desktopGitHubAuthorships} repository={repository} />
+      <IfCanChooseFolder>
+        <CloneInto />
+      </IfCanChooseFolder>
       <section className="flex flex-col gap-3">
         <h3 className="text-ui font-medium">Worktrees</h3>
         <WorktreesSection />
       </section>
     </div>
+  )
+}
+
+/** Where Open project clones and makes projects: a folder of the person's, or where most recent projects sit. */
+function CloneInto() {
+  const chosen = usePrefs((prefs) => prefs.cloneInto)
+  const home = useOpenProject((state) => state.home)
+  const recent = useRecentProjects()
+  useEffect(() => {
+    void loadFound()
+  }, [])
+  const folder = chosen ?? cloneDirectory(recent)
+  return (
+    <section className="flex flex-col gap-3">
+      <h3 className="text-ui font-medium">Projects</h3>
+      <ListCard>
+        <SettingRow
+          title="Clone into"
+          description={`${folder ? tildePath(folder, home) : "Your home folder"}${chosen ? "" : ", where most of your recent projects are"}. Open project clones GitHub repositories and makes new projects here.`}
+        >
+          <div className="flex shrink-0 items-center gap-2">
+            {chosen ? (
+              <Action tone="ghost" size="sm" onClick={() => setPref("cloneInto", undefined)}>
+                Use recent projects' folder
+              </Action>
+            ) : null}
+            <Action tone="outline" size="sm" data-clone-into onClick={() => void chooseCloneInto()}>
+              Choose…
+            </Action>
+          </div>
+        </SettingRow>
+      </ListCard>
+    </section>
   )
 }
 

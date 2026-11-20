@@ -54,6 +54,7 @@ import { declareWorktreeMethods } from "./worktree-methods.js"
 import { declareMoveMethods } from "./move-methods.js"
 import { declarePlanBuildMethods } from "./plan-build-methods.js"
 import { declareCheckoutHeadMethods } from "./checkout-head-methods.js"
+import { declareProjectMethods, ProjectFolders } from "./project-folders.js"
 import { declareThreadAppMethods } from "./app-methods.js"
 import { forgetGitHubReads, listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "../git/index.js"
 import type { MakoTools } from "../tools/index.js"
@@ -648,7 +649,8 @@ export interface WorkspaceMethodsDeps {
 export function declareWorkspaceMethods(methods: MethodTable, { workspaces, movers, live, automations, withHost, session, emit, machine, windowShown }: WorkspaceMethodsDeps): WatchedFile {
   declareSessionMethods(methods, session)
   const files = declareFileMethods(methods, { withHost, emit, machine })
-  methods.handle("mako:pick-folder", () => presentMachine(machine).chooseFolder("Choose a folder"))
+  methods.handle("mako:pick-folder", (defaultPath?: string) => presentMachine(machine).chooseFolder("Choose a project folder", defaultPath))
+  declareProjectMethods(methods, new ProjectFolders({ emit }))
   methods.handle("mako:external-editors", () => listExternalEditors())
   methods.handle("mako:open-in-editor", (path: string, editor?: string) =>
     withHost(async (h) => {

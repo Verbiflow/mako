@@ -69,7 +69,13 @@ export type HostEventBody =
   | { type: "view-hint"; hint: import("./view-hints.js").ViewHint }
   | { type: "application-lifecycle"; lifecycle: LifecycleState }
   | { type: "installation"; installation: UpdateInstallation }
-  | { type: "app-command"; command: "app.quit" | "app.updates" }
+  | { type: "app-command"; command: "app.quit" | "app.updates" | "workspace.open" }
+  /** The desktop app was handed a folder (dropped on its Dock icon, or `open -a Mako <folder>`): open it as a project. */
+  | { type: "app-open-project"; path: string }
+  /** How a clone a window asked for stands (`mako:project-clone`). */
+  | { type: "project-clone"; clone: import("./projects.js").CloneProgress }
+  /** The host's scan of home for checkouts finished (`mako:folders-found`). */
+  | { type: "folders-found"; found: import("./projects.js").FoundCheckouts }
   | { type: "app-shutdown"; requestId: string; action: LifecycleAction }
   | { type: "host-disconnected"; message: string; gone?: true }
   | { type: "host-reconnected" }

@@ -85,6 +85,10 @@ export interface Prefs {
   filesView: "tree" | "folders"
   /** New Threads start in their own Git worktree instead of the project folder. */
   newThreadsInWorktree: boolean
+  /** Where Open project clones repositories and makes new projects; unset, where most recent projects are. */
+  cloneInto?: string
+  /** Open project's scan of this Mac looks in Desktop, Documents and Downloads too, which macOS guards. */
+  scanGuardedFolders: boolean
   /** How a worktree's branch last landed in each project, by its main checkout: `merge` or `pull`. */
   landWith: PreferenceStringMap
   /** Archiving a Thread removes its worktree too, once its work is in its project's branch and nothing is left uncommitted. */
@@ -184,6 +188,7 @@ const defaults: Prefs = {
   usageMetric: "cost",
   usageWindow: "month",
   newThreadsInWorktree: false,
+  scanGuardedFolders: false,
   selectedDiffs: {},
   pinnedThreads: [],
   pinnedProjects: [],
@@ -415,6 +420,8 @@ function parsePrefs(value: JsonValue): Prefs | null {
     usageMetric: readChoice(value.usageMetric, ["cost", "tokens"], defaults.usageMetric),
     usageWindow: readChoice(value.usageWindow, USAGE_WINDOWS, defaults.usageWindow),
     newThreadsInWorktree: readBoolean(value.newThreadsInWorktree, defaults.newThreadsInWorktree),
+    cloneInto: readOptionalString(value.cloneInto)?.slice(0, 1024),
+    scanGuardedFolders: readBoolean(value.scanGuardedFolders, defaults.scanGuardedFolders),
     selectedDiffs: readStringRecord(value.selectedDiffs),
     pinnedThreads: readStringList(value.pinnedThreads, defaults.pinnedThreads),
     pinnedProjects: readStringList(

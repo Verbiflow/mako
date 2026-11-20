@@ -123,7 +123,7 @@ async function checkWindow() {
   assert.deepEqual(rows.map((row) => row.text), ["New thread", "Search", "Inbox", "Pull requests", "Setup", "Automations"])
   assert.ok(rows.every((row) => row.height === 28), `the top rows are 28px: ${JSON.stringify(rows)}`)
   assert.equal(await evaluate(`document.querySelector('[aria-label="Thread view"]')`), null, "no view switch")
-  assert.equal(await evaluate(`document.querySelector('[data-rail-threads-heading]')?.textContent`), "Threads")
+  assert.equal(await evaluate(`document.querySelector('[data-rail-threads-heading]')?.textContent`), "Projects")
   assert.equal(await evaluate(`[...document.querySelectorAll('.thread-jump-scope button')].some((node) => ['Projects', 'Recent', 'Status'].includes(node.innerText.trim()))`), false, "no Projects, Recent or Status button in the rail")
   console.log("PASS: six top rows, then Threads, no view switch")
 

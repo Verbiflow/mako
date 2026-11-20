@@ -9,7 +9,8 @@ import { foldTools } from "@/lib/tools"
 import { useChatFolders } from "@/state/chat-folders"
 import { useSession } from "@/state/session"
 import { chatFolderOf } from "@mako/host/contracts/chat-folders"
-import { FolderIcon, MessageCircleIcon } from "lucide-react"
+import { ProjectChip } from "@/components/transcript/project-chip"
+import { FolderDrop } from "@/components/shell/folder-drop"
 
 export function Transcript() {
   const sessionId = useSession((state) => state.meta?.sessionId)
@@ -36,9 +37,9 @@ function SessionTranscript({ sessionId }: { sessionId: string | undefined }) {
       {exchanges.length === 0 ? (
         <>
           <OceanScene />
-          <div className="min-h-0 flex-1 overflow-y-auto" data-empty-transcript>
+          <FolderDrop className="min-h-0 flex-1 overflow-y-auto" data-empty-transcript>
             <EmptyTranscript />
-          </div>
+          </FolderDrop>
         </>
       ) : (
         <ConversationTimeline
@@ -68,23 +69,7 @@ function EmptyTranscript() {
 
   return (
     <Welcome
-      detail={
-        chat ? (
-          <>
-            <MessageCircleIcon className="size-3 shrink-0" />
-            <span data-empty-chat className="truncate" title="The first message makes this chat a folder of its own in ~/Mako/Chats. Run git init there to make it a project.">
-              New chat, with its own folder in ~/Mako/Chats
-            </span>
-          </>
-        ) : (
-          <>
-            <FolderIcon className="size-3 shrink-0" />
-            <span className="truncate" title={cwd}>
-              {cwd ?? "no workspace"}
-            </span>
-          </>
-        )
-      }
+      detail={<ProjectChip cwd={cwd} chat={chat} />}
       model={model}
     >
       <Slot name="transcript.empty" meta={undefined} />
