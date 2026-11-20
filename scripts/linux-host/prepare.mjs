@@ -9,7 +9,7 @@ import { buildsDirectory, buildsFile, fetchBuilds, readBuilds } from "../lib/har
 /**
  * The build context of runtime/host/Dockerfile, from a built checkout:
  *
- *   app/    the root manifest and lockfile, the postinstall it runs, what prunes the install, and each
+ *   app/    the root manifest and lockfile, the postinstall it runs, and each
  *           workspace package as npm would publish it (its `files`), so the
  *           image installs the host from the same lockfile the Mac app ships
  *   proof/  the kit in scripts/linux-host that installs the harnesses and proves the host,
@@ -39,7 +39,7 @@ async function copy(source, destination) {
   files.push({ path: destination, bytes: data.length, sha256: createHash("sha256").update(data).digest("hex") })
 }
 
-for (const file of ["package.json", "package-lock.json", "LICENSE", "scripts/patch-cursor-sdk.mjs", "scripts/lib/anchored-patch.mjs", "scripts/patch-zod.mjs", "scripts/linux-host/prune-install.mjs"]) await copy(file, join("app", file))
+for (const file of ["package.json", "package-lock.json", "LICENSE", "scripts/patch-cursor-sdk.mjs", "scripts/lib/anchored-patch.mjs", "scripts/patch-zod.mjs"]) await copy(file, join("app", file))
 const folders = new Map()
 for (const entry of await readdir("packages", { withFileTypes: true }))
   if (entry.isDirectory()) folders.set(JSON.parse(await readFile(join("packages", entry.name, "package.json"), "utf8")).name, join("packages", entry.name))
