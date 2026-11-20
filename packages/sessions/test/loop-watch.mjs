@@ -50,38 +50,3 @@ test("work that throws or rejects is no longer under way; without names, work ju
   assert.doesNotMatch(work.describe(), /\(\d+ ms\)/)
   assert.equal(namedWork(undefined, "request ping", () => 7), 7)
 })
-
-test("an idle daemon's loop isn't looked at: work starts the watch, which stops a linger after the work ends", async () => {
-  let looks = 0
-  class CountedWork extends WorkUnderWay {
-    looked() {
-      looks++
-      super.looked()
-    }
-  }
-  const said = []
-  const work = new CountedWork()
-  const stop = watchLoop(work, (ms, during) => said.push({ ms, during }), { everyMs: 10, heldMs: 200, lingerMs: 50 })
-  try {
-    await tick(100)
-    assert.equal(looks, 0, "no look while nothing has run")
-    await namedWork(work, "request sync-status", async () => {
-      await tick(30)
-      spin(250)
-      await tick(10)
-    })
-    await tick(150)
-    assert.equal(said.length, 1, "a hold during the work is said")
-    assert.match(said[0].during, /request sync-status/)
-    const watched = looks
-    assert.ok(watched > 0, "looked while the work ran")
-    await tick(150)
-    assert.equal(looks, watched, "no look once the work ended and the linger passed")
-    namedWork(work, "scan sessions", () => spin(250))
-    await tick(60)
-    assert.equal(said.length, 2, "the next work starts the watch again")
-    assert.match(said[1].during, /scan sessions/)
-  } finally {
-    stop()
-  }
-})

@@ -12,14 +12,11 @@ export class WorkUnderWay {
   readonly #running = new Map<string, { count: number; since: number }>()
   /** Work begun since the watch last looked, ended or not: work that held the loop and ended within the hold. */
   readonly #begun = new Set<string>()
-  /** Told as each piece of work begins: a watch on the loop runs only while there's work (`watchLoop`). */
-  readonly #beginning = new Set<() => void>()
 
   /** Runs `work` named `label`: a hold of the loop while it runs names it. */
   run<Value>(label: string, work: () => Value): Value {
     if (this.#begun.size >= 64) this.#begun.clear()
     this.#begun.add(label)
-    for (const began of this.#beginning) began()
     const held = this.#running.get(label)
     if (held) held.count += 1
     else this.#running.set(label, { count: 1, since: performance.now() })
@@ -60,17 +57,6 @@ export class WorkUnderWay {
   looked(): void {
     this.#begun.clear()
   }
-
-  /** Nothing under way, and nothing begun since the watch last looked. */
-  get quiet(): boolean {
-    return this.#running.size === 0 && this.#begun.size === 0
-  }
-
-  /** Calls `began` as each piece of work begins; the returned function stops it. */
-  onBegin(began: () => void): () => void {
-    this.#beginning.add(began)
-    return () => this.#beginning.delete(began)
-  }
 }
 
 /** `work` named `label` where there's a `WorkUnderWay` to name it to; just `work` where there isn't. */
@@ -78,50 +64,26 @@ export function namedWork<Value>(names: WorkUnderWay | undefined, label: string,
   return names ? names.run(label, work) : work()
 }
 
-/** The loop is looked at this often while there's work. */
+/** The loop is looked at this often. */
 const EVERY_MS = 100
 /** A look this late is a hold worth a line: a third of the host's 3 s request timeout. */
 const HELD_MS = 1_000
-/** How long the watch keeps looking once the work has ended: what the work set going (its callbacks, a reply's write). */
-const LINGER_MS = 1_000
 
 /**
- * Watches the event loop while there's work, and says each hold of `heldMs` or more with what was under way
- * (`WorkUnderWay`): a request, a copy, a capture or a push starts it, and it stops `lingerMs` after the last of them
- * ended. An idle daemon has no timer, as an idle host has none (the host's `EventLoopWatch`): a look every 100 ms woke
- * a daemon with nothing to do ten times a second. The returned function stops it. Its timer never keeps the process
- * alive.
+ * Watches the event loop, and says each hold of `heldMs` or more with what was under way (`WorkUnderWay`). The
+ * returned function stops it. Its timer never keeps the process alive.
  */
-export function watchLoop(work: WorkUnderWay, say: (ms: number, during: string) => void, options: { everyMs?: number; heldMs?: number; lingerMs?: number } = {}): () => void {
+export function watchLoop(work: WorkUnderWay, say: (ms: number, during: string) => void, options: { everyMs?: number; heldMs?: number } = {}): () => void {
   const every = options.everyMs ?? EVERY_MS
   const held = options.heldMs ?? HELD_MS
-  const linger = options.lingerMs ?? LINGER_MS
-  let last = 0
-  let lingerUntil = 0
-  let timer: ReturnType<typeof setInterval> | undefined
-  const look = () => {
+  let last = performance.now()
+  const timer = setInterval(() => {
     const now = performance.now()
     const late = now - last - every
     last = now
     if (late >= held) say(Math.round(late), work.describe() || "nothing named")
-    const quiet = work.quiet
     work.looked()
-    if (quiet && now >= lingerUntil) {
-      clearInterval(timer)
-      timer = undefined
-    }
-  }
-  const watch = () => {
-    lingerUntil = performance.now() + linger
-    if (timer) return
-    last = performance.now()
-    timer = setInterval(look, every)
-    timer.unref?.()
-  }
-  const stopHearing = work.onBegin(watch)
-  return () => {
-    stopHearing()
-    clearInterval(timer)
-    timer = undefined
-  }
+  }, every)
+  timer.unref?.()
+  return () => clearInterval(timer)
 }
