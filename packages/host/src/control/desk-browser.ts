@@ -157,6 +157,11 @@ export class DeskBrowser {
     return this.pages.size
   }
 
+  /** Whether `tab` is one of its windows; its id is the one the window's maker knows it by. */
+  hasPage(tab: string): boolean {
+    return this.pages.has(tab)
+  }
+
   /**
    * Whether an agent is using the desk browser: waiting for a page, or having used it within `idleMs`. A profile host
    * that stops when idle stays up meanwhile (a fixture host stopped 10 s into a page its agent was waiting for), but

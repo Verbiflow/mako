@@ -25,6 +25,14 @@ const HEADER = 24
 export const CONTROL_VIDEO_DESCRIPTION_LIMIT = 4096
 export const CONTROL_VIDEO_DATA_LIMIT = 4 * 1024 * 1024
 
+/** The most bits a second live video spends at a size and rate, whichever encoder makes it: FFmpeg's cap and WebCodecs' target. */
+export function liveVideoBitrate(size: { width: number; height: number }, fps: number): number {
+  return Math.round(Math.min(8_000_000, Math.max(400_000, size.width * size.height * fps * 0.08)))
+}
+
+/** The longest side a packet may have (`encodeControlVideo` refuses more); captures are asked for no larger. */
+export const CONTROL_VIDEO_SIZE_LIMIT = 4096
+
 export function encodeControlVideo(packet: ControlVideoPacket): Uint8Array<ArrayBuffer> {
   const description = packet.kind === "key" ? packet.description : new Uint8Array()
   if ((packet.kind === "key" && !description.byteLength) || description.byteLength > CONTROL_VIDEO_DESCRIPTION_LIMIT ||
@@ -131,5 +139,5 @@ export function decodeControlVideoBatch(bytes: Uint8Array): ControlVideoBatch {
 }
 
 function validSize(value: number) {
-  return Number.isInteger(value) && value >= 2 && value <= 4096
+  return Number.isInteger(value) && value >= 2 && value <= CONTROL_VIDEO_SIZE_LIMIT
 }

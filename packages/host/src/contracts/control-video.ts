@@ -8,10 +8,11 @@ export const ControlVideoBoxSchema = z.object({
 }).strict()
 
 /**
- * What a client asks a cloud machine's host for when it watches a conversation's preview through the conversation's
- * Thread: live video of the tab its agent drives, no larger than `box` when it gives one. Each message of the stream
- * is one encoded `ControlVideoPacket`. Asked again on the same stream, the host takes the new box and sends a fresh
- * picture, a poster then a key frame, for a viewer that lost what it had.
+ * What a client asks a host for when it watches a conversation's preview through the conversation's Thread: live
+ * video of the tab its agent drives, or, on a Mac with its desktop app open, the app window, no larger than `box` when
+ * it gives one. Each message of the stream is one encoded `ControlVideoPacket`. Asked again on the same stream, the
+ * host takes the new box and sends a fresh picture (a poster, when it has the screencast's, then a key frame) for a
+ * viewer that lost what it had.
  */
 export const ControlVideoWatchSchema = z.object({
   kind: z.literal("control-video"),

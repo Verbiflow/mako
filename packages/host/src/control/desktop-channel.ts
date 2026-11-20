@@ -33,6 +33,12 @@ const ASK_TIMEOUT_MS = {
   "desk-page-destroy": 5_000,
   "update-check": 60_000,
   "update-install": 10_000,
+  // Opening may start a capture (the system's capturer takes a moment) and configure a hardware encoder.
+  "live-video-open": 15_000,
+  "live-video-frame": 10_000,
+  "live-video-key": 5_000,
+  "live-video-resize": 10_000,
+  "live-video-close": 5_000,
 } satisfies Record<DesktopMethod, number>
 
 const REPLACED_BY_DESKTOP = "Mako's desktop app opened; its windows replace the agent views app's."
@@ -50,6 +56,15 @@ interface Desktop {
 export interface DesktopChannelOptions {
   /** The attached desktop's updater moved, or the desktop that had one left (nothing). */
   updated?(state: UpdateState | undefined): void
+}
+
+/** What a live video session the desktop encodes hears from it (`contracts/live-video.ts`). */
+export interface LiveVideoListener {
+  /** One encoded `ControlVideoPacket`. */
+  packet(bytes: Uint8Array): void
+  /** A `frames` picture the encoder dropped: no unit comes for it. */
+  dropped(sequence: number): void
+  ended(reason: string): void
 }
 
 interface Pending {
@@ -75,6 +90,7 @@ export class DesktopChannel {
   private closed = false
   private readonly pending = new Map<number, Pending>()
   private readonly pages = new Map<string, RelayedPage>()
+  private readonly videos = new Map<string, { attachment: number; listener: LiveVideoListener }>()
   private readonly options: DesktopChannelOptions
 
   constructor(options: DesktopChannelOptions = {}) {
@@ -205,6 +221,23 @@ export class DesktopChannel {
     return page
   }
 
+  /**
+   * Hear a live video session the attached desktop encodes, before asking it to open: its units, its drops and its
+   * end. The session ends here when its desktop leaves. Returns the way to stop hearing it.
+   */
+  liveVideo(session: string, listener: LiveVideoListener): () => void {
+    const attachment = this.desktop?.attachment
+    if (attachment === undefined) {
+      listener.ended("Mako's desktop app isn't open.")
+      return () => {}
+    }
+    const entry = { attachment, listener }
+    this.videos.set(session, entry)
+    return () => {
+      if (this.videos.get(session) === entry) this.videos.delete(session)
+    }
+  }
+
   close(): void {
     this.closed = true
     if (this.desktop) this.detach(this.desktop, "The host is closing.")
@@ -220,6 +253,17 @@ export class DesktopChannel {
     if (frame.kind === "update") {
       desktop.update = frame.state
       this.options.updated?.(frame.state)
+      return
+    }
+    if (frame.kind === "live-video") {
+      const video = this.videos.get(frame.session)
+      if (!video || video.attachment !== desktop.attachment) return
+      if ("packet" in frame) video.listener.packet(Buffer.from(frame.packet, "base64"))
+      else if ("dropped" in frame) video.listener.dropped(frame.dropped)
+      else {
+        this.videos.delete(frame.session)
+        video.listener.ended(frame.ended)
+      }
       return
     }
     if (frame.kind === "reply") {
@@ -246,6 +290,11 @@ export class DesktopChannel {
       pending.fail(new Error(reason))
     }
     for (const page of this.pages.values()) if (page.attachment === desktop.attachment) page.ended(reason)
+    for (const [session, video] of this.videos) {
+      if (video.attachment !== desktop.attachment) continue
+      this.videos.delete(session)
+      video.listener.ended(reason)
+    }
     if (!desktop.response.writableEnded) desktop.response.end()
     if (desktop.update) this.options.updated?.(undefined)
     hostLog("desktop", "detached", { pid: desktop.pid, role: desktop.role, reason })

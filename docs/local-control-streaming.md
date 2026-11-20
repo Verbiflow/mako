@@ -567,3 +567,72 @@ difference that isn't. A second build of the same image booted 111 ms
 slower than the first, so how a build lays out the machine's snapshot
 matters as much as its contents. Boot is one request the agent answers from
 memory, so no Mako code on it got slower.
+
+## November 19: WebCodecs in the desktop app
+
+Live video no longer needs FFmpeg where Mako's desktop app is open. The desktop
+keeps a page with no window (`src/live-video/page.ts`, loaded by
+`electron/live-video-electron.ts`) whose WebCodecs `VideoEncoder` encodes H.264
+with the platform's hardware (VideoToolbox, Media Foundation, VA-API), else
+Chromium's OpenH264. The host asks for it on `/desktop`
+([`contracts/live-video.ts`](../packages/host/src/contracts/live-video.ts)): a
+session opens, and each unit comes back as an encoded `ControlVideoPacket`. The
+encoder (`src/lib/live-video-encoder.ts`) keeps the `avcC` WebCodecs gives only
+with its first key frame and puts it on every key unit, holds at most four
+frames in a hardware encoder and two in software, flushes one that sits on a
+full queue, and falls back from hardware to software when hardware is missing
+or fails. `BrowserVideo` keeps its pacing, posters, recovery key frames and
+acknowledged backlog; a source that encodes for itself (`EncodedVideoSource`) is
+asked for a key frame instead of having its encoder restarted.
+
+- **Mako's own pages** (the desk browser's hidden windows) are captured as a
+  tab, `webContents.getMediaSourceId`: Chromium sends a frame only when the
+  page paints, so there's no JPEG, no screencast and nothing for a still page.
+  The CDP screencast stays as the fallback, and takes over if the capture
+  can't start or stops while viewers watch.
+- **Any app's window** (computer use) is captured through `desktopCapturer`
+  (ScreenCaptureKit, Windows Graphics Capture, PipeWire or X11) into the same
+  encoder. Those capturers repeat a still window about 29 times a second, so
+  each frame passes a change gate first (`src/lib/live-video-gate.ts`): a
+  160×100 copy made on the GPU is compared with the last, and an unchanged
+  picture is encoded twice more, then once a second. A window's preview now
+  streams to remote viewers; it needs the desktop app.
+- **A tab elsewhere** (a person's Chrome, a direct CDP browser) still sends
+  the screencast's JPEGs. With the desktop app open they are decoded and
+  encoded there (`desktopLiveEncoder`), else by FFmpeg, as before.
+- A Mac now serves its previews' video to the account's other devices on its
+  gateway link (`controlVideoMedia`), as a cloud machine does.
+
+Measured on an M3 Max with the spike's scene (a 1280×800-point window, 2560×1600
+pixels, animating every frame), 15 s per case, Electron's processes and FFmpeg
+summed, host in the Electron process:
+
+| Viewer box, cap | Scene alone | Screencast + FFmpeg | Tab capture + WebCodecs |
+| --- | ---: | ---: | ---: |
+| 1280×800, 30 | 40.8% | 129.5% (30 fps, 11 ms) | 62.6% (30 fps, 8 ms) |
+| 2560×1600, 60 | 58.8% | 473.0% (60 fps, 29 ms) | 62.4% (60 fps, 13 ms) |
+| 1280×800, 30, still page | 0.2% | 0.2% | 0.2% (no frames) |
+
+Times are frame age at the viewer, median. Bandwidth matches (2.3 and 6.6–7.2
+Mbit/s). The screencast's JPEG encoding is most of the old cost (78% and 295%
+in the browser process), which the tab capture removes; the encode itself moves
+to the GPU.
+
+Encoding the screencast's JPEGs in the desktop instead of FFmpeg, with the host
+as its own process: 180.4% against 197.7% at 1280×800/30, and 422.5% (50 fps)
+against 417.9% (46.5 fps) at 2560×1600/60, with frame age 17 → 35 ms and
+52 → 89 ms. The JPEGs' extra hop and decode cost what FFmpeg did: this path is
+for being off FFmpeg, not for speed. With the host inside Electron's browser
+process it fell to 8 fps at 2560×1600/60. Window capture needs an awake,
+unlocked screen and wasn't measured; the gate was, on a canvas that repeats its
+picture at 30 fps: at most four frames in 2.5 s.
+
+Still to do: a cloud machine's tab. `ControlPreviews` takes a `PreviewCapture`
+whose `tab()` can return an `EncodedVideoSource` for the machine's Chromium:
+start it with `--auto-accept-this-tab-capture`, run the page's
+`CaptureSession` with `getDisplayMedia({ preferCurrentTab: true })` in an
+isolated world, and return units over a `Runtime.addBinding` binding. It has
+to open again after every navigation, which ends the isolated world and its
+capture, and on the machine's two vCPUs and OpenH264 the spike's tab capture
+held only 22 fps at 1280×800/60, so it needs measuring before it replaces
+FFmpeg there.
