@@ -1,7 +1,10 @@
-import type { spawn, fork, ChildProcess, ExecFileException, ExecFileOptions } from "node:child_process"
+import type { spawn, fork, ChildProcess, ExecFileException, ExecFileOptions, SpawnOptions } from "node:child_process"
 import { processRunner } from "@mako/git/process-runner"
 import { basename } from "node:path"
+import { resolveExecutable } from "./executable.js"
 import { hostStopping, type ProbeOptions } from "./host-stopping.js"
+import { onWindows } from "./platform.js"
+import { isBatchFile, windowsLaunch } from "./windows-launch.js"
 
 /** Programs that only read the machine, which the host's probe child runs for it (`HostProbes`). */
 const PROBES = new Set(["ps", "pgrep", "lsof", "sysctl", "footprint", "vm_stat", "pmset", "notifyutil"])
@@ -80,10 +83,25 @@ export function hostExecFile(file: string, args: readonly string[], options: Omi
 // SAFETY: the underlying runner preserves Node's stdio overloads; this wrapper only registers ownership.
 const hostSpawn = ((...args: Parameters<typeof spawn>) => {
   hostStopping()?.signal.throwIfAborted()
-  const child = processRunner.spawn(...args)
+  const child = processRunner.spawn(...(onWindows() ? windowsSpawn(args) : args))
   followHostChild(child, args[0])
   return child
 }) as typeof spawn
+
+/**
+ * A spawn as Windows can run it: a batch file (an npm `.cmd` shim, most agent CLIs) as Node on its script or through
+ * ComSpec (`windowsLaunch`), since Node refuses to spawn one itself.
+ */
+function windowsSpawn(args: Parameters<typeof spawn>): Parameters<typeof spawn> {
+  const [file, second, third] = args
+  if (!isBatchFile(file)) return args
+  const words = Array.isArray(second) ? second : []
+  // SAFETY: spawn's second argument is its words when an array, otherwise its options, as Node reads it.
+  const options = (Array.isArray(second) ? third : second) as SpawnOptions | undefined
+  const env = options?.env ?? process.env
+  const launch = windowsLaunch(file, words, env, resolveExecutable("node", env) ?? process.execPath)
+  return [launch.file, launch.args, { ...options, windowsVerbatimArguments: launch.verbatim || options?.windowsVerbatimArguments }]
+}
 
 // SAFETY: the underlying runner preserves Node's fork overloads; this wrapper only registers ownership.
 const hostFork = ((...args: Parameters<typeof fork>) => {

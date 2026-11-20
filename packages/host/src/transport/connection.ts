@@ -10,6 +10,7 @@ import { hostCallReplay } from "../contracts/host-call-policy.js"
 import { requestRuntimePreview, requestRuntimeVideo } from "./preview.js"
 
 import { readRuntimeResponse, RuntimeResponseLimitError, type RuntimeTransfer } from "./response.js"
+import { HOST_PROOF_HEADER, HostImpostorError, hostPipeProof, proofHolds } from "./pipe.js"
 
 
 // No socket, a socket nobody accepts on, or a plain file where the socket was: nothing listens.
@@ -61,6 +62,8 @@ interface RuntimeRequest<Reply> {
   onTransfer?: (transfer: RuntimeTransfer) => void
   history?: boolean
   correlationId?: string
+  /** What a 200 answer must say in `HOST_PROOF_HEADER` to be the host's (`pipe.ts`); nothing for a Unix socket. */
+  proof?: string
 }
 
 /** A body that is JSON of `schema`'s shape. */
@@ -78,6 +81,7 @@ export async function runtimeRequest<Reply>({
   onTransfer,
   history = false,
   correlationId,
+  proof,
 }: RuntimeRequest<Reply>): Promise<Reply> {
   return new Promise((resolve, reject) => {
     const headers = new Map([["content-type", "application/json"]])
@@ -95,6 +99,11 @@ export async function runtimeRequest<Reply>({
       },
       (response) => {
         receivedReply = true
+        if (proof !== undefined && response.statusCode === 200 && !proofHolds(proof, response.headers[HOST_PROOF_HEADER])) {
+          response.resume()
+          reject(new HostImpostorError(socket))
+          return
+        }
         const invalidReply = (error: Error) => {
           // The reply stalled past the deadline: slow, not gone.
           if (error instanceof HostCallTimeoutError) { reject(error); return }
@@ -168,8 +177,11 @@ export type RuntimeProbe =
   | { state: "ready"; info: RuntimeInfo }
 
 export async function probeRuntime(socket: string, options: { timeoutMs?: number } = {}): Promise<RuntimeProbe> {
+  // A profile's pipe drawn again since this caller learned it: its host is elsewhere, and whatever holds it isn't one.
+  const proof = hostPipeProof(socket)
+  if (proof === null) return { state: "absent" }
   try {
-    return { state: "ready", info: await runtimeRequest({ socket, path: "/health", read: jsonBody(RuntimeInfoSchema), timeoutMs: options.timeoutMs ?? 10_000 }) }
+    return { state: "ready", info: await runtimeRequest({ socket, path: "/health", read: jsonBody(RuntimeInfoSchema), timeoutMs: options.timeoutMs ?? 10_000, proof }) }
   } catch (error) {
     if (!(error instanceof Error)) throw error
     if (refused(error)) return { state: "absent" }

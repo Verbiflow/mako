@@ -7,6 +7,7 @@ import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { markedProcesses, processesHolding, processFolders, type MarkedProcess } from "../base/marked-processes.js"
 import { processIdentityMatches, processStartedAt } from "../base/process-liveness.js"
+import { processTreeAlive, signalProcessTree } from "../base/process-tree.js"
 import { errorMessage } from "../base/error-message.js"
 import type { AgentRefused, ChildOrigin, ChildRole, ChildThread, FollowedRun, ThreadParent } from "../contracts/agents.js"
 import { internalDiscoveredRun } from "../contracts/agents.js"
@@ -1001,27 +1002,12 @@ function signalable(pid: number): boolean {
   }
 }
 
-/** Whether any process of the group `pid` leads still runs; false for one that leads none. */
+/** Whether any process of the tree `pid` leads still runs; false for one that leads none. */
 function groupRuns(pid: number): boolean {
-  try {
-    process.kill(-pid, 0)
-    return true
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM"
-  }
+  return processTreeAlive(pid)
 }
 
-/** Its process group when it leads one, else the process alone. */
+/** Its process group when it leads one, else the process alone; on Windows the tree under it. */
 function signalGroup(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal)
-    return
-  } catch {
-    // Not a group leader: a run its own shell started.
-  }
-  try {
-    process.kill(pid, signal)
-  } catch {
-    // Already gone.
-  }
+  signalProcessTree(pid, signal)
 }

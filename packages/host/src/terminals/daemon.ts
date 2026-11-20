@@ -11,6 +11,7 @@ import {
 import { childProcessEnv } from "../base/child-environment.js"
 import { TerminalHistoryFilter } from "./history-filter.js"
 import { killTerminalProcessGroups } from "./process-groups.js"
+import { terminalShell } from "./shell.js"
 import { TerminalSaves } from "./saves.js"
 import type { TerminalSession } from "../contracts/terminal.js"
 import {
@@ -238,12 +239,6 @@ function listSessions() {
     .sort((left, right) => right.createdAt - left.createdAt)
 }
 
-function shellCommand() {
-  if (process.platform === "win32") {
-    return { file: process.env.COMSPEC ?? "powershell.exe", args: [] }
-  }
-  return { file: process.env.SHELL ?? "/bin/sh", args: ["-l"] }
-}
 
 async function createSession(
   request: Extract<TerminalRequest, { type: "create" }>
@@ -262,7 +257,7 @@ async function createSession(
   }
   delete env.ELECTRON_RUN_AS_NODE
   await prepareMacosTerminalLogin()
-  const shell = wrapMacosTerminalLogin(shellCommand(), env)
+  const shell = wrapMacosTerminalLogin(terminalShell(), env)
   const pty = spawnPty(shell.file, shell.args, {
     name: "xterm-256color",
     cwd: request.cwd,

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { lstat, realpath, rename, stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, join, sep } from "node:path"
 import { z } from "zod"
 import { chatsRoot } from "../base/chats.js"
 import { findExecutable } from "../base/executable.js"
@@ -9,13 +9,13 @@ import { hostCommand } from "../base/host-command.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { chatFolderOf } from "../contracts/chat-folders.js"
 import type { WorkspaceConversations } from "./conversations.js"
-import { expandPath } from "./project-folders.js"
+import { expandPath, trimmedPath, typedWholePath, wholePathAdvice } from "./project-folders.js"
 
 /** A chat to turn into a project: its folder under `~/Mako/Chats`, and where the project goes (`~/…` or `/…`). */
 export const ChatProjectRequestSchema = z.object({ folder: z.string().min(1).max(4096), to: z.string().min(1).max(4096) }).strict()
 export type ChatProjectRequest = z.infer<typeof ChatProjectRequestSchema>
 
-const holds = (folder: string, path: string) => path === folder || path.startsWith(`${folder}/`)
+const holds = (folder: string, path: string) => path === folder || path.startsWith(`${folder}${sep}`) || path.startsWith(`${folder}/`)
 
 /**
  * Turns a chat (a Thread started without a project, in a folder of its own under `~/Mako/Chats`) into a project: its
@@ -35,9 +35,9 @@ export async function makeChatProject(
   if (!(await stat(chat).then((found) => found.isDirectory(), () => false))) throw new Error("The chat's folder isn't there anymore.")
 
   const typed = to.trim()
-  if (!typed.startsWith("/") && !typed.startsWith("~/")) throw new Error("Write the project's whole path, starting with ~/ or /.")
+  if (!typedWholePath(typed)) throw new Error(`Write the project's whole path, ${wholePathAdvice()}.`)
   if (typed.split(/[\\/]/).some((part) => part === ".." || part === ".")) throw new Error("Write the project's whole path, without . or .. in it.")
-  const path = expandPath(typed.replace(/\/+$/, ""), home)
+  const path = expandPath(trimmedPath(typed), home)
   if (basename(path).startsWith(".")) throw new Error("A project's folder name can't start with a dot.")
   if (holds(root, path)) throw new Error("A project goes outside the Chats folder.")
   if (await lstat(path).then(() => true, () => false)) throw new Error(`${path} already exists. Pick another name.`)

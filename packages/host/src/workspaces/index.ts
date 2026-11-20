@@ -17,6 +17,7 @@ import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { WorktreeRetention, WORKTREE_RETENTION_MS } from "./worktree-retention.js"
 import { SUMMARY_PASS_MS } from "./thread-worktrees.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { onWindows } from "../base/platform.js"
 import type { ThreadStore, ThreadLifecycle } from "../threads/index.js"
 import { portListening, ThreadEnvironments } from "./thread-environment.js"
 import { ThreadProcesses } from "./thread-processes.js"
@@ -295,6 +296,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   // A worktree's files changing is heard from the tree watches the host already keeps, never from one of its own.
   if (worktrees) deps.trees?.follow((root, paths) => worktrees.filesHeard(root, paths))
   const openFiles = async (): Promise<string[]> => {
+    if (onWindows()) throw new Error("Open-file inspection is unavailable on Windows.")
     const { stdout, stderr } = await reader.run("lsof", ["-nP", "-F0n", "-u", String(process.getuid?.())], { timeout: 10_000, maxBuffer: 32 * 1024 * 1024 })
     if (stderr.trim() || !stdout.trim()) throw new Error("Open-file inspection was incomplete.")
     const paths: string[] = []

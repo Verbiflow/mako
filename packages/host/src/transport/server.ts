@@ -1,6 +1,7 @@
 import {
   createServer,
   type IncomingMessage,
+  type OutgoingHttpHeaders,
   type ServerResponse,
 } from "node:http"
 import { randomUUID } from "node:crypto"
@@ -15,6 +16,7 @@ import { CORRELATION_HEADER, CorrelationIdSchema, LIVE_FORM_HEADER, RuntimeCallS
 import { encodeRuntimeEvent, payloadFor, runtimeEventLine, runtimeSuccessBody, type EncodedValue, type RuntimeEvent, type RuntimeEventChannel } from "../contracts/runtime-value.js"
 import { HOST_CLOSED_CODE, HOST_RECONNECTING_MESSAGE, HOST_RESTARTING_CODE } from "../contracts/host-connection.js"
 import { historyChangedNotice } from "./gateway.js"
+import { HOST_PROOF_HEADER, hostPipeProof, isPipePath } from "./pipe.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { topic } from "../base/topic.js"
 import { failedCallWords } from "./failed-calls.js"
@@ -113,7 +115,7 @@ async function readSecretKeyOffer(request: IncomingMessage): Promise<Buffer> {
 }
 
 /**
- * Host transport shared by desktop and browser gateways on a private Unix socket.
+ * Host transport shared by desktop and browser gateways on a private Unix socket, or on Windows a named pipe.
  * `/secret-key` and `/desktop` are the desktop app's alone: browser gateways
  * forward only `/rpc`, `/events` and `/file/`, and the cloud gateway calls the
  * host in-process.
@@ -138,6 +140,10 @@ export async function startWebHost(
   video?: (args: unknown[], client: string) => Promise<Uint8Array>
 ) {
   const info = () => (runtime instanceof Function ? runtime() : runtime)
+  // On a profile's pipe (Windows), what tells its clients this is its host and not a program holding its name.
+  const proof = hostPipeProof(socket)
+  const healthHeaders: OutgoingHttpHeaders = { "content-type": "application/json" }
+  if (proof) healthHeaders[HOST_PROOF_HEADER] = proof
   /** Each subscriber, and the live form it reads (`x-mako-live`, `live-form.ts`): one that says none reads form 1. */
   const streams = new Map<ServerResponse, EventStream>()
   // A cloud machine's Thread hears every event through the outlet, so the work done for subscribers runs for it too.
@@ -200,7 +206,7 @@ export async function startWebHost(
     }
     if (request.method === "GET" && request.url === "/health" && runtime) {
       if (process.env.MAKO_RUNTIME_TRACE === "1") console.info("[mako-runtime] health requested")
-      response.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(info()))
+      response.writeHead(200, healthHeaders).end(JSON.stringify(info()))
       return
     }
     if (request.method === "GET" && request.url === "/packages") {
@@ -375,7 +381,8 @@ export async function startWebHost(
     server.once("error", reject)
     server.listen(socket, resolve)
   })
-  await chmod(socket, 0o600)
+  // A pipe has no mode; who may write to it is its DACL's to say (`pipe.ts`).
+  if (!isPipePath(socket)) await chmod(socket, 0o600)
   const stopHeartbeat = jobs.every("keep event streams alive", 15_000, () => {
     for (const stream of streams.keys()) stream.write("\n")
   }, { needs: [subscribed] })

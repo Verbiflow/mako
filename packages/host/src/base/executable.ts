@@ -1,7 +1,8 @@
-import { accessSync, constants, readdirSync, type Dirent } from "node:fs"
-import { access, readdir } from "node:fs/promises"
+import { accessSync, constants, readdirSync, statSync, type Dirent } from "node:fs"
+import { access, readdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { delimiter, dirname, isAbsolute, join } from "node:path"
+import { delimiter, dirname, extname, isAbsolute, join } from "node:path"
+import { onWindows } from "./platform.js"
 
 /** nvm's Node versions under `nvmRoot`, newest first, each one's folder of executables. */
 function nvmBinsOf(nvmRoot: string, entries: Dirent[]): string[] {
@@ -19,7 +20,7 @@ export function executableCandidates(
   env: NodeJS.ProcessEnv = process.env,
   home = homedir()
 ): string[] {
-  if (isAbsolute(command)) return [command]
+  if (isAbsolute(command)) return commandNames(command, env)
   const nvmRoot = join(home, ".nvm", "versions", "node")
   const nvmBins = (() => {
     try {
@@ -31,9 +32,32 @@ export function executableCandidates(
   return candidatesIn(command, env, home, nvmBins)
 }
 
+/**
+ * An environment's variable by `name`, in any case on Windows, which names `PATH` as `Path` and forgives the case; a
+ * copy of `process.env` no longer does.
+ */
+export function environmentVariable(env: NodeJS.ProcessEnv, name: string, windows = onWindows()): string | undefined {
+  if (!windows || env[name] !== undefined) return env[name]
+  const key = Object.keys(env).find((key) => key.toUpperCase() === name)
+  return key === undefined ? undefined : env[key]
+}
+
+/**
+ * The names `command` is found by in a folder: on Windows only those ending in one of `PATHEXT`'s extensions
+ * (`.COM;.EXE;.BAT;.CMD` when it's unset), so `grok` is `grok.cmd` or `grok.exe` and never the extensionless shell
+ * script npm writes beside its shim; a command already ending in one is looked for as it is.
+ */
+export function commandNames(command: string, env: NodeJS.ProcessEnv, windows = onWindows()): string[] {
+  if (!windows) return [command]
+  const extensions = (environmentVariable(env, "PATHEXT", true) || ".COM;.EXE;.BAT;.CMD").split(";").map((ext) => ext.trim().toLowerCase()).filter((ext) => ext.startsWith("."))
+  return extensions.includes(extname(command).toLowerCase()) ? [command] : extensions.map((ext) => command + ext)
+}
+
 function candidatesIn(command: string, env: NodeJS.ProcessEnv, home: string, nvmBins: string[]): string[] {
+  const names = commandNames(command, env)
+  if (isAbsolute(command)) return names
   return [
-    ...(env.PATH ?? "").split(delimiter).filter(Boolean),
+    ...(environmentVariable(env, "PATH") ?? "").split(delimiter).filter(Boolean),
     env.NVM_BIN,
     join(home, ".local", "bin"),
     join(home, ".codex", "bin"),
@@ -47,7 +71,7 @@ function candidatesIn(command: string, env: NodeJS.ProcessEnv, home: string, nvm
     "/usr/local/bin",
   ]
     .filter((directory) => directory !== undefined)
-    .map((directory) => join(directory, command))
+    .flatMap((directory) => names.map((name) => join(directory, name)))
 }
 
 export function environmentForExecutable(
@@ -55,10 +79,12 @@ export function environmentForExecutable(
   env: NodeJS.ProcessEnv
 ): NodeJS.ProcessEnv {
   const bin = dirname(executable)
-  const paths = (env.PATH ?? "").split(delimiter).filter(Boolean)
+  const paths = (environmentVariable(env, "PATH") ?? "").split(delimiter).filter(Boolean)
+  // One PATH, under the name the environment already had it by: Windows would see two in any case as one.
+  const key = Object.keys(env).find((key) => key.toUpperCase() === "PATH" && onWindows()) ?? "PATH"
   return {
     ...env,
-    PATH: [bin, ...paths.filter((path) => path !== bin)].join(delimiter),
+    [key]: [bin, ...paths.filter((path) => path !== bin)].join(delimiter),
   }
 }
 
@@ -69,7 +95,9 @@ export function resolveExecutable(
 ): string | null {
   for (const candidate of executableCandidates(command, env, home)) {
     try {
-      accessSync(candidate, constants.X_OK)
+      // Windows has no execute bit (`X_OK` asks only that it exists): there a file is what runs.
+      if (!onWindows()) accessSync(candidate, constants.X_OK)
+      else if (!statSync(candidate).isFile()) continue
       return candidate
     } catch {
       continue
@@ -89,7 +117,7 @@ export class Executables {
   private readonly found = new Map<string, string>()
 
   async find(command: string, env: NodeJS.ProcessEnv = process.env, home = homedir()): Promise<string | null> {
-    const key = [command, env.PATH ?? "", env.NVM_BIN ?? "", home].join("\0")
+    const key = [command, environmentVariable(env, "PATH") ?? "", env.NVM_BIN ?? "", home].join("\0")
     const kept = this.found.get(key)
     if (kept && await runs(kept)) return kept
     this.found.delete(key)
@@ -103,7 +131,7 @@ export class Executables {
 export async function findExecutable(command: string, env: NodeJS.ProcessEnv = process.env, home = homedir()): Promise<string | null> {
   const nvmRoot = join(home, ".nvm", "versions", "node")
   const candidates = isAbsolute(command)
-    ? [command]
+    ? commandNames(command, env)
     : candidatesIn(command, env, home, await readdir(nvmRoot, { withFileTypes: true }).then((entries) => nvmBinsOf(nvmRoot, entries), () => []))
   for (const candidate of candidates) if (await runs(candidate)) return candidate
   return null
@@ -111,7 +139,8 @@ export async function findExecutable(command: string, env: NodeJS.ProcessEnv = p
 
 async function runs(path: string): Promise<boolean> {
   try {
-    await access(path, constants.X_OK)
+    if (!onWindows()) await access(path, constants.X_OK)
+    else return (await stat(path)).isFile()
     return true
   } catch {
     return false

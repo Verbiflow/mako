@@ -6,6 +6,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { ensurePrivateDirectory } from "../base/private-directory.js"
+import { keptPipe } from "../base/kept-pipe.js"
 import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSnapshot } from "../contracts/terminal.js"
 import {
   JsonLineDecoder,
@@ -36,7 +37,9 @@ const SOCKET_PATH_BYTES = 104
  */
 export function terminalEndpoint(stateDir: string) {
   const owner = createHash("sha256").update(stateDir).digest("hex")
-  if (onWindows()) return `\\\\.\\pipe\\mako-terminal-${owner.slice(0, 20)}`
+  // A name drawn at random and kept in the profile, which only its user can read: one derived from the folder's path
+  // is one another account on the machine could take first (`base/kept-pipe.ts`).
+  if (onWindows()) return keptPipe(join(stateDir, "pipe.json"), `mako-terminal-${owner.slice(0, 20)}`).pipe
   const local = join(stateDir, "daemon.sock")
   if (Buffer.byteLength(local) <= SOCKET_PATH_BYTES) return local
   return join(tmpdir(), `mako-terminal-${owner.slice(0, 16)}`, "daemon.sock")
@@ -284,6 +287,8 @@ export class TerminalDaemonClient {
       {
         detached: true,
         stdio: "ignore",
+        // Windows gives a detached child a console window of its own; the daemon shows none.
+        windowsHide: true,
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       }
     )
