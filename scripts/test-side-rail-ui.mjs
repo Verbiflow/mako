@@ -8,8 +8,9 @@ import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
  * The right rail and the tab model on the mock bridge's Apex (`?mock&app=apex`), the web desk and the phone. The rail
- * is the left rail's twin: the same tone and row, a row a surface in a fixed order with its reading, needs-you in the
- * attention hue, arrows between rows, Agents offered only with someone to show. Changes is a list and a diff opens as
+ * is one bar of tabs on the left rail's tone, a tab a surface in a fixed order, needs-you in the attention hue, arrows
+ * between tabs, Agents offered only with someone to show; Changes counts its lines in its own header, beside the
+ * branch chip that opens push and history. Changes is a list and a diff opens as
  * a tab; a Fin has no tab until it's opened, then one, and giving it up leaves none. In a laptop's browser the rail is
  * Changes and Files the same way, past the shell's gutter with no line, and the phone draws no chip per Fin.
  * Screenshots land in the printed directory. `--url <base>` uses a running Vite server instead of starting one.
@@ -91,6 +92,19 @@ async function check() {
     await seen(selector)
     await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail: 1 })); node.click(); return true })()`)
   }
+  // The tab bar never scrolls or clips: every tab inside it, whatever its readings had to give up to fit.
+  const tabsFit = (scope = ".companion-panel") => evaluate(`(() => {
+    const bar = document.querySelector(${JSON.stringify(scope)} + ' [data-side-rail]')
+    const r = bar.getBoundingClientRect()
+    const clipped = [...bar.querySelectorAll('[role=tab]')].filter((tab) => { const t = tab.getBoundingClientRect(); return t.left < r.left - 0.5 || t.right > r.right + 0.5 }).map((tab) => tab.dataset.surfaceId)
+    return { scrolls: bar.scrollWidth > bar.clientWidth + 0.5, clipped, fit: bar.dataset.fit, width: Math.round(r.width) }
+  })()`)
+  const assertFits = async (label, scope) => {
+    const fit = await tabsFit(scope)
+    assert.equal(fit.scrolls, false, `${label}: the tab bar doesn't scroll (${JSON.stringify(fit)})`)
+    assert.deepEqual(fit.clipped, [], `${label}: no tab clipped (${JSON.stringify(fit)})`)
+    return fit
+  }
   const rowIds = () => evaluate("[...document.querySelectorAll('[data-side-rail] [data-surface-id]')].map((row) => row.dataset.surfaceId)")
   const selectedRow = () => evaluate("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId")
 
@@ -108,26 +122,36 @@ async function check() {
 
   // A row a surface, in their order, with Agents' Fins there to show.
   assert.deepEqual(await rowIds(), ["changes", "files", "control", "agents", "setup"], "the surfaces, in their fixed order")
-  assert.equal(await evaluate("document.querySelector('[data-side-rail]').getAttribute('aria-orientation')"), "vertical")
+  assert.equal(await evaluate("document.querySelector('[data-side-rail]').getAttribute('aria-orientation')"), "horizontal")
   // An Apex's rail opens on its Overview, over what the rail last showed; Changes is a press away, and kept for the Thread.
   assert.equal(await selectedRow(), "agents", "an Apex's rail opens on its Overview")
-  assert.equal(await evaluate("document.querySelector('[data-side-rail] [data-surface-id=agents]').getAttribute('aria-label')"), "Overview", "named so on an Apex")
+  assert.match(await evaluate("document.querySelector('[data-side-rail] [data-surface-id=agents]').getAttribute('aria-label')"), /^Overview, 2 need you$/, "named so on an Apex, its reading's words in its name")
   await until("Boolean(document.querySelector('.companion-panel [data-apex-fins]'))", "the Overview's Fins")
   await click("[data-side-rail] [data-surface-id=changes]")
   await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'changes'", "Changes from its row")
   assert.equal(await selectedRow(), "changes", "the rail on Changes once it's picked")
 
-  // The twin: the same tone as the left rail, the same row.
-  const twin = await evaluate(`(() => {
-    const left = document.querySelector('[data-rail-top-row="inbox"]')
-    const right = document.querySelector('[data-surface-id="files"]')
-    const style = (node) => { const each = getComputedStyle(node); return { height: node.getBoundingClientRect().height, font: each.fontSize, color: each.color, padding: each.paddingLeft } }
+  // Tabs: one 40px bar, 28px tabs in the 14px UI size, words without icons; the open one raised, the rest muted.
+  const tabs = await evaluate(`(() => {
+    const bar = document.querySelector('[data-side-rail]')
+    const probe = document.createElement('span')
+    probe.className = 'bg-raised text-muted-foreground'
+    document.body.append(probe)
+    const raised = getComputedStyle(probe).backgroundColor
+    const muted = getComputedStyle(probe).color
+    probe.remove()
+    const tab = (id) => { const node = bar.querySelector('[data-surface-id=' + id + ']'); const style = getComputedStyle(node); return { height: node.getBoundingClientRect().height, font: style.fontSize, background: style.backgroundColor, color: style.color, icons: node.querySelectorAll('svg').length, top: Math.round(node.getBoundingClientRect().top) } }
     const shell = (node) => { while (node && getComputedStyle(node).backgroundColor === 'rgba(0, 0, 0, 0)') node = node.parentElement; return getComputedStyle(node).backgroundColor }
-    return { left: style(left), right: style(right), leftTone: shell(left), rightTone: shell(right), panel: getComputedStyle(document.querySelector('.companion-panel')).backgroundColor }
+    return { bar: bar.getBoundingClientRect().height, changes: tab('changes'), files: tab('files'), raised, muted, panel: getComputedStyle(document.querySelector('.companion-panel')).backgroundColor, leftTone: shell(document.querySelector('[data-rail-top-row="inbox"]')) }
   })()`)
-  assert.deepEqual(twin.right, twin.left, "a rail row is the left rail's row")
-  assert.equal(twin.rightTone, twin.leftTone, "both rails sit on the shell")
-  assert.equal(twin.panel, twin.leftTone, "the panel is the shell, not a surface")
+  assert.equal(tabs.bar, 40, "a 40px bar")
+  assert.equal(tabs.changes.height, 28, "28px tabs")
+  assert.equal(tabs.changes.font, "14px", "in the 14px UI size")
+  assert.equal(tabs.changes.icons + tabs.files.icons, 0, "no icons")
+  assert.equal(tabs.changes.top, tabs.files.top, "on one line")
+  assert.equal(tabs.changes.background, tabs.raised, "the open tab on the raised surface")
+  assert.equal(tabs.files.color, tabs.muted, "the others muted")
+  assert.equal(tabs.panel, tabs.leftTone, "the panel is the shell, as the left rail is")
   await capture("desk-changes.png")
   // The left rail's rows are the same component, and still do what they say.
   const inbox = `document.querySelector('[data-rail-top-row="inbox"]')`
@@ -136,11 +160,12 @@ async function check() {
   await click('[data-rail-top-row="inbox"]')
   await until(`!${inbox}.dataset.open`, "the Inbox away")
 
-  // Readings: lines changed on Changes, who needs the person on Agents, in the hue that means it.
-  assert.match(await evaluate("document.querySelector('[data-surface-id=changes]').innerText"), /\+141\s+−246/)
+  // Readings: none on Changes, whose header counts the lines; who needs the person on Agents, in the hue that means it.
+  assert.equal(await evaluate("document.querySelector('[data-surface-id=changes]').innerText.trim()"), "Changes")
+  await until("/\\+141\\s+−246/.test(document.querySelector('[data-changes-header]')?.innerText ?? '')", "the lines changed in the Changes header")
   const agents = await evaluate(`(() => {
     const row = document.querySelector('[data-surface-id=agents]')
-    const needs = [...row.querySelectorAll('span')].find((node) => node.textContent === '2 need you')
+    const needs = row.querySelector('[data-tab-reading]')
     const probe = document.createElement('span')
     probe.className = 'text-attention'
     document.body.append(probe)
@@ -149,6 +174,34 @@ async function check() {
     return { color: needs && getComputedStyle(needs).color, attention }
   })()`)
   assert.equal(agents.color, agents.attention, "needs you reads in the attention hue")
+
+  // Readings say less as the bar narrows, measured from its width: words, then a violet count, then only the name.
+  const companion = "document.querySelector('.companion-panel')"
+  const widen = async (width) => {
+    await evaluate(`${companion}.style.width = '${width}px'; true`)
+    await evaluate("new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(() => done(true))))")
+  }
+  await evaluate("window.loopErrors = []; window.addEventListener('error', (event) => { if (/ResizeObserver/.test(event.message)) window.loopErrors.push(event.message) }); true")
+  const fitAt = {}
+  for (const width of [720, 420, 340]) {
+    await widen(width)
+    fitAt[width] = (await assertFits(`the panel at ${width}`)).fit
+    if (fitAt[width] === "count") assert.equal(await evaluate("document.querySelector('[data-surface-id=agents] [data-tab-reading]')?.textContent"), "2", "needs you shortens to its count")
+    await capture(`desk-tabs-${width}.png`)
+  }
+  assert.equal(fitAt[720], "words", "a wide panel reads every reading in words")
+  assert.notEqual(fitAt[340], "words", "the narrowest panel shortens them")
+  assert.ok(Object.values(fitAt).includes("count"), `some width shows the counts: ${JSON.stringify(fitAt)}`)
+  const tight = await evaluate("document.querySelector('[data-surface-id=agents]').getAttribute('title')")
+  assert.equal(tight, "Overview, 2 need you", "and the words go to the tab's tooltip")
+  // Every reading at once (a live control too), at the narrowest: still no scroll and no clip.
+  await evaluate("import('/src/state/control-preview.ts').then(({ controlPreviewStore }) => import('/src/state/acp.ts').then(({ acpStore, activeLiveAcp }) => { const key = activeLiveAcp(acpStore.get())?.key; controlPreviewStore.set({ activities: { ...controlPreviewStore.get().activities, [key]: { kind: 'browser', at: Date.now() } } }); return true }))")
+  await until("/, Live$/.test(document.querySelector('[data-surface-id=control]').getAttribute('aria-label'))", "Control's live reading")
+  await assertFits("every reading at the narrowest")
+  await widen(720)
+  await assertFits("every reading, wide")
+  await evaluate(`${companion}.style.width = ''; true`)
+  assert.deepEqual(await evaluate("window.loopErrors"), [], "fitting the tabs makes no ResizeObserver loop")
 
   // Changes is a list; a file's diff opens as a tab, which is what a tab is for.
   await until("Boolean(document.querySelector('[data-change-list]'))", "the list of changed files")
@@ -160,22 +213,31 @@ async function check() {
   await click("button[aria-label='Close src/state/store.ts']")
   await until(`!(${diffTab})`, "the diff's tab closed")
 
-  // Arrows walk the rows and open what they land on.
+  // The branch chip opens what's not pushed, the next step and the history; Escape puts it away.
+  await click("[data-branch-chip]")
+  await until("Boolean(document.querySelector('[data-branch-popover]'))", "the branch popover")
+  await until("document.querySelector('[data-branch-popover]').innerText.includes('2 not pushed')", "what's not pushed")
+  await until("Boolean(document.querySelector('[data-branch-popover] [data-git-actions]'))", "the push and pull request control")
+  await capture("desk-branch.png")
+  await evaluate("document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); true")
+  await until("!document.querySelector('[data-branch-popover]')", "the popover away on Escape")
+
+  // Arrows walk the tabs and open what they land on.
   await evaluate("document.querySelector('[data-surface-id=changes]').focus(); true")
   const key = (name) => evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent('keydown', { key: ${JSON.stringify(name)}, bubbles: true, cancelable: true })); true`)
-  await key("ArrowDown")
+  await key("ArrowRight")
   await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'files'", "Files by the arrow")
   assert.equal(await evaluate("document.activeElement.dataset.surfaceId"), "files", "focus went with it")
   await key("End")
   await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'setup'", "Setup by End")
   await until("Boolean(document.querySelector('[data-setup-panel]'))", "the Setup panel")
-  await key("ArrowUp")
-  await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'agents'", "Agents by the arrow up")
+  await key("ArrowLeft")
+  await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'agents'", "Agents by the left arrow")
   await until("Boolean(document.querySelector('[data-apex-fins]'))", "the Agents panel")
   await capture("desk-agents.png")
-  await key("ArrowDown")
+  await key("ArrowRight")
   await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'setup'", "Setup again")
-  await key("ArrowDown")
+  await key("ArrowRight")
   await until("document.querySelector('[data-side-rail] [aria-selected=true]')?.dataset.surfaceId === 'changes'", "the arrows wrapping to Changes")
 
   // No tab for a Fin until it's opened, however many there are or spawn.
@@ -192,7 +254,7 @@ async function check() {
   await click(`[data-shiver-row="${needing}"] button`)
   await until(`Boolean(document.querySelector('[data-child-tab="${needing}"][aria-selected="true"]'))`, "the opened Fin's tab")
   assert.equal(await fins(), 1, "the Fin opened has the one tab")
-  await until("/need you|needs you/.test(document.querySelector('[data-surface-id=agents]')?.innerText ?? '')", "Agents keeping the Apex's Fins while one is open")
+  await until("/need you|needs you/.test(document.querySelector('[data-surface-id=agents]')?.getAttribute('aria-label') ?? '')", "Agents keeping the Apex's Fins while one is open")
   await capture("desk-fin-tab.png")
   await click("button[aria-label='Close Sheet motion on iPad']")
   await until("!document.querySelector('[data-child-tab]') && !document.querySelector('[data-child-breadcrumb]')", "the Apex after closing its Fin's tab")
@@ -212,6 +274,7 @@ async function check() {
   assert.equal(narrow.beside, true, `the chat stands left of the rail: ${JSON.stringify(narrow)}`)
   assert.equal(narrow.covered, false, "nothing to get back from")
   assert.ok(narrow.rail >= 340, `the rail keeps its least: ${narrow.rail}`)
+  await assertFits("the rail at 1100")
   const overrun = await evaluate(`[...document.querySelectorAll('button[data-shiver-row]')].filter((row) => [...row.querySelectorAll('[data-fin-moved], .truncate')].some((each) => each.getBoundingClientRect().right > row.children[1].getBoundingClientRect().right + 1)).map((row) => row.innerText)`)
   assert.deepEqual(overrun, [], "a Shiver line stops short of its time in the narrower chat")
   await capture("desk-1100.png")
@@ -243,7 +306,8 @@ async function check() {
   assert.deepEqual(await rowIds(), ["changes", "files", "agents", "setup"], "the desk's rows")
   assert.equal(await evaluate("document.querySelector('[data-surface-id=changes]').dataset.open"), "true", "the rail opens on Changes")
   assert.equal(await evaluate("Math.round(document.querySelector('.rv-layer').getBoundingClientRect().width)"), 420, "the desk's width")
-  assert.equal(await evaluate("Boolean([...document.querySelectorAll('[data-surface-id=agents] span')].find((node) => node.textContent === '2 need you'))"), true, "and its reading")
+  assert.match(await evaluate("document.querySelector('[data-surface-id=agents]').getAttribute('aria-label')"), /2 need you/, "and its reading")
+  await assertFits("the browser's rail", ".rv-layer")
   await press("[data-side-rail] [data-surface-id=agents]")
   await until("document.querySelector('[data-surface-id=agents]')?.dataset.open === 'true' && Boolean(document.querySelector('.rv-layer [data-apex-fins]'))", "the Apex's Fins in the rail")
   await capture("web-agents.png")
@@ -349,7 +413,7 @@ async function check() {
   await click(`[data-shiver-row="${needing}"] button`)
   await until("Boolean(document.querySelector('[data-child-of]'))", "the Fin from the Shiver card")
 
-  console.log("Right rail UI: the twin's rows and tone, readings, list-first Changes, arrows, a Fin's one tab, the web's rail, Changes and Files out of reach, and the phone passed")
+  console.log("Right rail UI: the tab bar on the shell, readings, the Changes header and branch chip, list-first Changes, arrows, a Fin's one tab, the web's rail, Changes and Files out of reach, and the phone passed")
   guard.done()
   app.exit(0)
 }
