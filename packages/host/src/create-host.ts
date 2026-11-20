@@ -1,4 +1,7 @@
 import { HostStopping } from "./base/host-stopping.js"
+import { onWindows } from "./base/platform.js"
+import { ExecutableTrust } from "./base/executable-trust.js"
+import { pathExtensions, windowsFolders } from "./base/executable.js"
 import { Foreground } from "./base/foreground.js"
 import { lstat, mkdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -135,6 +138,15 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
   let stopped: Promise<void> | undefined
 
   const stopping = new HostStopping()
+  if (onWindows()) {
+    // The programs on the folders Windows' launches search, asked about off the thread now, so a launch finds its
+    // verdict kept (`executable-trust.ts`).
+    const trust = new ExecutableTrust()
+    stopping.trust = trust
+    const options = { env: process.env, home: homedir() }
+    void trust.warm(windowsFolders(options.env, options.home), pathExtensions(options.env), options)
+      .then((count) => hostLog("host", "programs Windows' launches may find checked", { count }), (error: Error) => hostWarn("host", "programs couldn't be checked ahead", { error: error.message }))
+  }
   const methods = new HostMethods({
     stopping,
     fixtureDesk,

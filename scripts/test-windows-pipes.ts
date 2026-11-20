@@ -242,6 +242,46 @@ try {
   }
   console.log("ok   no program is taken from a folder another account can write: not C:\\opt\\homebrew\\bin, not one under C:\\")
 
+  // The program file itself, and where a folder really is. A folder only administrators, SYSTEM and this user may write,
+  // outside the profile, holds three programs: one any user may write (an ACE on the file, as a file moved in keeps),
+  // one the folder's inherit-only grant to every user hands down, and one with no grant of its own. A junction to a
+  // folder every user may write is followed to where it leads.
+  const sid = (await windowsHelperLines(["sid"]))?.[0] ?? ""
+  const guarded = "C:\\mako-guarded-" + randomUUID().slice(0, 8)
+  const handsDown = "C:\\mako-handsDown-" + randomUUID().slice(0, 8)
+  const target = "C:\\mako-open-target-" + randomUUID().slice(0, 8)
+  const junction = "C:\\mako-junction-" + randomUUID().slice(0, 8)
+  const icacls = join(system32, "icacls.exe")
+  try {
+    for (const folder of [guarded, handsDown, target]) await mkdir(folder, { recursive: true })
+    for (const folder of [guarded, handsDown])
+      await run(icacls, [folder, "/inheritance:r", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", `*${sid}:(OI)(CI)F`])
+    // Every user may write what's made in `handsDown` from now on, though not `handsDown` itself.
+    await run(icacls, [handsDown, "/grant", "*S-1-5-32-545:(OI)(IO)M"])
+    await copyFile(join(system32, "cmd.exe"), join(guarded, "pwsh.exe"))
+    await copyFile(join(system32, "cmd.exe"), join(guarded, "kept.exe"))
+    await run(icacls, [join(guarded, "pwsh.exe"), "/grant", "*S-1-5-32-545:M"])
+    await copyFile(join(system32, "cmd.exe"), join(handsDown, "git.exe"))
+    await copyFile(join(system32, "cmd.exe"), join(target, "kept.exe"))
+    await run(join(system32, "cmd.exe"), ["/d", "/c", "mklink", "/J", junction, target])
+    const verdict = async (path: string) => (await windowsHelperLines(["trusted", path]))?.[0] ?? ""
+    assert.equal(await verdict(join(guarded, "kept.exe")), "trusted", "a program no one else may write, in a guarded folder")
+    assert.match(await verdict(join(guarded, "pwsh.exe")), /^untrusted writable by S-1-5-32-545 /, "a program every user may write")
+    assert.match(await verdict(join(handsDown, "git.exe")), /^untrusted writable by S-1-5-32-545 /, "a folder that hands every user write on its files")
+    assert.match(await verdict(join(junction, "kept.exe")), /^untrusted writable by S-1-5-11 .*mako-open-target/i, "a junction is checked where it leads")
+    const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "Path"
+    const env = { ...process.env, [pathKey]: [guarded, handsDown, junction, process.env[pathKey]].join(";") }
+    const pwsh = resolveExecutable("pwsh", env)
+    assert.ok(pwsh && !pwsh.toLowerCase().startsWith(guarded.toLowerCase()), `the writable pwsh.exe is passed by: ${pwsh}`)
+    const git = resolveExecutable("git", env)
+    assert.ok(git && !git.toLowerCase().startsWith(handsDown.toLowerCase()), `the git.exe its folder hands write on is passed by: ${git}`)
+    assert.equal(resolveExecutable("kept", env), join(guarded, "kept.exe"), "the guarded program is found")
+  } finally {
+    await rm(junction, { force: true, recursive: false }).catch(() => undefined)
+    for (const folder of [guarded, handsDown, target]) await rm(folder, { recursive: true, force: true }).catch(() => undefined)
+  }
+  console.log("ok   a program file anyone may write, one a folder hands write on, and a junction's target are each refused")
+
   console.log("PASS: Windows pipes prove their servers, and no planted program runs")
 } finally {
   await rm(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => undefined)

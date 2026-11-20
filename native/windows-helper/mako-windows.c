@@ -8,11 +8,12 @@
 //                                        with WRITE_DAC (SQOS identification: the server may not act as us) and sets
 //                                        it there; a pipe's security is its name's, so later instances keep it.
 //                                        Prints "secured" or "failed <step> <error>".
-//   mako-windows trusted <folder>...     whether a program in each folder can be trusted to be this user's choice:
-//                                        the folder and every folder above it are owned by this user, SYSTEM,
-//                                        Administrators or TrustedInstaller, and no one else may add, replace or
-//                                        delete in the folder, or delete, rename or re-own a folder above it.
-//                                        Prints "trusted" or "untrusted <why>".
+//   mako-windows trusted <path>...       whether the program at each path (or any in a folder) is this user's choice:
+//                                        the file, the folder holding it and every folder above, each where it really
+//                                        is through links, owned by this user, SYSTEM, Administrators or
+//                                        TrustedInstaller; no one else may write the file, add to or replace in its
+//                                        folder (files it inherits included), or delete, rename or re-own a folder
+//                                        above. Prints "trusted" or "untrusted <why>".
 //
 // Built with MSVC, /MT (scripts/build-windows-helper.mjs).
 #define WIN32_LEAN_AND_MEAN
@@ -97,8 +98,48 @@ static BOOL trusted_sid(PSID sid) {
          sid_is(sid, L"S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464");
 }
 
-/** "" when `path`'s owner and DACL leave it to trusted SIDs; else why not. `mask` is what no one else may hold. */
-static const wchar_t *check(const wchar_t *path, ACCESS_MASK mask, wchar_t *why, size_t size) {
+/**
+ * The SID an allow ACE grants to, for every kind of allow ACE (plain, callback, object, callback object); NULL for any
+ * other kind. An object ACE's SID follows the GUIDs its flags say are present.
+ */
+static PSID allowed_sid(ACE_HEADER *header, ACCESS_MASK *mask) {
+  switch (header->AceType) {
+    case ACCESS_ALLOWED_ACE_TYPE:
+    case ACCESS_ALLOWED_CALLBACK_ACE_TYPE: {
+      ACCESS_ALLOWED_ACE *ace = (ACCESS_ALLOWED_ACE *)header;
+      *mask = ace->Mask;
+      return (PSID)&ace->SidStart;
+    }
+    case ACCESS_ALLOWED_OBJECT_ACE_TYPE:
+    case ACCESS_ALLOWED_CALLBACK_OBJECT_ACE_TYPE: {
+      ACCESS_ALLOWED_OBJECT_ACE *ace = (ACCESS_ALLOWED_OBJECT_ACE *)header;
+      BYTE *at = (BYTE *)&ace->ObjectType;
+      if (ace->Flags & ACE_OBJECT_TYPE_PRESENT) at += sizeof(GUID);
+      if (ace->Flags & ACE_INHERITED_OBJECT_TYPE_PRESENT) at += sizeof(GUID);
+      *mask = ace->Mask;
+      return (PSID)at;
+    }
+    default:
+      return NULL;
+  }
+}
+
+/** Write to a file: its data, its permissions or owner, or deleting it. */
+#define FILE_WRITES (FILE_WRITE_DATA | FILE_APPEND_DATA | DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL)
+/** The folder holding the program: nobody else may add to it, replace or delete in it, or take it. */
+#define FOLDER_WRITES (FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL)
+/**
+ * A folder above it: nobody else may delete or rename what's in it, or take it. Making a new folder there, as every
+ * user may at `C:\`, changes nothing already on the path.
+ */
+#define ABOVE_WRITES (FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_ALL)
+
+/**
+ * "" when `path`'s owner and DACL leave `mask` to trusted SIDs; else why not. With `files_inside`, an ACE only for what
+ * is made inside (inherit-only) counts too when files inherit it and it lets them be written: a file made there later,
+ * or one made by a trusted account, would be writable by another.
+ */
+static const wchar_t *check(const wchar_t *path, ACCESS_MASK mask, BOOL files_inside, wchar_t *why, size_t size) {
   PSID owner = NULL;
   PACL dacl = NULL;
   PSECURITY_DESCRIPTOR descriptor = NULL;
@@ -113,12 +154,17 @@ static const wchar_t *check(const wchar_t *path, ACCESS_MASK mask, wchar_t *why,
   else
     for (DWORD index = 0; index < dacl->AceCount && !why[0]; index++) {
       ACE_HEADER *header = NULL;
-      if (!GetAce(dacl, index, (LPVOID *)&header) || header->AceType != ACCESS_ALLOWED_ACE_TYPE) continue;
-      // An ACE only for what is made inside applies to the folder's children, not to it.
-      if (header->AceFlags & INHERIT_ONLY_ACE) continue;
-      ACCESS_ALLOWED_ACE *ace = (ACCESS_ALLOWED_ACE *)header;
-      PSID sid = (PSID)&ace->SidStart;
-      if ((ace->Mask & mask) && !trusted_sid(sid)) {
+      ACCESS_MASK granted = 0;
+      if (!GetAce(dacl, index, (LPVOID *)&header)) continue;
+      PSID sid = allowed_sid(header, &granted);
+      if (!sid) continue;
+      ACCESS_MASK applies = mask;
+      if (header->AceFlags & INHERIT_ONLY_ACE) {
+        // CREATOR OWNER's inherit-only grant goes to whoever makes the file, whose ownership is checked itself.
+        if (!files_inside || !(header->AceFlags & OBJECT_INHERIT_ACE) || sid_is(sid, L"S-1-3-0")) continue;
+        applies = FILE_WRITES;
+      }
+      if ((granted & applies) && !trusted_sid(sid)) {
         LPWSTR text = NULL;
         ConvertSidToStringSidW(sid, &text);
         swprintf(why, size, L"writable by %ls %ls", text ? text : L"?", path);
@@ -129,33 +175,77 @@ static const wchar_t *check(const wchar_t *path, ACCESS_MASK mask, wchar_t *why,
   return why;
 }
 
-static void trusted(const wchar_t *folder) {
-  wchar_t full[MAX_PATH * 4], why[MAX_PATH * 4 + 64];
-  if (!GetFullPathNameW(folder, MAX_PATH * 4, full, NULL)) {
-    wprintf(L"untrusted unresolvable %lu\n", GetLastError());
-    return;
+/**
+ * Where `path` really is, through every link and junction (`GetFinalPathNameByHandleW`), as a drive path; FALSE for
+ * one that can't be opened, or is on a network share.
+ */
+static BOOL final_path(const wchar_t *path, wchar_t *out, DWORD size, wchar_t *why, size_t why_size) {
+  HANDLE handle = CreateFileW(path, 0, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, NULL, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, NULL);
+  if (handle == INVALID_HANDLE_VALUE) {
+    swprintf(why, why_size, L"unopenable %lu %ls", GetLastError(), path);
+    return FALSE;
   }
-  // The folder itself: nobody else may add a file, write one, or take its permissions or ownership.
-  const ACCESS_MASK in_folder = FILE_ADD_FILE | FILE_ADD_SUBDIRECTORY | FILE_WRITE_DATA | FILE_APPEND_DATA | FILE_DELETE_CHILD | DELETE | WRITE_DAC |
-                                WRITE_OWNER | GENERIC_WRITE | GENERIC_ALL;
-  // A folder above it: nobody else may delete or rename what's in it, or take its permissions or ownership. Making a
-  // new folder there (as every user may at C:\) changes nothing already on the path.
-  const ACCESS_MASK above = FILE_DELETE_CHILD | DELETE | WRITE_DAC | WRITE_OWNER | GENERIC_ALL;
-  if (check(full, in_folder, why, sizeof(why) / sizeof(why[0]))[0]) {
+  wchar_t raw[MAX_PATH * 4];
+  DWORD length = GetFinalPathNameByHandleW(handle, raw, MAX_PATH * 4, FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
+  CloseHandle(handle);
+  if (!length || length >= MAX_PATH * 4) {
+    swprintf(why, why_size, L"unresolvable %lu %ls", GetLastError(), path);
+    return FALSE;
+  }
+  if (wcsncmp(raw, L"\\\\?\\UNC\\", 8) == 0) {
+    swprintf(why, why_size, L"on a network share %ls", path);
+    return FALSE;
+  }
+  const wchar_t *drive = wcsncmp(raw, L"\\\\?\\", 4) == 0 ? raw + 4 : raw;
+  swprintf(out, size, L"%ls", drive);
+  return TRUE;
+}
+
+/** The folders above `folder`, each checked as one above: `C:\a\b` asks of `C:\a`, then `C:\`. */
+static BOOL chain_holds(wchar_t *folder, wchar_t *why, size_t size) {
+  for (;;) {
+    size_t length = wcslen(folder);
+    wchar_t *cut = wcsrchr(folder, L'\\');
+    if (!cut || length <= 3) return TRUE;
+    if (cut == folder + 2) folder[3] = 0;
+    else *cut = 0;
+    if (check(folder, ABOVE_WRITES, FALSE, why, size)[0]) return FALSE;
+  }
+}
+
+/**
+ * Whether a program at `path` (a file), or any program in `path` (a folder), is this user's choice: the file itself
+ * and the folder holding it owned by this user, SYSTEM, Administrators or TrustedInstaller and writable by no one
+ * else, files it inherits included; every folder above them likewise for deleting, renaming or re-owning. Each is
+ * checked where it really is, through links and junctions.
+ */
+static void trusted(const wchar_t *path) {
+  wchar_t real[MAX_PATH * 4], why[MAX_PATH * 4 + 64];
+  if (!final_path(path, real, MAX_PATH * 4, why, sizeof(why) / sizeof(why[0]))) {
     wprintf(L"untrusted %ls\n", why);
     return;
   }
-  // Each folder above, to the drive's root: `C:\a\b` asks of `C:\a`, then `C:\`.
-  for (;;) {
-    size_t length = wcslen(full);
-    wchar_t *cut = wcsrchr(full, L'\\');
-    if (!cut || length <= 3) break;
-    if (cut == full + 2) full[3] = 0;  // `C:\a` becomes the root, `C:\`
-    else *cut = 0;
-    if (check(full, above, why, sizeof(why) / sizeof(why[0]))[0]) {
+  DWORD attributes = GetFileAttributesW(real);
+  if (attributes == INVALID_FILE_ATTRIBUTES) {
+    wprintf(L"untrusted unreadable %lu %ls\n", GetLastError(), real);
+    return;
+  }
+  if (!(attributes & FILE_ATTRIBUTE_DIRECTORY)) {
+    if (check(real, FILE_WRITES, FALSE, why, sizeof(why) / sizeof(why[0]))[0]) {
       wprintf(L"untrusted %ls\n", why);
       return;
     }
+    wchar_t *cut = wcsrchr(real, L'\\');
+    if (!cut) {
+      wprintf(L"untrusted no folder %ls\n", real);
+      return;
+    }
+    if (cut == real + 2) real[3] = 0;
+    else *cut = 0;
+  }
+  if (check(real, FOLDER_WRITES, TRUE, why, sizeof(why) / sizeof(why[0]))[0] || !chain_holds(real, why, sizeof(why) / sizeof(why[0]))) {
+    wprintf(L"untrusted %ls\n", why);
+    return;
   }
   wprintf(L"trusted\n");
 }
@@ -170,6 +260,6 @@ int wmain(int argc, wchar_t **argv) {
     for (int at = 2; at < argc; at++) trusted(argv[at]);
     return 0;
   }
-  fwprintf(stderr, L"usage: mako-windows sid | secure-pipe <pipe>... | trusted <folder>...\n");
+  fwprintf(stderr, L"usage: mako-windows sid | secure-pipe <pipe>... | trusted <path>...\n");
   return 2;
 }

@@ -20,6 +20,7 @@ on:
       - packages/host/src/workspaces/project-folders.ts
       - packages/host/src/workspaces/thread-processes.ts
       - packages/client/src/**
+      - packages/control-runtime/src/executable.ts
       - packages/sessions/src/private-pipe.ts
       - packages/sessions/src/daemon.ts
       - packages/sessions/src/record-locks.ts

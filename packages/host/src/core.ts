@@ -61,7 +61,7 @@ import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import type { GitHubPerson } from "./contracts/github-person.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
-import { hostPlatform, nodePlatform, onMac } from "./base/platform.js"
+import { hostPlatform, nodePlatform, onMac, onWindows } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { KeepAwakeSettings } from "./contracts/keep-awake.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
@@ -75,7 +75,7 @@ import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods
 import { hostCommand } from "./base/host-command.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs, UtilityRunWhen } from "./git/index.js"
 import { ConversationMedia, declareConversationMediaMethods, declareMediaMethods, MachineArtifacts, machineArtifactPlaces, registerShowTool, TurnMedia } from "./media/index.js"
-import type { TerminalClients } from "./terminals/index.js"
+import { terminalShell, type TerminalClients } from "./terminals/index.js"
 import { declareApplicationMethods, Updates, type Application } from "./application/index.js"
 import { devHostBuildDirectories } from "./base/dev-host-build.js"
 import type { HostOwner } from "./create-host.js"
@@ -1896,7 +1896,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     stopThread: (conversation) => live.cancel(conversation),
     runGate: async (project, command, timeoutMs) => {
       try {
-        const { stdout, stderr } = await hostCommand(process.env.SHELL || "/bin/zsh", ["-lc", command], { cwd: project, timeout: timeoutMs, maxBuffer: 1024 * 1024 })
+        // Windows: the person's terminal shell (pwsh, Windows PowerShell or cmd.exe), its command run as written.
+        const shell = onWindows() ? terminalShell() : { file: process.env.SHELL || "/bin/zsh", args: [] }
+        const cmd = onWindows() && /cmd\.exe$/i.test(shell.file)
+        const words = !onWindows() ? ["-lc", command] : cmd ? ["/d", "/s", "/c", `"${command}"`] : ["-NoLogo", "-NoProfile", "-Command", command]
+        const { stdout, stderr } = await hostCommand(shell.file, words, { cwd: project, timeout: timeoutMs, maxBuffer: 1024 * 1024, windowsVerbatimArguments: cmd })
         return { exit: 0, stdout, stderr }
       } catch (error) {
         const exited = CommandExitSchema.safeParse(error).data

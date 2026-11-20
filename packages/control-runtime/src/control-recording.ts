@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { Mp4Writer, readMp4, retimeMp4 } from "./mp4.js"
 import { resolveExecutable } from "./executable.js"
-import { onMac } from "./platform.js"
+import { onLinux, onMac } from "./platform.js"
 import { VideoHelper } from "./video-helper.js"
 import { RecordingEncoder } from "./recording-encoder.js"
 import { recordingEncoder, recordingVideoEncoding } from "./recording-encoder-process.js"
@@ -952,7 +952,8 @@ export class ControlRecording {
     )
     const output = join(this.directory, "recording.mp4")
     const frames = this.renderNativeOverlayFrames({ ...frame, file: frame.file }, width, height)
-    const ffmpeg = onMac() ? undefined : resolveExecutable("ffmpeg")
+    // Only Linux's driver records through an FFmpeg on PATH; nothing records natively on Windows to finalize this way.
+    const ffmpeg = onLinux() ? resolveExecutable("ffmpeg") : undefined
     if (onMac()) await this.overlayWithHelper(this.sourceVideo, output, frames, width, height)
     else if (ffmpeg) await this.overlayWithFfmpeg(ffmpeg, this.sourceVideo, output, frames, width, height)
     else {
