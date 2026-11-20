@@ -1,6 +1,5 @@
 export * from "./browser-discovery.js"
 export { InstalledBrowsers } from "./browser-installed.js"
-export { WINDOWS_CHROMIUM, windowsInstalledChromium, windowsRegistryTool, windowsBrowserFor, windowsMachineChromium, type WindowsChromium, type WindowsInstalledChromium } from "./browser-installed-windows.js"
 export * from "./machine-browser.js"
 export * from "./desk-browser-registration.js"
 export * from "./process-registration.js"

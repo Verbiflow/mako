@@ -36,17 +36,14 @@ function readRegistration(path: string) {
 }
 
 // Linux reports the resolved executable, such as /opt/brave.com/brave/brave or
-// Snap's .../chromium-browser/chrome, and Windows its .exe, such as
-// C:\Program Files\Google\Chrome\Application\chrome.exe, so the whole path
-// decides. First match wins.
-const EXECUTABLE_PRODUCTS = [
+// Snap's .../chromium-browser/chrome, so the whole path decides. First match wins.
+const LINUX_PRODUCTS = [
   [/brave/i, "Brave Browser"],
   [/msedge|microsoft-edge/i, "Microsoft Edge"],
   [/vivaldi/i, "Vivaldi"],
   [/opera/i, "Opera"],
-  [/thebrowsercompany\.arc|[\\/]arc\.exe$/i, "Arc"],
   [/chromium/i, "Chromium"],
-  [/google[-/\\]chrome/i, "Google Chrome"],
+  [/google[-/]chrome/i, "Google Chrome"],
 ] as const
 
 /**
@@ -60,7 +57,7 @@ export function applicationProduct(
   if (!applicationPath) return undefined
   if (applicationPath.endsWith(".app"))
     return basename(applicationPath, ".app").slice(0, 80) || undefined
-  return EXECUTABLE_PRODUCTS.find(([pattern]) => pattern.test(applicationPath))?.[1]
+  return LINUX_PRODUCTS.find(([pattern]) => pattern.test(applicationPath))?.[1]
 }
 
 export async function extensionBrowsers(

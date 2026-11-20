@@ -1,13 +1,10 @@
-import { command, spawn } from "./processes.js"
+import { spawn } from "./processes.js"
 import type { ChildProcess } from "node:child_process"
 import { statfsSync } from "node:fs"
 import { get } from "node:http"
 import { mkdir, rm } from "node:fs/promises"
 import { join } from "node:path"
-import { Readable, Writable } from "node:stream"
-import { z } from "zod"
 import type { LocalBrowser } from "./browser-discovery.js"
-import { onLinux, onWindows } from "./platform.js"
 
 export const MACHINE_BROWSER_ID = "chromium:machine"
 /** Chromium keeps its pages' shared memory here; a container's default 64 MB crashes tabs. */
@@ -33,11 +30,6 @@ export interface MachineBrowserOptions {
   captureExtension?: () => Promise<{ directory: string; id: string } | undefined>
   /** Each Chromium once it answers, for a registry that ends what a crashed host left running. */
   started?: (child: ChildProcess) => void
-  /**
-   * How the capture extension is loaded: by `--load-extension`, which Chromium and Edge honor, or over a DevTools pipe
-   * (`Extensions.loadUnpacked`), as Google Chrome requires since it ignores that flag (137 on). The default is the flag.
-   */
-  extensionLoading?: "flag" | "pipe"
 }
 
 /**
@@ -66,7 +58,7 @@ export class MachineBrowser {
 
   close(): void {
     this.#closed = true
-    if (this.#child) end(this.#child, "SIGTERM")
+    this.#child?.kill("SIGTERM")
     this.#child = undefined
   }
 
@@ -89,7 +81,7 @@ export class MachineBrowser {
       const child = this.#child
       this.#child = undefined
       this.#starting = undefined
-      if (child) end(child, "SIGKILL")
+      child?.kill("SIGKILL")
     }
     return this.#endpoint(false)
   }
@@ -101,7 +93,6 @@ export class MachineBrowser {
     await rm(join(profile, "DevToolsActivePort"), { force: true })
     const extension = await this.#options.captureExtension?.()
     if (this.#closed) throw new Error("The machine's browser is shutting down")
-    const piped = Boolean(extension) && this.#options.extensionLoading === "pipe"
     const child = spawn(executable, [
       "--headless",
       "--remote-debugging-port=0",
@@ -110,18 +101,14 @@ export class MachineBrowser {
       "--no-first-run",
       "--no-default-browser-check",
       "--disable-background-networking",
-      ...(onLinux() && sharedMemory() < SHARED_MEMORY_FLOOR ? ["--disable-dev-shm-usage"] : []),
+      ...(sharedMemory() < SHARED_MEMORY_FLOOR ? ["--disable-dev-shm-usage"] : []),
       ...(sandbox ? [] : ["--no-sandbox"]),
-      ...(extension && piped ? ["--remote-debugging-pipe", "--enable-unsafe-extension-debugging", `--allowlisted-extension-id=${extension.id}`] : []),
-      ...(extension && !piped
+      ...(extension
         ? [`--load-extension=${extension.directory}`, `--disable-extensions-except=${extension.directory}`, `--allowlisted-extension-id=${extension.id}`]
         : []),
       "about:blank",
-    // A DevTools pipe is fds 3 and 4, Chromium's input and output; it stays open while Chromium runs, which ends without it.
-    ], { stdio: piped ? ["ignore", "ignore", "pipe", "pipe", "pipe"] : ["ignore", "ignore", "pipe"], windowsHide: true })
+    ], { stdio: ["ignore", "ignore", "pipe"] })
     this.#child = child
-    // SAFETY: stdio[2] is "pipe" in both launches; Node types a computed stdio array's streams as possibly absent.
-    const stderr = child.stderr as Readable
     child.once("exit", () => {
       if (this.#child !== child) return
       this.#child = undefined
@@ -129,11 +116,11 @@ export class MachineBrowser {
     })
     let output = ""
     try {
-      const endpoint = await new Promise<string>((resolve, reject) => {
+      return await new Promise<string>((resolve, reject) => {
         const timer = setTimeout(() => reject(new Error(`Chromium didn't start within ${startupMs / 1000} s`)), startupMs)
         const settle = () => {
           clearTimeout(timer)
-          stderr.off("data", read)
+          child.stderr.off("data", read)
           child.off("exit", exited)
           child.off("error", failed)
         }
@@ -142,6 +129,7 @@ export class MachineBrowser {
           const endpoint = LISTENING.exec(output)?.[1]
           if (!endpoint) return
           settle()
+          this.#options.started?.(child)
           resolve(endpoint)
         }
         const exited = (code: number | null, signal: NodeJS.Signals | null) => {
@@ -152,70 +140,18 @@ export class MachineBrowser {
           settle()
           reject(new Error(`Chromium couldn't start: ${error.message}`))
         }
-        stderr.on("data", read)
+        child.stderr.on("data", read)
         child.once("exit", exited)
         child.once("error", failed)
       })
-      if (extension && piped) await loadOverPipe(child, extension.directory, extension.id, startupMs)
-      this.#options.started?.(child)
-      return endpoint
     } catch (error) {
-      end(child, "SIGKILL")
+      child.kill("SIGKILL")
       throw error
     } finally {
       // Its later output is never read, so the pipe must not fill and stall it.
-      stderr.resume()
+      child.stderr.resume()
     }
   }
-}
-
-const loaded = z.object({ result: z.object({ id: z.string() }).optional(), error: z.object({ message: z.string() }).optional() })
-
-/**
- * Loads an unpacked extension over Chromium's DevTools pipe (`--remote-debugging-pipe`): one command, NUL-terminated
- * JSON each way. It must answer with the extension's id before a capture asks for the extension.
- */
-async function loadOverPipe(child: ChildProcess, directory: string, id: string, timeoutMs: number): Promise<void> {
-  const input = child.stdio[3]
-  const output = child.stdio[4]
-  if (!(input instanceof Writable) || !(output instanceof Readable)) throw new Error("Chromium's DevTools pipe isn't open")
-  const answer = await new Promise<string>((resolve, reject) => {
-    let text = ""
-    const timer = setTimeout(() => finish(new Error(`Chromium didn't load the capture extension within ${timeoutMs / 1000} s`)), timeoutMs)
-    const finish = (error?: Error, reply?: string) => {
-      clearTimeout(timer)
-      output.off("data", read)
-      child.off("exit", exited)
-      if (error) reject(error)
-      else resolve(reply ?? "")
-    }
-    const read = (chunk: Buffer) => {
-      text += chunk.toString()
-      const end = text.indexOf("\0")
-      if (end >= 0) finish(undefined, text.slice(0, end))
-    }
-    const exited = () => finish(new Error("Chromium exited while loading the capture extension"))
-    output.on("data", read)
-    child.once("exit", exited)
-    input.write(`${JSON.stringify({ id: 1, method: "Extensions.loadUnpacked", params: { path: directory } })}\0`)
-  })
-  const reply = loaded.safeParse(JSON.parse(answer))
-  if (!reply.success || reply.data.result?.id !== id)
-    throw new Error(`Chromium didn't load the capture extension: ${reply.data?.error?.message ?? answer.slice(0, 300)}`)
-  // Its later output is never read; it must not fill and stall Chromium.
-  output.resume()
-}
-
-/**
- * Ends Chromium and every process it started. On Windows a kill ends only the browser process, and its GPU, network
- * and renderer processes notice later or not at all, so the whole tree goes at once (`taskkill /T /F`).
- */
-function end(child: ChildProcess, signal: NodeJS.Signals): void {
-  if (onWindows() && child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
-    void command("taskkill", ["/PID", String(child.pid), "/T", "/F"], { timeout: 10_000, windowsHide: true }).catch(() => child.kill(signal))
-    return
-  }
-  child.kill(signal)
 }
 
 /** Ways a DevTools port says nobody serves it: refused, or taken by a process going away and then reset. */

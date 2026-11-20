@@ -2,7 +2,6 @@
 // A stand-in for Chromium that `MachineBrowser` launches in tests: it records its arguments and pid, then announces a
 // DevTools endpoint that answers every command, as Chromium does on stderr. FAKE_CHROMIUM_MODE=fail exits first.
 import { appendFileSync } from "node:fs"
-import { Socket } from "node:net"
 import { randomUUID } from "node:crypto"
 import { WebSocketServer } from "ws"
 
@@ -27,20 +26,3 @@ process.on("SIGUSR1", () => {
   for (const socket of server.clients) socket.terminate()
   server.close()
 })
-// --remote-debugging-pipe: commands on fd 3, answers on fd 4, each NUL-terminated. Extensions.loadUnpacked answers with
-// the allowlisted extension's id, as Chromium answers with the id its key gives.
-if (process.argv.includes("--remote-debugging-pipe")) {
-  const id = process.argv.find((arg) => arg.startsWith("--allowlisted-extension-id="))?.slice("--allowlisted-extension-id=".length)
-  // Sockets, not file streams: a file stream's blocking read would hold the process at exit.
-  const output = new Socket({ fd: 4, writable: true })
-  let text = ""
-  new Socket({ fd: 3, readable: true }).on("data", (chunk) => {
-    text += chunk
-    for (let end = text.indexOf("\0"); end >= 0; end = text.indexOf("\0")) {
-      const message = JSON.parse(text.slice(0, end))
-      text = text.slice(end + 1)
-      if (process.env.FAKE_CHROMIUM_PIPE_LOG) appendFileSync(process.env.FAKE_CHROMIUM_PIPE_LOG, `${JSON.stringify(message)}\n`)
-      output.write(`${JSON.stringify({ id: message.id, result: { id } })}\0`)
-    }
-  })
-}
