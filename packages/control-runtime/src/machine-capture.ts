@@ -89,8 +89,8 @@ interface Link {
   session: string
 }
 
-/** How long the extension's offscreen document may take to appear after the browser starts. */
-const OFFSCREEN_WAIT_MS = 5_000
+/** How long the extension's offscreen document, and its page, may take to appear after the browser starts. */
+const OFFSCREEN_WAIT_MS = 10_000
 
 /**
  * Live video of the machine browser's tabs, through its capture extension, on a DevTools connection of its own (the
@@ -178,6 +178,12 @@ export class MachineTabVideo {
       connection.onClose(() => this.#gone(link, "The machine's browser closed"))
       await connection.send("Runtime.enable", {}, AbortSignal.timeout(5_000), sessionId)
       await connection.send("Runtime.addBinding", { name: "makoVideo" }, AbortSignal.timeout(5_000), sessionId)
+      // The document is a target before its module has run: a slow machine's first capture asked before it had.
+      for (const deadline = performance.now() + OFFSCREEN_WAIT_MS; ; await new Promise((resolve) => setTimeout(resolve, 50))) {
+        const ready = evaluated.parse(await connection.send("Runtime.evaluate", { expression: "typeof makoCapture", returnByValue: true }, AbortSignal.timeout(5_000), sessionId))
+        if (ready.result?.value === "object") break
+        if (performance.now() > deadline) throw new Error("The machine browser's capture extension didn't load its page")
+      }
       return link
     } catch (error) {
       connection.close()
