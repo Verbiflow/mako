@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { BrowserVideo, type BrowserVideoViewer } from "@mako/control-runtime/browser"
-import { VideoHelper, helperCapture } from "@mako/control-runtime/desktop"
+import { VideoHelper, helperCapture, helperWindowSource, linuxDesktop } from "@mako/control-runtime/desktop"
 import { decodeControlVideo, type ControlVideoPacket } from "@mako/control-runtime/contracts"
 
 /**
@@ -76,5 +76,31 @@ await until(() => read().some((entry) => entry.type === "K"), "a key frame asked
 await leave()
 // The fake takes the window id 0 as one it can't capture.
 await assert.rejects(new BrowserVideo({ encoded: helperCapture(fake, { kind: "window", windowId: 0 }) }).join(viewer), /That window is gone/)
+
+// A portal capture: its source types and restore token file go to the helper as arguments.
+const portal = new BrowserVideo({ encoded: helperCapture(fake, { kind: "portal", types: "monitor", restore: join(root, "portal.token") }) }, { fps: 30 })
+const leavePortal = await portal.join(viewer)
+assert.deepEqual(read().at(-1), { args: ["portal", "--types", "monitor", "--restore", join(root, "portal.token"), "--fps", "30", "--box", "320x200"] })
+await leavePortal()
+
+// Which desktop a Linux session is, from its environment, and how the helper shows a window on each.
+assert.equal(linuxDesktop({ WAYLAND_DISPLAY: "wayland-0" }, "darwin"), undefined)
+assert.equal(linuxDesktop({}, "linux"), undefined, "a server or a cloud machine's host has no desktop")
+assert.equal(linuxDesktop({ DISPLAY: ":0", MAKO_SCREENLESS: "1" }, "linux"), undefined, "a screenless host drives no desktop")
+assert.deepEqual(linuxDesktop({ DISPLAY: ":0", XDG_CURRENT_DESKTOP: "XFCE" }, "linux"), { session: "x11", compositor: "other", xwayland: false })
+assert.deepEqual(linuxDesktop({ WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0", XDG_CURRENT_DESKTOP: "ubuntu:GNOME" }, "linux"), { session: "wayland", compositor: "gnome", xwayland: true })
+assert.deepEqual(linuxDesktop({ WAYLAND_DISPLAY: "wayland-0", XDG_CURRENT_DESKTOP: "KDE" }, "linux"), { session: "wayland", compositor: "kde", xwayland: false })
+assert.equal(linuxDesktop({ WAYLAND_DISPLAY: "wayland-1", SWAYSOCK: "/run/user/1000/sway-ipc.sock" }, "linux")?.compositor, "wlroots")
+assert.equal(linuxDesktop({ WAYLAND_DISPLAY: "wayland-1", XDG_CURRENT_DESKTOP: "Hyprland" }, "linux")?.compositor, "wlroots")
+if (process.platform === "linux") {
+  const x11 = linuxDesktop({ DISPLAY: ":0" }, "linux")
+  const wayland = linuxDesktop({ WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0", XDG_CURRENT_DESKTOP: "GNOME" }, "linux")
+  assert.deepEqual(helperWindowSource(77, root, x11), { kind: "window", windowId: 77 })
+  // On Wayland a driver's window id isn't an X window, even where XWayland runs: the person's shared monitor.
+  assert.deepEqual(helperWindowSource(77, root, wayland), { kind: "portal", types: "monitor", restore: join(root, "portal-monitor.token") })
+  assert.equal(helperWindowSource(77, root, undefined), undefined, "no desktop, no helper capture")
+} else {
+  assert.deepEqual(helperWindowSource(77, root, undefined), { kind: "window", windowId: 77 })
+}
 await rm(root, { recursive: true, force: true })
-console.log("Video helper protocol: arguments, framed pictures and commands, units back, opening on the first unit, key asks, and the helper's own reason for ending passed")
+console.log("Video helper protocol: arguments, framed pictures and commands, units back, opening on the first unit, key asks, the helper's own reason for ending, portal arguments and the Linux desktop's capture route passed")

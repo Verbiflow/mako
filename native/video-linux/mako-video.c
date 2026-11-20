@@ -5,12 +5,22 @@
 // them). It scales them to the viewers' box and encodes H.264 with OpenH264 (BSD-2-Clause); libyuv converts and scales,
 // libjpeg-turbo decodes. With nothing changing it sleeps in poll(): no frame, no CPU.
 //
+// On Wayland, where no client may read another's pixels, a build with MAKO_PORTAL (GIO and PipeWire, which
+// scripts/build-video-helper.mjs adds where they are installed) asks xdg-desktop-portal's ScreenCast for a monitor or
+// a window. The portal asks the person once; its restore token, kept in --restore's file, lets later sessions start
+// without asking again until they revoke it. The compositor sends a PipeWire buffer only when the picture changed,
+// and a buffer whose damage is empty (a cursor that moved, with the cursor hidden) is not encoded.
+//
 //   mako-video display [options]        the whole X screen ($DISPLAY)
 //   mako-video window <xid> [options]   one window, by its X id
+//   mako-video portal [options]         what the person shares through the ScreenCast portal (Wayland)
 //   mako-video frames [options]         the pictures on its input
 //   options: --fps N (30)  --bitrate BPS (from the size)  --box WxH (none)  --keyint N (0: only when asked)
 //            --quality Q (0–100: a constant quantizer for recordings, instead of a bitrate)  --threads N (from the size)
 //            --content screen (OpenH264's screen-content tools: fewer bits, more CPU; default camera)
+//   portal:  --types monitor|window|any (monitor)  --restore <file> (the restore token, read and rewritten, 0600)
+//            --consent-ms N (120000: how long the person has to answer the portal's dialog)
+//   `mako-video features` prints what this build captures, as JSON.
 //
 // stdout: each unit as a 4-byte big-endian length, then a ControlVideoPacket (packages/control-runtime/src/contracts/
 // control-video.ts): version 1, the kind, the picture's size, the avcC on a key unit, the source frame's sequence
@@ -46,6 +56,18 @@
 #include <turbojpeg.h>
 #include <wels/codec_api.h>
 
+#ifdef MAKO_PORTAL
+#include <fcntl.h>
+#include <gio/gio.h>
+#include <gio/gunixfdlist.h>
+#include <linux/dma-buf.h>
+#include <pipewire/pipewire.h>
+#include <spa/buffer/meta.h>
+#include <spa/param/video/format-utils.h>
+#include <sys/ioctl.h>
+#include <sys/mman.h>
+#endif
+
 #define LIMIT 4096
 #define DESCRIPTION_LIMIT 4096
 #define SAMPLES 65536
@@ -68,18 +90,24 @@ static int compare(const void *a, const void *b) {
 // ---- options and state ----------------------------------------------------------------------------------------
 
 static struct {
-  enum { DISPLAY_SOURCE, WINDOW_SOURCE, FRAMES_SOURCE } source;
+  enum { DISPLAY_SOURCE, WINDOW_SOURCE, FRAMES_SOURCE, PORTAL_SOURCE } source;
   Window window;
   int fps, bitrate, keyint, quality, threads, screen;
   int box_width, box_height;
-} options = { .fps = 30 };
+  // The portal's source types (1 monitor, 2 window), its token file and how long the person has to answer.
+  unsigned types;
+  const char *restore;
+  int consent_ms;
+} options = { .fps = 30, .types = 1, .consent_ms = 120000 };
 
 static struct {
-  long frames, bytes, damage, keys;
+  // buffers: what PipeWire sent; unchanged: those not encoded, as their damage was empty or their picture the same.
+  long frames, bytes, damage, keys, buffers, unchanged;
   double started, capture[SAMPLES], encode[SAMPLES];
 } stats;
 
 static const char *ended;
+static volatile sig_atomic_t stopping;
 
 // ---- output -------------------------------------------------------------------------------------------------
 
@@ -441,6 +469,429 @@ static int capture_and_encode(void) {
   return encode_argb((uint8_t *)image->data, image->bytes_per_line, source_width, source_height, ++sequence, captured_at);
 }
 
+// ---- Wayland: the ScreenCast portal and PipeWire --------------------------------------------------------------
+
+#ifdef MAKO_PORTAL
+#define PORTAL_NAME "org.freedesktop.portal.Desktop"
+#define PORTAL_PATH "/org/freedesktop/portal/desktop"
+#define SCREENCAST "org.freedesktop.portal.ScreenCast"
+
+static GDBusConnection *bus;
+static struct pw_loop *pw;
+static struct pw_context *pw_context;
+static struct pw_core *pw_core;
+static struct pw_stream *stream;
+static struct spa_hook stream_listener;
+static struct spa_video_info_raw format;
+static int streaming;
+/** The newest picture the compositor sent, as BGRA, kept after it's encoded for a key frame or a new box. */
+static uint8_t *frame;
+static size_t frame_capacity;
+static int frame_width, frame_height, frame_fresh, have_frame;
+/** One row of an RGBx picture as BGRx, to compare with the kept picture's. */
+static uint8_t *row;
+static size_t row_capacity;
+static double frame_captured_at;
+
+typedef struct {
+  int done;
+  guint32 code;
+  GVariant *results;
+} Response;
+
+static void on_response(GDBusConnection *connection, const char *sender, const char *path, const char *interface, const char *signal,
+                        GVariant *parameters, gpointer data) {
+  (void)connection, (void)sender, (void)path, (void)interface, (void)signal;
+  Response *response = data;
+  g_variant_get(parameters, "(u@a{sv})", &response->code, &response->results);
+  response->done = 1;
+}
+
+static int read_input(void);
+
+/** While the portal waits on the person, the end of stdin (the host stopped the video) still ends the helper. */
+static gboolean tick(gpointer data) {
+  (void)data;
+  struct pollfd input = { 0, POLLIN, 0 };
+  if (poll(&input, 1, 0) > 0 && input.revents & (POLLIN | POLLHUP | POLLERR) && read_input() < 0) stopping = 1;
+  return G_SOURCE_CONTINUE;
+}
+
+/**
+ * Calls a portal method that answers through a Request object, and waits for its Response: 0 granted, 1 the person
+ * declined, 2 anything else. The Request's path is known before the call (its handle token), so no answer is missed.
+ */
+static int portal_call(const char *method, GVariant *parameters, const char *token, int timeout_ms, GVariant **results) {
+  char *sender = g_strdup(g_dbus_connection_get_unique_name(bus) + 1);
+  for (char *p = sender; *p; p++)
+    if (*p == '.') *p = '_';
+  char *path = g_strdup_printf("%s/request/%s/%s", PORTAL_PATH, sender, token);
+  Response response = { 0 };
+  guint subscription = g_dbus_connection_signal_subscribe(bus, PORTAL_NAME, "org.freedesktop.portal.Request", "Response", path, NULL,
+                                                          G_DBUS_SIGNAL_FLAGS_NONE, on_response, &response, NULL);
+  GError *error = NULL;
+  GVariant *reply = g_dbus_connection_call_sync(bus, PORTAL_NAME, PORTAL_PATH, SCREENCAST, method, parameters, G_VARIANT_TYPE("(o)"),
+                                                G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
+  int code = 2;
+  if (!reply) {
+    fprintf(stderr, "mako-video: the ScreenCast portal refused %s: %s\n", method, error->message);
+    g_error_free(error);
+  } else {
+    g_variant_unref(reply);
+    guint timer = g_timeout_add(100, tick, NULL);
+    double deadline = now_ms() + timeout_ms;
+    while (!response.done && !stopping && now_ms() < deadline) g_main_context_iteration(NULL, TRUE);
+    g_source_remove(timer);
+    if (response.done) code = response.code;
+    else if (!stopping) ended = "Nobody answered the request to share the screen";
+  }
+  g_dbus_connection_signal_unsubscribe(bus, subscription);
+  g_free(path);
+  g_free(sender);
+  if (code == 0 && results) *results = response.results;
+  else if (response.results) g_variant_unref(response.results);
+  return code;
+}
+
+static guint32 portal_property(const char *name) {
+  GVariant *reply = g_dbus_connection_call_sync(bus, PORTAL_NAME, PORTAL_PATH, "org.freedesktop.DBus.Properties", "Get",
+                                                g_variant_new("(ss)", SCREENCAST, name), G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL);
+  if (!reply) return 0;
+  GVariant *value;
+  g_variant_get(reply, "(v)", &value);
+  guint32 result = g_variant_is_of_type(value, G_VARIANT_TYPE_UINT32) ? g_variant_get_uint32(value) : 0;
+  g_variant_unref(value);
+  g_variant_unref(reply);
+  return result;
+}
+
+static char *read_token(void) {
+  if (!options.restore) return NULL;
+  char *text = NULL;
+  if (!g_file_get_contents(options.restore, &text, NULL, NULL)) return NULL;
+  g_strstrip(text);
+  if (!*text || strlen(text) > 256) {
+    g_free(text);
+    return NULL;
+  }
+  return text;
+}
+
+/** The new token replaces the old one; the file stays the person's alone. */
+static void write_token(const char *token) {
+  if (!options.restore || !token || !*token) return;
+  char *temporary = g_strdup_printf("%s.%d", options.restore, (int)getpid());
+  int fd = open(temporary, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0600);
+  if (fd >= 0) {
+    size_t length = strlen(token);
+    int written = write(fd, token, length) == (ssize_t)length;
+    close(fd);
+    if (!written || rename(temporary, options.restore)) unlink(temporary);
+  }
+  g_free(temporary);
+}
+
+static void on_stream_state(void *data, enum pw_stream_state old, enum pw_stream_state state, const char *error) {
+  (void)data, (void)old;
+  if (state == PW_STREAM_STATE_STREAMING) streaming = 1;
+  if (state == PW_STREAM_STATE_ERROR) {
+    fprintf(stderr, "mako-video: PipeWire: %s\n", error ? error : "stream error");
+    ended = "Screen sharing stopped";
+  } else if (state == PW_STREAM_STATE_UNCONNECTED && streaming) {
+    ended = "Screen sharing stopped";
+  }
+}
+
+static void on_param_changed(void *data, uint32_t id, const struct spa_pod *param) {
+  (void)data;
+  if (!param || id != SPA_PARAM_Format) return;
+  uint32_t media_type, media_subtype;
+  if (spa_format_parse(param, &media_type, &media_subtype) < 0 || media_type != SPA_MEDIA_TYPE_video || media_subtype != SPA_MEDIA_SUBTYPE_raw)
+    return;
+  spa_format_video_raw_parse(param, &format);
+  uint8_t buffer[1024];
+  struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof buffer);
+  const struct spa_pod *params[4];
+  // Shared memory, or a DMA-BUF this process maps. No modifier is offered, so a compositor that sends a DMA-BUF sends
+  // it linear, which a CPU can read; the encoder is on the CPU anyway.
+  params[0] = spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers, SPA_PARAM_BUFFERS_dataType,
+                                         SPA_POD_CHOICE_FLAGS_Int((1 << SPA_DATA_MemPtr) | (1 << SPA_DATA_MemFd) | (1 << SPA_DATA_DmaBuf)));
+  params[1] = spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta, SPA_PARAM_META_type, SPA_POD_Id(SPA_META_Header),
+                                         SPA_PARAM_META_size, SPA_POD_Int(sizeof(struct spa_meta_header)));
+  params[2] = spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta, SPA_PARAM_META_type, SPA_POD_Id(SPA_META_VideoDamage),
+                                         SPA_PARAM_META_size,
+                                         SPA_POD_CHOICE_RANGE_Int(sizeof(struct spa_meta_region) * 16, sizeof(struct spa_meta_region),
+                                                                  sizeof(struct spa_meta_region) * 16));
+  params[3] = spa_pod_builder_add_object(&builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta, SPA_PARAM_META_type, SPA_POD_Id(SPA_META_VideoCrop),
+                                         SPA_PARAM_META_size, SPA_POD_Int(sizeof(struct spa_meta_region)));
+  pw_stream_update_params(stream, params, 4);
+}
+
+/** Whether a buffer says nothing changed: a damage list whose first region is empty. */
+static int undamaged(struct spa_buffer *buffer) {
+  struct spa_meta *meta = spa_buffer_find_meta(buffer, SPA_META_VideoDamage);
+  if (!meta) return 0;
+  struct spa_meta_region *region;
+  spa_meta_for_each(region, meta) {
+    return !spa_meta_region_is_valid(region);
+  }
+  return 1;
+}
+
+/** Whether two rows of pixels differ only in their fourth byte, which an x format leaves undefined (GNOME fills it). */
+static int same_colors(const uint8_t *a, const uint8_t *b, int width) {
+  for (int i = 0; i < width; i++, a += 4, b += 4)
+    if (a[0] != b[0] || a[1] != b[1] || a[2] != b[2]) return 0;
+  return 1;
+}
+
+/** The newest buffer, copied as BGRA; older ones queued straight back. Encoding waits for the frame's turn. */
+static void on_process(void *data) {
+  (void)data;
+  struct pw_buffer *newest = NULL, *next;
+  while ((next = pw_stream_dequeue_buffer(stream))) {
+    if (newest) pw_stream_queue_buffer(stream, newest);
+    newest = next;
+  }
+  if (!newest) return;
+  stats.buffers++;
+  struct spa_buffer *buffer = newest->buffer;
+  struct spa_data *d = &buffer->datas[0];
+  struct spa_meta_header *header = spa_buffer_find_meta_data(buffer, SPA_META_Header, sizeof *header);
+  if ((header && header->flags & SPA_META_HEADER_FLAG_CORRUPTED) || !d->chunk || !d->chunk->size || d->chunk->flags & SPA_CHUNK_FLAG_CORRUPTED ||
+      (have_frame && undamaged(buffer))) {
+    stats.unchanged++;
+    pw_stream_queue_buffer(stream, newest);
+    return;
+  }
+  double started = now_ms();
+  int width = format.size.width, height = format.size.height, x = 0, y = 0;
+  struct spa_meta_region *crop = spa_buffer_find_meta_data(buffer, SPA_META_VideoCrop, sizeof *crop);
+  if (crop && spa_meta_region_is_valid(crop) && crop->region.position.x >= 0 && crop->region.position.y >= 0 &&
+      crop->region.position.x + crop->region.size.width <= (uint32_t)width && crop->region.position.y + crop->region.size.height <= (uint32_t)height) {
+    x = crop->region.position.x;
+    y = crop->region.position.y;
+    width = crop->region.size.width;
+    height = crop->region.size.height;
+  }
+  uint8_t *source = d->data, *mapped = NULL;
+  size_t mapped_length = 0;
+  if (!source && d->type == SPA_DATA_DmaBuf) {
+    mapped_length = d->maxsize + d->mapoffset;
+    mapped = mmap(NULL, mapped_length, PROT_READ, MAP_SHARED, d->fd, 0);
+    if (mapped == MAP_FAILED) mapped = NULL;
+    if (mapped) {
+      struct dma_buf_sync sync = { DMA_BUF_SYNC_START | DMA_BUF_SYNC_READ };
+      ioctl(d->fd, DMA_BUF_IOCTL_SYNC, &sync);
+      source = mapped + d->mapoffset;
+    }
+  }
+  int stride = d->chunk->stride > 0 ? d->chunk->stride : format.size.width * 4;
+  if (source && width > 0 && height > 0 && width <= LIMIT * 2 && height <= LIMIT * 2) {
+    source += d->chunk->offset + (size_t)y * stride + (size_t)x * 4;
+    size_t size = (size_t)width * height * 4, row_bytes = (size_t)width * 4;
+    int same_size = have_frame && frame_width == width && frame_height == height, changed = !same_size;
+    if (frame_capacity < size) frame = realloc(frame, frame_capacity = size);
+    if (row_capacity < row_bytes) row = realloc(row, row_capacity = row_bytes);
+    // Row by row, kept only where it differs: some compositors (GNOME's, headless) send buffers at the full rate with
+    // no damage list while nothing moves, and an unchanged picture is neither encoded nor sent. libyuv's "ARGB" is
+    // B,G,R,A in memory, PipeWire's BGRx; its "ABGR" is R,G,B,A, PipeWire's RGBx.
+    int swap = format.format == SPA_VIDEO_FORMAT_RGBx || format.format == SPA_VIDEO_FORMAT_RGBA;
+    for (int r = 0; r < height; r++) {
+      const uint8_t *line = source + (size_t)r * stride;
+      if (swap) {
+        ABGRToARGB(line, (int)row_bytes, row, (int)row_bytes, width, 1);
+        line = row;
+      }
+      uint8_t *kept = frame + (size_t)r * row_bytes;
+      if (same_size && (!memcmp(kept, line, row_bytes) || same_colors(kept, line, width))) continue;
+      memcpy(kept, line, row_bytes);
+      changed = 1;
+    }
+    if (changed) {
+      frame_width = width;
+      frame_height = height;
+      frame_fresh = have_frame = 1;
+      frame_captured_at = wall_ms();
+      stats.damage++;
+      if (stats.frames < SAMPLES) stats.capture[stats.frames] = now_ms() - started;
+    } else {
+      stats.unchanged++;
+    }
+  }
+  if (mapped) {
+    struct dma_buf_sync sync = { DMA_BUF_SYNC_END | DMA_BUF_SYNC_READ };
+    ioctl(d->fd, DMA_BUF_IOCTL_SYNC, &sync);
+    munmap(mapped, mapped_length);
+  }
+  pw_stream_queue_buffer(stream, newest);
+}
+
+static const struct pw_stream_events stream_events = {
+  PW_VERSION_STREAM_EVENTS,
+  .state_changed = on_stream_state,
+  .param_changed = on_param_changed,
+  .process = on_process,
+};
+
+/**
+ * The portal's session: CreateSession, SelectSources (the restore token, if one was kept), Start (where the person
+ * is asked, unless the token stands for their earlier answer), then PipeWire. Returns PipeWire's loop fd, or -1 with
+ * `ended` saying why.
+ */
+static int open_portal(void) {
+  GError *error = NULL;
+  bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
+  if (!bus) {
+    fprintf(stderr, "mako-video: no session bus: %s\n", error->message);
+    ended = "This desktop has no session bus for the screen sharing portal";
+    return -1;
+  }
+  guint32 version = portal_property("version"), available = portal_property("AvailableSourceTypes");
+  guint32 cursors = portal_property("AvailableCursorModes");
+  if (!version) {
+    ended = "This desktop has no ScreenCast portal (xdg-desktop-portal and its desktop's backend)";
+    return -1;
+  }
+  guint32 types = options.types & available;
+  if (!types) {
+    ended = options.types == 2 ? "This desktop's portal can't share a single window" : "This desktop's portal can't share a monitor";
+    return -1;
+  }
+  char token[32], session_token[32];
+  snprintf(session_token, sizeof session_token, "mako_video_%d", (int)getpid());
+  GVariantBuilder builder;
+  g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
+  snprintf(token, sizeof token, "mako_create_%d", (int)getpid());
+  g_variant_builder_add(&builder, "{sv}", "handle_token", g_variant_new_string(token));
+  g_variant_builder_add(&builder, "{sv}", "session_handle_token", g_variant_new_string(session_token));
+  GVariant *results = NULL;
+  int code = portal_call("CreateSession", g_variant_new("(a{sv})", &builder), token, 10000, &results);
+  if (code) {
+    if (!ended && !stopping) ended = "The screen sharing portal didn't open a session";
+    return -1;
+  }
+  const char *session_handle = NULL;
+  g_variant_lookup(results, "session_handle", "&s", &session_handle);
+  char *session = g_strdup(session_handle);
+  g_variant_unref(results);
+  if (!session) {
+    ended = "The screen sharing portal didn't open a session";
+    return -1;
+  }
+
+  g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
+  snprintf(token, sizeof token, "mako_select_%d", (int)getpid());
+  g_variant_builder_add(&builder, "{sv}", "handle_token", g_variant_new_string(token));
+  g_variant_builder_add(&builder, "{sv}", "types", g_variant_new_uint32(types));
+  g_variant_builder_add(&builder, "{sv}", "multiple", g_variant_new_boolean(FALSE));
+  // Hidden where the portal allows it: the person's pointer is not the agent's, and a recording draws its own.
+  if (cursors & 1) g_variant_builder_add(&builder, "{sv}", "cursor_mode", g_variant_new_uint32(1));
+  char *kept = read_token();
+  if (version >= 4) {
+    // Until the person revokes it, not just for this process: the next session starts without asking again.
+    g_variant_builder_add(&builder, "{sv}", "persist_mode", g_variant_new_uint32(2));
+    if (kept) g_variant_builder_add(&builder, "{sv}", "restore_token", g_variant_new_string(kept));
+  }
+  g_free(kept);
+  code = portal_call("SelectSources", g_variant_new("(oa{sv})", session, &builder), token, 10000, NULL);
+  if (code) {
+    if (!ended && !stopping) ended = "The screen sharing portal refused the sources asked for";
+    return -1;
+  }
+
+  g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
+  snprintf(token, sizeof token, "mako_start_%d", (int)getpid());
+  g_variant_builder_add(&builder, "{sv}", "handle_token", g_variant_new_string(token));
+  double asked = now_ms();
+  code = portal_call("Start", g_variant_new("(osa{sv})", session, "", &builder), token, options.consent_ms, &results);
+  if (code) {
+    if (!ended && !stopping) ended = code == 1 ? "The person didn't share their screen" : "The screen sharing portal failed to start";
+    return -1;
+  }
+  const char *restore = NULL;
+  if (g_variant_lookup(results, "restore_token", "&s", &restore)) write_token(restore);
+  GVariant *streams = g_variant_lookup_value(results, "streams", G_VARIANT_TYPE("a(ua{sv})"));
+  guint32 node = 0;
+  if (streams && g_variant_n_children(streams) > 0) g_variant_get_child(streams, 0, "(u@a{sv})", &node, NULL);
+  if (streams) g_variant_unref(streams);
+  g_variant_unref(results);
+  fprintf(stderr, "mako-video: portal started in %.0f ms (node %u, %s)\n", now_ms() - asked, node, restore ? "token kept" : "no token");
+  if (!node) {
+    ended = "The screen sharing portal gave no stream";
+    return -1;
+  }
+
+  GUnixFDList *fds = NULL;
+  g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
+  GVariant *reply = g_dbus_connection_call_with_unix_fd_list_sync(bus, PORTAL_NAME, PORTAL_PATH, SCREENCAST, "OpenPipeWireRemote",
+                                                                  g_variant_new("(oa{sv})", session, &builder), G_VARIANT_TYPE("(h)"),
+                                                                  G_DBUS_CALL_FLAGS_NONE, -1, NULL, &fds, NULL, &error);
+  if (!reply) {
+    fprintf(stderr, "mako-video: OpenPipeWireRemote: %s\n", error->message);
+    ended = "The screen sharing portal gave no PipeWire connection";
+    return -1;
+  }
+  gint32 handle;
+  g_variant_get(reply, "(h)", &handle);
+  g_variant_unref(reply);
+  int remote = g_unix_fd_list_get(fds, handle, &error);
+  g_object_unref(fds);
+  if (remote < 0) {
+    ended = "The screen sharing portal gave no PipeWire connection";
+    return -1;
+  }
+
+  pw_init(NULL, NULL);
+  pw = pw_loop_new(NULL);
+  pw_context = pw_context_new(pw, NULL, 0);
+  pw_core = pw_context ? pw_context_connect_fd(pw_context, remote, NULL, 0) : NULL;
+  if (!pw_core) {
+    ended = "PipeWire refused the screen sharing connection";
+    return -1;
+  }
+  stream = pw_stream_new(pw_core, "mako-video",
+                         pw_properties_new(PW_KEY_MEDIA_TYPE, "Video", PW_KEY_MEDIA_CATEGORY, "Capture", PW_KEY_MEDIA_ROLE, "Screen", NULL));
+  pw_stream_add_listener(stream, &stream_listener, &stream_events, NULL);
+  uint8_t buffer[1024];
+  struct spa_pod_builder pod = SPA_POD_BUILDER_INIT(buffer, sizeof buffer);
+  const struct spa_pod *params[1];
+  params[0] = spa_pod_builder_add_object(
+      &pod, SPA_TYPE_OBJECT_Format, SPA_PARAM_EnumFormat, SPA_FORMAT_mediaType, SPA_POD_Id(SPA_MEDIA_TYPE_video), SPA_FORMAT_mediaSubtype,
+      SPA_POD_Id(SPA_MEDIA_SUBTYPE_raw), SPA_FORMAT_VIDEO_format,
+      SPA_POD_CHOICE_ENUM_Id(5, SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_BGRx, SPA_VIDEO_FORMAT_BGRA, SPA_VIDEO_FORMAT_RGBx, SPA_VIDEO_FORMAT_RGBA),
+      SPA_FORMAT_VIDEO_size, SPA_POD_CHOICE_RANGE_Rectangle(&SPA_RECTANGLE(1280, 720), &SPA_RECTANGLE(1, 1), &SPA_RECTANGLE(LIMIT * 2, LIMIT * 2)),
+      // At most the asked rate: the compositor paces what it sends, and sends nothing while the picture holds still.
+      SPA_FORMAT_VIDEO_framerate, SPA_POD_Fraction(&SPA_FRACTION(0, 1)), SPA_FORMAT_VIDEO_maxFramerate,
+      SPA_POD_CHOICE_RANGE_Fraction(&SPA_FRACTION(options.fps, 1), &SPA_FRACTION(1, 1), &SPA_FRACTION(options.fps, 1)));
+  if (pw_stream_connect(stream, PW_DIRECTION_INPUT, node, PW_STREAM_FLAG_AUTOCONNECT | PW_STREAM_FLAG_MAP_BUFFERS, params, 1) < 0) {
+    ended = "PipeWire refused the screen sharing stream";
+    return -1;
+  }
+  pw_loop_enter(pw);
+  return pw_loop_get_fd(pw);
+}
+
+static void close_portal(void) {
+  if (pw) {
+    pw_loop_leave(pw);
+    if (stream) pw_stream_destroy(stream);
+    if (pw_core) pw_core_disconnect(pw_core);
+    if (pw_context) pw_context_destroy(pw_context);
+    pw_loop_destroy(pw);
+    pw = NULL;
+  }
+  // Closing the bus connection closes the portal's session with it.
+  if (bus) g_object_unref(bus);
+}
+
+static int encode_portal_frame(void) {
+  if (!have_frame) return 0;
+  frame_fresh = 0;
+  return encode_argb(frame, frame_width * 4, frame_width, frame_height, ++sequence, frame_captured_at);
+}
+#endif
+
 // ---- input commands -----------------------------------------------------------------------------------------
 
 static uint8_t *input;
@@ -507,7 +958,13 @@ static int commands(void) {
         options.box_width = width;
         options.box_height = height;
         // The next picture opens an encoder at the new size; a still source sends its picture again now.
-        if (options.source != FRAMES_SOURCE) result = capture_and_encode();
+        if (options.source == PORTAL_SOURCE) {
+#ifdef MAKO_PORTAL
+          result = encode_portal_frame();
+#endif
+        } else if (options.source != FRAMES_SOURCE) {
+          result = capture_and_encode();
+        }
       }
     } else if (type == 'R' && length == 4) {
       set_bitrate(get32(body));
@@ -536,7 +993,6 @@ static int read_input(void) {
 
 // ---- main ---------------------------------------------------------------------------------------------------
 
-static volatile sig_atomic_t stopping;
 static void on_signal(int signal) {
   (void)signal;
   stopping = 1;
@@ -550,21 +1006,30 @@ static void summary(void) {
   if (ended) fprintf(stderr, "ended: %s\n", ended);
   fprintf(stderr,
           "{\"frames\":%ld,\"keys\":%ld,\"seconds\":%.1f,\"fps\":%.1f,\"kbps\":%.0f,\"damage\":%ld,\"captureMs\":[%.2f,%.2f],"
-          "\"encodeMs\":[%.2f,%.2f],\"size\":[%d,%d]}\n",
+          "\"encodeMs\":[%.2f,%.2f],\"size\":[%d,%d],\"buffers\":%ld,\"unchanged\":%ld}\n",
           stats.frames, stats.keys, seconds, seconds > 0 ? stats.frames / seconds : 0, seconds > 0 ? stats.bytes * 8 / seconds / 1000 : 0,
           stats.damage, n ? stats.capture[n / 2] : 0, n ? stats.capture[n * 95 / 100] : 0, n ? stats.encode[n / 2] : 0,
-          n ? stats.encode[n * 95 / 100] : 0, encoded_width, encoded_height);
+          n ? stats.encode[n * 95 / 100] : 0, encoded_width, encoded_height, stats.buffers, stats.unchanged);
 }
 
 static int usage(void) {
-  fprintf(stderr, "usage: mako-video display|window <xid>|frames [--fps N] [--bitrate BPS] [--box WxH] [--keyint N] [--quality Q] [--threads N] [--content screen|camera]\n");
+  fprintf(stderr, "usage: mako-video display|window <xid>|portal|frames|features [--fps N] [--bitrate BPS] [--box WxH] [--keyint N] [--quality Q] [--threads N] [--content screen|camera] [--types monitor|window|any] [--restore FILE] [--consent-ms N]\n");
   return 64;
 }
 
 int main(int argc, char **argv) {
   if (argc < 2) return usage();
   int arg = 2;
+  if (!strcmp(argv[1], "features")) {
+#ifdef MAKO_PORTAL
+    puts("{\"x11\":true,\"portal\":true}");
+#else
+    puts("{\"x11\":true,\"portal\":false}");
+#endif
+    return 0;
+  }
   if (!strcmp(argv[1], "display")) options.source = DISPLAY_SOURCE;
+  else if (!strcmp(argv[1], "portal")) options.source = PORTAL_SOURCE;
   else if (!strcmp(argv[1], "frames")) options.source = FRAMES_SOURCE;
   else if (!strcmp(argv[1], "window") && argc > 2) {
     options.source = WINDOW_SOURCE;
@@ -580,9 +1045,12 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "--threads")) options.threads = atoi(value);
     else if (!strcmp(name, "--content")) options.screen = !strcmp(value, "screen");
     else if (!strcmp(name, "--box")) sscanf(value, "%dx%d", &options.box_width, &options.box_height);
+    else if (!strcmp(name, "--types")) options.types = !strcmp(value, "window") ? 2 : !strcmp(value, "any") ? 3 : !strcmp(value, "monitor") ? 1 : 0;
+    else if (!strcmp(name, "--restore")) options.restore = value;
+    else if (!strcmp(name, "--consent-ms")) options.consent_ms = atoi(value);
     else return usage();
   }
-  if (arg != argc || options.fps < 1 || options.fps > 120) return usage();
+  if (arg != argc || options.fps < 1 || options.fps > 120 || !options.types || options.consent_ms < 1) return usage();
   signal(SIGTERM, on_signal);
   signal(SIGINT, on_signal);
   signal(SIGPIPE, SIG_IGN);
@@ -590,7 +1058,19 @@ int main(int argc, char **argv) {
 
   int x = -1;
   Damage damage = 0;
-  if (options.source != FRAMES_SOURCE) {
+  if (options.source == PORTAL_SOURCE) {
+#ifdef MAKO_PORTAL
+    x = open_portal();
+    if (x < 0) {
+      summary();
+      close_portal();
+      return 0;
+    }
+#else
+    fprintf(stderr, "mako-video: this build has no ScreenCast portal capture (built without GIO and PipeWire)\n");
+    return 69;
+#endif
+  } else if (options.source != FRAMES_SOURCE) {
     display = XOpenDisplay(NULL);
     if (!display) {
       fprintf(stderr, "mako-video: no X display to capture ($DISPLAY)\n");
@@ -621,8 +1101,22 @@ int main(int argc, char **argv) {
   }
 
   double interval = 1000.0 / options.fps, next = 0;
-  int dirty = options.source != FRAMES_SOURCE, open = 1;
+  int dirty = options.source != FRAMES_SOURCE && options.source != PORTAL_SOURCE, open = 1;
   while (!stopping && !ended && open) {
+#ifdef MAKO_PORTAL
+    if (pw) {
+      // The session bus: the portal may close the session (the person stopped sharing).
+      while (g_main_context_iteration(NULL, FALSE)) {
+      }
+      dirty = frame_fresh;
+      double t = now_ms();
+      if (dirty && t >= next) {
+        next = next + interval > t ? next + interval : t;
+        if (encode_portal_frame() < 0) break;
+        continue;
+      }
+    }
+#endif
     if (display) {
       while (XPending(display)) {
         XEvent event;
@@ -654,8 +1148,14 @@ int main(int argc, char **argv) {
     int wait = dirty ? (int)ceil(next - now_ms()) : -1;
     if (poll(fds, x < 0 ? 1 : 2, wait < 0 && dirty ? 0 : wait) < 0 && errno != EINTR) break;
     if (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) open = read_input() == 0;
+#ifdef MAKO_PORTAL
+    if (pw && fds[1].revents) pw_loop_iterate(pw, 0);
+#endif
   }
   summary();
   close_encoder();
+#ifdef MAKO_PORTAL
+  close_portal();
+#endif
   return 0;
 }

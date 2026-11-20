@@ -7,6 +7,7 @@ import { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES } from "../application/index.j
 import type { MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import { onMac } from "../base/platform.js"
+import { linuxDesktop } from "@mako/control-runtime/desktop"
 
 const execute = hostCommand
 
@@ -27,6 +28,12 @@ export type GrantedApp = Pick<HostEnvironment, "packaged" | "appRoot">
 
 /** With no `readings`, nothing is known yet: the desktop app that can read them isn't attached. */
 export function computerPermissions(app: GrantedApp, readings: PrivacyReadings | undefined): MakoComputerPermissions {
+  // A Linux desktop has no settings to grant ahead: X11 lets any client read the screen and send input, and on
+  // Wayland the portal asks the person at the first capture or input and keeps their answer (its restore token).
+  // Accessibility is the AT-SPI bus every GNOME and KDE session runs, which the driver reads apps through.
+  if (linuxDesktop()) {
+    return { supported: true, persistentAcrossUpdates: true, accessibility: true, screenRecording: "granted" }
+  }
   if (!onMac()) {
     return {
       supported: false,

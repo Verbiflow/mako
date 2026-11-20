@@ -3125,6 +3125,18 @@ driver afterwards and tasks get a new session on their next call. The driver
 cannot scroll Electron windows in the background and foreground input contends
 with the user, so the desk itself is reached through the browser tools instead.
 
+On a person's Linux desktop (`linuxDesktop()` in `@mako/control-runtime/desktop`:
+a `DISPLAY` or a `WAYLAND_DISPLAY`) the host starts the same embedded driver
+(`cua-embedded.ts`, with `CUA_DRIVER_RS_ENABLE_WAYLAND=1` on Wayland) and grants
+task sessions as on a Mac; a Linux machine with no display (a server, a cloud
+machine's host) starts none, and its computer control stays the standalone
+runtime's. Without the desktop app, a window's live video is the video helper's:
+XComposite on X11, and on Wayland the monitor the person shares through the
+ScreenCast portal and PipeWire, asked once and restored from
+`computer-use/portal-monitor.token`. The machine browser is never saved as a
+desktop person's browser. `scripts/linux-control/run-desktop.sh` proves X11,
+Sway, GNOME and KWin; its README holds the coverage per compositor.
+
 Browser actions publish input-mode JSON Schemas (defaults optional, every
 field described, `$defs` kept) through `help`. Input is real:
 click moves, presses with a buttons mask and releases on its own budget; type

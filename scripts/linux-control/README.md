@@ -9,6 +9,59 @@ For a portable payload and a credential-free contributor workflow, use
 acceptance now passes on EC2; the shared control server runs under Node without
 Electron. The commands below also support local isolated development.
 
+## A person's Linux desktop
+
+On a desktop session (`linuxDesktop()`: `DISPLAY` or `WAYLAND_DISPLAY`), the host
+starts its embedded driver as it does on a Mac, with `CUA_DRIVER_RS_ENABLE_WAYLAND=1`
+on Wayland, and grants task sessions to it. Without the desktop app, a window's
+live video comes from the video helper: XComposite on X11, and on Wayland the
+monitor the person shares through the ScreenCast portal (PipeWire, shared memory
+or a linear DMA-BUF), asked once and restored from
+`<data root>/computer-use/portal-monitor.token`. The helper encodes a picture
+only when it changed: XDamage on X11, and on Wayland a buffer with an empty
+damage list or the same pixels as the last one is skipped.
+
+`desktop-probe.mjs` takes the host's own path: the bundled `cua-embedded.ts`,
+the broker, a task session and the `mako-control` CLI. It launches apps from
+desktop entries, lists windows, screenshots, reads accessibility, types and
+clicks into a GTK fixture and into terminals (xterm, and foot on Wayland), drives
+an XWayland GTK app, writes and reads the clipboard, then measures live video
+(first frame, frames and CPU over 5 idle seconds, frames under input, its units
+written to MP4) and a recording read back with ffprobe. Each run writes
+`desktop-<kind>.json` with every operation's time. Run one desktop at a time:
+
+```sh
+npm run build:control-runtime
+npx esbuild packages/host/src/control/cua-embedded.ts --bundle --platform=node --format=esm \
+  --tsconfig=tsconfig.json --external:@mako/control-runtime/* --external:zod --outfile=build/cua-embedded.mjs
+sh scripts/linux-control/run-desktop.sh x11|sway|gnome|kde <root> <driver package> <evidence>
+```
+
+`<root>` needs Linux `node_modules`; on a Mac, use a payload laid out like the
+checkout. The GNOME and KDE desktops answer the portal's consent dialogs with
+`portal-consent.py` through AT-SPI and log each answer, so a restored session
+shows none. `linux-desktop-control.yml` runs all four on x64.
+
+Coverage on 2026-11-20 (Ubuntu 24.04 images, driver 0.28.2+mako.26):
+
+| | X11 (Openbox) | GNOME 46 Wayland | KDE KWin 5.27 Wayland | wlroots (Sway 1.9) |
+| --- | --- | --- | --- | --- |
+| Window list | EWMH | Shell helper | KWin; native apps without AT-SPI (foot) missing | sway IPC; native apps without AT-SPI (foot) missing |
+| Window screenshot | yes | yes | refused (surface identity unproven) | native yes; XWayland refused |
+| AT-SPI read, set value, press | yes | yes | yes | yes |
+| Focus and foreground keys and clicks | yes | libei, after one RemoteDesktop consent | refused: no verified activation | native yes; XWayland refused |
+| XWayland app | n/a | yes | AT-SPI only | AT-SPI only |
+| Clipboard | X selections | yes | yes | wl data-control |
+| Launch by desktop entry | yes | yes | yes | yes |
+| Live video (helper) | XDamage + XComposite | portal, consent once, restored | portal declines in headless KWin | portal (xdpw), first frame waits for damage |
+| Recording to MP4 | yes | yes (Shell helper) | refused | refused (needs the GNOME helper) |
+
+Idle cost of live video, 5 s with nothing changing: 0 frames and 0 CPU on X11,
+Sway and GNOME. On GNOME the driver's own agent cursor (the Shell helper's 33 ms
+repaint) keeps the screen changing at 19–26 fps while it shows; the probe hides
+it before measuring. The Sway image builds xdg-desktop-portal-wlr 0.7.1 with
+shared-memory screencopy allowed, since Ubuntu's refuses a GPU-less compositor.
+
 ## Recording worker without a desktop
 
 `continuous-recording-probe.mjs` tests the shared recording worker with a synthetic
