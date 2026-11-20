@@ -67,6 +67,9 @@ async function check() {
   await mkdir(join(repository, "nested"))
   await writeFile(join(repository, "nested", "a.ts"), "export const a = 1\n")
   await writeFile(join(repository, "nested", "b.ts"), "export const b = 2\n")
+  // Past twelve changed files the list folds into folders, where a folder stages as one.
+  await mkdir(join(repository, "more"))
+  for (let index = 0; index < 9; index += 1) await writeFile(join(repository, "more", `m${index}.ts`), `export const m${index} = ${index}\n`)
   let requests = 0
   let catalogRequests = 0
   let delay = 0
@@ -326,7 +329,7 @@ async function check() {
     await until(
       "window.stagingBox.getAttribute('aria-checked') === 'false' && window.stagingBox.getAttribute('aria-busy') !== 'true'"
     )
-    await click('[role="checkbox"][aria-label="Stage a.ts"]')
+    await click('[role="checkbox"][aria-label="Stage nested/a.ts"]')
     await until(
       "document.querySelector('[role=checkbox][aria-label=\"Stage all of nested\"]')?.getAttribute('aria-checked') === 'mixed'"
     )
@@ -357,13 +360,10 @@ async function check() {
     await capture("staging-hit-targets.png")
     await setTheme("dark")
     await click('button[title="feature.ts"]')
-    await until("Boolean(document.querySelector('[aria-label=\"Show the diff\"]'))")
-    if (
-      await evaluate(
-        "Boolean(document.querySelector('[aria-label=\"Show the diff\"]'))"
-      )
-    )
-      await click('[aria-label="Show the diff"]')
+    // The diff pane beneath the list is a preference (⌘⇧D, "Toggle the diff pane"); a file's own diff opens in the center.
+    // A file pressed opens its diff in the center (and turns the pane beneath the list off); then the pane comes back.
+    await until("[...document.querySelectorAll('diffs-container')].some(node => node.shadowRoot?.querySelector('pre')?.getBoundingClientRect().height > 0)")
+    await evaluate("import('/src/state/prefs.ts').then(({setPref}) => setPref('autoOpenDiff', true))")
     await until(
       "[...document.querySelectorAll('diffs-container')].some(node => node.shadowRoot?.querySelector('pre')?.getBoundingClientRect().height > 0)"
     )
@@ -400,10 +400,9 @@ async function check() {
     }
     await assertPalette("dark")
     await click('button[title="feature.ts"]')
-    await until(
-      "Boolean(document.querySelector('[aria-label=\"Show the diff\"]'))"
-    )
-    await click('[aria-label="Show the diff"]')
+    // A file pressed opens its diff in the center (and turns the pane beneath the list off); then the pane comes back.
+    await until("[...document.querySelectorAll('diffs-container')].some(node => node.shadowRoot?.querySelector('pre')?.getBoundingClientRect().height > 0)")
+    await evaluate("import('/src/state/prefs.ts').then(({setPref}) => setPref('autoOpenDiff', true))")
     await until(
       "[...document.querySelectorAll('diffs-container')].filter(node => node.shadowRoot?.querySelector('pre')?.getBoundingClientRect().height > 0).length >= 2"
     )
@@ -538,7 +537,7 @@ async function check() {
     )
     assert.equal(
       await evaluate(
-        "Number(document.querySelector('input[type=number]').value)"
+        "Number([...document.querySelectorAll('label')].find((label) => label.textContent.includes('Model context in tokens')).querySelector('input[type=number]').value)"
       ),
       1_048_576
     )
@@ -557,8 +556,8 @@ async function check() {
     )
     await click('[aria-label="Close connection"]')
     for (const provider of [
-      { name: "OpenAI", id: "gpt-6-astra", model: "GPT-6 Astra" },
-      { name: "Anthropic", id: "claude-fable-5-1", model: "Claude Fable 5.1" },
+      { name: "OpenAI", id: "gpt-6-astra", model: "GPT-6 Astra", family: "astra" },
+      { name: "Anthropic", id: "claude-fable-5-1", model: "Claude Fable 5.1", family: "fable" },
     ]) {
       await connectWith(provider.name)
       await until("document.body.textContent.includes('models.dev catalog')")
@@ -567,9 +566,13 @@ async function check() {
       await until(
         `[...document.querySelectorAll('[role=option]')].some(node => node.textContent.includes(${JSON.stringify(provider.model)}))`
       )
-      assert.equal(
-        await evaluate("document.querySelectorAll('[role=option]').length"),
-        1,
+      // The catalog is models.dev's, live: a sibling model (gpt-6.2-astra beside gpt-6-astra) is a fair fuzzy match,
+      // so the exact ID leads the list and nothing outside its family (a context limit, an unrelated name) is in it.
+      const options = await evaluate("[...document.querySelectorAll('[role=option]')].map((node) => node.textContent.toLowerCase())")
+      assert.ok(options[0]?.includes(provider.model.toLowerCase()), `The exact model ID leads the list: ${JSON.stringify(options)}`)
+      assert.deepEqual(
+        options.filter((option) => !option.includes(provider.family)),
+        [],
         "An exact model ID must not match unrelated names or context limits"
       )
       await capture(`${provider.name.toLowerCase()}-model-picker.png`)
@@ -636,7 +639,7 @@ async function check() {
     )
     assert.equal(
       await evaluate(
-        "Number(document.querySelector('input[type=number]').value)"
+        "Number([...document.querySelectorAll('label')].find((label) => label.textContent.includes('Model context in tokens')).querySelector('input[type=number]').value)"
       ),
       32_000
     )
