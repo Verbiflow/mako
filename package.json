@@ -50,6 +50,7 @@
     "test:phone-scroll-ui": "node scripts/test-phone-scroll-ui.mjs",
     "test:side-rail-ui": "node scripts/test-side-rail-ui.mjs",
     "test:lazy-pieces-ui": "node scripts/test-lazy-pieces-ui.mjs",
+    "test:prose-settle-ui": "node scripts/test-prose-settle-ui.mjs",
     "test:fin-transitions-ui": "node scripts/test-fin-transitions-ui.mjs",
     "test:rail-list": "tsx --no-maglev scripts/test-rail-list.ts && tsx --no-maglev scripts/test-thread-archive-targets.ts && tsx --tsconfig tsconfig.app.json scripts/test-rail-hot-path.ts && tsx --tsconfig tsconfig.app.json scripts/test-apex-overview.ts && tsx --tsconfig tsconfig.app.json scripts/test-rail-grouping.ts && tsx --tsconfig tsconfig.app.json scripts/test-worktree-summary-changes.ts",
     "test:roster-delta": "tsx scripts/test-roster-delta.ts && tsx --tsconfig tsconfig.app.json scripts/test-roster-recovery.ts && tsx --tsconfig tsconfig.app.json scripts/test-roster-invariant.ts && tsx --tsconfig tsconfig.app.json scripts/test-roster-canonical.mjs",

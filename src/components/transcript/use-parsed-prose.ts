@@ -1,4 +1,4 @@
-import { useEffect, useId, useState } from "react"
+import { startTransition, useEffect, useId, useState } from "react"
 import type { Root } from "hast"
 import { requestProse, cancelProse } from "@/lib/prose-parser-client"
 
@@ -26,4 +26,24 @@ export function useParsedProse(text: string, streaming: boolean) {
     })
   }, [owner, text, enabled])
   return enabled && result && text.startsWith(result.text) ? result : null
+}
+
+/**
+ * The whole tree of an answer that streamed in this prose and has settled (`parseSettledProse`), parsed in the prose
+ * worker, or `"failed"` when the worker can't. Parsed on the page, the 300 KB a long reply can reach held it 225 ms the
+ * moment the reply finished. It arrives as a transition: drawing it is a render of every piece the answer was cut
+ * into, which React spreads over frames rather than holding one.
+ */
+export function useSettledProse(text: string, enabled: boolean, previewedFiles: readonly string[] | undefined) {
+  const owner = useId()
+  const key = previewedFiles?.join("\0") ?? ""
+  const [result, setResult] = useState<{ text: string; key: string; tree: Root | null } | null>(null)
+  useEffect(() => {
+    if (!enabled) return
+    const files = key ? key.split("\0") : undefined
+    requestProse(owner, text, (tree) => startTransition(() => setResult({ text, key, tree })), false, { previewedFiles: files })
+    return () => cancelProse(owner)
+  }, [owner, text, enabled, key])
+  if (!enabled || result?.text !== text || result.key !== key) return null
+  return result.tree ?? "failed"
 }
