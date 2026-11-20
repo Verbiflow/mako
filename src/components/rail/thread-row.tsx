@@ -1,11 +1,16 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
+import { clearPicked, offerPick, pickByClick, useRailSelection } from "@/state/rail-selection"
+import { railThreadRowKeys } from "@/components/rail/rail-keys"
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { ChevronRightIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
 import { appMarkLabel, purposeWords, titleTone } from "@/lib/rail-marks"
 import { ThreadMark } from "@/components/rail/thread-status"
 import { ArchiveButton, ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
 import { ApexAvatar } from "@/components/rail/rail-avatars"
+import { JumpCap, WorkGlyph } from "@/components/rail/work-status"
+import { WORK_STATUS_WORDS, type WorkStatus } from "@mako/host/contracts/thread-marks"
+import { useThreadMarks } from "@/state/thread-marks"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { useApexFins, useIsApex } from "@/state/fin-pips"
 import { ApexAsks } from "@/components/rail/apex-asks"
@@ -76,7 +81,7 @@ const Detach = memo(function Detach({ path }: { path: string }) {
  * title and its time; under the pointer (`rail-calm`) the trailing slot gives way to the row's actions.
  */
 export const ROW_SURFACE =
-  "rail-calm group relative isolate flex h-7 w-full items-center gap-2 pr-1 pl-2 text-left transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised"
+  "rail-calm group relative isolate flex h-7 w-full items-center gap-2 pr-1 pl-2 text-left transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised data-picked:bg-fill-selected data-picked:hover:bg-fill-selected"
 
 /**
  * A row's floating controls, shown while the row (`group`) is hovered or focused, or a menu of theirs is open.
@@ -88,16 +93,19 @@ export const ROW_ACTIONS =
   "pointer-events-none absolute inset-y-0 right-0 z-[1] flex items-center pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 [.group:has(:focus-visible)_&]:pointer-events-auto [.group:has(:focus-visible)_&]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
 /**
- * A row's one trailing slot at rest: a ring while an Apex's Fins work, then how long ago the row moved, or "Failed" in
- * its place (faint: the fin already lists over). Hover gives the slot to the row's actions.
+ * A row's one trailing slot at rest: a ring while an Apex's Fins work, the status the person set, then how long ago
+ * the row moved, or "Failed" in its place (faint: the fin already lists over). Hover gives the slot to the row's
+ * actions; ⌘ held, to its jump key.
  */
-export function RowEnd({ status, updatedAt, finsWorking, children }: { status: ThreadStatus; updatedAt?: string; finsWorking?: boolean; children?: ReactNode }) {
+export function RowEnd({ status, updatedAt, finsWorking, work, children }: { status: ThreadStatus; updatedAt?: string; finsWorking?: boolean; work?: WorkStatus | null; children?: ReactNode }) {
   return (
     <span data-row-end className="flex min-w-7 shrink-0 items-center justify-end gap-1.5">
       {finsWorking ? <span data-fins-working className="rail-spin" aria-hidden /> : null}
+      {work ? <WorkGlyph status={work} /> : null}
       {status.kind === "failed" ? (
         <span data-status-end="failed" className="text-label text-faint">Failed</span>
       ) : (children ?? (updatedAt ? <span className="tabular text-label text-faint">{formatRelative(updatedAt)}</span> : null))}
+      <JumpCap />
     </span>
   )
 }
@@ -173,6 +181,8 @@ export const ThreadRow = memo(function ThreadRow({
   const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
   const apex = useIsApex(thread)
   const fins = useApexFins(thread, apex)
+  const work = useThreadMarks((state) => (thread ? state.byThread[thread]?.status : undefined)) ?? null
+  const markedUnread = useThreadMarks((state) => (thread ? state.byThread[thread]?.unreadAt != null : false))
   const working = status.kind === "working"
   const activeElsewhere = status.kind === "external-active"
   const isPinned = usePrefs((prefs) => prefs.pinnedThreads.includes(ref.path))
@@ -245,7 +255,13 @@ export const ThreadRow = memo(function ThreadRow({
     onPin: () => togglePinned(ref.path),
     onRename: () => setEditing(override ?? named ?? ref.title ?? ""),
   }
+  // ⌘-click and ⇧-click pick the row instead of opening it (`rail-selection.ts`).
+  const pickRow = useMemo(() => ({ key: ref.path, thread, target: nativeThreadTarget(ref) }), [ref, thread])
+  useEffect(() => offerPick(pickRow), [pickRow])
+  const picked = useRailSelection((state) => state.picked.some((row) => row.key === ref.path))
   const quiet = status.kind === "idle" || (status.kind === "review" && !status.unread)
+  // Marked to read again, a quiet row wears the unread sphere and a full title, as an answer not yet read does.
+  const unreadMark = markedUnread && quiet
 
   return (
     <>
@@ -264,7 +280,9 @@ export const ThreadRow = memo(function ThreadRow({
           // Dropped on the composer instead, it becomes a chip there.
           if (thread) pressTab(event, { thread, title, shown, reference: threadToken(ref.harness, threadReferenceId(ref)) }, event.currentTarget)
         }}
-        onClick={() => {
+        onClick={(event) => {
+          if (pickByClick(pickRow, event, railThreadRowKeys)) return
+          clearPicked()
           if (openedOnPress.current) openedOnPress.current = false
           else open()
         }}
@@ -281,7 +299,8 @@ export const ThreadRow = memo(function ThreadRow({
         // arrive late or not at all. What the row no longer draws (the branch, its Sessions, an app, setup) is here.
         data-tip={[
           title,
-          quiet ? undefined : threadStatusLabel(status, markHarness),
+          quiet ? (unreadMark ? "Marked unread" : undefined) : threadStatusLabel(status, markHarness),
+          work ? WORK_STATUS_WORDS[work] : undefined,
           fins.label,
           foldState
             ? [
@@ -306,6 +325,8 @@ export const ThreadRow = memo(function ThreadRow({
           .filter(Boolean)
           .join("\n")}
         data-active={lit || undefined}
+        data-picked={picked || undefined}
+        aria-selected={picked || undefined}
         data-thread-row
         data-thread-id={thread}
         data-flip-key={ref.path}
@@ -317,12 +338,14 @@ export const ThreadRow = memo(function ThreadRow({
         data-thread-purpose={setup ? "setup" : undefined}
         data-thread-worktree={branch}
         data-kept={ref.archived ? (ref.copyOnly ? "copy" : "records") : undefined}
+        data-work-status={work ?? undefined}
+        data-marked-unread={unreadMark || undefined}
         className={ROW_SURFACE}
       >
         {apex && thread ? (
           <ApexFold thread={thread} open={fins.open} />
         ) : (
-          <ThreadMark status={status} harness={markHarness} lit={lit} cut={lit ? "var(--raised)" : undefined} size={18} />
+          <ThreadMark status={status} state={unreadMark ? "unread" : undefined} harness={markHarness} lit={lit} cut={lit ? "var(--raised)" : undefined} size={18} />
         )}
         {editing !== null ? (
           <input
@@ -348,7 +371,7 @@ export const ThreadRow = memo(function ThreadRow({
               event.stopPropagation()
               setEditing(override ?? named ?? ref.title ?? "")
             }}
-            className={cn("rail-fade min-w-0 flex-1 text-ui", titleTone(lit, status))}
+            className={cn("rail-fade min-w-0 flex-1 text-ui", titleTone(lit, status, { work, unread: unreadMark }))}
           >
             {title}
           </span>
@@ -358,7 +381,7 @@ export const ThreadRow = memo(function ThreadRow({
             {threadFolderKey(ref) ? workspaceName(project ?? ref.cwd) : "tmp"}
           </span>
         ) : null}
-        <RowEnd status={status} updatedAt={ref.updatedAt} finsWorking={fins.working} />
+        <RowEnd status={status} updatedAt={ref.updatedAt} finsWorking={fins.working} work={work} />
         {/* The row's controls float over its trailing edge on hover or focus
             (`.rail-row-actions`), so the title keeps its width. They also stay
             while a menu inside is open: the menu is portaled, so focus leaves

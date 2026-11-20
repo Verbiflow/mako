@@ -43,9 +43,11 @@ export const PROTOCOL_VERSION = 1
  * `QUIET_PROJECT_FROM_LINK_VERSION`). 27 lets a `live` frame be `ephemeral`: the gateway passes it to the conversation's
  watchers who said they read such frames and keeps nothing of it (`EPHEMERAL_LIVE_VERSION`). 28 adds `passing`: the same
  for a Thread the runtime runs, to that Thread's readers who read such frames, never into its log
- (`PASSING_THREAD_VERSION`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ (`PASSING_THREAD_VERSION`). 29 lets a `sessions` row say what the person marked its Thread with: where its work
+ stands (`workStatus`, since `workStatusAt`) and that it's to be read again (`markedUnread`, `THREAD_MARKS_VERSION`).
+ Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 28
+export const LINK_VERSION = 29
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -194,6 +196,12 @@ export const EPHEMERAL_LIVE_VERSION = 27
  * older link sends none: the only way into a Thread then is its log, which keeps everything.
  */
 export const PASSING_THREAD_VERSION = 28
+
+/**
+ * The first link version whose gateway takes a `sessions` row's Thread marks (`workStatus`, `workStatusAt`,
+ * `markedUnread`): a gateway that agreed less gets the row without them, and its devices show no status.
+ */
+export const THREAD_MARKS_VERSION = 29
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

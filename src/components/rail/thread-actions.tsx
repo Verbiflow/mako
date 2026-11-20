@@ -1,7 +1,14 @@
 import { useRef, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 import { ArchiveIcon, ArchiveRestoreIcon, ClipboardCopyIcon, ClipboardListIcon, CopyIcon, FolderOpenIcon, HistoryIcon, MoreHorizontalIcon, PencilLineIcon, PinIcon, PinOffIcon, ScrollTextIcon, SquareIcon, Trash2Icon, WorkflowIcon } from "lucide-react"
-import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "@/components/ui/menu"
+import { CheckIcon, CircleDashedIcon, FolderPlusIcon, MailIcon, MailOpenIcon } from "lucide-react"
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger, Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger, MenuTrigger } from "@/components/ui/menu"
+import { WORK_STATUSES, WORK_STATUS_WORDS } from "@mako/host/contracts/thread-marks"
+import { chatFolderOf } from "@mako/host/contracts/chat-folders"
+import { WorkGlyph } from "@/components/rail/work-status"
+import { markThreads, setWorkStatus, useThreadMarks } from "@/state/thread-marks"
+import { useChatFolders } from "@/state/chat-folders"
+import { turnChatIntoProject } from "@/state/open-project"
 import { desktop } from "@/state/desktop"
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { inCloud, threadLifecycle, type ThreadControls, type ThreadTarget } from "@/state/thread-lifecycle"
@@ -133,12 +140,13 @@ export function ArchiveButton(props: ThreadMenuProps) {
 }
 
 function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: ReturnType<typeof useThreadMenu> }) {
-  const { target, title, archived, running, path, pinned, onPin, onRename } = props
+  const { target, title, archived, running, path, thread, cwd, pinned, onPin, onRename } = props
   const { controls, error } = menu
   const { archive, worktree, oneOfMany, cloud } = useArchive(props)
   const uncommitted = useWorktreeSummaries((state) => (worktree ? state.byPath[worktree.path]?.changes ?? 0 : 0))
   return (
     <>
+      {thread ? <ThreadMarkItems thread={thread} title={title} cwd={cwd} /> : null}
       {onPin ? (
         <MenuItem onSelect={onPin}>
           {pinned ? <PinOffIcon className="size-3.5" /> : <PinIcon className="size-3.5" />}{pinned ? "Unpin" : "Pin"}
@@ -197,6 +205,57 @@ function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Re
       {error ? <p role="alert" className="max-w-64 px-2 py-1 text-label text-negative">{error}</p> : null}
     </>
   )
+}
+
+/**
+ * The menu's first section, what the person marks a Thread with: Mark as unread (or read), its Status, and for a chat
+ * that has no project, Turn into project…. Kept in the Thread store and shown on every device (`thread-marks.ts`).
+ */
+function ThreadMarkItems({ thread, title, cwd }: { thread: string; title: string; cwd?: string }) {
+  const unread = useThreadMarks((state) => state.byThread[thread]?.unreadAt != null)
+  const status = useThreadMarks((state) => state.byThread[thread]?.status ?? null)
+  const chat = useChatFolders((state) => {
+    const folder = cwd ? chatFolderOf(cwd, state.root) : undefined
+    return folder && !state.projects.has(folder) ? folder : undefined
+  })
+  return (
+    <>
+      <MenuItem data-thread-action="unread" onSelect={() => void markThreads([thread], { unread: !unread })}>
+        {unread ? <MailOpenIcon className="size-3.5" /> : <MailIcon className="size-3.5" />}
+        {unread ? "Mark as read" : "Mark as unread"}
+        <MenuKey>U</MenuKey>
+      </MenuItem>
+      <MenuSub>
+        <MenuSubTrigger data-thread-action="status">
+          {status ? <WorkGlyph status={status} className="size-3.5" /> : <CircleDashedIcon className="size-3.5" />}Status
+        </MenuSubTrigger>
+        <MenuSubContent className="min-w-44">
+          {WORK_STATUSES.map((entry) => (
+            <MenuItem key={entry} data-work-status-choice={entry} onSelect={() => void setWorkStatus(thread, entry)}>
+              <WorkGlyph status={entry} className="size-3.5" />
+              {WORK_STATUS_WORDS[entry]}
+              {status === entry ? <CheckIcon className="ml-auto size-3.5" /> : null}
+            </MenuItem>
+          ))}
+          <MenuSeparator />
+          <MenuItem data-work-status-choice="none" disabled={!status} onSelect={() => void setWorkStatus(thread, null)}>
+            <span className="size-3.5" />No status
+            {status ? null : <CheckIcon className="ml-auto size-3.5" />}
+          </MenuItem>
+        </MenuSubContent>
+      </MenuSub>
+      {chat ? (
+        <MenuItem data-thread-action="turn-into-project" onSelect={() => turnChatIntoProject(chat, title)}>
+          <FolderPlusIcon className="size-3.5" />Turn into project…
+        </MenuItem>
+      ) : null}
+      <MenuSeparator />
+    </>
+  )
+}
+
+function MenuKey({ children }: { children: string }) {
+  return <span className="ml-auto pl-4 text-label text-faint">{children}</span>
 }
 
 /** A row's trailing controls: Stop while it runs, and the `…` menu. */

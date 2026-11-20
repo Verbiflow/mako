@@ -967,6 +967,8 @@ const inputs = {
   "mako:capabilities": () => z.tuple([]),
   "mako:change-usage": () => z.tuple([]),
   "mako:chat-folders": () => z.tuple([z.array(z.string())]),
+  "mako:chat-make-project": () =>
+    z.tuple([z.object({ folder: z.string(), to: z.string() })]),
   "mako:check-update-source": () => z.tuple([z.boolean()]),
   "mako:check-updates": () => z.tuple([]),
   "mako:checkout-heads": () => z.tuple([z.array(z.string())]),
@@ -3282,6 +3284,24 @@ const inputs = {
   "mako:thread-follow": () => z.tuple([z.string(), z.number()]),
   "mako:thread-groups": () => z.tuple([]),
   "mako:thread-harness-check": () => z.tuple([z.string()]),
+  "mako:thread-mark": () =>
+    z.tuple([
+      z.string(),
+      z.string(),
+      z.object({
+        status: z
+          .union([
+            z.null(),
+            z.literal("done"),
+            z.literal("backlog"),
+            z.literal("in-progress"),
+            z.literal("in-review"),
+          ])
+          .optional(),
+        unread: z.boolean().optional(),
+      }),
+    ]),
+  "mako:thread-marks": () => z.tuple([]),
   "mako:thread-move": () =>
     z.tuple([
       z.string(),
@@ -3696,6 +3716,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:capabilities", "workspaces"],
   ["mako:change-usage", "attribution"],
   ["mako:chat-folders", "threads"],
+  ["mako:chat-make-project", "workspaces"],
   ["mako:check-update-source", "application"],
   ["mako:check-updates", "application"],
   ["mako:checkout-heads", "workspaces"],
@@ -4033,6 +4054,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:thread-follow", "threads"],
   ["mako:thread-groups", "threads"],
   ["mako:thread-harness-check", "conversations"],
+  ["mako:thread-mark", "threads"],
+  ["mako:thread-marks", "threads"],
   ["mako:thread-move", "conversations"],
   ["mako:thread-open", "threads"],
   ["mako:thread-original", "threads"],

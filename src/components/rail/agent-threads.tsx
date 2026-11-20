@@ -1,4 +1,13 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
+import { nudgeProject, startProjectDrag, useProjectDrag } from "@/components/rail/project-drag"
+import { ProjectDragLayer } from "@/components/rail/project-drag-layer"
+import { orderByHand, useProjectOrder } from "@/state/project-order"
+import { WorkGlyph } from "@/components/rail/work-status"
+import { foldedAsDone, useThreadMarks } from "@/state/thread-marks"
+import { rowThread } from "@/state/thread-groups"
+import { railThreadRows } from "@/components/rail/rail-keys"
+import { archivePicked, clearPicked, markPickedRead, pickableRows, railSelectionStore, togglePicked } from "@/state/rail-selection"
+import { markThreads, markedUnread } from "@/state/thread-marks"
 import { everyWhileShown } from "@/lib/window-shown"
 import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { RailAnnouncer } from "@/components/rail/thread-status"
@@ -92,6 +101,8 @@ import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
   AppWindowIcon,
   ArchiveIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
   CheckIcon,
   ClockIcon,
   ChevronRightIcon,
@@ -144,6 +155,8 @@ const FOLDER_ROWS = 6
 /** Folders quiet longer than this start out collapsed. */
 const COLD_MS = 7 * 24 * 3600_000
 const LIVE_TIME_MS = 60_000
+/** How long ⌘ is held alone before the rows show their keys: a ⌘K or ⌘N pressed at once shows none. */
+const JUMP_HINT_MS = 200
 
 /** Conversations in a folder, the one that moved last first: another device's by its listed time, this Mac's by its start. */
 function byLatestMove(left: AcpPresence, right: AcpPresence): number {
@@ -275,35 +288,72 @@ export function AgentThreads() {
   const { cwd } = useWorkspaceFocus()
   const now = useLiveTime()
 
+  // ⌘ held alone for 200 ms shows the first nine rows' keys; ⌘1–9 opens that row at once, held or not. With rows
+  // picked, U marks them read, E archives them and Escape lets go; with none, U and E act on the focused row.
   useEffect(() => {
-    const rows = () =>
-      [
-        ...(rail.current?.querySelectorAll<HTMLElement>("[data-thread-row]") ??
-          []),
-      ].filter((row) => row.offsetParent !== null)
+    let held: ReturnType<typeof setTimeout> | undefined
+    const hide = () => {
+      clearTimeout(held)
+      held = undefined
+      setJumpHints(false)
+    }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.isComposing) return
+      if ((event.key === "Meta" || event.key === "Control") && !event.shiftKey && !event.altKey) {
+        clearTimeout(held)
+        held = setTimeout(() => setJumpHints(true), JUMP_HINT_MS)
+        return
+      }
       const mod = event.metaKey || event.ctrlKey
-      setJumpHints(mod && event.shiftKey)
-      if (!mod || !event.shiftKey || !event.code.startsWith("Digit")) return
-      const index = Number(event.code.slice(5)) - 1
-      const row = rows()[index]
-      if (!row || index < 0 || index > 8) return
+      if (mod) {
+        hide()
+        // ⌘1–9 alone: ⌘⇧ digits are the strip's surfaces, ⌃⌘ digits the model loadout.
+        if (event.shiftKey || event.altKey || (event.metaKey && event.ctrlKey) || !/^Digit[1-9]$/.test(event.code)) return
+        const row = railThreadRows()[Number(event.code.slice(5)) - 1]
+        if (!row) return
+        event.preventDefault()
+        row.click()
+        return
+      }
+      if (event.altKey || event.defaultPrevented) return
+      const typing = event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable]")
+      if (typing) return
+      const picked = railSelectionStore.get().picked
+      if (event.key === "Escape" && picked.length) {
+        event.preventDefault()
+        clearPicked()
+        return
+      }
+      const key = event.key.toLowerCase()
+      if (key !== "u" && key !== "e") return
+      if (picked.length) {
+        event.preventDefault()
+        void (key === "u" ? markPickedRead() : archivePicked())
+        return
+      }
+      // No rows picked: the row with focus.
+      const focused = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(".thread-jump-scope [data-thread-row]") : null
+      const row = focused?.dataset.flipKey ? pickableRows([focused.dataset.flipKey])[0] : undefined
+      if (!row || focused !== event.target) return
       event.preventDefault()
-      row.click()
+      if (key === "e") {
+        togglePicked(row)
+        void archivePicked()
+      } else if (row.thread) {
+        void markThreads([row.thread], { unread: !markedUnread(row.thread) })
+      }
     }
     const onKeyUp = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey)
-        setJumpHints(false)
+      if (event.key === "Meta" || event.key === "Control" || !(event.metaKey || event.ctrlKey)) hide()
     }
-    const onBlur = () => setJumpHints(false)
     window.addEventListener("keydown", onKeyDown)
     window.addEventListener("keyup", onKeyUp)
-    window.addEventListener("blur", onBlur)
+    window.addEventListener("blur", hide)
     return () => {
+      hide()
       window.removeEventListener("keydown", onKeyDown)
       window.removeEventListener("keyup", onKeyUp)
-      window.removeEventListener("blur", onBlur)
+      window.removeEventListener("blur", hide)
     }
   }, [])
 
@@ -491,9 +541,11 @@ export function AgentThreads() {
     const save = setTimeout(() => saveFolderRanks(workedRanks), SAVE_QUIET_MS)
     return () => clearTimeout(save)
   }, [loaded, unfiltered, workedRanks])
+  // The order the person dragged projects to comes first; the rest keep the order they were last worked in.
+  const handOrder = useProjectOrder((state) => state.order)
   const folders = useMemo(
-    () => orderThreadFolders(grouped, hold?.folderRanks ? heldFolderRanks(hold.folderRanks, folderRanks) : folderRanks, sortBy),
-    [grouped, hold, folderRanks, sortBy]
+    () => orderByHand(orderThreadFolders(grouped, hold?.folderRanks ? heldFolderRanks(hold.folderRanks, folderRanks) : folderRanks, sortBy), sortBy === "recent" ? handOrder : []),
+    [grouped, hold, folderRanks, sortBy, handOrder]
   )
   // Open for this reveal only (`reveal.open`); the person's stored choice for the folder is left as it was.
   const revealedOpen = reveal?.open ? reveal.key : null
@@ -575,12 +627,17 @@ export function AgentThreads() {
   }, [shownCheckouts])
 
   useEffect(() => {
-    const rows =
-      rail.current?.querySelectorAll<HTMLElement>("[data-thread-row]")
-    rows?.forEach((row, index) => {
-      if (index < 9) row.dataset.jumpIndex = String(index + 1)
-      else delete row.dataset.jumpIndex
-    })
+    if (!jumpHints) return
+    // The keys go on the rows as drawn now, the folded ones left out, as ⌘1–9 counts them.
+    const shown = railThreadRows()
+    for (const row of rail.current?.querySelectorAll<HTMLElement>("[data-thread-row]") ?? []) {
+      const index = shown.indexOf(row)
+      const cap = row.querySelector<HTMLElement>("[data-jump-cap]")
+      if (index >= 0 && index < 9) {
+        row.dataset.jumpIndex = String(index + 1)
+        if (cap) cap.textContent = `⌘${index + 1}`
+      } else delete row.dataset.jumpIndex
+    }
   }, [folders, held, jumpHints, shownRefs, shownLive, pages, showAllPinned, showAllFolders, collapsed, showHidden])
 
   return (
@@ -743,6 +800,7 @@ export function AgentThreads() {
         />
         <RailTip scroller={scroller} />
       </div>
+      <ProjectDragLayer />
     </div>
     </FolderDrop>
   )
@@ -1045,10 +1103,11 @@ const FOLDER_MARK_HIDES =
   "transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 [.rail-folder:has(:focus-visible)_&]:opacity-0"
 
 /** A project's own actions, from right-click on its header or its `…`. */
-function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHide }: {
+function FolderMenuItems({ folder, closed, hidden, movable, onToggle, onNew, onPin, onHide }: {
   folder: ThreadFolder & { cwd: string }
   closed: boolean
   hidden: boolean
+  movable: boolean
   onToggle: () => void
   onNew?: () => void
   onPin?: () => void
@@ -1071,6 +1130,14 @@ function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHid
       <MenuItem onSelect={onToggle}>
         {closed ? <ChevronsUpDownIcon className="size-3.5" /> : <ChevronsDownUpIcon className="size-3.5" />}{closed ? "Expand" : "Collapse"}
       </MenuItem>
+      {movable ? <>
+        <MenuItem data-folder-action="move-up" onSelect={() => nudgeProject(folder.key, -1)}>
+          <ArrowUpIcon className="size-3.5" />Move up
+        </MenuItem>
+        <MenuItem data-folder-action="move-down" onSelect={() => nudgeProject(folder.key, 1)}>
+          <ArrowDownIcon className="size-3.5" />Move down
+        </MenuItem>
+      </> : null}
       <MenuSeparator />
       {routed ? null : <>
         <MenuItem data-folder-action="project-settings" onSelect={() => openProjectSettings(folder.cwd)}>
@@ -1197,14 +1264,24 @@ const FolderSection = memo(function FolderSection({
   const head = useCheckoutHead(folder.cwd ?? undefined)
   const contentId = `folder-${folder.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`
 
-  const refs = folder.refs
+  // A Thread Done for three days leaves the rows for one "N done" line, which opens them in place.
+  const threadOf = useThreadGroups((state) => state.threadOf)
+  const doneKeys = useThreadMarks((state) => folder.refs.filter((ref) => foldedAsDone(state.byThread[rowThread(ref, threadOf) ?? ""], now)).map((ref) => ref.path).join("\n"))
+  const [showDone, setShowDone] = useState(false)
+  const folded = doneKeys ? new Set(doneKeys.split("\n")) : null
+  const refs = folded ? folder.refs.filter((ref) => !folded.has(ref.path)) : folder.refs
+  const doneRefs = folded && showDone ? folder.refs.filter((ref) => folded.has(ref.path)) : []
   const limit = FOLDER_LEAD_ROWS + pages * PAGE_ROWS
   const shownLive = liveAgents.slice(0, limit)
   const visible = refs.slice(0, Math.max(0, limit - shownLive.length))
   const more = refs.length + liveAgents.length - visible.length - shownLive.length
   const project = folder.cwd === null ? null : { ...folder, cwd: folder.cwd }
+  // A project with a folder moves by hand, when the list is in the order worked in; a hidden one stays under Hidden.
+  const sortBy = usePrefs((prefs) => prefs.railSortBy)
+  const movable = project !== null && !hidden && sortBy === "recent"
+  const dragging = useProjectDrag((state) => state.drag?.key === folder.key)
   const menuItems = project ? (
-    <FolderMenuItems folder={project} closed={closed} hidden={hidden} onToggle={onToggle} onNew={onNew} onPin={onPin} onHide={(next) => hideProject(project, next)} />
+    <FolderMenuItems folder={project} closed={closed} hidden={hidden} movable={movable} onToggle={onToggle} onNew={onNew} onPin={onPin} onHide={(next) => hideProject(project, next)} />
   ) : null
 
   const header = (
@@ -1212,6 +1289,7 @@ const FolderSection = memo(function FolderSection({
       <button
         type="button"
         data-folder-toggle={folder.key}
+        onPointerDown={movable && project ? (event) => startProjectDrag(event, { key: folder.key, name: folder.name, folder: project.cwd }) : undefined}
         data-tip={[folder.cwd ?? folder.name, head ? (head.kind === "branch" ? `On ${checkoutSentence(head)}` : checkoutSentence(head)) : undefined, folder.pinned ? "Pinned" : undefined].filter(Boolean).join("\n")}
         aria-expanded={!closed}
         aria-controls={contentId}
@@ -1272,7 +1350,7 @@ const FolderSection = memo(function FolderSection({
   )
 
   return (
-    <section data-project-section={folder.key} className="pb-2">
+    <section data-project-section={folder.key} data-project-name={folder.name} data-project-movable={movable || undefined} data-dragging={dragging || undefined} className={cn("pb-2 transition-opacity duration-150", dragging && "opacity-35")}>
       {menuItems ? (
         <ContextMenu modal={false}>
           <ContextMenuTrigger asChild>{header}</ContextMenuTrigger>
@@ -1318,6 +1396,22 @@ const FolderSection = memo(function FolderSection({
               Show less
             </button>
           ) : null}
+          {folded ? (
+            <button
+              type="button"
+              aria-expanded={showDone}
+              data-folder-done={folded.size}
+              onClick={() => setShowDone((current) => !current)}
+              className="flex h-7 w-full items-center gap-2 pl-[30px] text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+            >
+              <WorkGlyph status="done" className="text-faint" />
+              {showDone ? "Fold the done" : `${folded.size} done`}
+            </button>
+          ) : null}
+          {/* The Done Threads it holds, under it, all of them: they're out of the project's paging. */}
+          {doneRefs.map((ref) => (
+            <ThreadRow key={ref.path} threadRef={ref} folded={fold.byLead.get(ref.path)} indent />
+          ))}
           </> : null}
         </div>
       </div>

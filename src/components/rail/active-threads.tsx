@@ -1,4 +1,8 @@
-import { memo } from "react"
+import { memo, useEffect, useMemo } from "react"
+import { clearPicked, offerPick, pickByClick, useRailSelection } from "@/state/rail-selection"
+import { railThreadRowKeys } from "@/components/rail/rail-keys"
+import { WORK_STATUS_WORDS } from "@mako/host/contracts/thread-marks"
+import { useThreadMarks } from "@/state/thread-marks"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { attentionLine } from "@mako/host/contracts/notifications"
 import { useIsApex } from "@/state/fin-pips"
@@ -62,6 +66,8 @@ export const LiveAgentRow = memo(function LiveAgentRow({
   const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
   const apex = useIsApex(thread)
   const fins = useApexFins(thread, apex)
+  const work = useThreadMarks((state) => (thread ? state.byThread[thread]?.status : undefined)) ?? null
+  const markedUnread = useThreadMarks((state) => (thread ? state.byThread[thread]?.unreadAt != null : false))
   const viewedMember = useThreads((state) => {
     const path = state.opening?.ref.path ?? state.viewing?.ref.path
     return path === undefined ? undefined : Boolean(folded?.members.some((member) => member.kind === "native" && member.ref.path === path))
@@ -75,6 +81,10 @@ export const LiveAgentRow = memo(function LiveAgentRow({
     )
   )
   const lit = draftOpen || (viewedMember ?? liveOnScreen)
+  // ⌘-click and ⇧-click pick the row instead of opening it (`rail-selection.ts`).
+  const pickRow = useMemo(() => ({ key: presence.key, thread, target: { kind: "live" as const, id: presence.key } }), [presence.key, thread])
+  useEffect(() => offerPick(pickRow), [pickRow])
+  const picked = useRailSelection((state) => state.picked.some((row) => row.key === presence.key))
   // In a browser every computer is elsewhere: the cloud and a machine of the person's own are marked, as the places
   // apart from their Macs. The row's tip names the place.
   const routed = useWindowRoutes((state) => state.routes !== null)
@@ -107,6 +117,8 @@ export const LiveAgentRow = memo(function LiveAgentRow({
   const quiet = presence.quietSince !== undefined && presence.status === "ready"
   const status = otherSession ? foldState.status : quiet ? IDLE : presenceThreadStatus(presence)
   const markHarness = otherSession ? (foldState.sessions.find((session) => session.status === foldState.status)?.harness ?? presence.harness) : presence.harness
+  // Marked to read again, a quiet row wears the unread sphere, as an answer not yet read does.
+  const unreadMark = markedUnread && status.kind === "idle"
   const named = useThreadTitles((titles) => (thread ? titles.byThread[thread]?.title : undefined))
   // A Thread's name titles its row, this Mac's from its store, another device's from the account's list.
   const title =
@@ -151,6 +163,7 @@ export const LiveAgentRow = memo(function LiveAgentRow({
           title,
           where ? `${where}${presence.waitingOn ? ` · ${presence.waitingOn}` : ""}` : status.kind === "idle" ? undefined : label,
           fins.label,
+          work ? WORK_STATUS_WORDS[work] : undefined,
           foldState ? `${foldState.sessions.length} sessions` : undefined,
           purposeKind ? purposeWords(purposeKind, recordedPurpose?.project) : undefined,
           presence.worktreeBranch ? `Worktree on ${presence.worktreeBranch}` : undefined,
@@ -159,12 +172,20 @@ export const LiveAgentRow = memo(function LiveAgentRow({
         data-conversation-id={presence.key}
         data-thread-indent={indent || undefined}
         data-active={lit || undefined}
+        data-picked={picked || undefined}
+        aria-selected={picked || undefined}
         aria-current={lit || undefined}
-        onClick={open}
+        onClick={(event) => {
+          if (pickByClick(pickRow, event, railThreadRowKeys)) return
+          clearPicked()
+          open()
+        }}
         data-apex-row={apex || undefined}
         data-apex-open={apex ? fins.open : undefined}
         data-fin-counts={fins.label}
         data-thread-purpose={setup ? "setup" : undefined}
+        data-work-status={work ?? undefined}
+        data-marked-unread={unreadMark || undefined}
         className={cn("pressable", ROW_SURFACE)}
       >
         {apex && thread ? (
@@ -172,7 +193,7 @@ export const LiveAgentRow = memo(function LiveAgentRow({
         ) : (
           <ThreadMark
             status={status}
-            state={!otherSession && presence.status === "starting" ? "starting" : undefined}
+            state={!otherSession && presence.status === "starting" ? "starting" : unreadMark ? "unread" : undefined}
             harness={markHarness}
             lit={lit}
             cut={lit ? "var(--raised)" : undefined}
@@ -180,7 +201,7 @@ export const LiveAgentRow = memo(function LiveAgentRow({
             size={18}
           />
         )}
-        <span data-row-title className={cn("rail-fade min-w-0 flex-1 text-ui", titleTone(lit, status))}>
+        <span data-row-title className={cn("rail-fade min-w-0 flex-1 text-ui", titleTone(lit, status, { work, unread: unreadMark }))}>
           {title}
         </span>
         {presence.elsewhere && (!routed || place !== "device") ? <PlaceMark place={place} data-elsewhere={place} className="text-faint/80" /> : null}
@@ -189,7 +210,7 @@ export const LiveAgentRow = memo(function LiveAgentRow({
             {threadFolderKey(presence) ? workspaceName(presence.workspace ?? presence.cwd) : "tmp"}
           </span>
         ) : null}
-        <RowEnd status={status} updatedAt={presence.movedAt === undefined ? undefined : new Date(presence.movedAt).toISOString()} finsWorking={fins.working}>
+        <RowEnd status={status} updatedAt={presence.movedAt === undefined ? undefined : new Date(presence.movedAt).toISOString()} finsWorking={fins.working} work={work}>
           {quiet ? (
             <span data-last-seen title={`Last seen ${copyAge(presence.quietSince!)}`} className="tabular text-label text-faint">
               {/* "seen", so it doesn't read as an idle row's time of its last change. */}

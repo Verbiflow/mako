@@ -26,6 +26,11 @@ export const PREFERENCE_SCHEMAS = {
   "fins.moveOnLimit": z.boolean(),
   /** The person's harness order, most preferred first. */
   harnessOrder: z.array(z.string().min(1).max(64)).max(32),
+  /**
+   * The rail's projects in the order the person dragged them to, by folder, first first. Projects not in it follow,
+   * in the order they were last worked in (`rail-ranks`); a folder no longer listed is passed over.
+   */
+  "rail.projectOrder": z.array(z.string().min(1).max(4096)).max(400),
 } as const
 
 export type PreferenceName = keyof typeof PREFERENCE_SCHEMAS

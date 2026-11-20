@@ -3953,8 +3953,9 @@ rows and words; `npm run test:setup` the host's readings and brokers.
 
 The left rail at rest draws a row's fin, its title and its time, and nothing else; the rest is under the pointer, on
 selection, or in the row's tip (`rail-tip.tsx`). A Thread row is 28 px: the fin (`LiveMark`, 18 px, harness badge),
-the title in 14 px fading at its edge (`.rail-fade`) at 72% (full while it needs the person or holds an unread
-answer), and a trailing slot (`RowEnd`): the time, or "Failed" in faint grey. Under the pointer the slot gives way to Archive and `⋯`.
+the title in 14 px fading at its edge (`.rail-fade`) at 72% (full while it needs the person, holds an unread answer
+or a Mark as unread; 45% once Done), and a trailing slot (`RowEnd`): the status glyph the person set
+(`WorkGlyph`), then the time, or "Failed" in faint grey. Under the pointer the slot gives way to Archive and `⋯`.
 The branch, worktree, Sessions, setup purpose, pin and app went to the tip. The top rows are quiet with one count,
 the Inbox's in the attention hue; Pull requests and Automations say theirs in their tips, and an automation whose
 last run failed since Automations was opened counts in the Inbox (`failedAutomationRuns`), as a proposal does
@@ -3963,14 +3964,26 @@ through its agent's ask. The Projects header's Filter, `+` and `⋯` show under 
 A project row wears a 16 px avatar (`rail-avatars.tsx`): its GitHub owner's public picture when its `origin` is on
 GitHub (`repo-avatars.ts` asks `mako:repo-avatar` with the owner alone; the host fetches
 `https://github.com/<owner>.png` once and keeps it under `<dataRoot>/avatars`), else a monogram on one of eight hues
-hashed from the folder (`.rail-hue-*`). Folded, a project shows only a 6 px attention dot.
+hashed from the folder (`.rail-hue-*`). Folded, a project shows only a 6 px attention dot. Projects order as worked
+in unless the person dragged them (`project-drag.ts`, or Move up/down in a project's menu): that order is the
+`rail.projectOrder` preference, which follows the account; unplaced projects follow by `rail-ranks`.
 
 An Apex is a captain (Capy's pattern): its avatar is its Thread's hue with the fin cut out, turning into the fold's
 chevron under the pointer; its Fins hang from it on 1 px square-elbow lines (`.rail-branch`). Folded (the default)
 only the Fins that need the person show, with their asks; open (`prefs.openApexes`, ←/→ on the row) every Fin in
 play, then "N finished". A ring in the trailing slot says its Fins work; their counts are the tip.
 
-`test-rail-calm-ui.mjs` and `test-rail-calm.ts` hold it.
+A Thread's workflow status (Backlog, In progress, In review, Done) and Mark as unread are the Thread store's
+(`thread_marks`, `contracts/thread-marks.ts`, `mako:thread-mark`, replayed by its operation id), told to windows as
+`thread-marks` and to other devices on the Sessions a host reports (`workStatus`, `markedUnread`, link version 29;
+a link negotiated at 28 drops them in `rowsForLink`, and the marks stay on the Mac).
+A merged pull request of a Thread's worktree marks it Done once per pull request (`markPullMerged`), and a Done
+Thread folds into its project's "N done" after three days. Opening a Thread reads it. ⌘1–9 open the first nine rows
+(holding ⌘ 200 ms shows the keys); ⌘⇧1–9 are the strip's surfaces and ⌃⌘1–5 the model loadout. ⌘- and ⇧-click pick
+rows (`rail-selection.ts`); the footer is then the selection's bar: Mark read (U), Archive (E), Esc. Turn into
+project… moves a chat's folder out of Chats, `git init`s it and moves its conversations with it
+(`mako:chat-make-project`), or nothing moves. `test-rail-calm-ui.mjs`, `test-rail-calm.ts`,
+`test-thread-marks.ts` and `test-chat-projects.ts` hold it.
 
 ## Automations
 

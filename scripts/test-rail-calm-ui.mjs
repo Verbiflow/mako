@@ -10,8 +10,10 @@ import { testScratch } from "./lib/test-scratch.mjs"
 /**
  * The calm rail against the production components and the fixture desk: quiet top rows with the Inbox's one count,
  * project avatars (a GitHub owner's picture or a monogram) and the Projects header's
- * controls only under the pointer, a row that is its fin, title and time with Archive and ⋯ under the pointer, and
- * an Apex's Fins folded and open with ←/→. Screenshots stay in the printed directory; `--port` serves the page on that port.
+ * controls only under the pointer, a row that is its fin, title and time with Archive and ⋯ under the pointer, the
+ * Thread menu's Mark as unread and Status kept in the Thread store, a Done Thread folding into "N done", ⌘ held
+ * showing ⌘1–9 and ⌘2 opening the second row, ⌘/⇧-click picking rows with the selection bar's Archive and Esc,
+ * dragging a project, and an Apex's Fins folded and open with ←/→. Screenshots stay in the printed directory; `--port` serves the page on that port.
  */
 
 if (process.versions.electron) {
@@ -151,7 +153,90 @@ async function checkWindow() {
   await capture("calm-hover.png")
   console.log("PASS: a row's anatomy at rest and under the pointer")
 
-  // 4. An Apex: its avatar, folded to the Fins that need the person with their asks; open with →, every Fin in play.
+  // 4. The Thread menu: Mark as unread and Status, kept in the Thread store.
+  const statusRow = await evaluate(`${row(2)}.dataset.flipKey`)
+  await click(`(${row(2)}.querySelector('[aria-label^="Actions for"]'))`)
+  await until(`document.querySelector('[data-thread-action="status"]') !== null`, "the menu's Status")
+  await hover('[data-thread-action="status"]')
+  await until(`document.querySelector('[data-work-status-choice="in-review"]') !== null`, "the Status submenu")
+  await capture("calm-status-menu.png")
+  await click('[data-work-status-choice="in-review"]')
+  await until(`document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(statusRow)}]')?.dataset.workStatus === 'in-review'`, "the row's status")
+  assert.equal(await evaluate(`document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(statusRow)}] [data-row-end] [data-work-status="in-review"]') !== null`), true, "its glyph in the trailing slot")
+  // The status menu has left before the next row's is opened: a click on its fading item is no click on the row.
+  await until(`document.querySelector('[role="menu"]') === null`, "the menu closed")
+  await move(900, 500)
+  await click(`(${row(3)}.querySelector('[aria-label^="Actions for"]'))`)
+  await until(`document.querySelector('[data-thread-action="unread"]') !== null`, "Mark as unread")
+  const unreadItem = await evaluate(`[...document.querySelectorAll('[data-thread-action="unread"]')].map((item) => item.textContent).join(' | ')`)
+  assert.match(unreadItem, /Mark as unread/, `the menu offers Mark as unread: ${unreadItem}`)
+  await click('[data-thread-action="unread"]')
+  await until(`${row(3)}.dataset.markedUnread === 'true'`, "the row marked unread")
+  assert.equal(await evaluate(`${row(3)}.querySelector('[data-live-mark]').dataset.liveMark`), "unread", "it wears the unread sphere")
+  console.log("PASS: Status and Mark as unread from the Thread menu")
+
+  // 5. A Thread Done for three days folds into its project's "N done".
+  const doneThread = await evaluate(`${row(2)}.dataset.threadId`)
+  await evaluate(`import('/src/state/thread-marks.ts').then(({applyThreadMarks}) => applyThreadMarks([{ thread: ${JSON.stringify(doneThread)}, status: 'done', statusAt: Date.now() - 4 * 24 * 3600_000, by: 'person', unreadAt: null }]))`)
+  await until(`document.querySelector('.thread-jump-scope [data-folder-done]') !== null && !document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(statusRow)}]')`, "the done Thread folded away")
+  await until(`document.querySelector('[role="menu"]') === null`, "no menu open")
+  await click('.thread-jump-scope [data-folder-done]')
+  await until(`document.querySelector('.thread-jump-scope [data-folder-done]')?.getAttribute('aria-expanded') === 'true'`, "the done line open")
+  await until(`document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(statusRow)}]')?.dataset.workStatus === 'done'`, "the done line opens them")
+  await click('.thread-jump-scope [data-folder-done]')
+  console.log("PASS: Done for three days folds into N done")
+
+  // 6. ⌘ held 200 ms shows ⌘1–9 where the times were; ⌘2 opens the second row.
+  await key("rawKeyDown", "Meta", "MetaLeft", 4, 91)
+  await pause(80)
+  assert.equal(await evaluate(`document.querySelector('.thread-jump-scope[data-jump-hints]') === null`), true, "not before 200 ms")
+  await until(`document.querySelector('.thread-jump-scope[data-jump-hints]') !== null`, "the keys after 200 ms")
+  await until(`${row(0)}.querySelector('[data-jump-cap]')?.textContent === '⌘1' && getComputedStyle(${row(0)}.querySelector('[data-jump-cap]')).display === 'flex'`, "⌘1 on the first row")
+  await capture("calm-cmd-held.png")
+  await key("keyUp", "Meta", "MetaLeft", 0, 91)
+  await until(`document.querySelector('.thread-jump-scope[data-jump-hints]') === null`, "the keys leave with ⌘")
+  const second = (await rowKeys())[1]
+  await press("2", "Digit2", 50, 4)
+  await until(`document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(second)}]')?.dataset.active === 'true'`, "⌘2 opened the second row")
+  console.log("PASS: ⌘ held shows ⌘1–9; ⌘2 opens the second row")
+
+  // 7. ⌘-click and ⇧-click pick rows; the selection bar marks them read, archives them, and Esc lets go.
+  const keys = await rowKeys()
+  await click(row(0), 4)
+  await click(row(2), 8)
+  await until(`document.querySelector('[data-selection-bar="3"]') !== null`, "three picked")
+  assert.equal(await evaluate(`document.querySelectorAll('.thread-jump-scope [data-picked]').length`), 3)
+  await capture("calm-multi-select.png")
+  await press("Escape", "Escape", 27)
+  await until(`document.querySelector('[data-selection-bar]') === null`, "Esc lets go")
+  // Two of the first project's rows, so every project keeps a row to drag by below.
+  await click(row(2), 4)
+  await click(row(3), 4)
+  await until(`document.querySelector('[data-selection-bar="2"]') !== null`, "two picked")
+  await click('[data-selection-action="archive"]')
+  await until(`!document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(keys[2])}]') && !document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(keys[3])}]')`, "both archived")
+  console.log("PASS: ⌘/⇧-click picking, Esc, Archive from the selection bar")
+
+  // 8. A project dragged above the first keeps that order, which follows the account.
+  const movable = () => evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-project-movable]')].map((section) => section.dataset.projectSection)`)
+  const before = await movable()
+  assert.ok(before.length >= 2, "two projects to order")
+  const from = await point(`(document.querySelector('.thread-jump-scope [data-project-section=${JSON.stringify(before[1])}] [data-folder-toggle]'))`)
+  const to = await point(`(document.querySelector('.thread-jump-scope [data-project-section=${JSON.stringify(before[0])}] [data-folder-toggle]'))`)
+  await move(from.x, from.y)
+  await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...from })
+  for (let step = 1; step <= 10; step += 1) await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", button: "left", buttons: 1, x: from.x, y: Math.round(from.y + ((to.y - 10 - from.y) * step) / 10) })
+  await until(`document.querySelector('[data-drag-ghost]') !== null && document.querySelector('[data-drop-line]') !== null`, "the project lifted")
+  await capture("calm-drag.png")
+  await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, x: to.x, y: to.y - 10 })
+  await until(`document.querySelector('[data-drag-ghost]') === null`, "dropped")
+  const after = await movable()
+  assert.equal(after[0], before[1], `dropped first: ${JSON.stringify(after)}`)
+  assert.deepEqual(await evaluate(`import('/src/state/project-order.ts').then(({projectOrderStore}) => projectOrderStore.get().order.slice(0, 2))`), [before[1], before[0]], "the order is kept")
+  assert.deepEqual(await evaluate(`window.mako.preferences().then((values) => values['rail.projectOrder']?.slice(0, 2))`), [before[1], before[0]], "and follows the account")
+  console.log("PASS: dragging a project reorders it and keeps the order")
+
+  // 9. An Apex: its avatar, folded to the Fins that need the person with their asks; open with →, every Fin in play.
   await load("&app=apex")
   await until(`document.querySelector('[data-apex-row] [data-apex-avatar]') !== null`, "the Apex's avatar")
   const folded = await evaluate(`({ fins: document.querySelectorAll('[data-fin-row]').length, asking: document.querySelectorAll('[data-asking-fin]').length, line: document.querySelector('[data-asking-line]')?.textContent, branch: document.querySelector('[data-fin-row] .rail-branch') !== null })`)

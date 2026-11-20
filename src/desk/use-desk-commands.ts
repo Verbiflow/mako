@@ -738,13 +738,15 @@ export function useDeskCommands() {
       }
       const mod = event.metaKey || event.ctrlKey
 
-      // ⌘1 shows the chat; ⌘2…⌘9 open the reading surfaces in strip order.
-      // Terminal is a dock with its own ⌘J command. Bound here rather than as
-      // nine palette commands nobody would search for. Both `key` and `code`
-      // are consulted: `code` is layout-independent, `key` is what synthetic
-      // events actually carry. Attached sessions cycle with ⌘⇧[ and ⌘⇧] instead.
+      // ⌘⇧1 shows the chat; ⌘⇧2…⌘⇧9 open the reading surfaces in strip order.
+      // ⌘1–9 open the rail's first nine Threads (`AgentThreads`), and ⌃⌘1–5
+      // the model loadout. Terminal is a dock with its own ⌘J command. Bound
+      // here rather than as nine palette commands nobody would search for.
+      // Both `key` and `code` are consulted: `code` is layout-independent,
+      // `key` is what synthetic events actually carry. Attached sessions cycle
+      // with ⌘⇧[ and ⌘⇧] instead.
       const digit = digitOf(event)
-      if (mod && !event.shiftKey && !event.altKey && digit > 0) {
+      if (mod && event.shiftKey && !event.altKey && !(event.metaKey && event.ctrlKey) && digit > 0) {
         event.preventDefault()
         if (digit === 1) {
           viewer.showAgent()

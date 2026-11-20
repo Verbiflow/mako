@@ -352,16 +352,15 @@ async function checkWindow() {
   // The project says nothing of its rows at rest (the calm rail): the working row's own fin does.
   await until(`[...document.querySelectorAll('.thread-jump-scope [data-folder-toggle][data-tip^="/fixture/only-live-project"]')].some((head) => head.closest('section').querySelector('[data-thread-row] [data-live-mark="working"]'))`)
   assert.equal(await evaluate(`document.querySelectorAll('.thread-jump-scope [data-folder-activity]').length`), 0, "no project chips")
-  await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyDown',key:'Shift',code:'ShiftLeft',windowsVirtualKeyCode:16,modifiers:12})
+  // ⌘ held alone 200 ms: each of the first nine rows shows its ⌘N where its time was, its fin left where it is.
+  await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'rawKeyDown',key:'Meta',code:'MetaLeft',windowsVirtualKeyCode:91,modifiers:4})
   await until(`document.querySelector('.thread-jump-scope[data-jump-hints]') !== null`)
-  // Since #337 a row's live mark is at its start, where the jump hint is drawn: the hint stands over the mark while
-  // Shift is held (it ended before an orb at the row's end). Held here as it is, so a move of either is seen.
-  assert.equal(await evaluate(`(() => { const mark = document.querySelector('.thread-jump-scope [data-thread-row][data-jump-index] [data-live-mark]'); const row = mark.closest('[data-thread-row]'); const hint = getComputedStyle(row, '::after'); const left = mark.getBoundingClientRect().left - row.getBoundingClientRect().left; return parseFloat(hint.left) <= left + 2 && parseFloat(hint.left) + parseFloat(hint.width) > left; })()`), true)
+  assert.equal(await evaluate(`(() => { const row = document.querySelector('.thread-jump-scope [data-thread-row][data-jump-index="1"]'); const cap = row.querySelector('[data-jump-cap]'); const mark = row.querySelector('[data-live-mark]').getBoundingClientRect(); const box = cap.getBoundingClientRect(); return cap.textContent === '⌘1' && getComputedStyle(cap).display === 'flex' && box.left > mark.right })()`), true)
   await capture('project-shortcut-hints.png')
-  await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyUp',key:'Shift',code:'ShiftLeft',windowsVirtualKeyCode:16,modifiers:0})
+  await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyUp',key:'Meta',code:'MetaLeft',windowsVirtualKeyCode:91,modifiers:0})
   await until(`document.querySelector('.thread-jump-scope[data-jump-hints]') === null`)
   await capture("project-view.png")
-  const rowSelector = '.thread-jump-scope [data-thread-row][data-jump-index]'
+  const rowSelector = '.thread-jump-scope [data-thread-row][data-jump-index="1"]'
   const move = async (x, y) => { await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }) }
   const rowPoint = await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(rowSelector)}).getBoundingClientRect(); return {x: Math.round(r.x + 40), y: Math.round(r.y + r.height / 2)} })()`)
   await move(rowPoint.x, rowPoint.y)

@@ -1,6 +1,7 @@
 import type { ThreadPurposeKind } from "@mako/host/contracts/thread-purposes"
 import { workspaceName } from "@/lib/format"
 import type { AppMark } from "@/state/thread-app"
+import type { WorkStatus } from "@mako/host/contracts/thread-marks"
 import type { ThreadStatus } from "@/state/threads"
 
 /** How many hues the rail's avatars take (`.rail-hue-0` to `-7` in `index.css`). */
@@ -26,12 +27,14 @@ export function appMarkLabel(state: AppMark["state"], port: number | undefined):
 }
 
 /**
- * A row's title tone: the open one full and medium, one that needs the person or holds an answer not yet read full,
- * the rest quieter. The title fades at its trailing edge (`rail-fade`) instead of ending on an ellipsis.
+ * A row's title tone: the open one full and medium; one that needs the person, or holds an answer not yet read or a
+ * Mark as unread, full; a Done one faded; the rest quieter. The title fades at its trailing edge (`rail-fade`) instead
+ * of ending on an ellipsis.
  */
-export function titleTone(lit: boolean, status: ThreadStatus): string {
+export function titleTone(lit: boolean, status: ThreadStatus, marks: { work?: WorkStatus | null; unread?: boolean } = {}): string {
   if (lit) return "font-medium text-foreground"
-  if (status.kind === "needs-permission" || (status.kind === "review" && status.unread)) return "text-foreground"
+  if (status.kind === "needs-permission" || (status.kind === "review" && status.unread) || marks.unread) return "text-foreground"
+  if (marks.work === "done") return "text-foreground/45"
   return "text-foreground/72"
 }
 

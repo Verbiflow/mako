@@ -101,6 +101,7 @@ function OpenProjectDialog() {
   const found = useOpenProject((state) => state.found)
   const home = useOpenProject((state) => state.home)
   const clones = useOpenProject((state) => state.clones)
+  const adopt = useOpenProject((state) => state.adopt)
   const cwd = useSession((state) => state.meta?.cwd)
   const recent = useRecentProjects()
   const heads = useHeads((state) => state.heads)
@@ -237,7 +238,7 @@ function OpenProjectDialog() {
         const path = `${into}/${name}`
         if (listing?.exact.kind === "folder") list.push({ id: "create:open", section: "New project", icon: FolderOpenIcon, title: `Open ${tilde(path)}`, detail: "already there", run: () => void openProject(path) })
         else if (listing?.exact.kind === "file") list.push({ id: "create:file", section: "New project", icon: FileIcon, title: `${tilde(path)} is a file; pick another name` })
-        else list.push({ id: "create:make", section: "New project", icon: FolderPlusIcon, title: `Create ${tilde(path)}`, detail: "with git init", keys: formatChord("alt+enter"), keysLabel: "Make it elsewhere", run: (how) => (how.alt ? void createElsewhere(name) : void make(path, true)) })
+        else list.push({ id: "create:make", section: adopt ? `Turn “${adopt.title}” into a project` : "New project", icon: FolderPlusIcon, title: adopt ? `Move it to ${tilde(path)}` : `Create ${tilde(path)}`, detail: adopt ? "with git init; its Thread goes on there" : "with git init", keys: formatChord("alt+enter"), keysLabel: "Make it elsewhere", run: (how) => (how.alt ? void createElsewhere(name) : void make(path, true)) })
       }
       if (creating?.error) list.push({ id: "create:error", section: "New project", icon: FolderPlusIcon, title: creating.error, wrap: true })
       return list
