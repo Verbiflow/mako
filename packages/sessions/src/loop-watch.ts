@@ -90,9 +90,9 @@ const LINGER_MS = 1_000
  * (`WorkUnderWay`): a request, a copy, a capture or a push starts it, and it stops `lingerMs` after the last of them
  * ended. An idle daemon has no timer, as an idle host has none (the host's `EventLoopWatch`): a look every 100 ms woke
  * a daemon with nothing to do ten times a second. The returned function stops it. Its timer never keeps the process
- * alive.
+ * alive. `watching` hears it start and stop, for whatever else samples the loop only while it's watched.
  */
-export function watchLoop(work: WorkUnderWay, say: (ms: number, during: string) => void, options: { everyMs?: number; heldMs?: number; lingerMs?: number } = {}): () => void {
+export function watchLoop(work: WorkUnderWay, say: (ms: number, during: string) => void, options: { everyMs?: number; heldMs?: number; lingerMs?: number; watching?: (on: boolean) => void } = {}): () => void {
   const every = options.everyMs ?? EVERY_MS
   const held = options.heldMs ?? HELD_MS
   const linger = options.lingerMs ?? LINGER_MS
@@ -109,6 +109,7 @@ export function watchLoop(work: WorkUnderWay, say: (ms: number, during: string) 
     if (quiet && now >= lingerUntil) {
       clearInterval(timer)
       timer = undefined
+      options.watching?.(false)
     }
   }
   const watch = () => {
@@ -117,10 +118,12 @@ export function watchLoop(work: WorkUnderWay, say: (ms: number, during: string) 
     last = performance.now()
     timer = setInterval(look, every)
     timer.unref?.()
+    options.watching?.(true)
   }
   const stopHearing = work.onBegin(watch)
   return () => {
     stopHearing()
+    if (timer) options.watching?.(false)
     clearInterval(timer)
     timer = undefined
   }

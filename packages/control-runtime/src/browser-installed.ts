@@ -5,7 +5,8 @@ import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import { z } from "zod"
 import type { LocalBrowser } from "./browser-discovery.js"
-import { onMac } from "./platform.js"
+import { onMac, onWindows } from "./platform.js"
+import { windowsInstalledChromium, windowsLocalBrowsers } from "./browser-installed-windows.js"
 
 const execute = command
 const applicationInfo = z.object({
@@ -142,20 +143,26 @@ export async function discoverInstalledChromium(
   return found.sort((a, b) => a.name.localeCompare(b.name))
 }
 
-/** This Mac's Chromium applications, found again at most every 10 seconds or when the extra paths change. */
+/**
+ * This machine's Chromium applications, found again at most every 10 seconds or when the extra paths change: a Mac's
+ * application bundles, Windows' App Paths and install folders (`browser-installed-windows.ts`). A Linux machine lists
+ * none; its browsers appear once the extension connects them.
+ */
 export class InstalledBrowsers {
   private cached:
     | { key: string; expires: number; browsers: Promise<LocalBrowser[]> }
     | undefined
 
   list(extraPaths: string[] = []): Promise<LocalBrowser[]> {
-    if (!onMac()) return Promise.resolve([])
+    if (!onMac() && !onWindows()) return Promise.resolve([])
     const key = extraPaths.join("\n")
     if (!this.cached || this.cached.key !== key || this.cached.expires <= Date.now()) {
       this.cached = {
         key,
         expires: Date.now() + 10_000,
-        browsers: discoverInstalledChromium(undefined, extraPaths),
+        browsers: onWindows()
+          ? windowsInstalledChromium(process.env, extraPaths).then(windowsLocalBrowsers, () => [])
+          : discoverInstalledChromium(undefined, extraPaths),
       }
     }
     return this.cached.browsers
