@@ -14,6 +14,8 @@ const displayName = z
     )
   )
 const preferences = z.object({ profile: z.object({ name: displayName }) })
+const localStateProfiles = z.object({ profile: z.object({ info_cache: z.record(z.string(), z.json()) }) })
+const profileInfo = z.object({ name: displayName })
 
 /** A unique profile is identifiable; multiple profiles must never use last-used. */
 export async function singleBrowserProfile(
@@ -67,5 +69,25 @@ export async function browserProfileName(
       .name
   } catch {
     return
+  }
+}
+
+/** A user-data folder's profiles, as its `Local State` lists them: each one's folder, and its name where it has one. */
+export async function browserProfiles(
+  root: string
+): Promise<{ directory: string; name?: string }[]> {
+  try {
+    const path = join(root, "Local State")
+    if ((await stat(path)).size > 8 * 1024 * 1024) return []
+    const state = localStateProfiles.parse(JSON.parse(await readFile(path, "utf8")))
+    return Object.entries(state.profile.info_cache)
+      .filter(([folder]) => folder && folder !== "." && folder !== ".." && basename(folder) === folder && !folder.includes("\\"))
+      .slice(0, 64)
+      .map(([folder, info]) => {
+        const name = profileInfo.safeParse(info)
+        return { directory: join(root, folder), ...(name.success && { name: name.data.name }) }
+      })
+  } catch {
+    return []
   }
 }

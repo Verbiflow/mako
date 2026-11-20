@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process"
 import { realpath } from "node:fs/promises"
+import { win32 } from "node:path"
 import { promisify } from "node:util"
 
 const execute = promisify(execFile)
@@ -12,6 +13,16 @@ export async function nativeBrowserApplication(
     // /proc resolves the running executable even for Chromium forks launched
     // through shell wrappers or alternatives symlinks.
     return realpath(`/proc/${String(parent)}/exe`).catch(() => undefined)
+  }
+  if (process.platform === "win32") {
+    // Chromium starts a native host through cmd.exe, so the browser is the
+    // grandparent, which Node can't name without a slow WMI query. Each brand
+    // reads its own registry key, whose launcher names its executable
+    // (`browser-extension-windows.ts`).
+    const named = process.env.MAKO_BROWSER_APPLICATION
+    return named && win32.isAbsolute(named)
+      ? realpath(named).catch(() => undefined)
+      : undefined
   }
   if (process.platform !== "darwin") return undefined
   try {

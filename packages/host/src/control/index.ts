@@ -14,6 +14,7 @@ import {
   publishDeskBrowserRegistration,
   videoHelperExecutable,
   videoHelperName,
+  windowsMachineChromium,
 } from "@mako/control-runtime/desktop"
 import type { MethodTable } from "../base/methods.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -40,7 +41,7 @@ import { CuaDriverVersions } from "./cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "../application/index.js"
 import { computerPermissions } from "./computer-permissions.js"
 import type { MachineCapability } from "../base/machine.js"
-import { onLinux, onMac } from "../base/platform.js"
+import { onLinux, onMac, onWindows } from "../base/platform.js"
 import type { CuaDriverStatus, MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
 import type { AppshotFrontRequest, AppshotTarget } from "@mako/control-runtime/contracts"
 import type { HostEvent } from "../contracts/host-events-boot.js"
@@ -200,8 +201,10 @@ export function openControl(
     ? join(dirname(dirname(environment.appRoot)), ...(onMac() ? ["MacOS"] : []), videoHelperName())
     : join(environment.appRoot, "build", videoHelperName())
   if (existsSync(bundledVideoHelper)) process.env.MAKO_VIDEO_HELPER ??= bundledVideoHelper
-  // A Linux machine has no person's browser for Mako to connect to, so it runs its own.
-  const chromium = onLinux() ? resolveExecutable("chromium") : undefined
+  // The machine's own browser, headless in a profile of Mako's, which never becomes the person's: Chromium on Linux,
+  // where a server has no person's browser to connect to; on Windows the installed Chrome or Edge, whose capture
+  // extension loads over its DevTools pipe, since Chrome ignores --load-extension.
+  const chromium = onLinux() ? resolveExecutable("chromium") : onWindows() ? windowsMachineChromium() : undefined
   const machineBrowser = chromium
     ? new MachineBrowser({
         executable: chromium,
@@ -209,9 +212,11 @@ export function openControl(
         // Chromium refuses its sandbox to root, who owns the machine already.
         sandbox: process.getuid?.() !== 0,
         captureExtension: machineCaptureExtension(environment.dataRoot),
+        extensionLoading: onWindows() ? "pipe" : "flag",
         started(child) {
           const pid = child.pid
-          if (!pid) return
+          // The provider registry reads a process's executable from /proc; elsewhere it has no identity to check.
+          if (!pid || !onLinux()) return
           let executable: string
           try {
             // Debian's `chromium` is a script that execs the browser: the registry checks what the process runs now.
@@ -245,7 +250,9 @@ export function openControl(
     {
       preferencePath: join(environment.dataRoot, "browser-preference.json"),
       defaultApplication: preferredBrowserApplication,
-      defaultBrowser: machineBrowser?.definition.id,
+      // Agents' tabs open in it until someone chooses only where nobody sits at the machine: on a desktop the person's
+      // own browser is theirs to pick, and the machine's is one choice among them.
+      defaultBrowser: machine.kind === "absent" && onLinux() ? machineBrowser?.definition.id : undefined,
     }
   )
   let devRendererGeneration = 0
