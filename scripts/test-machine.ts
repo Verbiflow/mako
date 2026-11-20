@@ -35,6 +35,12 @@ assert.equal(await mac.chooseFolder(prompt), "/Users/someone/Projects/app", "The
 const chooser = calls.pop()
 assert.equal(chooser?.[1].at(-1), prompt, "The prompt is an argument to the script, never spliced into its source")
 assert.ok(!chooser?.[1].slice(0, -1).some((part) => part.includes(prompt)))
+const opensAt = '/Users/someone/Projects "quoted"'
+await mac.chooseFolder(prompt, opensAt)
+const at = calls.pop()
+assert.deepEqual(at?.[1].slice(-2), [prompt, opensAt], "The folder the chooser opens at is an argument too")
+assert.ok(at?.[1].some((part) => part.includes("default location (POSIX file (item 2 of argv))")), "and the script opens there")
+assert.ok(!at?.[1].slice(0, -2).some((part) => part.includes(opensAt)))
 
 exit = 1
 assert.equal(await mac.open("/tmp/nothing-opens-this"), false, "Open says when nothing could open the item")

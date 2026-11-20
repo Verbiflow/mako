@@ -107,7 +107,7 @@ async function checkWindow() {
 
   // No view switch: the Threads heading, then the glyphs, on one line that fits at the default width.
   const header = await evaluate(`(() => { const heading = document.querySelector('[data-rail-threads-heading]'); const glyph = document.querySelector('[aria-label="Filter and sort"]').getBoundingClientRect(); return {headingRight: heading.getBoundingClientRect().right, glyphLeft: glyph.left, heading: heading.textContent, switcher: document.querySelector('[aria-label="Thread view"]') !== null} })()`)
-  assert.equal(header.heading, "Threads")
+  assert.equal(header.heading, "Projects")
   assert.equal(header.switcher, false, "the Projects / Recent / Status switch is gone")
   assert.ok(header.headingRight <= header.glyphLeft, `The heading must fit beside the glyphs, received ${JSON.stringify(header)}`)
   await capture("rail-projects.png")
@@ -318,7 +318,7 @@ async function checkWindow() {
   await click('[data-rail-test="archived"]')
   await until(`document.querySelector('[data-rail-threads-heading]')?.textContent === 'Archived'`, "the heading names Archived")
   await click('[data-rail-threads-heading]')
-  await until(`document.querySelector('[data-rail-threads-heading]')?.textContent === 'Threads'`)
+  await until(`document.querySelector('[data-rail-threads-heading]')?.textContent === 'Projects'`)
   console.log("PASS: Archived is reached from the filter and its heading returns to the projects")
 
   // 7. Reduced motion: rows still move, nothing glides.

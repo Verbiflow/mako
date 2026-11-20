@@ -36,6 +36,7 @@ import type { JsonValue } from "./json.js"
 import type { PreferenceName, PreferenceValues } from "./preferences.js"
 import type { FinChoicesReading, FinPolicy, RoleRules } from "./fin-tuning.js"
 import type { CheckoutHeads } from "./checkout-heads.js"
+import type { CloneAccepted, CloneRequest, CreateProjectRequest, FolderBrowse, FolderBrowseRequest, FoundCheckouts, FoundCheckoutsRequest } from "./projects.js"
 import type { AppActionOutcome, AppMark, AppOutputChunk, AppOutputCursor, AppOutputKey, AppProbeView, AppSamplingDemand, AppSamplingReply, RoomView, ThreadAppView } from "./thread-app.js"
 import type { ViewHintsStatus } from "./view-hints.js"
 import type { ThreadPlacement } from "./thread-identity.js"
@@ -1121,7 +1122,18 @@ export function createMakoBridge(transport: BridgeTransport) {
       payload: { message: string; stack?: string; source?: string }
     ) => invokeTrustedHost<void>("mako:report-crash", kind, payload),
 
-    pickFolder: () => invokeTrustedHost<string | null>("mako:pick-folder"),
+    /** The folder the person picks in the system's chooser, opened at `defaultPath` when given; null if they cancel. */
+    pickFolder: (defaultPath?: string) =>
+      defaultPath === undefined ? invokeTrustedHost<string | null>("mako:pick-folder") : invokeTrustedHost<string | null>("mako:pick-folder", defaultPath),
+    /** The folders under a path being typed, and what the path itself is. */
+    browseFolders: (request: FolderBrowseRequest) => invokeTrustedHost<FolderBrowse>("mako:folders-browse", request),
+    /** The Git checkouts the host found under home; a newer scan arrives as `folders-found`. */
+    foundCheckouts: (request: FoundCheckoutsRequest) => invokeTrustedHost<FoundCheckouts>("mako:folders-found", request),
+    /** Clones a GitHub repository with this Mac's own Git and credentials; progress arrives as `project-clone`. */
+    cloneProject: (request: CloneRequest) => invokeTrustedHost<CloneAccepted>("mako:project-clone", request),
+    cancelClone: (id: string) => invokeTrustedHost<void>("mako:project-clone-cancel", id),
+    /** Makes a new project folder, a Git repository when asked. */
+    createProject: (request: CreateProjectRequest) => invokeTrustedHost<{ path: string }>("mako:project-create", request),
     externalEditors: () =>
       invokeTrustedHost<ExternalEditor[]>("mako:external-editors"),
     openInEditor: (path: string, editor?: string) =>

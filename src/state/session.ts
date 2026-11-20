@@ -612,6 +612,9 @@ function applyToActive(event: HostEvent) {
     case "app-command":
       runCommand(event.command)
       break
+    case "app-open-project":
+      void actions.newConversationIn(event.path)
+      break
     case "app-shutdown":
       void application.shutdown(event.requestId)
       break
@@ -1202,14 +1205,15 @@ export const actions = {
     adoptState(next)
   },
 
-  async pickWorkspace() {
+  /** The system's folder chooser, opened at `defaultPath` when given; the folder picked gets a new Thread. */
+  async pickWorkspace(defaultPath?: string) {
     const { machine } = store.get()
     if (!machine.chooseFolder) {
       toast(machine.missing ?? "No folder chooser is available here.", { id: "machine-missing" })
       return
     }
     const currentOpen = inboxView.pendingOpen()
-    const folder = await guard(() => getMako().pickFolder())
+    const folder = await guard(() => getMako().pickFolder(defaultPath))
     if (folder && currentOpen()) await actions.newConversationIn(folder)
   },
 

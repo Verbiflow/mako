@@ -27,6 +27,7 @@ import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-ident
 import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeReview, type WorktreeStartPoint, type WorktreeSummary, type WorktreeUpdate } from "@mako/host/contracts/thread-worktrees"
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
 import { mockStorage } from "./mock-storage"
+import { mockProjects } from "./mock-projects"
 import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
 import type { FileWriters, RewindPreview, WorkspaceSnapshot } from "@mako/host/contracts/workspace-snapshots"
@@ -1044,6 +1045,7 @@ export function installMockBridge() {
     moveOnLimit: true,
   }
   let mockTelemetry = { usage: true, errors: true }
+  const projects = mockProjects(emit)
   window.mako = {
     boot: async () => boot,
     threadArchives: async () => ({
@@ -1827,6 +1829,7 @@ export function installMockBridge() {
         if (crowdedReads === 2) setTimeout(() => emit({ type: "live-listed", summaries: crowded.elsewhere }), 1_000)
         return { ready: crowdedReads > 1, threads: crowdedReads > 1 ? crowded.refs : crowded.early, activity: {} }
       }
+      if (scene === "first-run") return { ...fixture, threads: [], activity: {} }
       const threads = scene === "rail" ? fixture.threads.map(railRef) : [...keptThreads(), ...(scene === "busy" ? busyRefs() : []), ...(scene === "apex" ? [...apexRefs(), ...benchScene.refs] : []), ...(scene === "automations" ? automationRefs() : []), ...fixture.threads]
       if (scene === "rail" && !railRunsSent) {
         railRunsSent = true
@@ -3790,6 +3793,7 @@ export function installMockBridge() {
       return { ...mockTelemetry }
     },
     pickFolder: async () => (mockReturnOutdated.value === "project-gone" ? MOCK_MOVED_PROJECT : null),
+    ...projects,
     externalEditors: async () => [
       { id: "zed", label: "Zed", available: true },
       { id: "cursor", label: "Cursor", available: true },

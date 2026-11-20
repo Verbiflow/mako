@@ -120,7 +120,7 @@ async function check() {
   await both("rail")
 
   // Recent (the filter menu's choice) and search list no other either; the Apex is there in each.
-  for (const [scope, heading] of [["recent", "Recent"], ["project", "Threads"]]) {
+  for (const [scope, heading] of [["recent", "Recent"], ["project", "Projects"]]) {
     await evaluate(`import('/src/state/prefs.ts').then(({setPref}) => setPref('railGrouping', ${JSON.stringify(scope)}))`)
     await until(`document.querySelector('[data-rail-threads-heading]')?.textContent === ${JSON.stringify(heading)}`, `the rail's ${heading}`)
     await settle()

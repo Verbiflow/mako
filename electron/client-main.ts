@@ -2,7 +2,7 @@ import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, powerMonitor, pro
 import { WindowShutdown } from "@mako/host/application/window-shutdown"
 import { SHUTDOWN_HOLD_MS } from "@mako/host/contracts/cloud-threads"
 import { createHash, randomUUID } from "node:crypto"
-import { cp, mkdir, access, mkdtemp, rename, rm } from "node:fs/promises"
+import { cp, mkdir, access, mkdtemp, rename, rm, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -95,7 +95,10 @@ let agentViewsIdle: ReturnType<typeof setTimeout> | undefined
 const agentViews = new Set<number>()
 const personWindows = () => BrowserWindow.getAllWindows().filter((window) => !agentViews.has(window.webContents.id))
 let shuttingDown = false
-let pendingCommand: "app.quit" | "app.updates" | null = null
+type AppCommand = "app.quit" | "app.updates" | "workspace.open"
+let pendingCommand: AppCommand | null = null
+/** A folder the app was handed before a window could take it: the next window to boot opens it as a project. */
+let pendingProject: string | null = null
 let shutdownAction: "quit" | "install" | "restart" | null = null
 const draftShutdown = new WindowShutdown()
 let closingLocally = false
@@ -153,7 +156,24 @@ function sendEvent(contents: Electron.WebContents, event: HostEvent): void {
   contents.send("mako:event", JSON.stringify(event))
 }
 
-function requestCommand(command: "app.quit" | "app.updates"): void {
+/** Opens `path` as a project in the window in front, or the next one to boot. */
+function requestOpenProject(path: string): void {
+  const window = app.isReady() ? (BrowserWindow.getFocusedWindow() ?? personWindows()[0]) : undefined
+  if (window && !window.webContents.isLoadingMainFrame()) { window.show(); sendEvent(window.webContents, { type: "app-open-project", path }) }
+  else {
+    pendingProject = path
+    if (app.isReady() && !window) void openWindow().catch((error) => dialog.showErrorBox("Mako could not open", error instanceof Error ? error.message : "Try opening Mako again."))
+  }
+}
+
+// A folder dropped on the Dock icon, or `open -a Mako <folder>`: macOS hands it over before or after launch.
+if (role === "desktop")
+  app.on("open-file", (event, path) => {
+    event.preventDefault()
+    void stat(path).then((info) => { if (info.isDirectory()) requestOpenProject(path) }, () => undefined)
+  })
+
+function requestCommand(command: AppCommand): void {
   const window = BrowserWindow.getFocusedWindow() ?? personWindows()[0]
   if (window && !window.webContents.isLoadingMainFrame()) { window.show(); sendEvent(window.webContents, { type: "app-command", command }) }
   else {
@@ -457,6 +477,7 @@ async function start() {
   closeOnSignals()
   Menu.setApplicationMenu(Menu.buildFromTemplate([
     { label: "Mako", submenu: [{ role: "about" }, { label: "Updates…", click: () => requestCommand("app.updates") }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, { role: "quit" }] },
+    { label: "File", submenu: [{ label: "Open Project…", accelerator: "CmdOrCtrl+O", click: () => requestCommand("workspace.open") }] },
     { role: "editMenu" }, { role: "viewMenu" }, { role: "windowMenu" },
   ]))
   await serveWindows()
@@ -606,7 +627,9 @@ async function serveWindows() {
       if (isClientCall(channel)) return encodeRuntimeValue(await answerClientCall(clientAnswers, channel, event, inputs.of(channel).parse(raw)))
       if (channel === "mako:pick-folder") {
         const parent = BrowserWindow.fromWebContents(event.sender)
+        const [defaultPath] = inputs.of("mako:pick-folder").parse(args)
         const options: Electron.OpenDialogOptions = { properties: ["openDirectory", "createDirectory"] }
+        if (defaultPath) options.defaultPath = defaultPath
         const result = parent ? await dialog.showOpenDialog(parent, options) : await dialog.showOpenDialog(options)
         return encodeRuntimeValue(result.canceled ? null : result.filePaths[0])
       }
@@ -620,6 +643,7 @@ async function serveWindows() {
       const encoded = (early && await early.catch(() => undefined)) ?? await invokeWithRecovery(channel, (attempt) => invokeRuntimeEncoded(runtime.socket, client.id, channel, args, attempt, { history: true, correlationId }), client.link)
       if (channel === "mako:boot") {
         if (pendingCommand) { sendEvent(event.sender, { type: "app-command", command: pendingCommand }); pendingCommand = null }
+        if (pendingProject) { sendEvent(event.sender, { type: "app-open-project", path: pendingProject }); pendingProject = null }
         const boot = z.looseObject({ machine: MachineOfferSchema.optional() }).parse(decodeRuntimeValue(encoded))
         // This app answers the folder chooser with its own dialog, whatever the host's machine offers.
         const machine: MachineOffer = { ...(boot.machine ?? UNSTATED_MACHINE_OFFER), chooseFolder: true }
