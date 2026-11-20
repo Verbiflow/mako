@@ -70,6 +70,7 @@ export function SyncSection() {
           </ListCardRow>
         )}
       </ListCard>
+      {status && "tiers" in status && status.unreachableSince !== undefined ? <Unreachable since={status.unreachableSince} /> : null}
       {status && "tiers" in status && status.failures.length ? <Failures status={status} /> : null}
     </div>
   )
@@ -127,6 +128,7 @@ function footer(status: Running): string {
   if (status.state === "paused") parts.push("Catching up waits while this Mac is on a low battery or in Low Power Mode; the Thread you're working in still goes up.")
   parts.push(status.lastSuccessAt ? `Last sent ${ago(status.lastSuccessAt)}.` : "Nothing sent yet.")
   if (status.stale > 0) parts.push(`${count(status.stale, "Session")} changed since ${status.stale === 1 ? "its" : "their"} last copy, going up in turn.`)
+  if (status.retrying && status.unreachableSince === undefined) parts.push(`${count(status.retrying, "Session")} will be sent again shortly.`)
   const backfill = status.backfill
   if (backfill && backfill.endedAt === undefined && backfill.done < backfill.sessions)
     parts.push(`Reading this Mac's older sessions into its records: ${backfill.done.toLocaleString()} of ${backfill.sessions.toLocaleString()}.`)
@@ -191,6 +193,20 @@ function Failures({ status }: { status: Running }) {
   )
 }
 
+/**
+ * The account not answering this Mac, said once for the account rather than as each Session's failure: only while the
+ * latest request to it got no answer and that has lasted, gone at its next answer.
+ */
+function Unreachable({ since }: { since: number }) {
+  return (
+    <div role="alert" className="flex flex-col gap-0.5 bg-negative/8 px-3 py-2.5 ring-1 ring-negative/20 ring-inset" data-sync-unreachable>
+      <p className="text-ui font-medium text-negative">{syncFailureWords("unreachable").what}</p>
+      <p className="text-label text-foreground">Since {sinceAt(since)}</p>
+      <p className="text-label text-muted-foreground">Mako sends what's waiting on its own as soon as the account answers.</p>
+    </div>
+  )
+}
+
 /** One failure for a report: when it began and was last tried, the Session, the correlation ID, the account's words. */
 function detailLine(failure: SyncFailureView): string {
   return [new Date(failure.since ?? failure.at).toISOString(), new Date(failure.at).toISOString(), failure.kind ?? "-", failure.harness, failure.nativeId, failure.correlationId ?? "-", failure.message].join("\t")
@@ -224,6 +240,7 @@ export function SyncRailLine() {
   useEffect(() => syncStatus.watch(RAIL_READ_EVERY_MS), [])
   if (!status || !("tiers" in status)) return null
   const [first] = status.failures
+  if (!first && status.unreachableSince !== undefined) return <UnreachableRailLine since={status.unreachableSince} waiting={status.retrying ?? 0} />
   if (!first) return null
   const notSynced = status.notSynced ?? status.failures.length
   // One Session out is named by its title, the title the part that gives way to the rail's width; the harness leads its reason.
@@ -245,6 +262,25 @@ export function SyncRailLine() {
         ) : (
           <span className="truncate text-label font-medium text-negative">{count(notSynced, "Session")} not synced</span>
         )}
+        <span className="truncate text-label text-faint" title={reason}>{reason}</span>
+      </span>
+      <span className="shrink-0 text-label text-muted-foreground">Why</span>
+    </button>
+  )
+}
+
+/** The rail's line while the account isn't answering: what waits on it, and since when this time. */
+function UnreachableRailLine({ since, waiting }: { since: number; waiting: number }) {
+  const reason = `${syncFailureWords("unreachable").what} · since ${sinceAt(since)}`
+  return (
+    <button
+      type="button"
+      data-sync-rail-unreachable
+      onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "account" }))}
+      className="pressable flex w-full items-center gap-2.5 px-3 py-2.5 text-left hover:bg-fill-hover"
+    >
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-label font-medium text-negative">{waiting ? `${count(waiting, "Session")} not synced` : "Not syncing"}</span>
         <span className="truncate text-label text-faint" title={reason}>{reason}</span>
       </span>
       <span className="shrink-0 text-label text-muted-foreground">Why</span>

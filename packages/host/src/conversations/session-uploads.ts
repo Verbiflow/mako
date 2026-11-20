@@ -279,8 +279,9 @@ export function syncStatusOf(scope: SyncScope, catalog: CatalogSyncStatus | null
   const failures = notSynced.slice(0, FAILURES_SHOWN)
   const retrying = (catalog.copies?.retrying ?? 0) + (catalog.originals?.retrying ?? 0)
   const lastSuccessAt = Math.max(catalog.copies?.lastSuccessAt ?? 0, catalog.originals?.lastSuccessAt ?? 0)
+  const unreachableSince = unansweredSince(catalog)
   const status: SyncStatus = {
-    state: failures.length ? "failing" : scope.paused ? "paused" : "syncing",
+    state: failures.length || unreachableSince !== undefined ? "failing" : scope.paused ? "paused" : "syncing",
     sessions: scope.sessions.length,
     tiers,
     sending: [...(catalog.copies?.sending ?? []), ...(catalog.originals?.sending ?? [])].length,
@@ -291,6 +292,7 @@ export function syncStatusOf(scope: SyncScope, catalog: CatalogSyncStatus | null
     }),
     ...notSynced.length > failures.length && { notSynced: notSynced.length },
     ...retrying > 0 && { retrying },
+    ...unreachableSince !== undefined && { unreachableSince },
     ...lastSuccessAt > 0 && { lastSuccessAt },
     ...backfill && { backfill },
   }
@@ -300,6 +302,17 @@ export function syncStatusOf(scope: SyncScope, catalog: CatalogSyncStatus | null
 
 /** The Sessions not synced the status names; `notSynced` counts the rest. */
 const FAILURES_SHOWN = 5
+
+/**
+ * Since when the account hasn't answered, as both forms' uploads heard it: one form's unanswered requests count only
+ * while nothing either form sent was answered after them, and the episode begins no earlier than the last answer.
+ * Undefined while the account answers.
+ */
+function unansweredSince(catalog: CatalogSyncStatus): number | undefined {
+  const answeredAt = Math.max(catalog.copies?.answeredAt ?? 0, catalog.originals?.answeredAt ?? 0)
+  const current = [catalog.copies?.unreachable, catalog.originals?.unreachable].flatMap((each) => (each && each.at > answeredAt ? [each.since] : []))
+  return current.length ? Math.max(answeredAt, Math.min(...current)) : undefined
+}
 
 type Backfill = NonNullable<Extract<SyncStatus, { tiers: unknown }>["backfill"]>
 

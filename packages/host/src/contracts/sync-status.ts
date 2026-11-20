@@ -93,8 +93,16 @@ export const SyncStatusSchema = z.discriminatedUnion("state", [
     failures: z.array(SyncFailureViewSchema),
     /** How many Sessions aren't synced, when more than `failures` lists. */
     notSynced: z.number().int().nonnegative().optional(),
-    /** Sessions whose last push failed but not yet for long, tried again soon: never said as not synced. */
+    /**
+     * Sessions whose last push failed and go again on its own (not failing for long, or their last try got no answer):
+     * never said as not synced.
+     */
     retrying: z.number().int().nonnegative().optional(),
+    /**
+     * Since when the account hasn't answered: the latest request to it got no answer, none since did, and that has
+     * lasted. Absent once anything is answered. Said once for the account, never as each Session's failure.
+     */
+    unreachableSince: z.number().optional(),
     backfill: SyncBackfillSchema.optional(),
   }),
 ])
@@ -111,8 +119,9 @@ export function describeSending(status: SyncStatus): string {
   const parts: string[] = []
   const notSynced = status.notSynced ?? status.failures.length
   const [first] = status.failures
+  if (status.unreachableSince !== undefined) parts.push(`The account hasn't answered since ${new Date(status.unreachableSince).toISOString()}; Sessions go once it does.`)
   if (first) parts.push(`${plural(notSynced, "Session")} not synced; the first: ${syncFailureWords(first.kind).what.toLowerCase()}${first.correlationId ? ` (correlation ${first.correlationId})` : ""}.`)
-  else parts.push(status.state === "synced" ? "Every Session of the last 7 days is in the cloud." : status.state === "paused" ? "Catching up waits for power." : "Catching up.")
+  else if (status.unreachableSince === undefined) parts.push(status.state === "synced" ? "Every Session of the last 7 days is in the cloud." : status.state === "paused" ? "Catching up waits for power." : "Catching up.")
   if (status.retrying) parts.push(`${plural(status.retrying, "Session")} retrying after a failed push, not said elsewhere until it lasts.`)
   if (status.sending) parts.push(`${status.sending} sending now.`)
   return parts.join(" ")

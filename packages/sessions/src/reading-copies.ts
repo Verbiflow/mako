@@ -179,7 +179,11 @@ export class ReadingCopies {
     this.#uploads = new ScopedUploads(store, this.#remote(remote), this.#log, { bytesPerSecond: COPIES_BYTES_PER_SECOND, ...this.#work && { work: this.#work }, ...this.#budget && { budget: this.#budget } })
     this.#link = remote
     if (this.#scope) this.#uploads.scope(this.#scope)
-    this.#timer = setInterval(() => this.#look(), LOOK_EVERY_MS)
+    // The uploads look too, not only after a copy: a push waiting to go again goes on time, and a wake is seen (`SLEPT_MS`).
+    this.#timer = setInterval(() => {
+      this.#uploads?.look()
+      this.#look()
+    }, LOOK_EVERY_MS)
     this.#timer.unref?.()
     this.#look()
   }
