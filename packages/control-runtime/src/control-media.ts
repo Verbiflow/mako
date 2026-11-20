@@ -1,6 +1,7 @@
 import { existsSync } from "node:fs"
 import { dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
+import { liveVideoBitrate } from "./contracts/control-video.js"
 import { resolveExecutable } from "./executable.js"
 import { nodePlatform } from "./platform.js"
 
@@ -29,7 +30,7 @@ export function recordingVideoEncoding(platform = nodePlatform()) {
  * The transport is reliable, so key frames come only when a viewer needs one
  * (the caller restarts the encoder) and quality is capped by bitrate. */
 export function liveVideoEncoding(size: { width: number; height: number }, fps: number) {
-  const bitrate = Math.round(Math.min(8_000_000, Math.max(400_000, size.width * size.height * fps * 0.08)))
+  const bitrate = liveVideoBitrate(size, fps)
   return [
     "-c:v", "libx264", "-preset", "veryfast", "-tune", "zerolatency",
     "-pix_fmt", "yuv420p", "-x264-params", "keyint=infinite",

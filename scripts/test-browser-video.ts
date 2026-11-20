@@ -161,11 +161,13 @@ let emit: ((frame: BrowserFrame) => void) | undefined
 let endCapture: ((reason: string) => void) | undefined
 let demand: (() => CaptureSize | undefined) | undefined
 let stops = 0, resizes = 0
-const video = new BrowserVideo(async (consumer) => {
-  emit = consumer.frame
-  endCapture = consumer.ended
-  demand = consumer.size
-  return { stop: async () => { stops++ }, resized: async () => { resizes++ } }
+const video = new BrowserVideo({
+  frames: async (consumer) => {
+    emit = consumer.frame
+    endCapture = consumer.ended
+    demand = consumer.size
+    return { stop: async () => { stops++ }, resized: async () => { resizes++ } }
+  },
 }, { encoder: fake, fps: 1000 })
 const frame = (width = 640, height = 360): BrowserFrame => ({ bytes: Buffer.from([0xff, 0xd8]), width, height, viewportWidth: width, viewportHeight: height, pageScaleFactor: 1, offsetTop: 0, capturedAt: Date.now() })
 const settle = () => wait(5)
@@ -248,7 +250,7 @@ assert.equal(third.self.ended, "encoder crashed")
 await assert.rejects(video.join(viewer().handle), /ended/)
 
 // The capture ending ends its viewers.
-const other = new BrowserVideo(async (consumer) => { endCapture = consumer.ended; return { stop: async () => {}, resized: async () => {} } }, { encoder: fake })
+const other = new BrowserVideo({ frames: async (consumer) => { endCapture = consumer.ended; return { stop: async () => {}, resized: async () => {} } } }, { encoder: fake })
 const watcher = viewer()
 await other.join(watcher.handle)
 endCapture!("Recording target detached")

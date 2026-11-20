@@ -1,4 +1,4 @@
-import { BrowserVideo, type BrowserVideoOptions, type BrowserVideoSource, type BrowserVideoViewer } from "@mako/control-runtime/browser"
+import { BrowserVideo, type BrowserVideoOptions, type BrowserVideoSources, type BrowserVideoViewer } from "@mako/control-runtime/browser"
 
 /** The largest picture a viewer draws, in device pixels. */
 export interface VideoBox {
@@ -26,10 +26,13 @@ interface Viewer {
   joined?: { video: BrowserVideo; port: BrowserVideoViewer; leave?: () => Promise<void> }
 }
 
-/** A preview's tab, as the video reads it: `key` names the tab and who drives it, so the same tab isn't joined twice. */
+/**
+ * What a preview shows, as the video reads it: `key` names the tab or window and who drives it, so the same one isn't
+ * joined twice. A tab has its screencast's frames and may have an encoded capture; a window has only the capture.
+ */
 export interface PreviewVideoTab {
   key: string
-  source: BrowserVideoSource
+  sources: BrowserVideoSources
 }
 
 /** At most this many remote viewers watch one preview. */
@@ -113,7 +116,7 @@ export class PreviewVideo {
   #join(stream: string, viewer: Viewer): void {
     const tab = this.#tab
     if (!tab) return
-    const video = (this.#video ??= new BrowserVideo(tab.source, this.#options))
+    const video = (this.#video ??= new BrowserVideo(tab.sources, this.#options))
     const port: BrowserVideoViewer = {
       size: () => viewer.box,
       backlog: () => viewer.sent - viewer.acked,
