@@ -51,7 +51,7 @@ async function bundle() {
   const { writeFileSync } = await import("node:fs")
   writeFileSync(entry, `
 import { ControlVideoPlayer } from "@/lib/control-video-player"
-import { CaptureSession } from "@/live-video/page"
+import { CaptureSession } from "@/live-video/capture-session"
 const { ipcRenderer } = require("electron")
 ipcRenderer.on("packet", (_event: unknown, bytes: Uint8Array) => player.push(bytes))
 const canvas = document.createElement("canvas")

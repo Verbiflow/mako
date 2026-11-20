@@ -23,6 +23,11 @@ export interface MachineBrowserOptions {
   startupMs?: number
   /** The window a new tab opens in. As in a person's Chromium, its page is shorter by the toolbar: 1280×713 in 1280×800. */
   window?: { width: number; height: number }
+  /**
+   * The capture extension (`machine-capture.ts`), written before each launch: live video of a tab is encoded inside
+   * this Chromium. Without it, a tab's live video comes from its screencast.
+   */
+  captureExtension?: () => Promise<{ directory: string; id: string } | undefined>
   /** Each Chromium once it answers, for a registry that ends what a crashed host left running. */
   started?: (child: ChildProcess) => void
 }
@@ -86,6 +91,7 @@ export class MachineBrowser {
     await mkdir(profile, { recursive: true, mode: 0o700 })
     // A profile left by a Chromium that was killed names a port nobody listens on.
     await rm(join(profile, "DevToolsActivePort"), { force: true })
+    const extension = await this.#options.captureExtension?.()
     if (this.#closed) throw new Error("The machine's browser is shutting down")
     const child = spawn(executable, [
       "--headless",
@@ -97,6 +103,9 @@ export class MachineBrowser {
       "--disable-background-networking",
       ...(sharedMemory() < SHARED_MEMORY_FLOOR ? ["--disable-dev-shm-usage"] : []),
       ...(sandbox ? [] : ["--no-sandbox"]),
+      ...(extension
+        ? [`--load-extension=${extension.directory}`, `--disable-extensions-except=${extension.directory}`, `--allowlisted-extension-id=${extension.id}`]
+        : []),
       "about:blank",
     ], { stdio: ["ignore", "ignore", "pipe"] })
     this.#child = child

@@ -627,12 +627,60 @@ process it fell to 8 fps at 2560×1600/60. Window capture needs an awake,
 unlocked screen and wasn't measured; the gate was, on a canvas that repeats its
 picture at 30 fps: at most four frames in 2.5 s.
 
-Still to do: a cloud machine's tab. `ControlPreviews` takes a `PreviewCapture`
-whose `tab()` can return an `EncodedVideoSource` for the machine's Chromium:
-start it with `--auto-accept-this-tab-capture`, run the page's
-`CaptureSession` with `getDisplayMedia({ preferCurrentTab: true })` in an
-isolated world, and return units over a `Runtime.addBinding` binding. It has
-to open again after every navigation, which ends the isolated world and its
-capture, and on the machine's two vCPUs and OpenH264 the spike's tab capture
-held only 22 fps at 1280×800/60, so it needs measuring before it replaces
-FFmpeg there.
+## November 20: a cloud machine's tab, encoded in its own Chromium
+
+A cloud machine's tab no longer goes through the screencast and FFmpeg. The host
+loads a small extension into the machine's Chromium
+([`machine-capture.ts`](../packages/control-runtime/src/machine-capture.ts)),
+written into its data folder before each launch and allowlisted with
+`--allowlisted-extension-id`, so `chrome.tabCapture` needs no gesture. Its
+offscreen document runs the same `CaptureSession` and WebCodecs encoder as the
+desktop's live video page ([`src/live-video/machine-capture.ts`](../src/live-video/machine-capture.ts),
+built by `scripts/build-machine-capture.mjs` into the host's `dist`). The host
+drives it over a DevTools connection of its own, not the agents', and each unit
+comes back through a `Runtime.addBinding` binding. The extension's pages are
+never listed as tabs.
+
+Why the extension and not `getDisplayMedia({ preferCurrentTab })` in an
+isolated world, as planned: the spike's 22 fps at 1280×800/60 was the encoder
+sharing the page's main thread. With the page busy for 40 ms a frame, an
+in-page encoder kept 13.4 fps at 40.6 ms an encode, where the offscreen document
+encoded every frame the page painted (24.7 fps) at 3.1 ms. A tab capture also
+follows the tab through navigations, works for pages that aren't secure
+contexts, and shows no "sharing this tab" bar; `getDisplayMedia`'s bar took
+57 px off the page's viewport. The offscreen document's renderer costs about
+34 MB (PSS) while the machine's browser runs, and nothing while no one watches.
+
+Two Chromium details: without a `minWidth`/`minHeight` below the limits, a tab
+capture is scaled up to the limits and letterboxed; and a tab capture's track
+never settles `applyConstraints` (Chromium 156, headless), so a new viewer box
+captures again.
+
+Measured in a GPU-less Linux container (OrbStack on an M3 Max, arm64, 2 CPUs
+like the machines cloud Threads run on, Debian's Chromium 156), the product's
+`BrowserVideo` to one viewer at its full size, 12 s per case
+(`scripts/bench-machine-tab-video.mjs`; whole-container CPU):
+
+| Window, cap | Screencast + FFmpeg | Extension + WebCodecs |
+| --- | ---: | ---: |
+| 1280×800, 30 | 87% (30 fps, 1.4 / 17 ms) | 66% (30 fps, 4 / 7 ms) |
+| 1280×800, 60 | 118% (60 fps, 2 / 5 ms) | 80% (60 fps, 3 / 5 ms) |
+| 1920×1080, 30 | 138% (30 fps, 10 / 25 ms) | 71% (30 fps, 4 / 5 ms) |
+| 2560×1600, 60 | 202% (50 fps at 1898×1080, 28 / 68 ms) | 154% (60 fps at 2560×1512, 4 / 6 ms) |
+| 1280×800, 30, page busy 40 ms a frame | 149% (24 fps) | 127% (24 fps) |
+| 1280×800, 30, still page | 1.8% | 2.7% |
+
+Times are capture to viewer, p50 / p95. The host's own share fell from about
+10% to 2%: it no longer reads base64 JPEGs or feeds an encoder.
+
+A viewer still paints at once. A capture that encodes for itself has no frame on
+the host, so `BrowserVideo` asks the source for a poster (`previewPoster`: the
+shared screencast's first frame at the viewers' box, after which the screencast
+is left) beside the capture's start, and the viewer swaps to video at the first
+key frame; a poster that comes after it isn't sent. The extension checks its
+encoder while the tab's stream opens. Three runs each at 30 fps, join to first
+picture / first video frame: 1280×800, screencast 35–46 / 121–130 ms against
+extension 42–48 / 114–149 ms; 1920×1080, 43–53 / 115–136 ms against 41–58 /
+152–187 ms (`scripts/bench-machine-tab-video.mjs`). A screenshot instead of
+the screencast's frame took 76–105 ms. `scripts/test-machine-tab-video.mjs`
+checks it end to end against a real Chromium.
