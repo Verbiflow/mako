@@ -71,21 +71,24 @@ async function liveSession(root) {
   await capture()
   uploads.scope({ sessions: [{ harness: "synthetic", nativeId: "live", path: file, thread: "t-live", busy: true, tier: "now" }], paused: false })
   await uploads.settled()
-  /** Each second of `seconds`: a capture every fifth, its push, and whether the status says the Session isn't synced. */
-  const run = async (seconds) => {
+  /**
+   * Each second of `seconds`: a capture every fifth, its push, and whether the status says the Session isn't synced
+   * (`saying`: by default, as its own failure).
+   */
+  const run = async (seconds, saying = (status) => status.failures.length > 0) => {
     const said = []
     for (let second = 1; second <= seconds; second++) {
       now += 1_000
       if (second % 5 === 0) await capture()
       uploads.look()
       // Read while the push is in flight, as the host reads every 5 s whatever is under way, and again once it settles.
-      said.push(uploads.status().failures.length > 0)
+      said.push(saying(uploads.status()))
       await uploads.settled()
-      said.push(uploads.status().failures.length > 0)
+      said.push(saying(uploads.status()))
     }
     return said
   }
-  return { store, remote, uploads, run, close: async () => (uploads.stop(), await store.close()) }
+  return { store, remote, uploads, run, clock: () => now, close: async () => (uploads.stop(), await store.close()) }
 }
 
 /** How many times `said` changes from not said to said. */
@@ -119,20 +122,26 @@ test("a failure that lasts is said once, stays through each try and change of wo
     assert.equal(shown(early), 0, "not said before it has lasted")
     assert.ok(live.uploads.status().retrying >= 1, "retrying meanwhile, for Diagnostics")
     const refusedFor = await live.run(5 * 60)
-    // Its words change (the account stops answering), and it keeps failing: still the one failure, said since it began.
-    live.remote.failing = unanswered
-    const unansweredFor = await live.run(5 * 60)
-    const failing = [...refusedFor, ...unansweredFor]
-    assert.equal(shown(failing), 1, "said once")
-    assert.ok(failing.slice(failing.indexOf(true)).every(Boolean), "and never unsaid while it fails, in flight or not")
+    assert.equal(shown(refusedFor), 1, "said once")
+    assert.ok(refusedFor.slice(refusedFor.indexOf(true)).every(Boolean), "and never unsaid while it's refused, in flight or not")
     const [failure] = live.uploads.status().failures
-    assert.deepEqual([failure.nativeId, failure.kind, failure.since, failure.correlationId], ["live", "unreachable", 1_800_000_005_000, "c-503"], "its newest words, since its first failure (the first capture's push)")
-    // The account takes it: unsaid at once, and not said again as the Session goes on.
+    assert.deepEqual([failure.nativeId, failure.kind, failure.since], ["live", "refused", 1_800_000_005_000], "since its first failure (the first capture's push)")
+    // The account stops answering: that's the account's, said once for it when it has lasted, never as the Session's.
+    live.remote.failing = unanswered
+    const stopped = live.clock()
+    const unreachable = (status) => status.unreachable !== undefined
+    const unansweredFor = await live.run(5 * 60, unreachable)
+    assert.deepEqual(live.uploads.status().failures, [], "a push that got no answer isn't the Session's failure")
+    assert.equal(shown(unansweredFor), 1, "the account not answering is said once")
+    assert.ok(unansweredFor.slice(unansweredFor.indexOf(true)).every(Boolean), "and never unsaid while it doesn't answer")
+    const since = live.uploads.status().unreachable.since
+    assert.ok(since >= stopped, "since its first unanswered request (the refusal's wait out first), not the Session's refusal before it")
+    assert.ok(live.uploads.status().retrying >= 1, "the Session waits for it, retrying")
+    // The account answers: unsaid at its next try, which waits two minutes at most, and not said again.
     live.remote.failing = null
-    // It's said until its next try goes (a failure that kept failing waits up to five minutes), then never again.
-    const healed = await live.run(10 * 60)
+    const healed = await live.run(10 * 60, (status) => unreachable(status) || status.failures.length > 0)
     const until = healed.indexOf(false)
-    assert.ok(until >= 0 && until <= 2 * 5 * 60, `unsaid by its next try, ${until / 2} s after the account healed`)
+    assert.ok(until >= 0 && until <= 2 * 2 * 60, `unsaid by its next try, ${until / 2} s after the account healed`)
     assert.ok(healed.slice(0, until).every(Boolean) && !healed.slice(until).some(Boolean), "said until it went, and not again at its next captures")
     assert.equal(live.uploads.inCloud("synthetic", "live"), true)
     await live.close()

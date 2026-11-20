@@ -72,11 +72,23 @@ export const UploadsStatusSchema = z.object({
   lastSuccessAt: z.number().optional(),
   /**
    * The Sessions not synced: each one's pushes failing for `LASTING_MS` or more and tried again since, the longest
-   * failing first, and only while it's behind. A failure the next try heals is never here.
+   * failing first, and only while it's behind. A failure the next try heals is never here, nor one that got no answer
+   * (`unreachable`): that's the account's, said once in `unreachable` while it lasts, never a Session's.
    */
   failures: z.array(SyncFailureSchema),
-  /** Sessions whose last push failed but not yet for long: tried again soon, said nowhere a person looks. */
+  /**
+   * Sessions whose last push failed and goes again on its own: one that hasn't failed for long, or whose last try got
+   * no answer. Never said as not synced.
+   */
   retrying: z.number().int().nonnegative().optional(),
+  /** The latest request the account answered, whatever it said: it was reachable then. */
+  answeredAt: z.number().optional(),
+  /**
+   * The account isn't answering: the latest request to it got no answer, none since did, and that has lasted
+   * (`LASTING_MS`, tried at least twice). `since`: the first unanswered request since the last answer, or since this
+   * Mac woke; `at`: the latest. Gone at the next answer.
+   */
+  unreachable: z.object({ since: z.number(), at: z.number() }).optional(),
 })
 export type UploadsStatus = z.infer<typeof UploadsStatusSchema>
 
@@ -117,6 +129,18 @@ const FLIGHTS = 2
 const RETRY_MS = 2_000
 const RETRY_MOST_MS = 5 * 60_000
 /**
+ * The most a push that got no answer waits (a dropped connection, a timeout, a 5xx or 429), whatever its Session's
+ * tier: what it carries is captured already, and the account answering again sends it at once anyway (`#heard`).
+ */
+const UNANSWERED_MOST_MS = 2 * 60_000
+/**
+ * Looks this far apart mean the process was suspended (the Mac slept): looks come every few seconds while it's awake
+ * (`ORIGINALS_LOOK_MS`, `ReadingCopies`). A push that got no answer before goes again at once, its wait short again.
+ */
+export const SLEPT_MS = 60_000
+/** A push that got no answer goes again this soon after it at its Session's next capture, however long its wait has grown. */
+const CAPTURED_UNANSWERED_MS = 15_000
+/**
  * The most a push the account refused waits: the same records sent again get the same answer, so a refusal is tried
  * about hourly once it has been tried a dozen times. A refused pack once went again every few seconds for hours.
  */
@@ -142,9 +166,12 @@ type Wanted = SyncScope["sessions"][number]
 /**
  * A Session's pushes failing in a row: how many, when the next may go, when the first of them failed (`failingSince`,
  * whatever each said), and the time and words of the first that said what the last did, which is logged once.
- * `refused`: the account answered and refused what was sent.
+ * `refused`: the account answered and refused what was sent. `unanswered`: the last try got no answer, so the account
+ * answering again, or this Mac waking, sends it at once (`rearmed`: the account's answer did once this streak, so a
+ * Session whose own pushes keep going unanswered while others go isn't sent again at each of theirs). `steps`: the
+ * failures its wait doubles over, which a wake or the account's answer starts again. `failedAt`: its last failure.
  */
-type Retry = { failures: number; after: number; conflictAt?: number; refused?: boolean; failingSince: number; since: number; words: string }
+type Retry = { failures: number; steps: number; after: number; failedAt: number; conflictAt?: number; refused?: boolean; unanswered?: boolean; rearmed?: boolean; failingSince: number; since: number; words: string }
 
 /**
  * One record store kept in step with one remote for a device's scope, the most wanted Session first. What's in the
@@ -154,9 +181,11 @@ type Retry = { failures: number; after: number; conflictAt?: number; refused?: b
  *
  * At most two pushes go at once and only one of them catching up, so a Session at work goes in the seconds after its
  * capture; catching up is paced to `bytesPerSecond` and waits while the scope is paused. A failed push is tried again
- * later, waiting twice as long after each failure in a row, up to five minutes, or an hour for one the account
- * refused. The next capture ends the wait after a single failure (a dropped connection), never after a refusal or a
- * second failure: a Session at work captures every few seconds, and each capture once sent a refused push again.
+ * later, waiting twice as long after each failure in a row, up to five minutes, an hour for one the account refused,
+ * or two minutes for one that got no answer, whatever its tier; one that got no answer goes at once when the account
+ * next answers anything or the Mac wakes. The next capture ends the wait after a single failure (a dropped
+ * connection), never after a refusal or a second failure: a Session at work captures every few seconds, and each
+ * capture once sent a refused push again.
  * Records that went on in two places wait for something new. A failure is logged once, when it starts or its words
  * change, and once more when the Session goes. Idempotent: a push sends only what the remote isn't known to hold, by
  * content-addressed chunks.
@@ -184,6 +213,12 @@ export class ScopedUploads {
   /** When what the account holds was last set against what's believed (`#reconcile`); 0 before the first. */
   #reconciledAt = 0
   #reconciling: Promise<void> | undefined
+  /** When the account last answered a request, whatever it said (`#heard`). */
+  #answeredAt: number | undefined
+  /** Requests to the account that got no answer since its last (or since a wake): the first, the latest, how many. */
+  #unanswered: { since: number; at: number; tries: number } | undefined
+  /** The last look, on this process's clock: one much later than it means the Mac slept in between (`SLEPT_MS`). */
+  #lookedAt: number | undefined
   /** Names each push while it runs, for the watch on the process's loop. */
   readonly #work: WorkUnderWay | undefined
   /** The bytes this process's uploads share (`UploadBudget`); while it sheds, no push starts. */
@@ -226,6 +261,9 @@ export class ScopedUploads {
   /** Reads what was captured since the last look, in any process, and starts the pushes due. */
   look(): void {
     if (this.#stopped) return
+    const now = this.#now()
+    if (this.#lookedAt !== undefined && now - this.#lookedAt >= SLEPT_MS) this.#woke()
+    this.#lookedAt = now
     try {
       if (!this.#pushed) this.#pushed = this.#store.pushed(this.#remote.id)
       const read = this.#store.captureHeads(this.#heads ? this.#through : 0)
@@ -233,10 +271,13 @@ export class ScopedUploads {
       else
         for (const [key, capture] of read.heads) {
           this.#heads.set(key, capture)
-          // Something new is captured: records that went on in two places go again, as does a push that failed once.
+          // Something new is captured: records that went on in two places go again, as does a push that failed once,
+          // and one that got no answer once `CAPTURED_UNANSWERED_MS` has passed since: a Session at work finds the
+          // network back within seconds, and its push answered sends every other that waited (`#heard`).
           const retry = this.#retries.get(key)
           if (retry?.conflictAt !== undefined) delete retry.conflictAt
           else if (retry && !retry.refused && retry.failures === 1) retry.after = 0
+          else if (retry?.unanswered) retry.after = Math.min(retry.after, retry.failedAt + CAPTURED_UNANSWERED_MS)
         }
       this.#through = Math.max(this.#through, read.through)
     } catch (error) {
@@ -262,10 +303,15 @@ export class ScopedUploads {
     let listed: Map<string, number>
     try {
       listed = new Map((await this.#remote.sessions()).map((session) => [keyOf(session), session.versions]))
+      this.#heard(true)
     } catch (error) {
-      this.#log("info", "couldn't compare with the account", { remote: this.#remote.id, error: error instanceof Error ? error.message : String(error) })
+      const failed = error instanceof Error ? error : new Error(String(error))
+      this.#heard(kindOf(failed) !== "unreachable")
+      this.#log("info", "couldn't compare with the account", { remote: this.#remote.id, error: failed.message })
+      this.#pump()
       return
     }
+    this.#pump()
     const believed = this.#store.remoteVersionCounts(this.#remote.id)
     let short = 0
     for (const session of this.#scope.sessions) {
@@ -315,7 +361,8 @@ export class ScopedUploads {
       failed: this.#failed,
       failures: [],
     }
-    // Said only once lasting, and kept while behind: a Session the next try heals never shows, one failing stays until it goes.
+    // Said only once lasting, and kept while behind: a Session the next try heals never shows, one failing stays until it
+    // goes. One whose last try got no answer is never said as its own: the account not answering is said once, below.
     const now = this.#now()
     const inScope = new Set(this.#scope.sessions.map(keyOf))
     let retrying = 0
@@ -324,12 +371,15 @@ export class ScopedUploads {
       const retry = this.#retries.get(key)
       // Records that went on in two places wait for something new, tried once: lasting by their time alone.
       const tried = retry !== undefined && (retry.failures >= LASTING_TRIES || retry.conflictAt !== undefined)
-      if (retry && tried && now - retry.failingSince >= LASTING_MS) status.failures.push(failure)
+      if (retry && !retry.unanswered && tried && now - retry.failingSince >= LASTING_MS) status.failures.push(failure)
       else retrying += 1
     }
     status.failures.sort(longestFailing).splice(FAILURES_SAID)
     if (retrying) status.retrying = retrying
     if (lastSuccessAt !== undefined) status.lastSuccessAt = lastSuccessAt
+    if (this.#answeredAt !== undefined) status.answeredAt = this.#answeredAt
+    const unanswered = this.#unanswered
+    if (unanswered && unanswered.tries >= LASTING_TRIES && now - unanswered.since >= LASTING_MS) status.unreachable = { since: unanswered.since, at: unanswered.at }
     return status
   }
 
@@ -342,6 +392,44 @@ export class ScopedUploads {
     this.#stopped = true
     this.#unhear()
     if (this.#wake) clearTimeout(this.#wake)
+  }
+
+  /**
+   * A request to the account ended: `answered` whatever the account said (refused or conflicting is an answer), or
+   * with no answer (a dropped connection, a timeout, a 5xx or 429). The first answer after requests that got none sends
+   * at once what waited on them, its wait short again: the network came back, and nothing captured waits out a backoff
+   * built up while it was gone. The caller pumps.
+   */
+  #heard(answered: boolean): void {
+    const now = this.#now()
+    if (!answered) {
+      const unanswered = (this.#unanswered ??= { since: now, at: now, tries: 0 })
+      unanswered.at = now
+      unanswered.tries += 1
+      return
+    }
+    this.#answeredAt = now
+    if (!this.#unanswered) return
+    this.#unanswered = undefined
+    for (const retry of this.#retries.values()) {
+      if (!retry.unanswered || retry.rearmed || retry.conflictAt !== undefined) continue
+      retry.rearmed = true
+      retry.after = 0
+      retry.steps = 0
+    }
+  }
+
+  /**
+   * The Mac slept (`SLEPT_MS`): what got no answer before goes again at once, its wait short again, as the network
+   * comes back in the seconds after a wake; and what the account didn't answer before is a past episode, not this one.
+   */
+  #woke(): void {
+    this.#unanswered = undefined
+    for (const retry of this.#retries.values()) {
+      if (!retry.unanswered || retry.conflictAt !== undefined) continue
+      retry.after = 0
+      retry.steps = 0
+    }
   }
 
   #behind(key: string): boolean {
@@ -399,6 +487,7 @@ export class ScopedUploads {
       const streak = this.#retries.get(key)
       this.#retries.delete(key)
       this.#failures.delete(key)
+      this.#heard(true)
       if (streak) this.#log("info", "pushed after failing", { remote: this.#remote.id, harness: session.harness, nativeId: session.nativeId, failures: streak.failures, failingMs: at - streak.since })
       if (report.versions || report.chunks) {
         this.#pushes += 1
@@ -411,15 +500,21 @@ export class ScopedUploads {
       const failure = failureOf(failed, session, started)
       const words = failureWords(failed)
       const before = this.#retries.get(key)
-      const retry: Retry = before?.words === words ? before : { failures: before?.failures ?? 0, after: 0, failingSince: before?.failingSince ?? started, since: started, words }
+      const retry: Retry = before?.words === words ? before : { failures: before?.failures ?? 0, steps: before?.steps ?? 0, after: 0, failedAt: 0, failingSince: before?.failingSince ?? started, since: started, words, ...before?.rearmed && { rearmed: true } }
       retry.failures += 1
+      retry.failedAt = this.#now()
       failure.since = retry.failingSince
+      // However its Session's tier: the tier paces capturing it, never how soon what's captured goes again.
+      retry.unanswered = failure.kind === "unreachable"
       if (failure.conflict) retry.conflictAt = started
       else {
         retry.refused = refusedBy(failed)
-        retry.after = this.#now() + Math.min(retry.refused ? REFUSED_MOST_MS : RETRY_MOST_MS, RETRY_MS * 2 ** (retry.failures - 1))
+        retry.steps += 1
+        const most = retry.refused ? REFUSED_MOST_MS : retry.unanswered ? UNANSWERED_MOST_MS : RETRY_MOST_MS
+        retry.after = this.#now() + Math.min(most, RETRY_MS * 2 ** (retry.steps - 1))
       }
       this.#retries.set(key, retry)
+      this.#heard(!retry.unanswered)
       this.#failed += 1
       // The Session's newest failure stands for the ones before it.
       this.#failures.set(key, failure)

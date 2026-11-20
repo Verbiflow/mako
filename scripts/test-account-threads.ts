@@ -1296,6 +1296,27 @@ test("the Sessions not synced are one line each, its copy's or its records', the
   assert.deepEqual([retrying.state, retrying.failures, retrying.retrying], ["synced", [], 1])
 })
 
+test("the account not answering is said once, since this episode, and not once either form's request to it is answered after", () => {
+  const scope: SyncScope = { sessions: [], paused: false }
+  const tiers = { now: tierCount(1), day: tierCount(1), week: tierCount(0) }
+  type Uploads = NonNullable<CatalogSyncStatus["copies"]>
+  const catalog = (copies: Partial<Uploads>, originals: Partial<Uploads>): CatalogSyncStatus => ({ paused: false, tiers, stale: 0, copies: { ...activity(), ...copies }, originals: { ...activity(), ...originals } })
+  const copiesDown = { answeredAt: NOW - 600_000, unreachable: { since: NOW - 300_000, at: NOW }, retrying: 1 }
+  // The copies went unanswered for five minutes; the originals were last answered before that: the account isn't answering.
+  const down = syncStatusOf(scope, catalog(copiesDown, { answeredAt: NOW - 400_000 }), undefined)
+  assert.ok("failures" in down)
+  assert.deepEqual([down.state, down.failures, down.unreachableSince, down.retrying], ["failing", [], NOW - 300_000, 1], "failing, for the account, never as the Session's")
+  assert.match(describeSending(down), /^The account hasn't answered since .+; Sessions go once it does\. 1 Session retrying/)
+  // The originals' request is answered after the copies' last unanswered one: the account answers, and nothing is red.
+  const back = syncStatusOf(scope, catalog(copiesDown, { answeredAt: NOW + 1_000 }), undefined)
+  assert.ok("failures" in back)
+  assert.deepEqual([back.state, back.unreachableSince], ["synced", undefined], "an answer to either form clears it")
+  // Answered in between, then unanswered again: the episode begins no earlier than the last answer.
+  const again = syncStatusOf(scope, catalog(copiesDown, { answeredAt: NOW - 200_000 }), undefined)
+  assert.ok("failures" in again)
+  assert.equal(again.unreachableSince, NOW - 200_000)
+})
+
 const listed = (n: number, state: ListedSession["state"] = "idle"): ListedSession => ({ ...row(n, state), runsOn: { kind: "device", deviceId: uuid(900) }, listedAt: new Date(NOW).toISOString() })
 
 test("a device's list is the one it read, then each change the stream said after it, in order; one said twice or before the read changes nothing", () => {
