@@ -106,7 +106,7 @@ export class ExecutableTrust {
 
 /**
  * Whether `path` is one of `folders` or inside one, in any case as Windows names them, each by its long name through
- * any link (`C:\Users\RUNNER~1` is `C:\Users\runneradmin`).
+ * any link (`C:\Users\RUNNER~1` is `C:\Users\runner-admin`).
  */
 export function underAny(path: string, folders: readonly string[]): boolean {
   const real = (folder: string) => {

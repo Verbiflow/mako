@@ -9,11 +9,11 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import { expandPath, trimmedPath, typedWholePath, wholePathAdvice, windowsSharePath } from "@mako/host/workspaces/project-folders"
 
-for (const typed of ["/Users/one/app", "~/app"]) {
+for (const typed of ["/Users/someone/app", "~/app"]) {
   assert.ok(typedWholePath(typed, false), typed)
   assert.ok(typedWholePath(typed, true), typed)
 }
-for (const typed of ["C:\\Users\\one\\app", "c:/work/app", "~\\app", "\\\\server\\share\\app"]) {
+for (const typed of ["C:\\Users\\someone\\app", "c:/work/app", "~\\app", "\\\\server\\share\\app"]) {
   assert.ok(typedWholePath(typed, true), `${typed} is whole on Windows`)
   assert.ok(!typedWholePath(typed, false), `${typed} isn't elsewhere`)
 }

@@ -41,9 +41,9 @@ try {
   // npm's shims, both shapes, and a batch file that is no shim.
   const modern = `@ECHO off\r\nGOTO start\r\n:find_dp0\r\nSET dp0=%~dp0\r\nEXIT /b\r\n:start\r\nSETLOCAL\r\nCALL :find_dp0\r\n\r\nIF EXIST "%dp0%\\node.exe" (\r\n  SET "_prog=%dp0%\\node.exe"\r\n) ELSE (\r\n  SET "_prog=node"\r\n  SET PATHEXT=%PATHEXT:;.JS;=;%\r\n)\r\n\r\nendLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\\node_modules\\@xai-official\\grok\\bin\\grok.js" %*\r\n`
   const older = `@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"  "%~dp0\\..\\tool\\cli.mjs" %*\r\n) ELSE (\r\n  node  "%~dp0\\..\\tool\\cli.mjs" %*\r\n)\r\n`
-  const shim = "C:\\Users\\one\\AppData\\Roaming\\npm\\grok.cmd"
-  assert.equal(npmShimScript(shim, modern), "C:\\Users\\one\\AppData\\Roaming\\npm\\node_modules\\@xai-official\\grok\\bin\\grok.js")
-  assert.equal(npmShimScript(shim, older), "C:\\Users\\one\\AppData\\Roaming\\tool\\cli.mjs")
+  const shim = "C:\\Users\\someone\\AppData\\Roaming\\npm\\grok.cmd"
+  assert.equal(npmShimScript(shim, modern), "C:\\Users\\someone\\AppData\\Roaming\\npm\\node_modules\\@xai-official\\grok\\bin\\grok.js")
+  assert.equal(npmShimScript(shim, older), "C:\\Users\\someone\\AppData\\Roaming\\tool\\cli.mjs")
   assert.equal(npmShimScript(shim, "@echo off\r\necho hello %*\r\n"), undefined)
 
   // Words for cmd.exe: quoted, metacharacters escaped once for the line and once more for the batch file's %*.
