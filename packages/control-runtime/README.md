@@ -117,8 +117,8 @@ Changes to engine code invalidate old CLI session descriptors; reconnect using t
 current owner instead of silently mixing versions.
 
 Recording and live video encode with Mako's video helper, `mako-video` (VideoToolbox
-on macOS, OpenH264 on Linux; see `native/`): an absolute `MAKO_VIDEO_HELPER`, else
-`mako-video` on PATH. Packaged desktop builds carry it beside their executable. No
+on macOS, OpenH264 on Linux, Media Foundation on Windows as `mako-video.exe`; see
+`native/`): an absolute `MAKO_VIDEO_HELPER`, else the helper on PATH. Packaged desktop builds carry it beside their executable. No
 FFmpeg is needed; on Linux an FFmpeg already on PATH draws the pointer on a native
 window's video. Sharp installs only the current platform's optional native package;
 this package includes no browser, driver, encoder or Python cache.

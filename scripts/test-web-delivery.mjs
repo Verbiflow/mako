@@ -57,6 +57,10 @@ const host = createServer(async (request, response) => {
   response.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ok: true, value }))
 })
 await new Promise(resolve => host.listen(socket, resolve))
+// The real host's heartbeat (`keep event streams alive`, every 15 s, sped up here): a page whose call dropped replays it
+// only once its stream speaks again. Without one, the lost reply's notice reaching the page before the drop left the
+// stream silent, and the replay gave up after 20 s.
+const heartbeat = setInterval(() => { for (const stream of streams) stream.write('\n') }, 200)
 await mkdir(join(root, 'dist'))
 await build({ entryPoints: ['src/dev/web-bridge.ts'], outfile: join(root, 'dist/bridge.js'), bundle: true, format: 'esm', platform: 'browser', define: { 'import.meta.env': '{}' } })
 await build({ entryPoints: ['src/state/message-outbox.ts'], outfile: join(root, 'dist/outbox.js'), bundle: true, format: 'esm', platform: 'browser', tsconfig: 'tsconfig.app.json' })
@@ -130,6 +134,7 @@ try {
   assert.equal(requests.size, 5)
   console.log('PASS: desktop socket transport continues the same host conversation')
 } finally {
+  clearInterval(heartbeat)
   for (const stream of streams) stream.destroy()
   await new Promise(resolve => gateway.httpServer.close(resolve))
   await new Promise(resolve => host.close(resolve))

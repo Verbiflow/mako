@@ -706,15 +706,23 @@ frame, `B` viewer box, `R` bitrate, `F` a picture to encode).
   encodes only a changed picture: a still window cost 2 units in 3 s, a 30 fps
   one about 5% CPU and 42 MB resident. Shipped in `Contents/MacOS` beside the
   sleep watch.
-- **Windows** (not built): Windows Graphics Capture for a window or a display
-  (`Direct3D11CaptureFramePool`, which also sends only changed frames) into a
-  Media Foundation H.264 encoder (`CLSID_MSH264EncoderMFT`, or the GPU's
-  hardware MFT) in `MFT_ENUM_FLAG_HARDWARE` low-latency mode, behind the same
-  protocol. Until then, a Windows window streams only while the desktop app is
-  open.
+- **Windows** ([`native/video-windows/mako-video.cpp`](../native/video-windows/mako-video.cpp)):
+  Windows Graphics Capture for a window (its HWND, as Electron's `window:<hwnd>:0`
+  names it) or a display, which sends a frame only when the desktop composes a
+  change; the helper copies it out of the pool on arrival, reads it back at most at
+  the asked rate and compares it with the last, since a composition isn't always a
+  change. It converts and scales on the CPU (BT.601, as Linux) and encodes with
+  Media Foundation: the GPU's hardware encoder where one enumerates, else Windows'
+  own (`CLSID_MSH264EncoderMFT`), in low-delay VBR, which follows `R` without a key
+  frame (peak-constrained VBR ignored it). The pointer stays out and the capture
+  border is turned off where Windows allows. JPEGs decode with WIC. MSVC builds it
+  with the C runtime linked in: one 297 KB `.exe` that needs only Windows 10 1903 or
+  later (Windows Server 2025 encodes without its Media Foundation feature). A window
+  whose process ends is noticed within half a second even when Windows doesn't say
+  it closed.
 
 The host captures an app's window with the desktop app where it's open, else with
-the helper (a Mac, or Linux with `DISPLAY`). A Wayland session needs the
+the helper (a Mac, Windows, or Linux with `DISPLAY`). A Wayland session needs the
 portal's PipeWire stream, which the helper doesn't read yet.
 
 OpenH264's screen-content mode finds scrolls and spends about a third of the
@@ -825,3 +833,28 @@ frame: the helper's `R` command, the WebCodecs encoder's reconfigure (in the
 machine browser's capture page and the desktop's live video page, through a new
 `live-video-rate` ask; an older desktop keeps its own rate). Before this, a slow
 link only skipped to key frames, each a whole picture at full rate.
+
+## November 20: the video helper on Windows, measured on a hosted runner
+
+`scripts/test-video-helper-windows.mjs` checks the Windows helper end to end on
+GitHub's `windows-latest` (Windows Server 2025, 2 cores / 4 threads of an EPYC
+7763, Hyper-V video and no GPU, so Direct3D runs on WARP and Media Foundation's
+software encoder encodes), in the runner's console session at 1024×768
+(`.github/workflows/windows-video.yml`). Every unit was decoded by an FFmpeg
+the job installs for the check.
+
+| Case | Result |
+| --- | --- |
+| 640×400 WinForms window painting 21 times a second | 20–23 units/s, 5% of a core, paint to unit at Node p50 33 ms / p95 52–64 ms |
+| 1280×720 window, cap 60 (the fixture paints about 25 a second) | 25 fps, read back 2.2 ms, convert 1.0 ms, encode 1.8 ms a frame (p50), 158 kbit/s |
+| Still window, 3 s | 0 units, 0% CPU; a key frame when asked; a smaller box gives a key frame at its size |
+| Window under a topmost window | Its own pixels; its process killed ends the video ("The window closed") |
+| Whole display, 1024×768, one window animating | 23 units/s, 23% of a core |
+| Frames into a recording (`RecordingEncoderProcess`) | 60 pictures, 2.00 s MP4, a key frame a second, read by Mediabunny, all 60 decoded |
+| Bitrate on textured 640×360 at 30 fps | asked 4 → 3.9 Mbit/s; 0.3 → 1.1 Mbit/s (the encoder's floor on this content); 4 then 0.3 by `R` → 3.8 then 1.2 Mbit/s with no key frame |
+
+The display costs more than a window: each composition is read back whole and
+compared, where WGC's window capture sends far fewer frames. Hardware encoding
+(an `MFT_ENUM_FLAG_HARDWARE` transform, driven by its events) is chosen first
+wherever one enumerates and falls back to the software encoder if it fails, but
+no hosted runner has a GPU, so that path is unmeasured.
