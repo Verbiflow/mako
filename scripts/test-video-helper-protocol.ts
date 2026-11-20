@@ -68,7 +68,12 @@ const viewer: BrowserVideoViewer = { size: () => ({ width: 320, height: 200 }), 
 const video = new BrowserVideo({ encoded: helperCapture(fake, { kind: "window", windowId: 77 }) }, { fps: 30 })
 const leave = await video.join(viewer)
 assert.equal(packets[0]?.kind, "key")
-assert.deepEqual(read().at(-1), { args: ["window", "77", "--fps", "30", "--box", "320x200"] })
+// The helper starts at the viewer's box, and joining tells the open capture its viewers' box again (`BrowserVideo.join`),
+// a command the fake may log before or after this reads: the start is the newest start, not the newest line.
+const started = read().findLastIndex((entry) => entry.args)
+assert.deepEqual(read()[started], { args: ["window", "77", "--fps", "30", "--box", "320x200"] })
+await until(() => read().length > started + 1, "the viewers' box told to the open capture")
+assert.deepEqual(read()[started + 1], { type: "B", length: 4, width: 320, height: 200 })
 video.refresh(viewer)
 await delay(1100)
 video.refresh(viewer)

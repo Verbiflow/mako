@@ -2,11 +2,11 @@ import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/perm
 import { openCodeLaunchAccess } from "@mako/host/harnesses/opencode/access"
 import { accessModeId } from "@mako/host/contracts/access"
 import assert from "node:assert/strict"
-import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
+import { chmod, link, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { OpenCodeVersions, openCodeDatabasePaths, resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
-import { openCodeUnusedBuilds } from "@mako/host/harnesses/opencode/updates"
+import { cmdShimTarget, openCodeBinaryTarget, openCodeUnusedBuilds } from "@mako/host/harnesses/opencode/updates"
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-runtime-"))
 try {
@@ -72,5 +72,20 @@ try {
   await writeFile(join(root, "brew-opencode"), "#!/bin/sh\n")
   assert.deepEqual(openCodeUnusedBuilds(join(root, "brew-opencode")), [], "a launcher outside npm's layout leaves everything")
   assert.deepEqual(openCodeUnusedBuilds(join(root, "missing")), [])
+  // On Windows, npm's shim in its prefix (`opencode.cmd`, as cmd-shim writes it) runs the package's executable: that
+  // executable is the binary, whose builds go as above.
+  const windowsPrefix = join(root, "windows-prefix")
+  const exe = join(windowsPrefix, "node_modules", "@opencode", "cli", "bin", "opencode.exe")
+  await mkdir(join(windowsPrefix, "node_modules", "@opencode", "cli", "node_modules", "@opencode", "cli-windows-x64-baseline"), { recursive: true })
+  await mkdir(dirname(exe), { recursive: true })
+  await writeFile(join(windowsPrefix, "node_modules", "@opencode", "cli", "package.json"), JSON.stringify({ name: "@opencode/cli" }))
+  await writeFile(exe, "an executable")
+  const shim = join(windowsPrefix, "opencode.cmd")
+  await writeFile(shim, ["@ECHO off", "GOTO start", ":find_dp0", "SET dp0=%~dp0", "EXIT /b", ":start", "SETLOCAL", "CALL :find_dp0", '"%dp0%\\node_modules\\@opencode\\cli\\bin\\opencode.exe"   %*', ""].join("\r\n"))
+  assert.equal(cmdShimTarget(shim), exe, "the shim's executable")
+  assert.equal(openCodeBinaryTarget(shim), await realpath(exe), "followed from where the shim really is")
+  assert.deepEqual(openCodeUnusedBuilds(openCodeBinaryTarget(shim)).map((folder) => folder.split("/").pop()), ["cli-windows-x64-baseline"], "and the builds beside it")
+  await writeFile(join(windowsPrefix, "other.cmd"), "@ECHO off\r\nnode other.js %*\r\n")
+  assert.equal(cmdShimTarget(join(windowsPrefix, "other.cmd")), null, "a script that runs no executable of its own names none")
   console.log("OpenCode runtime: actual version beats filename, every OpenCode 2 release and newer ones, prereleases before the API 2.0.4 released refused, explicit mismatch/unknown refused, one version check per executable, a failing executable named, launch rulesets merge into user configuration, configured database roots preserved")
 } finally { await rm(root, { recursive: true, force: true }) }
