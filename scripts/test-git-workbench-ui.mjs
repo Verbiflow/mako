@@ -108,20 +108,7 @@ async function check() {
         ...point,
       })
   }
-  // Push, the pull request and the branch's history open from the branch chip at the top of Changes.
-  const openBranch = async () => {
-    await until("Boolean(document.querySelector('[data-branch-chip]'))")
-    if (!(await evaluate("Boolean(document.querySelector('[data-branch-popover]'))"))) await click("[data-branch-chip]")
-    await until("Boolean(document.querySelector('[data-branch-popover] [data-git-actions]'))")
-  }
-  // Waits with the branch popover open, opening it again if a refresh of the panel put it away.
-  const untilBranch = (code) => until(`(() => { if (!document.querySelector('[data-branch-popover]')) document.querySelector('[data-branch-chip]')?.click(); return ${code} })()`)
-  const hover = async (selector) => {
-    const point = await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect(); return {x:r.x+r.width/2,y:r.y+r.height/2} })()`)
-    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", ...point })
-    await new Promise((resolve) => setTimeout(resolve, 200))
-  }
-  const timer = setTimeout(() => app.exit(1), 150000)
+  const timer = setTimeout(() => app.exit(1), 90000)
   try {
     await window.loadURL(
       `${process.env.MAKO_GIT_CHECK_URL}scripts/git-workbench.html`
@@ -177,7 +164,6 @@ async function check() {
       frames < 150,
       `Renderer stalled with a large change list: ${frames}ms`
     )
-    await openBranch()
     assert.equal(
       await evaluate(
         "document.querySelectorAll('[data-push-control] button[aria-label=\"Push to main\"]').length"
@@ -192,9 +178,8 @@ async function check() {
     )
     assert.ok(
       await evaluate(
-        "document.querySelector('[aria-label=\"Commit message\"]').getBoundingClientRect().height === 40"
-      ),
-      "the message field is one 40px line until it has more to hold"
+        "document.querySelector('[aria-label=\"Commit message\"]').getBoundingClientRect().height >= 64"
+      )
     )
     await click('[aria-label="Push to main"]')
     await until(
@@ -203,7 +188,7 @@ async function check() {
     assert.equal(await fixture("return m.calls.pushes"), 1)
     await capture("pushing.png")
     await fixture("m.finishPush('/fixture/large', true)")
-    await untilBranch(
+    await until(
       "document.querySelector('[data-push-control]')?.textContent.includes('Pushed')"
     )
     await capture("pushed.png")
@@ -234,7 +219,6 @@ async function check() {
     await until(
       "document.querySelector('[data-history-panel]').textContent.includes('Commit from /fixture/second')"
     )
-    await openBranch()
     await click('[aria-label="Push to main"]')
     await until("Boolean(document.querySelector('[data-push-state=pushing]'))")
     await fixture("m.selectProject('/fixture/third', 3)")
@@ -247,8 +231,7 @@ async function check() {
     )
     await fixture("m.finishPush('/fixture/second', false)")
     await fixture("m.selectProject('/fixture/second', 4)")
-    await openBranch()
-    await untilBranch(
+    await until(
       "document.querySelector('[data-push-control]')?.textContent.includes('Pull & merge 3')"
     )
     await capture("push-failed.png")
@@ -259,12 +242,8 @@ async function check() {
     window.setContentSize(1200, 400)
     await capture("pull-before-push.png", true)
     window.setContentSize(1200, 900)
-    // The desk's toasts stand top-right, over the branch popover; a click is for the control under them.
-    await fixture("m.dismissToasts()")
-    await until("!document.querySelector('[data-sonner-toast]')")
     await click('[aria-label="Pull and merge 3 incoming commits"]')
-    await openBranch()
-    await untilBranch("document.querySelector('[data-push-control]')?.textContent.includes('Push 3')")
+    await until("document.querySelector('[data-push-control]')?.textContent.includes('Push 3')")
     await capture("merged-ready-to-push.png", true)
     await click('[aria-label="Push to main"]')
     await until("Boolean(document.querySelector('[data-push-state=pushing]'))")
@@ -278,8 +257,7 @@ async function check() {
       "none"
     )
     await fixture("m.finishPush('/fixture/second', true)")
-    await openBranch()
-    await untilBranch(
+    await until(
       "document.querySelector('[data-push-control]')?.textContent.includes('Pushed')"
     )
     await fixture("m.selectProject('/fixture/commit', 3)")
@@ -290,11 +268,6 @@ async function check() {
     await page.debugger.sendCommand("Input.insertText", {
       text: "Keep the full change set",
     })
-    assert.equal(await evaluate("document.querySelector('[aria-label=\"Commit message\"]').getBoundingClientRect().height"), 40, "one line of message, one line of field")
-    await page.debugger.sendCommand("Input.insertText", { text: "\n\nThe body, on a line of its own." })
-    await until("document.querySelector('[aria-label=\"Commit message\"]').getBoundingClientRect().height > 60")
-    assert.ok(await evaluate("(() => { const box = document.querySelector('[data-commit-box]'); const field = box.querySelector('textarea').getBoundingClientRect(); const commit = [...box.querySelectorAll('button')].find(b => b.textContent.startsWith('Commit all')).getBoundingClientRect(); const generate = box.querySelector('[aria-label^=\"Draft a message\"], [aria-label^=\"Connect an API key\"], [aria-label^=\"Reconnect\"]').getBoundingClientRect(); return Math.abs(commit.top - generate.top) < 4 && commit.top >= field.bottom })()"), "Generate and Commit share the toolbar row under the grown field")
-    await capture("commit-grown.png", true)
     const submit = await evaluate(
       "[...document.querySelectorAll('[data-commit-box] button')].find(b=>b.textContent.startsWith('Commit all'))?.outerHTML"
     )
@@ -320,15 +293,9 @@ async function check() {
     await click('[aria-label="Copy Git context"]')
     await until("import('/src/dev/git-workbench-check.tsx').then(m => m.calls.context.includes('local-edit.ts'))")
     await captureElement('dirty-pull-recovery.png', '[data-git-footer]')
-    await openBranch()
-    // The desk's toasts stand top-right, over the branch popover; a click is for the control under them.
-    await fixture("m.dismissToasts()")
-    await until("!document.querySelector('[data-sonner-toast]')")
     await click('[aria-label="Pull 3 incoming commits with stash"]')
     assert.equal(await fixture("return m.calls.remoteAction"), "merge_autostash")
-    await until("!document.querySelector('[data-git-remote-notice]')")
-    await openBranch()
-    await untilBranch("document.querySelector('[data-push-control]').textContent.includes('Push')")
+    await until("!document.querySelector('[data-git-remote-notice]') && document.querySelector('[data-push-control]').textContent.includes('Push')")
     await fixture("return m.showUntrackedBlocker('/fixture/commit')")
     await until("document.body.textContent.includes('A local file conflicts with incoming changes.')")
     assert.equal(await evaluate("document.body.textContent.includes('Continue merge')"), false)
@@ -400,11 +367,10 @@ async function check() {
     await click('button[aria-label="mako-backend"]')
     await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '1'")
     assert.equal(await fixture("return m.calls.selections"), 1)
-    await openBranch()
     assert.equal(await evaluate("document.querySelectorAll('[data-git-actions]').length"), 1)
     assert.equal(await evaluate("document.querySelector('[data-git-actions]').dataset.repository"), '/fixture/mono/mako-backend')
     assert.equal(await evaluate("document.querySelector('[aria-label=\"Changes in mako-backend\"] [data-push-control]')"), null)
-    await captureElement("focused-repository-actions.png", "[data-branch-popover]")
+    await captureElement("focused-repository-actions.png", "[data-git-footer]")
     assert.equal(await evaluate("import('/src/dev/git-workbench-check.tsx').then(m=>m.store.get().meta.cwd)"), "/fixture/mono")
     assert.equal(await evaluate("document.querySelector('button[aria-label=mako-backend]').getAttribute('aria-expanded') === 'true'"), true)
     assert.equal(await evaluate("document.querySelectorAll('[data-commit-box]').length"), 1)
@@ -426,60 +392,10 @@ async function check() {
     assert.equal(await evaluate("import('/src/dev/git-workbench-check.tsx').then(m=>m.store.get().meta.cwd)"), "/fixture/mono")
     console.log("Repository selection: switches both ways, keeps the workspace, and shows one shared commit box")
 
-    await fixture("m.dismissToasts()")
-    await until("!document.querySelector('[data-sonner-toast]')")
-    // Twelve files list flat: a row each, its folder faint after its name, no folder rows; no letters but a conflict's.
-    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.store.set({git: {...m.store.get().git, files: m.store.get().git.files.map((file, index) => ({...file, path: `src/${index % 2 ? 'a' : 'b/c'}/${file.path}`, status: index === 0 ? 'deleted' : index === 1 ? 'conflicted' : file.status, staged: index === 2}))}}))")
-    await until("document.querySelectorAll('[data-change-folder]').length === 12")
-    assert.equal(await evaluate("document.querySelector('[data-change-list]').dataset.rowCount"), "12", "twelve files, twelve rows")
-    assert.equal(await evaluate("document.querySelectorAll('[data-change-list] button[aria-expanded]').length"), 0, "no folder rows in the flat list")
-    const flatRows = await evaluate(`(() => {
-      const rows = [...document.querySelectorAll('[data-change-path]')]
-      const deleted = rows.find(row => row.dataset.status === 'deleted').querySelector('button span.truncate')
-      const conflicted = rows.find(row => row.dataset.status === 'conflicted')
-      const plain = rows.find(row => row.dataset.status === 'modified' || row.dataset.status === 'added' || row.dataset.status === 'untracked')
-      const row = rows[0].getBoundingClientRect()
-      const name = rows[0].querySelector('button span.truncate')
-      return {
-        height: row.height,
-        nameFont: getComputedStyle(name).fontSize,
-        folderFont: getComputedStyle(rows[0].querySelector('[data-change-folder]')).fontSize,
-        struck: getComputedStyle(deleted).textDecorationLine,
-        conflictLetter: [...conflicted.querySelectorAll('span')].some(node => node.textContent === '!'),
-        letters: [...plain.querySelectorAll('span')].some(node => /^[MADU]$/.test(node.textContent)),
-      }
-    })()`)
-    assert.equal(flatRows.height, 28, "28px rows")
-    assert.equal(flatRows.nameFont, "14px", "names at 14px")
-    assert.equal(flatRows.folderFont, "12px", "folders at 12px")
-    assert.match(flatRows.struck, /line-through/, "a deleted file is struck through")
-    assert.equal(flatRows.conflictLetter, true, "a conflict keeps its letter")
-    assert.equal(flatRows.letters, false, "no M, A, D or U letters")
-    // The staging box shows under the pointer; a staged file keeps its check without it.
-    const box = (path) => `getComputedStyle(document.querySelector('[data-change-path=${JSON.stringify(path)}] [role=checkbox]')).opacity`
-    const unstagedPath = await evaluate("[...document.querySelectorAll('[data-change-path]')].find(row => row.dataset.status !== 'conflicted' && row.querySelector('[role=checkbox]').getAttribute('aria-checked') === 'false').dataset.changePath")
-    const stagedPath = await evaluate("[...document.querySelectorAll('[data-change-path]')].find(row => row.querySelector('[role=checkbox]').getAttribute('aria-checked') === 'true').dataset.changePath")
-    await hover("[data-branch-chip]")
-    await until(`${box(unstagedPath)} === '0' && ${box(stagedPath)} === '1'`)
-    await hover(`[data-change-path=${JSON.stringify(unstagedPath)}]`)
-    await until(`${box(unstagedPath)} === '1'`)
-    await captureElement("files-flat-hover.png", '[aria-label="Changes in mako"]')
-    const stagesBefore = await fixture("return m.calls.stages")
-    await click(`[data-change-path=${JSON.stringify(unstagedPath)}] [role=checkbox]`)
-    await until(`import('/src/dev/git-workbench-check.tsx').then(m => m.calls.stages > ${stagesBefore})`)
-    // The header: the change's size, its sentence in the tip; under the pointer Stage all and Review every change instead.
-    assert.match(await evaluate("document.querySelector('[data-changes-counts]').getAttribute('title')"), /^12 changes · \d+ staged$/)
-    await hover("[data-branch-chip]")
-    await until("Boolean(document.querySelector('[data-changes-header] [aria-label=\"Review every change\"]')?.offsetParent) && !document.querySelector('[data-changes-counts]').offsetParent")
-    assert.equal(await evaluate("Boolean(document.querySelector('[data-changes-header] [aria-label$=\"everything\"]')?.offsetParent)"), true, "Stage all under the pointer")
-    // A thirteenth file folds the list into the tree.
-    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.store.set({git: {...m.store.get().git, files: [...m.store.get().git.files.map((file, index) => file.path.startsWith('src/') ? file : ({...file, path: `src/${index % 2 ? 'a' : 'b/c'}/${file.path}`})), {path: 'src/a/extra.ts', status: 'added', staged: false, insertions: 4, deletions: 0, binary: false}]}}))")
-    await until("document.querySelectorAll('[data-change-list] button[aria-expanded]').length > 0 && document.querySelectorAll('[data-change-folder]').length === 0")
-    const treeRows = Number(await evaluate("document.querySelector('[data-change-list]').dataset.rowCount"))
-    assert.ok(treeRows > 13, `thirteen files and their folders: ${treeRows}`)
-    await captureElement("files-tree.png", '[aria-label="Changes in mako"]')
+    await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.store.set({git: {...m.store.get().git, files: m.store.get().git.files.map((file, index) => ({...file, path: `src/${index % 2 ? 'a' : 'b/c'}/${file.path}`}))}}))")
+    await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '15'")
     await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('filesView', 'folders'))")
-    await until(`document.querySelector('[data-change-list]')?.dataset.rowCount !== '${treeRows}'`)
+    await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '14'")
     assert.deepEqual(
       await evaluate("Array.from(document.querySelectorAll('[data-change-row]')).map(row => row.textContent).filter(text => text.startsWith('src/')).map(text => text.match(/^src\\/[a-z/]+/)[0])"),
       ["src/a", "src/b/c"],
@@ -487,8 +403,8 @@ async function check() {
     )
     await captureElement("files-by-folder.png", '[aria-label="Changes in mako"]')
     await evaluate("import('/src/dev/git-workbench-check.tsx').then(m => m.setPref('filesView', 'tree'))")
-    await until(`document.querySelector('[data-change-list]')?.dataset.rowCount === '${treeRows}'`)
-    console.log("Files list: twelve files flat with their folders, letters only for a conflict, deleted struck through, the staging box under the pointer; a thirteenth folds into the tree, by folder or nested")
+    await until("document.querySelector('[data-change-list]')?.dataset.rowCount === '15'")
+    console.log("Files list: switches between the folded tree and one row per folder")
 
     window.setContentSize(1200, 900)
     await fixture("m.selectProject('/fixture/review', 5000)")
@@ -538,8 +454,7 @@ async function check() {
     const menuItem = (text) => `[...document.querySelectorAll('[role=menuitem],[role=menuitemradio]')].find(node => node.textContent.includes(${JSON.stringify(text)}))`
     await fixture("m.dismissToasts()")
     await fixture("m.selectMediaProject()")
-    await openBranch()
-    await untilBranch("document.body.textContent.includes('logo.png') && document.querySelector('[data-git-next]')?.dataset.gitNext === 'open-pull'")
+    await until("document.body.textContent.includes('logo.png') && document.querySelector('[data-git-next]')?.dataset.gitNext === 'open-pull'")
     assert.equal(await evaluate("document.querySelectorAll('[data-push-control] button[aria-label=\"Push to feature/logo\"]').length"), 0, "Publishing isn't a second button beside Open pull request")
     await click('[aria-label="More Git actions"]')
     await until(`Boolean(${menuItem("Publish feature/logo")})`)

@@ -92,8 +92,7 @@ async function check() {
     await until(`Boolean(${row(words)})`, `the row of ${words}`)
     await evaluate(`${row(words)}.click(); true`)
   }
-  // The tab's full name: its reading's words, which a narrow bar shortens on screen to a count.
-  const reading = () => evaluate("(() => { const row = document.querySelector('[data-surface-id=agents]'); const tab = row && (row.matches('[role=tab]') ? row : row.querySelector('[role=tab]') ?? row); return tab ? (tab.getAttribute('aria-label') || tab.innerText).replace(/,/g, '').replace(/\\s+/g, ' ').trim() : null })()")
+  const reading = () => evaluate("document.querySelector('[data-surface-id=agents]')?.innerText.replace(/\\s+/g, ' ').trim() ?? null")
   const rail = async () => {
     if (!(await evaluate("Boolean(document.querySelector('[data-side-rail]'))"))) await click(SHOW)
     await seen("[data-side-rail]")

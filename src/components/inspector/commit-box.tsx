@@ -1,3 +1,4 @@
+import { GitActionControl } from "@/components/inspector/git-action-control"
 import { CopyGitContextButton, GitConflictFooter, GitDetailsButton } from "@/components/inspector/git-conflict-footer"
 import {
   useCallback,
@@ -10,7 +11,7 @@ import {
 } from "react"
 import { Action, Keys } from "@/components/ui/kit"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
-import { GitActionControl, ReasonedItem } from "@/components/inspector/git-action-control"
+import { ReasonedItem } from "@/components/inspector/git-action-control"
 import { cn } from "@/lib/utils"
 import { Notice as SharedNotice } from "@/components/ui/notice"
 import { formatChord } from "@/extend/commands"
@@ -19,7 +20,7 @@ import { actions, useSession } from "@/state/session"
 import { usePrefs } from "@/state/prefs"
 import { commitDrafts, draftRepository, useCommitDraft } from "@/state/commit-drafts"
 import { refreshCommitModel, useResolvedCommitModel } from "@/state/commit-model"
-import { ArrowUpIcon, ChevronDownIcon, GitPullRequestIcon } from "lucide-react"
+import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, GitBranchIcon, GitPullRequestIcon } from "lucide-react"
 import { Orb } from "@/components/ui/orb/orb"
 import { useOrbTheme } from "@/components/ui/use-orb-theme"
 import { BorderBeam } from "border-beam"
@@ -50,12 +51,24 @@ export function CommitBox({ staged, total }: { staged: number; total: number }) 
   const status = useSession(state => state.git)
   const root = status?.root
   const resolving = Boolean(status?.operation || status?.files.some(file => file.status === "conflicted"))
+  // Several repositories share one footer, so it names the one it commits to.
+  const named = Boolean(status?.repositories?.length)
   return <div data-git-footer className="shrink-0">
     <CommitEditor staged={staged} total={total} />
-    {/* The branch, its history and push live at the top of Changes (`BranchChip`); the box ends at the commit. While a
-        merge or rebase is under way its next step (Continue merge, Abort) is the panel's one job, so it stands here too. */}
-    {root && status.branch && !resolving ? <GitRemoteNotice cwd={root} branch={status.branch} /> : null}
-    {root && status.branch && status.head && resolving ? <div data-git-resolving className="flex h-9 items-center justify-end pr-2 pl-3"><GitActionControl cwd={root} branch={status.branch} /></div> : null}
+    {root && status.branch ? <>
+      {!resolving ? <GitRemoteNotice cwd={root} branch={status.branch} /> : null}
+      {/* As Zed's panel ends: the branch the commit lands on, and what to do with it next. */}
+      <div data-git-actions data-repository={root} className="flex h-9 items-center gap-2 pr-2 pl-3">
+        <span className="flex min-w-0 flex-1 items-center gap-1.5 text-label" title={`${root} · ${status.branch}`}>
+          {named ? <span className="shrink-0 text-faint">{root.split("/").filter(Boolean).at(-1)}</span> : null}
+          <GitBranchIcon className="size-3 shrink-0 text-faint" />
+          <span className="min-w-0 truncate text-muted-foreground">{status.branch}</span>
+          {status.ahead > 0 ? <span className="tabular flex shrink-0 items-center text-faint" title={`${status.ahead} ${status.ahead === 1 ? "commit" : "commits"} to push`}><ArrowUpIcon className="size-3" />{status.ahead}</span> : null}
+          {status.behind > 0 ? <span className="tabular flex shrink-0 items-center text-faint" title={`${status.behind} incoming ${status.behind === 1 ? "commit" : "commits"}`}><ArrowDownIcon className="size-3" />{status.behind}</span> : null}
+        </span>
+        {status.head ? <GitActionControl cwd={root} branch={status.branch} /> : null}
+      </div>
+    </> : null}
   </div>
 }
 
@@ -189,19 +202,19 @@ function CommitEditor({
   if (operation || conflicts.length) return <GitConflictFooter count={conflicts.length} operation={operation} busy={pushState.kind === "syncing"} detail={pushState.kind === "failed" ? pushState.detail : undefined} />
 
   return (
-    <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} data-drafting={drafting || undefined} className="shrink-0 px-2 pt-2 pb-2">
+    <div data-commit-box data-busy={drafting || busy || pushState.kind === "pushing" || undefined} data-drafting={drafting || undefined} className="shrink-0 px-2.5 pt-2.5 pb-0.5">
       <BorderBeam size="md" colorVariant="mono" theme={theme} active={drafting} brightness={1.8} borderRadius={0}>
       <div className="commit-editor relative overflow-hidden bg-raised ring-1 ring-hairline focus-within:ring-border">
         <textarea
           aria-label="Commit message"
           ref={field}
-          rows={1}
+          rows={2}
           value={message}
           onChange={(event) => commitDrafts.edit(cwd, event.target.value)}
           placeholder={placeholder}
           disabled={total === 0}
           spellCheck={false}
-          className="block max-h-40 min-h-10 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-ui leading-5 placeholder:text-faint focus:outline-none disabled:opacity-50"
+          className="block max-h-40 min-h-16 w-full resize-none bg-transparent px-3 pt-2.5 pb-1 text-ui leading-5 placeholder:text-faint focus:outline-none disabled:opacity-50"
         />
 
         {/* What the last draft left behind lives inside the card, between the

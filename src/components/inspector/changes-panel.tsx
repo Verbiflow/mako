@@ -17,8 +17,6 @@ import { Slot } from "@/extend/slot"
 import { actions, store, useSession } from "@/state/session"
 import { git as gitActions } from "@/state/git"
 import { GitLog } from "@/components/inspector/git-log"
-import { GitActionControl } from "@/components/inspector/git-action-control"
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { GitLoading } from "@/components/inspector/git-loading"
 import { GitDiffPreviewView } from "@/components/inspector/git-diff-preview"
 import { ChangeList } from "@/components/inspector/change-list"
@@ -28,6 +26,7 @@ import { DIFF_THEME } from "@/lib/diff-theme"
 import { HighlightPool } from "@/lib/highlight-pool"
 import { buildFileTree, type TreeRow } from "@/lib/file-tree"
 import { cn } from "@/lib/utils"
+import { Collapse } from "@/components/ui/collapse"
 import { discardFiles } from "@/state/git-discard"
 import { prefsStore, setPref, togglePref, usePrefs } from "@/state/prefs"
 import { viewer } from "@/state/viewer"
@@ -37,8 +36,6 @@ import { FileIcon } from "@/components/ui/file-icon"
 import { LineCounts } from "@/components/inspector/change-marks"
 import { MARK, type StatusMark } from "@/lib/git-marks"
 import {
-  ArrowDownIcon,
-  ArrowUpIcon,
   CheckCircle2Icon,
   ChevronRightIcon,
   Columns2Icon,
@@ -47,7 +44,10 @@ import {
   GitBranchIcon,
   Maximize2Icon,
   MinusIcon,
+  PanelBottomCloseIcon,
+  PanelBottomOpenIcon,
   PlusIcon,
+  RefreshCwIcon,
   Undo2Icon,
   WrapTextIcon,
   XIcon,
@@ -67,9 +67,6 @@ function lineAt(diff: GitDiff, line: number, side: "additions" | "deletions"): s
 
 /** Pixels per tree level. */
 const TREE_INDENT = 10
-
-/** Up to this many changed files list flat, a row each with its folder beside its name; more fold into the tree. */
-const FLAT_LIMIT = 12
 
 export function ChangesPanel() {
   const focus = useWorkspaceFocus()
@@ -182,8 +179,6 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
 
   const filesView = usePrefs((prefs) => prefs.filesView)
   const rows = useMemo(() => buildFileTree(files, collapsed, filesView), [collapsed, files, filesView])
-  // A short list reads straight down, a row a file; past a screenful the folders gather it.
-  const flat = files.length <= FLAT_LIMIT
   const staged = useMemo(() => files.filter((file) => file.staged).length, [files])
 
   // With the diff pane closed the list is the whole panel, so nothing is
@@ -390,8 +385,6 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
     return (
       <div className={cn("flex min-h-0 flex-col", inline ? "shrink" : "h-full")}>
         <WorktreeReview />
-        {/* A clean tree is exactly when history is the interesting part: the branch opens it. */}
-        {git?.root ? <ChangesHeader files={files} staged={0} staging={false} onPickFile={pickCommitFile} onPickCommit={pickCommit} /> : null}
         <div className="min-h-0 flex-1">
           <Blank
             icon={<CheckCircle2Icon />}
@@ -403,6 +396,8 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
             }
           />
         </div>
+        {/* A clean tree is exactly when history is the interesting part. */}
+        <CommitsSection onPickFile={pickCommitFile} onPickCommit={pickCommit} defaultOpen />
         {/* Still here on a clean tree — a branch you have finished committing
             is exactly when you want to open the pull request. */}
         {!inline && git?.root ? <CommitBox staged={0} total={0} /> : null}
@@ -415,9 +410,8 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
     return (
       <div className={cn("flex min-h-0 flex-col", inline ? "flex-1" : "h-full")}>
         <WorktreeReview />
-        {/* The stream counts its own files; the line above it is only the branch, its history and push. */}
-        <ChangesHeader files={files} staged={staged} staging={staging} counts={false} onPickFile={pickCommitFile} onPickCommit={pickCommit} />
         <ReviewStream files={files} workspace={workspace} staged={staged} onReviewInCenter={openWorkingTree} />
+        <CommitsSection onPickFile={pickCommitFile} onPickCommit={pickCommit} />
         <ReviewBar workspace={workspace} />
         {!inline ? <CommitBox staged={staged} total={files.length} /> : null}
         {!inline ? <PullRequestCard /> : null}
@@ -428,12 +422,53 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
   return (
     <div className={cn("flex min-h-0 flex-col", inline ? "shrink" : "h-full")}>
       <WorktreeReview />
-      <ChangesHeader files={files} staged={staged} staging={staging} onStageAll={() => void stagePaths(files.map((file) => file.path), staged !== files.length)} onExpand={openWorkingTree} onPickFile={pickCommitFile} onPickCommit={pickCommit} />
+      <div className="group/head flex h-7 shrink-0 items-center gap-2 pr-2 pl-3.5 text-label">
+        {/* The counts already project pending checkbox intent, so a stage
+            write in flight only marks the reading busy; swapping the whole
+            sentence for "Updating..." and back made every click blink. Lines
+            changed are the Changes row's reading, right above this. */}
+        <span role="status" aria-busy={staging || undefined} className="tabular min-w-0 truncate text-faint">
+          {`${files.length} ${files.length === 1 ? "change" : "changes"}`}
+          {staged > 0 ? ` · ${staged} staged` : null}
+        </span>
+        {/* What's for now stands; what's for now and then shows under the pointer. The list's shape is Settings' (Git). */}
+        <div className="ml-auto flex items-center text-faint">
+          <span className="flex items-center opacity-0 transition-opacity duration-100 group-hover/head:opacity-100 focus-within:opacity-100">
+            <IconAction label="Refresh" size="xs" onClick={() => void actions.refreshGit()}>
+              <RefreshCwIcon />
+            </IconAction>
+            {selectedFile ? (
+              <IconAction
+                label={showDiff ? "Hide the diff" : "Show the diff"}
+                size="xs"
+                data-on={showDiff || undefined}
+                onClick={() => togglePref("autoOpenDiff")}
+              >
+                {showDiff ? <PanelBottomCloseIcon /> : <PanelBottomOpenIcon />}
+              </IconAction>
+            ) : null}
+          </span>
+          <IconAction
+            label={staged === files.length ? "Unstage everything" : "Stage everything"}
+            size="xs"
+            onClick={() => void stagePaths(files.map((file) => file.path), staged !== files.length)}
+          >
+            {staged === files.length ? <MinusIcon /> : <PlusIcon />}
+          </IconAction>
+          <IconAction
+            label="Review current changes in the center"
+            size="xs"
+            onClick={openWorkingTree}
+          >
+            <Maximize2Icon />
+          </IconAction>
+        </div>
+      </div>
 
-      <ChangeList rows={flat ? flatRows(files) : rows} compact={showDiff} fitContent={inline && !showDiff} renderRow={(row) => row.kind === "dir" ? (
+      <ChangeList rows={rows} compact={showDiff} fitContent={inline && !showDiff} renderRow={(row) => row.kind === "dir" ? (
         <DirRow row={row} busy={row.paths.some((path) => stageOverrides.has(path))} onToggle={toggleDir} onStage={stagePaths} onDiscard={discardPaths} />
       ) : (
-        <FileRow row={row} flat={flat} busy={stageOverrides.has(row.file.path)} active={selected === row.file.path} onSelect={selectFile} onToggleStage={toggleStage} onDiscard={discardPaths} />
+        <FileRow row={row} busy={stageOverrides.has(row.file.path)} active={selected === row.file.path} onSelect={selectFile} onToggleStage={toggleStage} onDiscard={discardPaths} />
       )} />
 
       {showDiff ? (
@@ -549,6 +584,7 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
         </div>
       ) : null}
 
+      <CommitsSection onPickFile={pickCommitFile} onPickCommit={pickCommit} />
       <ReviewBar workspace={workspace} />
       {!inline ? <CommitBox staged={staged} total={files.length} /> : null}
       {!inline ? <PullRequestCard /> : null}
@@ -557,9 +593,55 @@ function WorkspaceChanges({ inline = false }: { inline?: boolean }) {
 }
 
 /**
- * The cell at a row's end: the staging checkbox, shown under the pointer or focus. Staged rows keep the check, so what
- * the next commit takes reads at a glance. A conflicted file keeps its letter here until the pointer comes. Folders
- * carry the same control and act on everything beneath them, partial when only some of it is staged.
+ * The repository's commits, folded under the working tree.
+ *
+ * This is where commits belong — beside the changes that will become the
+ * next one — rather than in a separate tab someone has to know about. Each
+ * commit opens into its files; each file opens its diff in the same surface
+ * the working tree uses.
+ */
+function CommitsSection({
+  onPickFile,
+  onPickCommit,
+  defaultOpen = false,
+}: {
+  onPickFile: (hash: string, path: string) => void
+  onPickCommit: (hash: string, subject: string) => void
+  defaultOpen?: boolean
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  const hasRepo = useSession((state) => Boolean(state.git?.root))
+  const branch = useSession((state) => state.git?.branch)
+  const ahead = useSession((state) => state.git?.ahead ?? 0)
+  if (!hasRepo) return null
+  return (
+    <div className="flex min-h-0 shrink-0 flex-col">
+      <button
+        type="button"
+        aria-expanded={open}
+        aria-label={branch ? `History on ${branch}` : "History"}
+        onClick={() => setOpen((value) => !value)}
+        className="pressable flex h-7 w-full shrink-0 items-center gap-2 pr-3.5 pl-3.5 text-left text-label transition-colors duration-100 hover:bg-fill-hover"
+      >
+        <span className="text-muted-foreground">History</span>
+        {ahead > 0 ? <span className="tabular text-faint">{ahead} not pushed</span> : null}
+        <span className="flex-1" />
+        <ChevronRightIcon className={cn("size-3 shrink-0 text-faint transition-transform duration-200 ease-[var(--ease-out)]", open ? "-rotate-90" : "rotate-90")} />
+      </button>
+      <Collapse open={open}>
+        <div className="max-h-[36vh] overflow-y-auto overscroll-contain">
+          <GitLog onPickFile={onPickFile} onPickCommit={onPickCommit} />
+        </div>
+      </Collapse>
+    </div>
+  )
+}
+
+/**
+ * The cell at a row's end: the file's status letter, which turns into its
+ * staging checkbox on hover or focus. Staged rows keep the check, so what the
+ * next commit takes reads at a glance. Folders carry the same control and act
+ * on everything beneath them, partial when only some of it is staged.
  */
 function StageCell({
   state,
@@ -695,7 +777,6 @@ function DiscardAction({ label, onDiscard }: { label: string; onDiscard: () => v
 
 function FileRow({
   row,
-  flat,
   active,
   busy,
   onSelect,
@@ -704,21 +785,15 @@ function FileRow({
 }: {
   busy: boolean
   row: Extract<TreeRow, { kind: "file" }>
-  /** A row of the flat list: the folder reads faint after the name, cut from its start when the row is narrow. */
-  flat: boolean
   active: boolean
   onSelect: (path: string) => void
   onToggleStage: (file: GitFile) => void
   onDiscard: (paths: readonly string[]) => void
 }) {
   const file = row.file
-  const slash = file.path.lastIndexOf("/")
-  const name = flat ? file.path.slice(slash + 1) : row.label
-  const folder = flat && slash > 0 ? file.path.slice(0, slash) : ""
-  // Only a conflict keeps its letter: added, modified and deleted read from the counts and the struck name.
-  const conflicted = file.status === "conflicted"
+  const mark = MARK[file.status]
   return (
-    <div data-change-path={file.path} data-status={file.status} className={cn(
+    <div className={cn(
       "group relative flex h-7 items-center gap-1 select-none transition-colors duration-100",
       active ? "bg-fill-selected" : "hover:bg-fill-hover"
     )}>
@@ -727,152 +802,29 @@ function FileRow({
         type="button"
         onClick={() => onSelect(file.path)}
         title={file.path}
-        aria-label={file.status === "deleted" ? `${file.path}, deleted` : file.path}
         style={indent(row.depth)}
         className="pressable stage-hit-target flex h-full min-w-0 flex-1 items-center gap-1.5 text-left"
       >
-        {/* In the tree, files sit under their folder's label, past the chevron column. */}
-        {flat ? null : <span className="w-3 shrink-0" />}
-        <FileIcon path={file.path} className={cn("size-3.5 shrink-0 text-faint/80", flat && "ml-1")} />
+        {/* Files sit under their folder's label, past the chevron column. */}
+        <span className="w-3 shrink-0" />
+        <FileIcon path={file.path} className="size-3.5 shrink-0 text-faint/80" />
         <span className={cn(
-          "truncate text-ui",
-          folder ? "max-w-[70%] shrink-0" : "min-w-0",
-          file.status === "deleted" ? "text-faint line-through decoration-faint/60" : conflicted ? "text-removed" : active ? "text-foreground" : "text-foreground/85"
+          "min-w-0 truncate text-ui",
+          file.status === "deleted" ? "text-faint line-through decoration-faint/60" : file.status === "conflicted" ? "text-removed" : active ? "text-foreground" : "text-foreground/85"
         )}>
-          {name}
+          {row.label}
         </span>
-        {/* Right to left, so a long path loses its start ("…components/rail") and keeps the folder nearest the file. */}
-        {folder ? <span data-change-folder className="min-w-0 truncate text-left text-label text-faint/80 [direction:rtl]"><bdi dir="ltr">{folder}</bdi></span> : null}
       </button>
-      {!conflicted ? <DiscardAction label={`Discard changes to ${file.path}`} onDiscard={() => onDiscard([file.path])} /> : null}
+      {file.status !== "conflicted" ? <DiscardAction label={`Discard changes to ${row.label}`} onDiscard={() => onDiscard([file.path])} /> : null}
       <LineCounts insertions={file.insertions} deletions={file.deletions} className="group-hover:hidden group-focus-within:hidden" />
       <StageCell
         state={file.staged ? "on" : "off"}
-        mark={conflicted ? MARK[file.status] : undefined}
+        mark={mark}
         busy={busy}
-        label={file.staged ? `Unstage ${file.path}` : `Stage ${file.path}`}
+        label={file.staged ? `Unstage ${row.label}` : `Stage ${row.label}`}
         onToggle={() => onToggleStage(file)}
       />
       <Slot name="changes.file.trailing" file={file} />
     </div>
-  )
-}
-
-/** One row a file, sorted by path, nothing to open: the list a short change reads as. */
-function flatRows(files: readonly GitFile[]): TreeRow[] {
-  return [...files].sort((a, b) => a.path.localeCompare(b.path)).map((file) => ({ kind: "file" as const, key: file.path, label: file.path, depth: 0, file }))
-}
-
-/**
- * The Changes view's one header line. On the left, the branch the work is on and how far ahead it is; it opens what's
- * not pushed, the next step for it (push, open or update the pull request) and the branch's history. On the right,
- * the size of the change, with the count of files and what's staged in its tip; under the pointer Stage all and
- * Review every change take its place.
- */
-function ChangesHeader({ files, staged, staging, counts = true, onStageAll, onExpand, onPickFile, onPickCommit }: {
-  files: readonly GitFile[]
-  staged: number
-  staging: boolean
-  /** Off where the view below counts the change itself (the Review stream): the line is then the branch alone. */
-  counts?: boolean
-  onStageAll?: () => void
-  onExpand?: () => void
-  onPickFile: (hash: string, path: string) => void
-  onPickCommit: (hash: string, subject: string) => void
-}) {
-  const sized = useMemo(() => {
-    const counted = files.every((file) => file.insertions !== null && file.deletions !== null)
-    return {
-      counted,
-      insertions: files.reduce((sum, file) => sum + (file.insertions ?? 0), 0),
-      deletions: files.reduce((sum, file) => sum + (file.deletions ?? 0), 0),
-    }
-  }, [files])
-  const sentence = `${files.length} ${files.length === 1 ? "change" : "changes"}${staged > 0 ? ` · ${staged} staged` : ""}`
-  const actions = counts && files.length > 0 && onStageAll && onExpand
-  return (
-    <div data-changes-header className="group/head flex h-9 shrink-0 items-center gap-1 pr-2 pl-2 text-label">
-      <BranchChip onPickFile={onPickFile} onPickCommit={onPickCommit} />
-      <span className="flex-1" />
-      {actions ? (
-        <span className="hidden items-center text-faint group-hover/head:flex group-focus-within/head:flex">
-          <IconAction label={staged === files.length ? "Unstage everything" : "Stage everything"} size="xs" onClick={onStageAll}>
-            {staged === files.length ? <MinusIcon /> : <PlusIcon />}
-          </IconAction>
-          <IconAction label="Review every change" size="xs" onClick={onExpand}>
-            <Maximize2Icon />
-          </IconAction>
-        </span>
-      ) : null}
-      {counts && files.length > 0 ? (
-        // The counts already project pending checkbox intent, so a stage write in flight only marks the reading busy.
-        <span role="status" aria-label={sentence} aria-busy={staging || undefined} title={sentence} data-changes-counts className={cn("flex items-center pr-1", actions && "group-hover/head:hidden group-focus-within/head:hidden")}>
-          {sized.counted && (sized.insertions || sized.deletions) ? <LineCounts insertions={sized.insertions} deletions={sized.deletions} /> : <span className="tabular text-faint">{`${files.length} ${files.length === 1 ? "file" : "files"}`}</span>}
-        </span>
-      ) : null}
-    </div>
-  )
-}
-
-/**
- * The branch, as a chip: its name and the commits not pushed. It opens a popover with the next step for the branch
- * (`GitActionControl`: push, publish, open or update the pull request) and its history (`GitLog`), each commit opening
- * its diff in the center, which puts the popover away.
- */
-function BranchChip({ onPickFile, onPickCommit }: {
-  onPickFile: (hash: string, path: string) => void
-  onPickCommit: (hash: string, subject: string) => void
-}) {
-  const branch = useSession((state) => state.git?.branch)
-  const ahead = useSession((state) => state.git?.ahead ?? 0)
-  const behind = useSession((state) => state.git?.behind ?? 0)
-  const head = useSession((state) => Boolean(state.git?.head))
-  const root = useSession((state) => state.git?.root)
-  // Several repositories share the panel, so the chip names the one it is about.
-  const named = useSession((state) => Boolean(state.git?.repositories?.length))
-  const [open, setOpen] = useState(false)
-  const pickFile = useCallback((hash: string, path: string) => {
-    setOpen(false)
-    onPickFile(hash, path)
-  }, [onPickFile])
-  const pickCommit = useCallback((hash: string, subject: string) => {
-    setOpen(false)
-    onPickCommit(hash, subject)
-  }, [onPickCommit])
-  if (!root) return null
-  const name = branch ?? "Detached HEAD"
-  const repository = root.split("/").filter(Boolean).at(-1)
-  const spoken = [`Branch ${name}`, ahead ? `${ahead} not pushed` : "", behind ? `${behind} incoming` : ""].filter(Boolean).join(", ")
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          data-branch-chip
-          data-repository={root}
-          aria-label={spoken}
-          title={`${named ? `${repository} · ` : ""}${name} — history and push`}
-          className="pressable flex h-7 min-w-0 items-center gap-1.5 px-1.5 text-label text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground aria-expanded:bg-raised aria-expanded:text-foreground"
-        >
-          <GitBranchIcon className="size-3.5 shrink-0 text-faint" />
-          <span className="min-w-0 truncate">{name}</span>
-          {ahead > 0 ? <span className="tabular flex shrink-0 items-center text-faint"><ArrowUpIcon className="size-3" />{ahead}</span> : null}
-          {behind > 0 ? <span className="tabular flex shrink-0 items-center text-faint"><ArrowDownIcon className="size-3" />{behind}</span> : null}
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" sideOffset={4} data-branch-popover className="w-80 max-w-[calc(100vw-1rem)] p-0">
-        {branch ? (
-          <div data-git-actions data-repository={root} className="flex h-10 items-center gap-2 border-b border-hairline pr-1.5 pl-3">
-            <span className="tabular min-w-0 flex-1 truncate text-label text-faint">
-              {ahead > 0 ? `${ahead} not pushed` : behind > 0 ? `${behind} incoming` : "Up to date"}
-            </span>
-            {head ? <GitActionControl cwd={root} branch={branch} /> : null}
-          </div>
-        ) : null}
-        <div className="max-h-80 overflow-y-auto overscroll-contain">
-          <GitLog onPickFile={pickFile} onPickCommit={pickCommit} />
-        </div>
-      </PopoverContent>
-    </Popover>
   )
 }

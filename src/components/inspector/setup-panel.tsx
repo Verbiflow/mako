@@ -1,4 +1,3 @@
-import { TabReading } from "@/components/stage/side-tab"
 import { ThreadSetup } from "@/components/setup/setup-page"
 import { activeAcp, useAcp } from "@/state/acp"
 import { useSetup } from "@/state/setup"
@@ -16,6 +15,6 @@ export function SetupReading() {
   const cwd = useAcp((state) => activeAcp(state)?.cwd)
   const thread = useAcp((state) => activeAcp(state)?.threadId)
   const waiting = useSetup((state) => (cwd && thread ? (state.byFolder[cwd]?.places ?? []).flatMap((place) => place.asks).filter((ask) => ask.by.thread === thread).length : 0))
-  return waiting ? <TabReading words={`${waiting} need${waiting === 1 ? "s" : ""} you`} count={String(waiting)} attention /> : null
+  return waiting ? <span className="tabular shrink-0 text-label font-medium text-attention">{`${waiting} need${waiting === 1 ? "s" : ""} you`}</span> : null
 }
 

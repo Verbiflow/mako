@@ -29,7 +29,7 @@ import { quoteSelectionCommand } from "@/components/transcript/quote-reply-selec
 import { registerSurface } from "@/extend/surfaces"
 import { IdentityRow } from "@/components/identity/identity-row"
 import { ChangesPanel } from "@/components/inspector/changes-lazy"
-import { AgentsReading, ControlReading } from "@/components/stage/side-readings"
+import { AgentsReading, ChangesReading, ControlReading } from "@/components/stage/side-readings"
 import { AGENTS_LABEL, useAgentsLabel, useAgentsOffered } from "@/state/agents-offered"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { FileTree } from "@/components/rail/file-tree"
@@ -64,6 +64,7 @@ export function installBuiltins(): () => void {
       icon: GitCompareIcon,
       render: ChangesPanel,
       order: 0,
+      reading: ChangesReading,
     }),
     registerSurface({
       id: "files",

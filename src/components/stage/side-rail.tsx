@@ -1,19 +1,26 @@
-import { SideTab, SideTabs } from "@/components/stage/side-tab"
+import { moveInRail } from "@/components/rail/rail-keys"
+import { RailRow } from "@/components/rail/rail-row"
 import type { SurfaceDefinition } from "@/extend/surfaces"
 import { stage } from "@/state/stage"
 
 /**
- * The right panel's top: one 40px bar of tabs, a surface each in a fixed order, the open one raised. A tab carries a
- * reading only when it asks for the eye (who needs the person, a live control); Changes says its size in its own
- * header. What a tab opens fills the panel under it. What's read at length (a diff, a file) opens as a tab, on purpose.
+ * The right rail's top: the left rail's twin. One row a surface, in a fixed order, each with its quiet reading at the
+ * end; what a row opens fills the rail under them. What's read at length (a diff, a file) opens as a tab, on purpose.
  */
 export function SideRail({ surfaces, activeId }: { surfaces: SurfaceDefinition[]; activeId: string }) {
   return (
-    <SideTabs label="Right rail">
+    <nav
+      role="tablist"
+      aria-label="Right rail"
+      aria-orientation="vertical"
+      data-side-rail
+      className="flex shrink-0 flex-col gap-px px-2 pt-1.5 pb-2"
+      onKeyDown={moveInRail}
+    >
       {surfaces.map((surface) => (
         <SideRow key={surface.id} surface={surface} active={surface.id === activeId} />
       ))}
-    </SideTabs>
+    </nav>
   )
 }
 
@@ -22,13 +29,19 @@ function SideRow({ surface, active }: { surface: SurfaceDefinition; active: bool
   const offered = useOffered(surface)
   const label = useLabel(surface)
   if (!offered && !active) return null
+  const Icon = surface.icon
   const Reading = surface.reading
   return (
-    <SideTab
-      label={label}
-      active={active}
+    <RailRow
+      role="tab"
+      aria-selected={active}
+      aria-current={undefined}
+      tabIndex={active ? 0 : -1}
       data-surface-id={surface.id}
-      reading={Reading ? <Reading /> : null}
+      icon={Icon ? <Icon /> : null}
+      label={label}
+      open={active}
+      end={Reading ? <Reading /> : null}
       onClick={() => stage.open(surface.id)}
     />
   )
