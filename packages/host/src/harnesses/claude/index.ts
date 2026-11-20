@@ -13,7 +13,7 @@ import { createClaudeProfileLoader } from "./profile.js"
 import { claudeSkillSource } from "./skills.js"
 import type { RuntimeUpdateSource } from "../update-source.js"
 import { CLAUDE_VERSIONS } from "./versions.js"
-import { claudeInstall, claudeRuntime, terminalClaudeExecutable } from "./runtime.js"
+import { claudeRuntime, terminalClaudeExecutable } from "./runtime.js"
 import { claudeUsageHistory } from "./usage-history.js"
 import { claudePresentation } from "./presentation.js"
 import { CLAUDE_AUTH_LOG } from "./auth-diagnostics.js"
@@ -77,8 +77,8 @@ export const installClaude: ProviderModule = (host, context) => installHarness(h
     versions: CLAUDE_VERSIONS,
     binary: (env) => claudeRuntime(env)?.executable ?? null,
     ...claudeReleasePolicy,
-    // Sessions run the Claude Code build the Agent SDK ships inside Mako; a host made without it installs that build.
-    install: claudeInstall(),
+    // Sessions run the Claude Code build the Agent SDK ships inside Mako.
+    install: [],
     installations: [
       {
         id: "terminal",

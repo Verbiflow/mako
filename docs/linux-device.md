@@ -55,10 +55,7 @@ device, ends the credential in the cloud at once.
 ## In a container
 
 The image is the host's Linux image with OpenCode installed (`HARNESSES`
-names others, such as `HARNESSES="opencode codex"`, or `none`). It carries
-nothing for a harness it isn't given, Claude Code's 356 MB build included;
-Settings › Harnesses lists the rest as installable, and installs any of them
-later. Build it from a checkout:
+names others, such as `HARNESSES="opencode codex"`). Build it from a checkout:
 
 ```sh
 npm ci && npm run build:control-runtime

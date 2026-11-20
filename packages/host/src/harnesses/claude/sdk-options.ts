@@ -71,7 +71,7 @@ export async function claudeSdkOptions(
     env,
     // Native approval observation requires the SDK to choose its own build.
     pathToClaudeCodeExecutable:
-      runtime && runtime.kind !== "bundled" ? runtime.executable : undefined,
+      runtime?.kind === "configured" ? runtime.executable : undefined,
     resume: input.fork?.nativeId ?? input.resume,
     sessionId: input.fork || !input.resume ? input.conversationId : undefined,
     forkSession: input.fork ? true : undefined,

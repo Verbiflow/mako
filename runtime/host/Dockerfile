@@ -31,18 +31,7 @@ COPY video/mako-video.c /build/
 RUN gcc -O2 -Wall -Werror -o /build/mako-video /build/mako-video.c \
       $(pkg-config --cflags --libs x11 xext xdamage xfixes xcomposite openh264 libturbojpeg) -lyuv -lm
 
-# The host's production install, built once: the host below runs it as it is,
-# and a device's copy carries only what its harnesses need (keep-harnesses.mjs).
-FROM node AS install
-WORKDIR /opt/mako
-COPY app/ ./
-# The install keeps only what runs (scripts/linux-host/prune-install.mjs): no type declarations, source maps or
-# TypeScript sources. npm's compile cache, which it keeps in /tmp, isn't the image's either.
-RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --workspace @mako/host --no-audit --no-fund \
-    && node scripts/linux-host/prune-install.mjs /opt/mako && rm -rf /tmp/node-compile-cache \
-    && if node -e 'require.resolve("electron")' 2>/dev/null; then echo "electron resolves in the host's install" >&2; exit 1; fi
-
-FROM node AS system
+FROM node AS host
 # Chromium, the machine's own browser, which the host starts headless when an
 # agent first connects to it; and fonts for the pages it renders. Its sandbox
 # needs user namespaces: a VM gives them, Docker's default seccomp profile
@@ -50,11 +39,23 @@ FROM node AS system
 RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-liberation fonts-noto-color-emoji \
       libopenh264-7 libyuv0 libturbojpeg0 libx11-6 libxext6 libxdamage1 libxfixes3 libxcomposite1 \
     && rm -rf /var/lib/apt/lists/* \
-    && groupadd --gid 1000 node && useradd --uid 1000 --gid node --shell /bin/bash --create-home node \
-    && ln -s /opt/mako/node_modules/@mako/host/dist/mako-host.js /usr/local/bin/mako-host
+    && groupadd --gid 1000 node && useradd --uid 1000 --gid node --shell /bin/bash --create-home node
+WORKDIR /opt/mako
+# Root owns the host's code; the machine's user, who runs the host and its
+# agents, can't change it.
+COPY app/ ./
+# The install keeps only what runs (scripts/linux-host/prune-install.mjs): no type declarations, source maps or
+# TypeScript sources. npm's compile cache, which it keeps in /tmp, isn't the image's either.
+RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --workspace @mako/host --no-audit --no-fund \
+    && node scripts/linux-host/prune-install.mjs /opt/mako && rm -rf /tmp/node-compile-cache \
+    && ln -s /opt/mako/node_modules/@mako/host/dist/mako-host.js /usr/local/bin/mako-host \
+    && chmod 755 /opt/mako/packages/host/dist/mako-host.js \
+    && if node -e 'require.resolve("electron")' 2>/dev/null; then echo "electron resolves in the host's install" >&2; exit 1; fi \
+    && mako-host --help >/dev/null
 # The video helper, on PATH, where the host finds it: live video of the
 # machine's display or windows, and recordings. No FFmpeg is installed.
 COPY --from=video /build/mako-video /usr/local/bin/mako-video
+USER node
 # Harnesses install into the user's home, as on a person's machine.
 ENV NPM_CONFIG_PREFIX=/home/node/.local PATH=/home/node/.local/bin:$PATH
 # A cloud machine runs exactly the version Mako tested and installed: each
@@ -66,14 +67,6 @@ ENV NPM_CONFIG_PREFIX=/home/node/.local PATH=/home/node/.local/bin:$PATH
 ENV DISABLE_AUTOUPDATER=1 OPENCODE_DISABLE_AUTOUPDATE=1 GROK_DISABLE_AUTOUPDATER=1
 WORKDIR /home/node
 ENTRYPOINT ["mako-host"]
-
-# Mako's host as a Linux machine runs it, with every harness's payload the
-# install carries. Root owns the host's code; the machine's user, who runs the
-# host and its agents, can't change it.
-FROM system AS host
-COPY --from=install /opt/mako /opt/mako
-RUN chmod 755 /opt/mako/packages/host/dist/mako-host.js && mako-host --help >/dev/null
-USER node
 
 # The host above with every harness it can install, installed by the host as
 # Settings installs them (scripts/linux-host/install-harnesses.mjs): what a
@@ -98,24 +91,13 @@ RUN node -e 'const fs = require("node:fs"); const file = "/home/node/.config/dev
 
 # Mako on a machine of the person's own, as a device of their account
 # (docs/linux-device.md): the host above with the harnesses it's given,
-# OpenCode unless HARNESSES names others (`none` for none), installed the same
-# way, and no other harness's payload. It joins
+# OpenCode unless HARNESSES names others, installed the same way. It joins
 # with a code its log shows (`mako-host join`), then runs as that device. Its
 # data, its sign-in and the key that seals it (a 0600 file, as there's no
 # keychain here) are on the volume at /data, so a new container of the image
 # is the same device; arguments go to `mako-host join` (`--name <name>`).
-# The install with only the payloads of the harnesses it's given: Claude
-# Code's build, which the Agent SDK carries, only with `claude` among them
-# (scripts/linux-host/keep-harnesses.mjs). Settings installs it later.
-FROM install AS device-install
+FROM host AS device
 ARG HARNESSES=opencode
-RUN node scripts/linux-host/keep-harnesses.mjs /opt/mako ${HARNESSES}
-
-FROM system AS device
-ARG HARNESSES=opencode
-COPY --from=device-install /opt/mako /opt/mako
-RUN chmod 755 /opt/mako/packages/host/dist/mako-host.js && mako-host --help >/dev/null
-USER node
 COPY proof/host-process.mjs proof/install-harnesses.mjs proof/seed-harnesses.mjs /opt/mako/install/
 RUN --mount=type=bind,source=harnesses,target=/opt/mako/harnesses node /opt/mako/install/seed-harnesses.mjs /opt/mako/harnesses ${HARNESSES}
 RUN --mount=type=cache,target=/home/node/.npm,uid=1000,gid=1000 node /opt/mako/install/install-harnesses.mjs /home/node/harnesses.json ${HARNESSES}
