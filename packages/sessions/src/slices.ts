@@ -33,7 +33,7 @@ export async function inSlices<Result>(steps: Steps<Result>, sliceMs = SLICE_MS,
     const next = steps.next()
     if (next.done) return next.value
     if (performance.now() >= until) {
-      await new Promise((resolve) => setImmediate(resolve))
+      await loopTurn()
       if (stopping?.()) {
         steps.throw(new StepsStopped())
         // Steps that kept going past it stop all the same.
@@ -42,6 +42,17 @@ export async function inSlices<Result>(steps: Steps<Result>, sliceMs = SLICE_MS,
       until = performance.now() + sliceMs
     }
   }
+}
+
+/**
+ * A whole turn of the event loop: timers and ready I/O run before this resolves. One `setImmediate` isn't one: asked
+ * for from an I/O callback (where a slice starts once what it awaited was read), it runs in the same iteration's check
+ * phase, before any timer or socket, so a first slice and the one after it held the loop as one, 16 ms for 8
+ * (2026-11-21, `loop-holds.mjs`: every step's longest hold was two slices). The second, asked for in the check phase,
+ * runs in the next iteration's, after its timers and its poll.
+ */
+function loopTurn(): Promise<void> {
+  return new Promise((resolve) => setImmediate(() => setImmediate(resolve)))
 }
 
 /** What `inSlices` throws, into the steps and out of itself, for work its `stopping` cut: not a failure. */
