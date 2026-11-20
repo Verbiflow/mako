@@ -8,12 +8,13 @@ import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
- * The calm rail against the production components and the fixture desk: quiet top rows with the Inbox's one count,
- * project avatars (a GitHub owner's picture or a monogram) and the Projects header's
+ * The calm rail against the production components and the fixture desk: quiet top rows with the Inbox's one count and
+ * Setup hidden until asked for, project avatars (a GitHub owner's picture or a monogram) and the Projects header's
  * controls only under the pointer, a row that is its fin, title and time with Archive and ⋯ under the pointer, the
  * Thread menu's Mark as unread and Status kept in the Thread store, a Done Thread folding into "N done", ⌘ held
  * showing ⌘1–9 and ⌘2 opening the second row, ⌘/⇧-click picking rows with the selection bar's Archive and Esc,
- * dragging a project, and an Apex's Fins folded and open with ←/→. Screenshots stay in the printed directory; `--port` serves the page on that port.
+ * dragging a project, Customize sidebar, "N to resolve" with its lines, Finish setting up, and an Apex's Fins folded
+ * and open with ←/→. Screenshots stay in the printed directory; `--port` serves the page on that port.
  */
 
 if (process.versions.electron) {
@@ -114,16 +115,16 @@ async function checkWindow() {
 
   await load()
 
-  // 1. Top rows: quiet, one count; Pull requests and Automations say theirs in tips.
+  // 1. Top rows: quiet, one count, Setup hidden until asked for; Pull requests and Automations say theirs in tips.
   const top = await evaluate(`(() => {
     const rows = [...document.querySelectorAll('[data-rail-top] [data-rail-top-row]')].map((row) => row.dataset.railTopRow)
     const pulls = document.querySelector('[data-rail-top-row="pulls"]')
     return { rows, pullsCount: pulls?.querySelector('[data-pulls-count]') !== null && pulls?.querySelector('[data-pulls-count]') !== undefined, height: pulls?.getBoundingClientRect().height }
   })()`)
-  assert.deepEqual(top.rows, ["session.new", "view.command-palette", "inbox", "pulls", "setup", "automations"])
+  assert.deepEqual(top.rows, ["session.new", "view.command-palette", "inbox", "pulls", "automations"], "Setup is hidden at first")
   assert.equal(top.pullsCount, false, "Pull requests draws no count")
   assert.equal(Math.round(top.height), 28, "top rows are 28 px")
-  console.log("PASS: quiet top rows, no Pull requests count")
+  console.log("PASS: quiet top rows, Setup hidden, no Pull requests count")
 
   // 2. Projects: an avatar each, the GitHub owner's where its origin is on GitHub; the header's controls under the pointer only.
   await until(`document.querySelector('[data-project-avatar="github"] img') !== null`, "the GitHub owner's avatar")
@@ -236,7 +237,47 @@ async function checkWindow() {
   assert.deepEqual(await evaluate(`window.mako.preferences().then((values) => values['rail.projectOrder']?.slice(0, 2))`), [before[1], before[0]], "and follows the account")
   console.log("PASS: dragging a project reorders it and keeps the order")
 
-  // 9. An Apex: its avatar, folded to the Fins that need the person with their asks; open with →, every Fin in play.
+  // 9. Customize sidebar from the Projects header's ⋯: Setup shown on request; a right-click on the top rows opens the same.
+  await hover("[data-rail-threads-heading]")
+  await click("[data-rail-options]")
+  await until(`document.querySelector('[data-customize="setup"]') !== null`, "Customize sidebar")
+  await capture("calm-customize.png")
+  await click('[data-customize="setup"]')
+  await until(`document.querySelector('[data-rail-top-row="setup"]') !== null`, "Setup shown")
+  await click('[data-customize="pulls"]')
+  await until(`document.querySelector('[data-rail-top-row="pulls"]') === null`, "Pull requests hidden")
+  await press("Escape", "Escape", 27)
+  await click('[data-rail-top-row="inbox"]', 0, "right")
+  await until(`document.querySelector('[data-customize="pulls"]') !== null`, "the same choices from the top rows")
+  await click('[data-customize="pulls"]')
+  await press("Escape", "Escape", 27)
+  console.log("PASS: Customize sidebar")
+
+  // 10. Finish setting up: real steps, folded and opened, put away.
+  await until(`document.querySelector('[data-setup-checklist]') !== null`, "the checklist")
+  const steps = await evaluate(`[...document.querySelectorAll('[data-setup-step]')].map((step) => step.dataset.setupStep + ':' + (step.dataset.done ?? 'no'))`)
+  assert.equal(steps.length, 5, `five steps: ${JSON.stringify(steps)}`)
+  assert.ok(steps.includes("project:true"), "a project is open")
+  await click('[data-setup-checklist] [aria-expanded]')
+  await until(`document.querySelector('[data-setup-checklist="folded"]') !== null`, "folded")
+  await hover('[data-setup-checklist]')
+  await click('[data-setup-put-away]')
+  await until(`document.querySelector('[data-setup-checklist]') === null`, "put away")
+  assert.equal(await evaluate(`import('/src/extend/commands.ts').then(({ runCommand }) => runCommand('view.finish-setup'))`), true, "the palette's Finish setting up")
+  await until(`document.querySelector('[data-setup-checklist="open"]') !== null`, "brings it back open")
+  console.log("PASS: Finish setting up")
+
+  // 11. "N to resolve": the footer's one quiet button, its lines each with their fix.
+  await load("&cloud=signed-in&invited&sync=failing")
+  await until(`document.querySelector('[data-rail-issues]') !== null`, "N to resolve")
+  assert.equal(await evaluate(`[...document.querySelectorAll('[data-sync-rail], [data-mcp-sign-ins]')].filter((line) => line.offsetParent !== null).length`), 0, "no line stands over the footer")
+  await click("[data-rail-issues]")
+  await until(`document.querySelector('[data-rail-issue-lines] [data-sync-rail]') !== null`, "the sync line in the popover")
+  await capture("calm-issues.png")
+  await press("Escape", "Escape", 27)
+  console.log("PASS: N to resolve opens the footer's lines")
+
+  // 12. An Apex: its avatar, folded to the Fins that need the person with their asks; open with →, every Fin in play.
   await load("&app=apex")
   await until(`document.querySelector('[data-apex-row] [data-apex-avatar]') !== null`, "the Apex's avatar")
   const folded = await evaluate(`({ fins: document.querySelectorAll('[data-fin-row]').length, asking: document.querySelectorAll('[data-asking-fin]').length, line: document.querySelector('[data-asking-line]')?.textContent, branch: document.querySelector('[data-fin-row] .rail-branch') !== null })`)

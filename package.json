@@ -48,6 +48,7 @@
     "test:placed-fin-ui": "node scripts/test-placed-fin-ui.mjs",
     "test:follow-ui": "node scripts/test-follow-ui.mjs",
     "test:phone-scroll-ui": "node scripts/test-phone-scroll-ui.mjs",
+    "test:phone-rail-ui": "node scripts/test-phone-rail-ui.mjs",
     "test:side-rail-ui": "node scripts/test-side-rail-ui.mjs",
     "test:lazy-pieces-ui": "node scripts/test-lazy-pieces-ui.mjs",
     "test:fin-transitions-ui": "node scripts/test-fin-transitions-ui.mjs",

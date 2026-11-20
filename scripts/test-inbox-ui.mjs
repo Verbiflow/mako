@@ -118,16 +118,19 @@ async function checkWindow() {
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 264, theme: 'dark'}))`)
   await frames()
 
-  // 1. The fixed top rows, in order, each 28px, and no Projects / Recent / Status switch under them.
+  // 1. The top rows, in order, each 28px, and no Projects / Recent / Status switch under them.
   const rows = await evaluate(`[...document.querySelectorAll('[data-rail-top-row]')].map((node) => ({ id: node.dataset.railTopRow, text: node.innerText.split('\\n')[0], height: Math.round(node.getBoundingClientRect().height) }))`)
-  assert.deepEqual(rows.map((row) => row.text), ["New thread", "Search", "Inbox", "Pull requests", "Setup", "Automations"])
+  // Setup shows once asked for (Customize sidebar).
+  assert.deepEqual(rows.map((row) => row.text), ["New thread", "Search", "Inbox", "Pull requests", "Automations"])
   assert.ok(rows.every((row) => row.height === 28), `the top rows are 28px: ${JSON.stringify(rows)}`)
   assert.equal(await evaluate(`document.querySelector('[aria-label="Thread view"]')`), null, "no view switch")
   assert.equal(await evaluate(`document.querySelector('[data-rail-threads-heading]')?.textContent`), "Projects")
   assert.equal(await evaluate(`[...document.querySelectorAll('.thread-jump-scope button')].some((node) => ['Projects', 'Recent', 'Status'].includes(node.innerText.trim()))`), false, "no Projects, Recent or Status button in the rail")
   console.log("PASS: six top rows, then Threads, no view switch")
 
-  // Setup is reachable without opening Settings or the right rail first.
+  // Setup is reachable without opening Settings or the right rail first, once the person shows its row.
+  await evaluate(`import('/src/state/prefs.ts').then(({ setRailNav }) => { setRailNav('setup', true); return true })`)
+  await until(`Boolean(document.querySelector('[data-rail-top-row="setup"]'))`, "Setup shown")
   await click('[data-rail-top-row="setup"]')
   await until(`Boolean(document.querySelector('[data-project-tab="setup"][aria-selected="true"], [data-app-project]'))`, "Setup from the left rail")
   if (await evaluate(`!document.querySelector('[data-project-tab="setup"][aria-selected="true"]')`))
@@ -252,20 +255,19 @@ async function checkWindow() {
 
   await checkInboxNavigation({ window, page, base, evaluate, until, frames, click, capture })
 
-  // 5. The phone: the Inbox chip with its count, Needs you / Working / Recent, the asking Fins as rows of their own.
+  // 5. The phone: the Inbox chip with its count; projects with their Threads, an Apex's asking Fins hung under it.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
-  await until(`document.querySelector('[data-list-chips]') !== null && document.querySelectorAll('[data-fin-row]').length > 0`, "the phone's chips and Fin rows")
-  const phone = await evaluate(`({ chips: [...document.querySelectorAll('[data-list-chip]')].map((node) => node.dataset.listChip), count: Number(document.querySelector('[data-list-chip="inbox"] [data-inbox-count]')?.textContent ?? 0), sections: [...document.querySelectorAll('[data-list-section]')].map((node) => node.dataset.listSection), fins: [...document.querySelectorAll('[data-list-section="needs"] [data-fin-row]')].map((node) => ({ fin: node.dataset.finRow, text: node.innerText.replace(/\\s+/g, ' ') })) })`)
+  await until(`document.querySelector('[data-list-chips]') !== null && document.querySelectorAll('[data-asking-fin]').length > 0`, "the phone's chips and asking Fins")
+  const phone = await evaluate(`({ chips: [...document.querySelectorAll('[data-list-chip]')].map((node) => node.dataset.listChip), count: Number(document.querySelector('[data-list-chip="inbox"] [data-inbox-count]')?.textContent ?? 0), groups: document.querySelectorAll('[data-project-group]').length, fins: [...document.querySelectorAll('[data-asking-fin]')].map((node) => ({ fin: node.dataset.finRow, text: node.innerText.replace(/\\s+/g, ' '), under: node.closest('[data-apex-fins]')?.dataset.apexFins })) })`)
   console.log("PHONE", JSON.stringify(phone))
   assert.deepEqual(phone.chips, ["inbox"], "the phone's chips: the Inbox (pull requests and automations live on a Mac)")
-  assert.equal(phone.sections[0], "needs", "Needs you leads")
-  assert.ok(phone.sections.includes("working"), "Working follows")
+  assert.ok(phone.groups > 0, "Threads stand under their projects")
   assert.ok(phone.fins.length >= 2, "each asking Fin is a row")
-  assert.equal(phone.count, phone.fins.length + (await evaluate(`document.querySelectorAll('[data-list-section="needs"] [data-thread]').length`)), "the chip counts Needs you")
-  assert.ok(phone.fins.every((fin) => fin.text.includes("Mobile polish · ")), "a Fin's row says its Apex before its question")
+  assert.ok(phone.fins.every((fin) => fin.under), "hung under its Apex")
+  assert.equal(phone.count, phone.fins.length + (await evaluate(`document.querySelectorAll('[data-thread][data-standing="waiting"]').length`)), "the chip counts what needs you")
   await capture("phone-list.png")
-  console.log("PASS: the phone's chips, sections and Fin rows")
+  console.log("PASS: the phone's chips, projects and asking Fins")
 
   // 6. The phone's Inbox screen: the asks answered in place.
   await click('[data-list-chip="inbox"]')
@@ -283,7 +285,7 @@ async function checkWindow() {
   assert.equal((await evaluate("window.apexScene.responds()[0]")).fin, phoneTarget)
   await until(`document.querySelectorAll('[data-inbox] [data-ask=fin]').length === ${cards - 1}`, "the answered Fin leaves the phone's Inbox")
   await click('[aria-label="Back to threads"]')
-  await until(`document.querySelectorAll('[data-fin-row]').length === ${phone.fins.length - 1} && Number(document.querySelector('[data-list-chip="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${phone.count - 1}`, "the list and its chip say it too")
+  await until(`document.querySelectorAll('[data-asking-fin]').length === ${phone.fins.length - 1} && Number(document.querySelector('[data-list-chip="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${phone.count - 1}`, "the list and its chip say it too")
   console.log("PASS: the phone's Inbox answers in place")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])

@@ -92,7 +92,7 @@ import { DraftThreads } from "@/components/rail/draft-threads"
 import { FirstProject } from "@/components/rail/first-project"
 import { FolderDrop } from "@/components/shell/folder-drop"
 import { openProjectPalette } from "@/state/open-project"
-import { RailTop } from "@/components/rail/rail-top"
+import { CustomizeItems, RailTop } from "@/components/rail/rail-top"
 import { useInboxView } from "@/state/inbox"
 import { archivedLive, archivedThread, useThreadArchives } from "@/state/thread-lifecycle"
 import { RailSkeleton } from "@/components/rail/rail-activity"
@@ -897,6 +897,8 @@ function RailHeader({
             </button>
           </MenuTrigger>
           <MenuContent align="end" sideOffset={4} className="min-w-56">
+            <CustomizeItems />
+            <MenuSeparator />
             <RailOptionsItems />
           </MenuContent>
         </Menu>

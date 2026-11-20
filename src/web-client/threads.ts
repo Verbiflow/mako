@@ -1,6 +1,7 @@
 import type { ArchivedThread, ListedSession, ListedState } from "@mako/protocol/thread-listing"
 import type { WaitingMessage } from "@mako/protocol/waiting"
 import type { WaitingFor } from "@mako/protocol/attention"
+import type { WorkStatus } from "@mako/host/contracts/thread-marks"
 import { CLOUD_FOLDER_WHERE, listedApexOf, listedOwner, listedPromptedAt, listedSummary, type ListedOwner } from "@mako/host/contracts/listed-conversations"
 import { byLastWorked, staleTarget, type OpenedBy, type SessionFacts } from "@mako/host/contracts/session-choice"
 import type { LiveSummary } from "@mako/host/contracts/live-conversations"
@@ -47,6 +48,16 @@ export interface WebThread {
   machine?: true
   /** The project folder's name, when its Sessions agree on one. */
   project?: string
+  /**
+   * The project it's grouped under, as the list's project rows group Threads: its Sessions' project root (a worktree's
+   * is its project's), or their folder when no project is said; absent when they agree on none (a chat).
+   */
+  projectFolder?: string
+  /** Where its work stands, as its owner keeps it (`ReportedSession.workStatus`), and since when (ms). */
+  workStatus?: WorkStatus
+  workStatusAt?: number
+  /** The person marked it to read again, on any device (`ReportedSession.markedUnread`). */
+  markedUnread?: true
   /** Its newest activity, in ms since the epoch. */
   activityAt: number
   quietSince?: string
@@ -139,6 +150,9 @@ function fold(id: string, sessions: WebSession[], archived?: ArchivedThread): We
   let waitingMessages = 0
   const places = new Set<string>()
   const projects = new Set<string>()
+  const folders = new Set<string>()
+  // The marks are the Thread's, kept by its owner and said on each of its rows: any row that says one speaks for it.
+  let marked: Pick<WebThread, "workStatus" | "workStatusAt" | "markedUnread"> = {}
   for (const session of sessions) {
     const own = archived ? "idle" : standingOf(session.row.state, session.quietSince !== undefined, session.row.move !== undefined)
     if (STANDING_ORDER[own] < STANDING_ORDER[standing]) standing = own
@@ -152,6 +166,10 @@ function fold(id: string, sessions: WebSession[], archived?: ArchivedThread): We
     places.add(session.where)
     const project = projectOf(session.row.folder)
     if (project) projects.add(project)
+    const folder = session.row.project?.folder ?? session.row.folder
+    if (folder) folders.add(folder)
+    if (session.row.workStatus && (marked.workStatusAt ?? -1) < (session.row.workStatusAt ?? 0)) marked = { ...marked, workStatus: session.row.workStatus, workStatusAt: session.row.workStatusAt ?? 0 }
+    if (session.row.markedUnread) marked = { ...marked, markedUnread: true }
   }
   const title = sessions.find((session) => session.row.threadTitle)?.row.threadTitle ?? lead.row.title ?? "New thread"
   const thread: WebThread = {
@@ -167,6 +185,12 @@ function fold(id: string, sessions: WebSession[], archived?: ArchivedThread): We
   if (standing === "waiting" && waitingFor) thread.waitingFor = waitingFor
   if (standing === "working" && workingSince !== undefined) thread.workingSince = workingSince
   if (projects.size === 1) thread.project = [...projects][0]!
+  if (folders.size === 1) thread.projectFolder = [...folders][0]!
+  if (marked.workStatus) {
+    thread.workStatus = marked.workStatus
+    thread.workStatusAt = marked.workStatusAt ?? 0
+  }
+  if (marked.markedUnread) thread.markedUnread = true
   if (sessions.every((session) => session.machine)) thread.machine = true
   const quietSince = sessions.find((session) => session.quietSince)?.quietSince
   if (quietSince && sessions.every((session) => session.quietSince)) thread.quietSince = quietSince

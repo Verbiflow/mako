@@ -12,8 +12,8 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * one line, its Fins counted in its tip as `rollup` counts them (the pips are the Overview's); folded, each Fin that
  * needs the person hung under it with its ask and nothing else of the Shiver in the rail; a Fin going to needs-you nests and leaves once answered, rows below it moving
  * by that row alone while every other row keeps its place, the folder's paging untouched; a nested row opens its Fin
- * in place, and answering one in the Inbox takes it from under its Apex at once. On the phone the Apex's row wears the
- * pips on its second line, and its asking Fins stay the Needs you rows they are, listed once.
+ * in place, and answering one in the Inbox takes it from under its Apex at once. On the phone the Apex's row counts them the
+ * same and its asking Fins hang under it, listed once.
  * Screenshots land in the printed directory. `--url <base>` uses a running Vite server instead of starting one.
  */
 
@@ -46,19 +46,6 @@ if (process.versions.electron) {
   } finally {
     await server?.close()
   }
-}
-
-const LETTER = { needs: "n", queued: "q", idle: "i", failed: "f", done: "d" }
-
-/** The pips a roster draws, as `FinPips` reads them: one letter per Fin in the shared order. */
-function expectedPips(children) {
-  return orderedChildren(children)
-    .map((agent) => {
-      const state = childStateOf(agent)
-      const group = childGroup(state)
-      return group === "working" ? (state.kind === "blocked" ? "l" : "w") : LETTER[group]
-    })
-    .join("")
 }
 
 async function check() {
@@ -187,27 +174,18 @@ async function check() {
     assert.ok(folder.asking > 0, "its Apexes' asking Fins hang under them")
   }
 
-  // The phone: the Apex's row has the pips on its second line; its asking Fins are Needs you rows of their own, once.
+  // The phone: the Apex's row counts its Fins as the desk's does; folded, its asking Fins hang under it, once each.
   window.setContentSize(390, 844)
   await load("/scripts/phone-apex.html")
-  await until(`Boolean(document.querySelector('[data-thread] [data-fin-pips]')) && document.querySelectorAll('[data-fin-row]').length > 0`, "the pips on the phone's Apex row")
-  const phone = await evaluate(`(() => {
-    const pips = document.querySelector('[data-thread] [data-fin-pips]')
-    return {
-      pips: pips.dataset.finPips,
-      label: pips.getAttribute('aria-label'),
-      line: pips.innerText,
-      fins: [...document.querySelectorAll('[data-fin-row]')].map((row) => row.dataset.finRow),
-      nested: document.querySelectorAll('[data-asking-fin]').length,
-      list: document.querySelector('[data-list]').innerText,
-    }
-  })()`)
-  assert.equal(phone.pips, expectedPips(roster))
+  await until(`Boolean(document.querySelector('[data-apex-row][data-fin-counts]')) && document.querySelectorAll('[data-apex-fins] [data-asking-fin]').length > 0`, "the phone's Apex row and its asking Fins")
+  const phone = await evaluate(`(() => ({
+    label: document.querySelector('[data-apex-row][data-fin-counts]').dataset.finCounts,
+    fins: [...document.querySelectorAll('[data-apex-fins] [data-fin-row]')].map((row) => row.dataset.finRow),
+    list: document.querySelector('[data-list]').innerText,
+  }))()`)
   assert.equal(phone.label, rollupLabel(counts))
-  assert.match(phone.line, /12 Fins/)
-  assert.deepEqual([...phone.fins].sort(), asking.map((agent) => agent.child.thread).sort(), "each asking Fin is one row")
-  assert.equal(phone.nested, 0, "the phone hangs no second copy under the Apex")
-  for (const agent of roster) if (!asking.includes(agent)) assert.ok(!phone.list.includes(agent.title), `the phone lists no other Fin: ${agent.title}`)
+  assert.deepEqual([...phone.fins].sort(), asking.map((agent) => agent.child.thread).sort(), "folded, each asking Fin is one row under its Apex")
+  for (const agent of roster) if (!asking.includes(agent)) assert.ok(!phone.list.includes(agent.title), `the phone lists no other Fin while folded: ${agent.title}`)
   await capture("phone-dark.png")
 
   guard.done()

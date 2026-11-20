@@ -171,9 +171,9 @@ async function check() {
   await until("Boolean(document.querySelector('[data-thread-row][data-fin-counts]'))", "the desktop rail's Apex")
   const desktop = await counts("[data-thread-row][data-fin-counts]")
   await window.loadURL(`${base}scripts/phone-apex.html`)
-  await until("Boolean(document.querySelector('[data-fin-pips]'))", "the phone row's pips")
-  assert.equal(await counts("[data-fin-pips]"), desktop, "the phone's row counts the Fins as the desktop's rail does")
-  agrees("the phone's row", await evaluate("document.querySelector('[data-fin-pips]').getAttribute('aria-label')"), numbers(desktop))
+  await until("Boolean(document.querySelector('[data-apex-row][data-fin-counts]'))", "the phone's Apex row")
+  assert.equal(await counts("[data-apex-row][data-fin-counts]"), desktop, "the phone's row counts the Fins as the desktop's rail does")
+  agrees("the phone's row", await evaluate("document.querySelector('[data-apex-row][data-fin-counts]').getAttribute('aria-label')"), numbers(desktop))
 
   // An older Session of the Apex on screen, its own roster empty, its Thread's Fins in the newest Session's: the chip
   // shows them, as every surface reads a Session's Fins from its Thread (`conversationRoster`). #524's third review

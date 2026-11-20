@@ -1,5 +1,6 @@
 import { memo, useEffect, type ReactNode } from "react"
-import { GitPullRequestIcon, InboxIcon, PackageIcon, SearchIcon, SquarePenIcon, WorkflowIcon } from "lucide-react"
+import { CheckIcon, GitPullRequestIcon, InboxIcon, PackageIcon, SearchIcon, SquarePenIcon, WorkflowIcon } from "lucide-react"
+import { ContextMenu, ContextMenuContent, ContextMenuTrigger, MenuItem, MenuLabel } from "@/components/ui/menu"
 import { formatChord, keysFor, runCommand, useCommands } from "@/extend/commands"
 import { openInbox } from "@/components/inbox/open-inbox"
 import { RailRow } from "@/components/rail/rail-row"
@@ -8,14 +9,15 @@ import { automations, automationsOn, failedAutomationRuns, pendingProposals, use
 import { toggleAutomations } from "@/state/automations-view"
 import { inboxView, useInboxCount, useInboxRosters, useInboxView } from "@/state/inbox"
 import { OPEN_PULLS_LISTED, openPullRequests, refreshOpenPulls, useOpenPulls } from "@/state/open-pulls"
-import { usePrefs } from "@/state/prefs"
+import { RAIL_NAV, setRailNav, usePrefs, type RailNavId } from "@/state/prefs"
 import { openProjectSetup } from "@/state/project-setup"
 import { useSession } from "@/state/session"
 import { useWindowRoutes } from "@/state/window-routes"
 
 /**
- * The rail's fixed top: New thread, Search, Inbox, Pull requests, Setup and
- * Automations, above Pinned and the projects, quiet: a faint icon and the
+ * The rail's fixed top: New thread, then Search, Inbox, Pull requests,
+ * Automations and Setup as the person keeps them (Customize sidebar; Setup is
+ * hidden at first), above Pinned and the projects, quiet: a faint icon and the
  * label, and one count, the Inbox's, in the attention hue. Pull requests and
  * Automations say theirs in their tips; an automation that failed counts in the
  * Inbox, as a proposal does through its agent's ask. Each reads its own narrow
@@ -29,27 +31,68 @@ import { useWindowRoutes } from "@/state/window-routes"
  */
 export const RailTop = memo(function RailTop() {
   const routed = useWindowRoutes((state) => state.routes !== null)
+  const nav = usePrefs((prefs) => prefs.railNav)
+  // A window whose Threads live on another computer shows only what it can reach: Search and the Inbox.
+  const shows = (id: RailNavId) => nav[id] && (!routed || id === "search" || id === "inbox")
   return (
-    <nav aria-label="Go to" data-rail-top className="flex shrink-0 flex-col gap-px px-2 pt-1 pb-1">
-      <CommandRow command="session.new" icon={<SquarePenIcon />} label="New thread" />
-      <CommandRow command="view.command-palette" icon={<SearchIcon />} label="Search" />
-      <InboxRow />
-      {routed ? null : (
-        <>
-          <PullsRow />
-          <RailRow
-            data-rail-top-row="setup"
-            icon={<PackageIcon />}
-            label="Setup"
-            title="Files, accounts, tools and environments"
-            onClick={openProjectSetup}
-          />
-          <AutomationsRow />
-        </>
-      )}
-    </nav>
+    <ContextMenu modal={false}>
+      <ContextMenuTrigger asChild>
+        <nav aria-label="Go to" data-rail-top className="flex shrink-0 flex-col gap-px px-2 pt-1 pb-1">
+          <CommandRow command="session.new" icon={<SquarePenIcon />} label="New thread" />
+          {shows("search") ? <CommandRow command="view.command-palette" icon={<SearchIcon />} label="Search" /> : null}
+          {shows("inbox") ? <InboxRow /> : null}
+          {shows("pulls") ? <PullsRow /> : null}
+          {shows("automations") ? <AutomationsRow /> : null}
+          {shows("setup") ? (
+            <RailRow
+              data-rail-top-row="setup"
+              icon={<PackageIcon />}
+              label="Setup"
+              title="Files, accounts, tools and environments"
+              onClick={openProjectSetup}
+            />
+          ) : null}
+        </nav>
+      </ContextMenuTrigger>
+      <ContextMenuContent className="min-w-56">
+        <CustomizeItems />
+      </ContextMenuContent>
+    </ContextMenu>
   )
 })
+
+/**
+ * Customize sidebar: each of the top rows is always shown or not shown, by the person, from a right-click on them or
+ * the Projects header's `⋯`. New thread always shows. What's not shown is still a key and a palette entry away.
+ */
+export function CustomizeItems() {
+  const nav = usePrefs((prefs) => prefs.railNav)
+  return (
+    <>
+      <MenuLabel>Show in the sidebar</MenuLabel>
+      {RAIL_NAV.map((id) => (
+        <MenuItem
+          key={id}
+          role="menuitemcheckbox"
+          aria-checked={nav[id]}
+          data-customize={id}
+          data-shown={nav[id] || undefined}
+          title={nav[id] ? "Always shown; choose to stop showing it" : "Not shown; choose to always show it"}
+          onSelect={(event) => {
+            // The menu stays open for the next choice.
+            event.preventDefault()
+            setRailNav(id, !nav[id])
+          }}
+        >
+          <span className="flex size-3.5 items-center justify-center">{nav[id] ? <CheckIcon className="size-3.5" /> : null}</span>
+          {RAIL_NAV_WORDS[id]}
+        </MenuItem>
+      ))}
+    </>
+  )
+}
+
+const RAIL_NAV_WORDS = { search: "Search", inbox: "Inbox", pulls: "Pull requests", automations: "Automations", setup: "Setup" } satisfies Record<RailNavId, string>
 
 /** A row that runs one of the desk's commands, its chord shown on hover. */
 function CommandRow({ command, icon, label }: { command: string; icon: ReactNode; label: string }) {

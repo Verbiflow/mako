@@ -3959,7 +3959,8 @@ or a Mark as unread; 45% once Done), and a trailing slot (`RowEnd`): the status 
 The branch, worktree, Sessions, setup purpose, pin and app went to the tip. The top rows are quiet with one count,
 the Inbox's in the attention hue; Pull requests and Automations say theirs in their tips, and an automation whose
 last run failed since Automations was opened counts in the Inbox (`failedAutomationRuns`), as a proposal does
-through its agent's ask. The Projects header's Filter, `+` and `⋯` show under the pointer.
+through its agent's ask. Customize sidebar (`prefs.railNav`, Setup hidden at first) is in the Projects header's
+`⋯` and a right-click on the top rows. The Projects header's Filter, `+` and `⋯` show under the pointer.
 
 A project row wears a 16 px avatar (`rail-avatars.tsx`): its GitHub owner's public picture when its `origin` is on
 GitHub (`repo-avatars.ts` asks `mako:repo-avatar` with the owner alone; the host fetches
@@ -3982,7 +3983,14 @@ Thread folds into its project's "N done" after three days. Opening a Thread read
 (holding ⌘ 200 ms shows the keys); ⌘⇧1–9 are the strip's surfaces and ⌃⌘1–5 the model loadout. ⌘- and ⇧-click pick
 rows (`rail-selection.ts`); the footer is then the selection's bar: Mark read (U), Archive (E), Esc. Turn into
 project… moves a chat's folder out of Chats, `git init`s it and moves its conversations with it
-(`mako:chat-make-project`), or nothing moves. `test-rail-calm-ui.mjs`, `test-rail-calm.ts`,
+(`mako:chat-make-project`), or nothing moves. The footer is one row: the identity and, while anything wants a look,
+"N to resolve", whose popover holds the MCP, sync, unopened, turn-on and store-format lines and their fixes (its dot
+violet only for a sign-in). Finish setting up (`setup-checklist.ts`) reads real facts, sits above the footer until
+done or put away, and stays in the palette and the account menu. The phone and iPad list (`src/web-client/list.tsx`)
+draws the same anatomy at touch size (52 px rows on a phone, 44 on an iPad, 20 px tiles and fins): projects with their
+tiles (`rail-groups.ts`), an Apex's Fins on the same elbows, status glyphs and "N done", Mark as unread and Status in
+the long-press menu sent to the owner (`thread-marks.ts`), and on the phone a Finish setting up card of what the
+browser knows (`setup-card.tsx`); `test-phone-rail-ui.mjs` holds it. `test-rail-calm-ui.mjs`, `test-rail-calm.ts`,
 `test-thread-marks.ts` and `test-chat-projects.ts` hold it.
 
 ## Automations

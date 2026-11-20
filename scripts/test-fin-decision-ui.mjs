@@ -144,13 +144,13 @@ async function check() {
   await until("[...document.querySelectorAll('[data-shiver] [data-shiver-row]')].some((node) => node.innerText.includes('Thread list swipe') && node.innerText.includes('You answered: Merge'))", "the row saying who answered")
   console.log("PASS: answered in the Inbox, the row says You answered: Merge")
 
-  // 4. The phone: a row of its own under Needs you, in the same words.
+  // 4. The phone: hung under its Apex, its ask in the same words.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex&fins=decisions`)
-  await until("document.querySelectorAll('[data-fin-row]').length > 0", "the phone's Fin rows")
-  const phone = await evaluate("[...document.querySelectorAll('[data-list-section=\"needs\"] [data-fin-row]')].map((node) => node.innerText.replace(/\\s+/g, ' '))")
+  await until("document.querySelectorAll('[data-apex-fins] [data-asking-fin]').length > 0", "the phone's asking Fins")
+  const phone = await evaluate("[...document.querySelectorAll('[data-apex-fins] [data-asking-fin]')].map((node) => node.innerText.replace(/\\s+/g, ' '))")
   console.log("PHONE", JSON.stringify(phone))
-  assert.ok(phone.some((text) => text.includes(`Mobile polish · ${WORDS}`)), "the phone's row says it")
+  assert.ok(phone.some((text) => text.includes(QUESTION)), "the phone's row says what it asks")
   console.log("PASS: the phone's row says Done · needs you")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])

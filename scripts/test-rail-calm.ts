@@ -7,12 +7,13 @@ import { AVATAR_HUES, avatarHue, monogram, titleTone } from "@/lib/rail-marks"
 import { githubOwner } from "@/state/repo-avatars"
 import { orderByHand, placeProject, projectOrderStore } from "@/state/project-order"
 import { clearPicked, pickRange, railSelectionStore, togglePicked, type PickedRow } from "@/state/rail-selection"
+import { phoneLinked } from "@/state/setup-checklist"
 import { failedAutomationRuns } from "@/state/automations"
 
 /**
  * The calm rail's rules that hold without a window: avatars' hues and letters, a row's title tone, the GitHub owner a
  * project's avatar is asked by (and the host's kept picture, asked of nobody), projects in the person's order with the
- * rest as worked in, rows picked by ⌘ and ⇧, and failed automations in the Inbox.
+ * rest as worked in, rows picked by ⌘ and ⇧, a phone among the account's browsers, and failed automations in the Inbox.
  */
 
 // Avatars: one hue a seed, the same every time, spread over all eight; a letter or digit of the name.
@@ -67,10 +68,16 @@ pickRange(rows[2]!, rows)
 assert.deepEqual(railSelectionStore.get().picked.map((row) => row.key), ["r3"], "⇧ with nothing picked picks the one")
 clearPicked()
 
+// Get Mako on your phone: a browser session on a phone or a tablet.
+assert.equal(phoneLinked(undefined), false)
+assert.equal(phoneLinked([{ os: "macOS" }, { os: null }]), false)
+assert.equal(phoneLinked([{ os: "macOS" }, { os: "iOS" }]), true)
+assert.equal(phoneLinked([{ os: "Android" }]), true)
+
 // Failed automations count in the Inbox from when Automations was last opened.
 const state = { projects: [{ automations: [{ lastRun: { status: "failed" as const, at: 50 } }, { lastRun: { status: "failed-to-start" as const, at: 150 } }, { lastRun: { status: "failed" as const, at: 20, endedAt: 250 } }, {}] }] }
 assert.equal(failedAutomationRuns(state, 0), 3)
 assert.equal(failedAutomationRuns(state, 100), 2, "what failed before Automations was opened is read")
 assert.equal(failedAutomationRuns(state, 200), 1, "a run counts from when it ended")
 assert.equal(failedAutomationRuns(state, 300), 0)
-console.log("Calm rail checks clean: avatars, title tones, GitHub owners, project order, picking rows, failed automations")
+console.log("Calm rail checks clean: avatars, title tones, GitHub owners, project order, picking rows, phones, failed automations")

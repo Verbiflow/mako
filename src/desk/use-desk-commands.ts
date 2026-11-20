@@ -1,4 +1,5 @@
 import { useEffect } from "react"
+import { setupLeftStore, showSetupChecklist } from "@/state/setup-checklist"
 import {
   commands,
   isTypingTarget,
@@ -610,6 +611,15 @@ const DESK_COMMANDS: DeskCommand[] = [
     keys: "mod+/",
     hint: "The layout, and every key that does something",
     run: () => window.dispatchEvent(new CustomEvent("mako:guide")),
+  },
+  {
+    id: "view.finish-setup",
+    title: "Finish setting up",
+    section: "View",
+    hint: "Sign in to an agent, open a project, connect GitHub, set it up, get Mako on your phone",
+    keywords: "checklist setup onboarding getting started",
+    when: () => setupLeftStore.get().left > 0,
+    run: showSetupChecklist,
   },
   {
     id: "view.settings",
