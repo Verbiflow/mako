@@ -102,6 +102,8 @@ const reads = [
   "mako:worktree-review-diffs",
   "mako:worktree-branches",
   "mako:project-settings",
+  /** A GitHub owner's avatar, kept on disk once fetched: asking again reaches the same picture. */
+  "mako:repo-avatar",
   "mako:worktree-pulls",
   "mako:worktree-summaries",
   "mako:worktree-removal",

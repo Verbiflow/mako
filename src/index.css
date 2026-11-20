@@ -2975,3 +2975,120 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   .files-chevron, .files-row { transition: none; }
   .files-pending { animation: none; opacity: 0.5; }
 }
+
+/*
+ * The rail at rest draws the fin, the title and the time (docs/design.md). A title too long for its row fades at the
+ * trailing edge rather than ending on an ellipsis.
+ */
+.rail-fade {
+  overflow: hidden;
+  white-space: nowrap;
+  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+}
+/* Hover, focus or an open menu swaps a row's trailing slot (time, status) for its actions (`.rail-row-actions`). */
+.rail-calm:hover [data-row-end],
+.rail-calm:focus-visible [data-row-end],
+.rail-calm:has(:focus-visible) [data-row-end],
+.rail-calm:has([data-state="open"]) [data-row-end] {
+  visibility: hidden;
+}
+
+/*
+ * Avatars: a muted tile in the seed's hue with its letter the same hue deepened, quiet in both themes; an Apex's is
+ * solid with the fin cut out. The letter is 9.5 px, the one glyph outside the three type sizes: a 16 px tile holds no
+ * 12 px capital.
+ */
+.rail-avatar {
+  --avatar-bg: oklch(0.36 0.045 var(--avatar-hue));
+  --avatar-ink: oklch(0.86 0.06 var(--avatar-hue));
+  background: var(--avatar-bg);
+  color: var(--avatar-ink);
+  font-size: 9.5px;
+  font-weight: 640;
+  line-height: 1;
+}
+.rail-avatar-solid {
+  --avatar-bg: oklch(0.52 0.085 var(--avatar-hue));
+  --avatar-ink: oklch(0.97 0.01 var(--avatar-hue));
+}
+.light .rail-avatar {
+  --avatar-bg: oklch(0.9 0.04 var(--avatar-hue));
+  --avatar-ink: oklch(0.42 0.08 var(--avatar-hue));
+}
+.light .rail-avatar-solid {
+  --avatar-bg: oklch(0.62 0.09 var(--avatar-hue));
+  --avatar-ink: oklch(0.99 0.005 var(--avatar-hue));
+}
+.rail-avatar:has(img) {
+  background: var(--fill-selected);
+}
+.rail-hue-0 { --avatar-hue: 245; }
+.rail-hue-1 { --avatar-hue: 280; }
+.rail-hue-2 { --avatar-hue: 320; }
+.rail-hue-3 { --avatar-hue: 20; }
+.rail-hue-4 { --avatar-hue: 55; }
+.rail-hue-5 { --avatar-hue: 95; }
+.rail-hue-6 { --avatar-hue: 150; }
+.rail-hue-7 { --avatar-hue: 195; }
+
+/* Folded, a project says only that something inside needs the person: a 6 px dot in the one attention hue. */
+.rail-attention-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--attention);
+}
+
+/* An Apex's Fins at work: a neutral 9 px ring turning in its trailing slot, the fin's own glint being the Thread's. */
+.rail-spin {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  border: 1.5px solid color-mix(in oklab, var(--foreground) 16%, transparent);
+  border-top-color: color-mix(in oklab, var(--foreground) 62%, transparent);
+  animation: rail-spin 900ms linear infinite;
+}
+@keyframes rail-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .rail-spin {
+    animation: none;
+    border-color: color-mix(in oklab, var(--foreground) 45%, transparent);
+  }
+}
+
+/*
+ * A Shiver's connectors: one 1 px line dropping from the Apex avatar's centre, a square elbow (Mako's corners are
+ * square) 10 px into each Fin; the last Fin's line stops at its centre.
+ */
+.rail-branch {
+  position: absolute;
+  left: var(--branch-x, 16.5px);
+  top: 0;
+  width: 10px;
+  height: 100%;
+  pointer-events: none;
+}
+.rail-branch::before,
+.rail-branch::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  background: color-mix(in oklab, var(--foreground) 16%, transparent);
+}
+.rail-branch::before {
+  top: 0;
+  width: 1px;
+  height: 100%;
+}
+.rail-branch[data-last]::before {
+  height: 50%;
+}
+.rail-branch::after {
+  top: 50%;
+  width: 10px;
+  height: 1px;
+}

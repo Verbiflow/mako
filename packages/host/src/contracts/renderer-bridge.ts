@@ -1019,8 +1019,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<PullRequest | null>("mako:merge-pull", strategy, as),
     /** How many failed GitHub Actions runs were re-run. */
     rerunChecks: () => invokeTrustedHost<number>("mako:rerun-checks"),
-    repoAvatar: (repo: string) =>
-      invokeTrustedHost<string | undefined>("mako:repo-avatar", repo),
+    /** A GitHub owner's public avatar as a data URL (`owner` or `owner/name`; only the owner is used), kept by the host. */
+    repoAvatar: (owner: string) =>
+      invokeTrustedHost<string | undefined>("mako:repo-avatar", owner),
     userAvatar: () => invokeTrustedHost<string | undefined>("mako:user-avatar"),
 
     usage: () => invokeTrustedHost<UsageSummary>("mako:usage"),

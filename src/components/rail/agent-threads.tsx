@@ -1,6 +1,6 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { everyWhileShown } from "@/lib/window-shown"
-import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { RailAnnouncer } from "@/components/rail/thread-status"
 import type { RailAsk } from "@/lib/rail-announcement"
 import {
@@ -9,13 +9,11 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { LiveAgentRow } from "@/components/rail/active-threads"
-import { AppMarkIcon } from "@/components/rail/app-mark"
 import { threadAppDriver } from "@/state/thread-app"
 import type { AcpPresence } from "@/state/acp-presence"
 import type { ThreadRef } from "@/lib/types"
 import { ROW_SURFACE, ThreadRow } from "@/components/rail/thread-row"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
-import { formatRelative } from "@/lib/format"
 import {
   groupThreadFolders,
   heldFolderRanks,
@@ -49,7 +47,6 @@ import { actions, useCanChooseFolder, useSession } from "@/state/session"
 import { useTabs } from "@/state/tabs"
 import { IfCanChooseFolder, IfCanReveal } from "@/components/ui/machine-gate"
 import { checkoutSentence, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
-import { CheckoutLabel } from "@/components/rail/checkout-label"
 import { useRailAcp } from "@/state/acp-state"
 import {
   canonicalThreadRefs,
@@ -61,7 +58,7 @@ import {
 } from "@/state/acp-presence"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { useWindowRoutes, windowRoutesStore } from "@/state/window-routes"
-import { prefsStore, setPref, setProjectHidden, toggleGroupCollapsed, togglePinnedProject, usePrefs } from "@/state/prefs"
+import { prefsStore, setPref, setProjectHidden, toggleApexOpen, toggleGroupCollapsed, togglePinnedProject, usePrefs } from "@/state/prefs"
 import { openAppSetup } from "@/state/app-setup"
 import { openProjectSettings } from "@/state/project-settings"
 import { SlidersHorizontalIcon } from "lucide-react"
@@ -89,11 +86,14 @@ import { openProjectPalette } from "@/state/open-project"
 import { RailTop } from "@/components/rail/rail-top"
 import { useInboxView } from "@/state/inbox"
 import { archivedLive, archivedThread, useThreadArchives } from "@/state/thread-lifecycle"
-import { FolderActivity, RailSkeleton } from "@/components/rail/rail-activity"
+import { RailSkeleton } from "@/components/rail/rail-activity"
+import { ProjectAvatar } from "@/components/rail/rail-avatars"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
   AppWindowIcon,
+  ArchiveIcon,
   CheckIcon,
+  ClockIcon,
   ChevronRightIcon,
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
@@ -101,9 +101,7 @@ import {
   CopyIcon,
   EyeIcon,
   EyeOffIcon,
-  FolderIcon,
   FolderOpenIcon,
-  FolderPlusIcon,
   ListFilterIcon,
   MessagesSquareIcon,
   MoreHorizontalIcon,
@@ -189,6 +187,26 @@ function useFoldAway(closed: boolean) {
     timer.current = window.setTimeout(() => setFolding(false), FOLD_MS)
   }, [])
   return { drawn: !closed || folding, folding, fold }
+}
+
+/**
+ * ← folds and → opens what has focus: an Apex's Fins on its row, a project on its header. A project's row is its
+ * header's button, which says whether it's open (`aria-expanded`), so it's toggled only when it isn't already so.
+ */
+function foldByKey(event: ReactKeyboardEvent<HTMLElement>): void {
+  if (!(event.target instanceof HTMLElement) || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+  const open = event.key === "ArrowRight"
+  const apex = event.target.closest<HTMLElement>("[data-thread-row][data-apex-row]")
+  if (apex === event.target && apex.dataset.threadId) {
+    event.preventDefault()
+    toggleApexOpen(apex.dataset.threadId, open)
+    return
+  }
+  const header = event.target.closest<HTMLElement>("[data-folder-toggle]")
+  if (header === event.target) {
+    event.preventDefault()
+    if ((header.getAttribute("aria-expanded") === "true") !== open) header.click()
+  }
 }
 
 function toggleFolder(folder: ThreadFolder): void {
@@ -572,6 +590,10 @@ export function AgentThreads() {
       data-jump-hints={jumpHints || undefined}
       data-inbox-open={inboxOpen || undefined}
       onKeyDown={(event) => {
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          foldByKey(event)
+          return
+        }
         if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
         const current =
           event.target instanceof HTMLElement
@@ -589,7 +611,7 @@ export function AgentThreads() {
         event.preventDefault()
         next.focus()
       }}
-      className="thread-jump-scope flex min-h-0 flex-1 flex-col"
+      className="thread-jump-scope group/rail flex min-h-0 flex-1 flex-col"
     >
       <RailAnnouncer asks={asks} />
       <RailTop />
@@ -610,6 +632,7 @@ export function AgentThreads() {
           }
           onPointerEnter={() => setHold((current) => current ?? { ranks, folderRanks: byProject ? folderRanks : null })}
           onPointerLeave={() => setHold(null)}
+          data-rail-scroller
           className="scroll-fade-scroller min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3"
         >
           {!loaded && matched.length === 0 && unboundLiveAgents.length === 0 ? (
@@ -783,7 +806,7 @@ function RailHeader({
   }
 
   return (
-    <div className="flex h-8 shrink-0 items-center pr-2 pl-3.5">
+    <div className="mt-2 flex h-7 shrink-0 items-center pr-2 pl-4">
       {grouping === "project" ? (
         <h2 data-rail-threads-heading className="text-label font-medium text-faint">Projects</h2>
       ) : (
@@ -794,20 +817,50 @@ function RailHeader({
         </button>
       )}
       <span className="flex-1" />
-      <HarnessFilter counts={counts} filter={filter} />
-      <IfCanChooseFolder>
-        <button
-          type="button"
-          aria-label="Open project…"
-          title={`Open project… ${formatChord("mod+o").join("")}`}
-          data-rail-open-project
-          onClick={() => openProjectPalette()}
-          className="pressable p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-        >
-          <FolderPlusIcon className="size-3.5" />
-        </button>
-      </IfCanChooseFolder>
+      {/* The header's controls show while the pointer is over the rail, or one of them has focus or its menu open. */}
+      <span data-rail-header-actions className="flex items-center opacity-0 transition-opacity duration-150 group-hover/rail:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100 has-[[data-filter-on]]:opacity-100">
+        <HarnessFilter counts={counts} filter={filter} />
+        <IfCanChooseFolder>
+          <button
+            type="button"
+            aria-label="Open project…"
+            title={`Open project… ${formatChord("mod+o").join("")}`}
+            data-rail-open-project
+            onClick={() => openProjectPalette()}
+            className="pressable p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+          >
+            <PlusIcon className="size-3.5" />
+          </button>
+        </IfCanChooseFolder>
+        <Menu modal={false}>
+          <MenuTrigger asChild>
+            <button type="button" aria-label="Sidebar options" data-rail-options className="pressable p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground">
+              <MoreHorizontalIcon className="size-3.5" />
+            </button>
+          </MenuTrigger>
+          <MenuContent align="end" sideOffset={4} className="min-w-56">
+            <RailOptionsItems />
+          </MenuContent>
+        </Menu>
+      </span>
     </div>
+  )
+}
+
+/** The Projects header's `⋯`: the other ways to list Threads. */
+function RailOptionsItems() {
+  const grouping = usePrefs((prefs) => prefs.railGrouping)
+  return (
+    <>
+      <MenuItem data-rail-show="archived" onSelect={() => setPref("railGrouping", grouping === "archived" ? "project" : "archived")}>
+        <ArchiveIcon className="size-3.5" />Archived threads
+        {grouping === "archived" ? <CheckIcon className="ml-auto size-3.5" /> : null}
+      </MenuItem>
+      <MenuItem data-rail-show="recent" onSelect={() => setPref("railGrouping", grouping === "recent" ? "project" : "recent")}>
+        <ClockIcon className="size-3.5" />Recent, all projects
+        {grouping === "recent" ? <CheckIcon className="ml-auto size-3.5" /> : null}
+      </MenuItem>
+    </>
   )
 }
 
@@ -846,6 +899,7 @@ function HarnessFilter({
         <button
           type="button"
           aria-label="Filter and sort"
+          data-filter-on={on || undefined}
           className={cn(
             "pressable relative p-1.5 transition-colors duration-100 hover:bg-fill-hover",
             on ? "text-foreground" : "text-faint hover:text-foreground"
@@ -985,6 +1039,10 @@ function HarnessFilter({
 /** `ROW_ACTIONS` for a folder header, whose group is `group/folder`. */
 const FOLDER_ACTIONS =
   "pointer-events-none absolute inset-y-0 right-0 flex items-center pl-4 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/folder:pointer-events-auto group-hover/folder:opacity-100 group-focus-visible/folder:pointer-events-auto group-focus-visible/folder:opacity-100 [.rail-folder:has(:focus-visible)_&]:pointer-events-auto [.rail-folder:has(:focus-visible)_&]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
+
+/** The project's avatar (or the Chats glyph), which gives way to the chevron under the pointer or focus. */
+const FOLDER_MARK_HIDES =
+  "transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 [.rail-folder:has(:focus-visible)_&]:opacity-0"
 
 /** A project's own actions, from right-click on its header or its `…`. */
 function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHide }: {
@@ -1139,32 +1197,34 @@ const FolderSection = memo(function FolderSection({
   const head = useCheckoutHead(folder.cwd ?? undefined)
   const contentId = `folder-${folder.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`
 
+  const refs = folder.refs
   const limit = FOLDER_LEAD_ROWS + pages * PAGE_ROWS
   const shownLive = liveAgents.slice(0, limit)
-  const visible = folder.refs.slice(0, Math.max(0, limit - shownLive.length))
-  const more = folder.refs.length + liveAgents.length - visible.length - shownLive.length
+  const visible = refs.slice(0, Math.max(0, limit - shownLive.length))
+  const more = refs.length + liveAgents.length - visible.length - shownLive.length
   const project = folder.cwd === null ? null : { ...folder, cwd: folder.cwd }
   const menuItems = project ? (
     <FolderMenuItems folder={project} closed={closed} hidden={hidden} onToggle={onToggle} onNew={onNew} onPin={onPin} onHide={(next) => hideProject(project, next)} />
   ) : null
 
   const header = (
-    <div data-flip-key={`folder:${folder.key}`} data-folder-hidden={hidden || undefined} className="rail-folder group/folder relative flex h-7 w-full items-center transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover">
+    <div data-flip-key={`folder:${folder.key}`} data-folder-hidden={hidden || undefined} className="rail-folder rail-calm group/folder relative flex h-7 w-full items-center transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover">
       <button
         type="button"
-        title={[folder.cwd ?? folder.name, head ? `On ${checkoutSentence(head)}` : undefined].filter(Boolean).join("\n")}
+        data-folder-toggle={folder.key}
+        data-tip={[folder.cwd ?? folder.name, head ? (head.kind === "branch" ? `On ${checkoutSentence(head)}` : checkoutSentence(head)) : undefined, folder.pinned ? "Pinned" : undefined].filter(Boolean).join("\n")}
         aria-expanded={!closed}
         aria-controls={contentId}
         onClick={onToggle}
-        className={cn("flex min-w-0 flex-1 items-center gap-1.5 self-stretch px-1.5 text-left", hidden && "opacity-55")}
+        className={cn("flex min-w-0 flex-1 items-center gap-2 self-stretch px-2 text-left", hidden && "opacity-55")}
       >
-        {/* The folder glyph turns into the disclosure chevron under the
+        {/* The project's avatar turns into the disclosure chevron under the
             pointer, so the row carries one leading mark instead of two. */}
-        <span className="relative flex size-3.5 shrink-0 items-center justify-center text-faint">
-          {closed ? (
-            <FolderIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 [.rail-folder:has(:focus-visible)_&]:opacity-0" />
+        <span className="relative flex size-[18px] shrink-0 items-center justify-center text-faint">
+          {folder.cwd ? (
+            <ProjectAvatar name={folder.name} folder={folder.cwd} className={FOLDER_MARK_HIDES} />
           ) : (
-            <FolderOpenIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 [.rail-folder:has(:focus-visible)_&]:opacity-0" />
+            <MessagesSquareIcon className={cn("size-[15px] stroke-[1.75]", FOLDER_MARK_HIDES)} />
           )}
           <ChevronRightIcon
             className={cn(
@@ -1173,30 +1233,13 @@ const FolderSection = memo(function FolderSection({
             )}
           />
         </span>
-        <span
-          className={cn(
-            "min-w-8 shrink truncate text-ui",
-            folder.current
-              ? "font-medium text-foreground"
-              : "text-foreground/80"
-          )}
-        >
+        <span className={cn("rail-fade min-w-8 flex-1 text-ui font-medium", folder.current ? "text-foreground" : "text-foreground/80")}>
           {folder.name}
         </span>
-        {/* The main checkout's own branch; it gives way before the name does. */}
-        {head ? <CheckoutLabel head={head} className="min-w-8 shrink-[4] text-label text-faint/80" /> : null}
-        <span className="flex-1" />
-        {folder.cwd ? <AppMarkIcon checkout={folder.cwd} /> : null}
-        <FolderActivity folder={folder} />
-        {/* Open, the newest row already shows this time. */}
-        {closed && !folder.priority && folder.latest ? (
-          <span className="tabular shrink-0 pr-0.5 text-label text-faint/60">
-            {formatRelative(folder.latest)}
-          </span>
-        ) : null}
-        {folder.pinned ? (
-          <PinIcon className="size-3 shrink-0 fill-current text-faint/70" />
-        ) : null}
+        {/* Folded away, a project says only that something inside needs the person. */}
+        <span data-row-end className="flex shrink-0 items-center pr-1.5">
+          {closed && (folder.needsInput || folder.failed) ? <span data-folder-needs aria-label="Something here needs you" className="rail-attention-dot" /> : null}
+        </span>
       </button>
       <span data-tip-quiet className={cn("rail-row-actions", FOLDER_ACTIONS)}>
         {onNew ? (
@@ -1208,32 +1251,6 @@ const FolderSection = memo(function FolderSection({
             className="pressable flex size-6 shrink-0 items-center justify-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
           >
             <PlusIcon className="size-3.5" />
-          </button>
-        ) : null}
-        {hidden && project ? (
-          <button
-            type="button"
-            aria-label={`Show ${folder.name}`}
-            title="Show this project in the list again"
-            onClick={() => hideProject(project, false)}
-            className="pressable flex size-6 shrink-0 items-center justify-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-          >
-            <EyeIcon className="size-3.5" />
-          </button>
-        ) : onPin ? (
-          <button
-            type="button"
-            aria-label={folder.pinned ? "Unpin folder" : "Pin folder"}
-            title={folder.pinned ? "Unpin folder" : "Pin folder"}
-            onClick={onPin}
-            className={cn(
-              "pressable flex size-6 shrink-0 items-center justify-center transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
-              folder.pinned ? "text-foreground/70" : "text-faint"
-            )}
-          >
-            <PinIcon
-              className={cn("size-3", folder.pinned && "fill-current")}
-            />
           </button>
         ) : null}
         {menuItems ? (
@@ -1255,7 +1272,7 @@ const FolderSection = memo(function FolderSection({
   )
 
   return (
-    <section className="pb-1">
+    <section data-project-section={folder.key} className="pb-2">
       {menuItems ? (
         <ContextMenu modal={false}>
           <ContextMenuTrigger asChild>{header}</ContextMenuTrigger>
@@ -1286,20 +1303,19 @@ const FolderSection = memo(function FolderSection({
             <button
               type="button"
               onClick={() => onPages(folder.key, pages + 1)}
-              className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              data-folder-more={more}
+              className="flex h-7 w-full items-center pl-9 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
-              More
-              <span className="tabular ml-1 text-label text-faint/60">
-                {more}
-              </span>
+              Show {more} more
             </button>
           ) : pages > 0 ? (
             <button
               type="button"
               onClick={() => onPages(folder.key, 0)}
-              className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              data-folder-less
+              className="flex h-7 w-full items-center pl-9 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
-              Less
+              Show less
             </button>
           ) : null}
           </> : null}

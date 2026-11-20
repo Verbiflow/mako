@@ -3641,7 +3641,7 @@ deliberate action and never rides along with a commit.
   on screen, and `watchApexView` ends the desk's view once anything else shows. `npm run test:side-rail-ui` holds the
   rail, and `test:fin-transitions-ui` each way in through closing, another Thread, a reload and the rail on every form.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
-  composer's chip, the Shiver card, the rail's pips, the Overview, the stop
+  composer's chip, the Shiver card, the rail Apex's tip, the Overview, the stop
   card, the phone's row) counts from the Thread's one roster
   (`threadChildren` / `threadRollup` in `src/state/apex-fins.ts`) through
   `rollup`, and words it with `rollupLine`, `rollupChip` or `rollupLabel`
@@ -3948,6 +3948,29 @@ the Inbox and above its Thread's composer, and Keep, Add to setup and the Add
 menu draft the recipe change in a new Thread for the person to send. No value
 is ever shown. `packages/protocol/test/setup.mjs` (in `test:protocol`) covers the
 rows and words; `npm run test:setup` the host's readings and brokers.
+
+## The calm rail
+
+The left rail at rest draws a row's fin, its title and its time, and nothing else; the rest is under the pointer, on
+selection, or in the row's tip (`rail-tip.tsx`). A Thread row is 28 px: the fin (`LiveMark`, 18 px, harness badge),
+the title in 14 px fading at its edge (`.rail-fade`) at 72% (full while it needs the person or holds an unread
+answer), and a trailing slot (`RowEnd`): the time, or "Failed" in faint grey. Under the pointer the slot gives way to Archive and `⋯`.
+The branch, worktree, Sessions, setup purpose, pin and app went to the tip. The top rows are quiet with one count,
+the Inbox's in the attention hue; Pull requests and Automations say theirs in their tips, and an automation whose
+last run failed since Automations was opened counts in the Inbox (`failedAutomationRuns`), as a proposal does
+through its agent's ask. The Projects header's Filter, `+` and `⋯` show under the pointer.
+
+A project row wears a 16 px avatar (`rail-avatars.tsx`): its GitHub owner's public picture when its `origin` is on
+GitHub (`repo-avatars.ts` asks `mako:repo-avatar` with the owner alone; the host fetches
+`https://github.com/<owner>.png` once and keeps it under `<dataRoot>/avatars`), else a monogram on one of eight hues
+hashed from the folder (`.rail-hue-*`). Folded, a project shows only a 6 px attention dot.
+
+An Apex is a captain (Capy's pattern): its avatar is its Thread's hue with the fin cut out, turning into the fold's
+chevron under the pointer; its Fins hang from it on 1 px square-elbow lines (`.rail-branch`). Folded (the default)
+only the Fins that need the person show, with their asks; open (`prefs.openApexes`, ←/→ on the row) every Fin in
+play, then "N finished". A ring in the trailing slot says its Fins work; their counts are the tip.
+
+`test-rail-calm-ui.mjs` and `test-rail-calm.ts` hold it.
 
 ## Automations
 
@@ -5366,7 +5389,7 @@ doesn't keep the account's list between starts: other devices' rows arrive
 when it's read, a second or two after the window opens, and a folder last
 worked in from elsewhere rises then, once.
 `test-rail-order.ts` holds a Mac's window and the web to one order. Status
-is the row's mark and the folder's chip, and a folder with a working,
+is the row's mark (and, folded, the project's one attention dot), and a folder with a working,
 waiting, or unread thread stays visible past the folder page limit instead of
 climbing. An unread answer is a 7px sphere in the text colour
 (`.review-dot`: one static radial gradient between `--mark-highlight`,

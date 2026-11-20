@@ -1,0 +1,171 @@
+import assert from "node:assert/strict"
+import { spawn } from "node:child_process"
+import { writeFile } from "node:fs/promises"
+import { join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
+import { manualDevUpdates } from "../electron/dev-updates.mjs"
+import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
+import { testScratch } from "./lib/test-scratch.mjs"
+
+/**
+ * The calm rail against the production components and the fixture desk: quiet top rows with the Inbox's one count,
+ * project avatars (a GitHub owner's picture or a monogram) and the Projects header's
+ * controls only under the pointer, a row that is its fin, title and time with Archive and ⋯ under the pointer, and
+ * an Apex's Fins folded and open with ←/→. Screenshots stay in the printed directory; `--port` serves the page on that port.
+ */
+
+if (process.versions.electron) {
+  void checkWindow().catch(async (error) => {
+    console.error(error)
+    const { app } = await import("electron")
+    app.exit(1)
+  })
+} else {
+  const { createServer } = await import("vite")
+  const portAt = process.argv.indexOf("--port")
+  const port = portAt === -1 ? 0 : Number(process.argv[portAt + 1])
+  const root = testScratch("mako-rail-calm-ui-")
+  const server = await createServer({
+    cacheDir: join(root, "cache"),
+    define: { "import.meta.env.MAKO_MANUAL_RELOAD": "true" },
+    plugins: [manualDevUpdates()],
+    server: { host: "127.0.0.1", port, strictPort: port !== 0 },
+  })
+  await server.listen()
+  await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-rail-calm-check", main: fileURLToPath(import.meta.url) }))
+  const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0] }
+  delete env.ELECTRON_RUN_AS_NODE
+  try {
+    const child = spawn(resolve("node_modules/.bin/electron"), [root], { stdio: "inherit", env })
+    process.exitCode = await new Promise((resolveExit, reject) => {
+      child.once("error", reject)
+      child.once("exit", (code, signal) => resolveExit(electronExit("The calm rail UI check", code, signal)))
+    })
+  } finally {
+    await server.close()
+  }
+}
+
+async function checkWindow() {
+  const { app, BrowserWindow } = await import("electron")
+  const root = process.env.MAKO_UI_TEST_ROOT
+  const base = process.env.MAKO_UI_TEST_URL
+  app.setPath("userData", join(root, "profile"))
+  await app.whenReady()
+  const window = new BrowserWindow({ width: 1280, height: 900, show: false, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  const page = window.webContents
+  page.debugger.attach("1.3")
+  const guard = guardElectronCheck({ app, page, name: "The calm rail UI check", ms: 180_000 })
+  page.on("console-message", (details) => {
+    if (details.level === "error") console.error(`[ui] ${details.message}`)
+  })
+  const evaluate = (code) => page.executeJavaScript(code)
+  const frames = () => evaluate("new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))")
+  const pause = (ms) => new Promise((resolveWait) => setTimeout(resolveWait, ms))
+  const capture = async (name) => {
+    await evaluate("document.fonts.ready.then(() => true)")
+    await frames()
+    await writeFile(join(root, name), (await page.capturePage()).toPNG())
+  }
+  const until = async (code, label = code) => {
+    guard.at(label)
+    const deadline = Date.now() + 15_000
+    while (!(await evaluate(code))) {
+      if (Date.now() > deadline) {
+        await capture("failure.png")
+        throw new Error(`UI condition timed out: ${label}`)
+      }
+      await pause(30)
+    }
+  }
+  const move = (x, y) => page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x, y })
+  const point = async (selector) => evaluate(`(() => { const node = ${selector.startsWith("(") ? selector : `document.querySelector(${JSON.stringify(selector)})`}; if (!node) throw new Error('Missing target ' + ${JSON.stringify(selector)}); const r = node.getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
+  // Modifiers as CDP counts them: Alt 1, Ctrl 2, Meta 4, Shift 8.
+  const click = async (selector, modifiers = 0, button = "left") => {
+    const at = await point(selector)
+    await move(at.x, at.y)
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button, clickCount: 1, modifiers, ...at })
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button, clickCount: 1, modifiers, ...at })
+    await frames()
+  }
+  const hover = async (selector) => {
+    const at = await point(selector)
+    await move(at.x, at.y)
+    await frames()
+  }
+  const key = (type, key, code, modifiers = 0, keyCode = 0) => page.debugger.sendCommand("Input.dispatchKeyEvent", { type, key, code, modifiers, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode })
+  const press = async (keyName, code, keyCode, modifiers = 0) => {
+    await key("rawKeyDown", keyName, code, modifiers, keyCode)
+    await key("keyUp", keyName, code, modifiers, keyCode)
+    await frames()
+  }
+  const row = (index) => `(document.querySelectorAll('.thread-jump-scope [data-thread-row]')[${index}])`
+  const rowKeys = () => evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].filter((row) => row.offsetParent !== null).map((row) => row.dataset.flipKey)`)
+  const load = async (query = "") => {
+    await window.loadURL(`${base}?mock${query}`)
+    await until(`document.querySelector('[data-rail-threads-heading]') !== null`, `the rail with ${query || "the default desk"}`)
+    await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 264, theme: 'dark'}))`)
+    await until(`document.querySelectorAll('.thread-jump-scope [data-flip-key^="folder:"]').length >= 2`, "projects drawn")
+    await move(900, 500)
+    await frames()
+  }
+
+  await load()
+
+  // 1. Top rows: quiet, one count; Pull requests and Automations say theirs in tips.
+  const top = await evaluate(`(() => {
+    const rows = [...document.querySelectorAll('[data-rail-top] [data-rail-top-row]')].map((row) => row.dataset.railTopRow)
+    const pulls = document.querySelector('[data-rail-top-row="pulls"]')
+    return { rows, pullsCount: pulls?.querySelector('[data-pulls-count]') !== null && pulls?.querySelector('[data-pulls-count]') !== undefined, height: pulls?.getBoundingClientRect().height }
+  })()`)
+  assert.deepEqual(top.rows, ["session.new", "view.command-palette", "inbox", "pulls", "setup", "automations"])
+  assert.equal(top.pullsCount, false, "Pull requests draws no count")
+  assert.equal(Math.round(top.height), 28, "top rows are 28 px")
+  console.log("PASS: quiet top rows, no Pull requests count")
+
+  // 2. Projects: an avatar each, the GitHub owner's where its origin is on GitHub; the header's controls under the pointer only.
+  await until(`document.querySelector('[data-project-avatar="github"] img') !== null`, "the GitHub owner's avatar")
+  const avatars = await evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-project-avatar]')].map((avatar) => ({ kind: avatar.dataset.projectAvatar, text: avatar.textContent, size: avatar.getBoundingClientRect().width }))`)
+  assert.ok(avatars.some((avatar) => avatar.kind === "monogram" && /^[A-Z0-9]$/.test(avatar.text)), `a project off GitHub wears its monogram: ${JSON.stringify(avatars)}`)
+  assert.ok(avatars.every((avatar) => avatar.size === 16), "avatars are 16 px")
+  const actionsAt = () => evaluate(`getComputedStyle(document.querySelector('[data-rail-header-actions]')).opacity`)
+  await move(900, 500)
+  await pause(250)
+  assert.equal(await actionsAt(), "0", "the header's Filter, + and ⋯ rest out of sight")
+  await hover("[data-rail-threads-heading]")
+  await pause(250)
+  assert.equal(await actionsAt(), "1", "and show with the pointer over the rail")
+  const chips = await evaluate(`document.querySelectorAll('.thread-jump-scope [data-folder-activity], .thread-jump-scope [data-thread-purpose] [data-thread-purpose], .thread-jump-scope [data-app-mark]').length`)
+  assert.equal(chips, 0, "no project chips, purpose chips or app marks on the rows")
+  console.log("PASS: avatars, a GitHub owner's picture, header controls under the pointer only")
+
+  // 3. A row: its fin, its title and its time; under the pointer, Archive and ⋯ in place of the time.
+  const rest = await evaluate(`(() => { const row = ${row(1)}; const end = row.querySelector('[data-row-end]'); return { end: getComputedStyle(end).visibility, mark: row.querySelector('[data-live-mark]')?.getBoundingClientRect().width, height: row.getBoundingClientRect().height } })()`)
+  assert.equal(rest.end, "visible")
+  assert.equal(Math.round(rest.mark), 18, "the fin is 18 px")
+  assert.equal(Math.round(rest.height), 28)
+  await hover(row(1))
+  await pause(200)
+  const hovered = await evaluate(`(() => { const row = ${row(1)}; return { end: getComputedStyle(row.querySelector('[data-row-end]')).visibility, archive: getComputedStyle(row.querySelector('[data-row-archive]')).opacity, actions: row.querySelector('[aria-label^="Actions for"]') !== null } })()`)
+  assert.deepEqual(hovered, { end: "hidden", archive: "1", actions: true }, "Archive and ⋯ take the trailing slot")
+  await capture("calm-hover.png")
+  console.log("PASS: a row's anatomy at rest and under the pointer")
+
+  // 4. An Apex: its avatar, folded to the Fins that need the person with their asks; open with →, every Fin in play.
+  await load("&app=apex")
+  await until(`document.querySelector('[data-apex-row] [data-apex-avatar]') !== null`, "the Apex's avatar")
+  const folded = await evaluate(`({ fins: document.querySelectorAll('[data-fin-row]').length, asking: document.querySelectorAll('[data-asking-fin]').length, line: document.querySelector('[data-asking-line]')?.textContent, branch: document.querySelector('[data-fin-row] .rail-branch') !== null })`)
+  assert.ok(folded.asking > 0 && folded.fins === folded.asking, `folded, only the Fins that need you: ${JSON.stringify(folded)}`)
+  assert.ok(folded.line && folded.branch, "with their asks, hung on the Apex's line")
+  await evaluate(`document.querySelector('[data-apex-row]').focus()`)
+  await press("ArrowRight", "ArrowRight", 39)
+  await until(`document.querySelector('[data-apex-fins-open]') !== null && document.querySelectorAll('[data-fin-row]').length > ${folded.fins}`, "open: every Fin in play")
+  assert.equal(await evaluate(`document.querySelector('[data-apex-row]').dataset.apexOpen`), "true")
+  await capture("calm-apex-open.png")
+  await press("ArrowLeft", "ArrowLeft", 37)
+  await until(`document.querySelectorAll('[data-fin-row]').length === ${folded.fins}`, "← folds it again")
+  console.log("PASS: an Apex's Fins folded, opened with →, folded with ←")
+
+  console.log(`Calm rail UI checks clean. Screenshots: ${root}`)
+  app.exit(0)
+}

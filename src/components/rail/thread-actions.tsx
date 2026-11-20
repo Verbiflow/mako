@@ -84,11 +84,13 @@ function ThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Return
   return <HostThreadMenuItems props={props} menu={menu} />
 }
 
-function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: ReturnType<typeof useThreadMenu> }) {
-  const { target, title, archived, running, path, thread, cwd, archiveTargets, pinned, onPin, onRename } = props
-  const { controls, error } = menu
+/**
+ * Archive or restore what a row stands for, from its menu or its hover button: the whole Thread, or one Session of it
+ * when the row is one archived Session of a Thread still out.
+ */
+function useArchive(props: ThreadMenuProps) {
+  const { target, archived, running, thread, cwd, archiveTargets } = props
   const worktree = useWorktrees((state) => worktreeAt(state.worktrees, cwd)?.worktree)
-  const uncommitted = useWorktreeSummaries((state) => (worktree ? state.byPath[worktree.path]?.changes ?? 0 : 0))
   // An archived row of a Thread whose other Sessions are still out is one Session of it.
   const oneOfMany = useThreadGroups((state) => !archiveTargets && thread !== undefined && state.groups[thread] !== undefined)
   // A cloud Thread is archived in the cloud, for every device, and only between turns: its machine packs as it goes.
@@ -104,6 +106,37 @@ function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Re
     if (changed && leftBehind) void archivedWithWorktree(leftBehind, () => void threadLifecycle.archive(targets, false, false))
     if (changed && !archived && thread) discardSessionDraft(thread)
   }
+  return { archive, worktree, oneOfMany, cloud }
+}
+
+/** A row's hover Archive (or Restore, in Archived). A window that routes archives from its own menu. */
+export function ArchiveButton(props: ThreadMenuProps) {
+  const routed = useWindowRoutes((state) => state.routes !== null)
+  const { archive, cloud } = useArchive(props)
+  if (routed || (cloud && props.running && !props.archived)) return null
+  const label = props.archived ? "Restore" : "Archive"
+  return (
+    <button
+      type="button"
+      aria-label={`${label} ${props.title}`}
+      title={props.archived ? "Restore" : "Archive  E"}
+      data-row-archive
+      onClick={(event) => {
+        event.stopPropagation()
+        void archive()
+      }}
+      className="pressable flex size-6 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground"
+    >
+      {props.archived ? <ArchiveRestoreIcon className="size-3.5" /> : <ArchiveIcon className="size-3.5" />}
+    </button>
+  )
+}
+
+function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: ReturnType<typeof useThreadMenu> }) {
+  const { target, title, archived, running, path, pinned, onPin, onRename } = props
+  const { controls, error } = menu
+  const { archive, worktree, oneOfMany, cloud } = useArchive(props)
+  const uncommitted = useWorktreeSummaries((state) => (worktree ? state.byPath[worktree.path]?.changes ?? 0 : 0))
   return (
     <>
       {onPin ? (

@@ -1,8 +1,5 @@
-import { rollupLabel } from "@mako/host/contracts/children"
-import { memo } from "react"
 import { observePhaseLockedAnimation } from "@/lib/visible-animation"
-import { apexPips, pipsCounts, settledWords, type Pips } from "@/state/fin-pips"
-import { useRailAcp } from "@/state/acp-state"
+import type { Pips } from "@/state/fin-pips"
 
 const PIP = new Map([["n", "needs"], ["w", "working"], ["l", "lead"], ["q", "queued"], ["i", "idle"], ["f", "failed"], ["d", "done"]])
 const MAX_PIPS = 16
@@ -39,16 +36,3 @@ export function FinPips({ pips }: { pips: Pips }) {
     </span>
   )
 }
-
-/** The second line of an Apex's rail row: its pips and how many Fins. Repaints when a pip changes, never its row. */
-export const ApexShiverLine = memo(function ApexShiverLine({ thread }: { thread: string | undefined }) {
-  const pips = useRailAcp((state) => apexPips(state, thread))
-  if (!pips) return null
-  const label = rollupLabel(pipsCounts(pips))
-  return (
-    <span role="img" aria-label={label} data-tip={label} data-fin-pips={pips} data-fin-counts={label} className="flex h-3.5 w-full min-w-0 items-center gap-2 pl-7">
-      <FinPips pips={pips} />
-      <span className="tabular min-w-0 truncate text-label text-faint">{settledWords(pips)}</span>
-    </span>
-  )
-})

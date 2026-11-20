@@ -99,6 +99,10 @@ export interface Prefs {
   pinnedProjects: string[]
   /** Projects kept out of the rail's project list, by folder; working in one brings it back. */
   hiddenProjects: string[]
+  /** Apexes whose every Fin in play shows under them, by Thread; the rest show only the Fins that need the person. */
+  openApexes: string[]
+  /** When Automations was last opened: a run that failed after it counts in the Inbox. */
+  automationsSeenAt: number
   /** Harnesses shown in the Agents rail. Empty means all of them. */
   agentHarnessFilter: string[]
   /** The composer's chosen agent, kept across launches. */
@@ -193,6 +197,8 @@ const defaults: Prefs = {
   pinnedThreads: [],
   pinnedProjects: [],
   hiddenProjects: [],
+  openApexes: [],
+  automationsSeenAt: Date.now(),
   agentHarnessFilter: [],
   providerSettings: {},
   settingsOverrides: {},
@@ -352,6 +358,12 @@ function readLastCompanion(value: JsonObject): string | null {
   return defaults.lastCompanion
 }
 
+/** When Automations was last opened; none kept counts only what fails from now on. */
+const SeenAtSchema = z.number().nonnegative().catch(() => Date.now())
+
+/** A list of Thread ids the rail keeps a choice for; what isn't one is dropped, and a damaged list is none. */
+const ThreadIdListSchema = z.array(z.string().min(1).max(256)).max(500).catch([])
+
 const AppshotShortcutSchema = z.union([
   z.object({ kind: z.literal("modifiers"), modifier: z.enum(["shift", "command", "option", "control"]) }),
   z.object({ kind: z.literal("keys"), chord: z.string().min(1).max(64) }),
@@ -429,6 +441,9 @@ function parsePrefs(value: JsonValue): Prefs | null {
       defaults.pinnedProjects
     ),
     hiddenProjects: readStringList(value.hiddenProjects, defaults.hiddenProjects),
+    openApexes: ThreadIdListSchema.parse(value.openApexes),
+    // A desk from before this counts only what fails from now on, not every run that ever failed.
+    automationsSeenAt: SeenAtSchema.parse(value.automationsSeenAt),
     agentHarnessFilter: readStringList(
       value.agentHarnessFilter,
       defaults.agentHarnessFilter
@@ -599,6 +614,12 @@ export function toggleGroupCollapsed(key: string) {
       ? current.filter((entry) => entry !== key)
       : [...current, key],
   })
+}
+
+/** Opens an Apex in the rail to every Fin in play, or folds it back to the Fins that need the person. */
+export function toggleApexOpen(thread: string, open = !prefsStore.get().openApexes.includes(thread)) {
+  const current = prefsStore.get().openApexes.filter((entry) => entry !== thread)
+  prefsStore.set({ openApexes: open ? [thread, ...current].slice(0, 500) : current })
 }
 
 export function modelKey(provider: string, id: string) {

@@ -1,15 +1,13 @@
 import { memo } from "react"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { attentionLine } from "@mako/host/contracts/notifications"
-import { AppMarkIcon } from "@/components/rail/app-mark"
-import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
-import { ApexShiverLine } from "@/components/rail/fin-pips"
 import { useIsApex } from "@/state/fin-pips"
 import { ApexAsks } from "@/components/rail/apex-asks"
 import { harnessLabel } from "@/components/rail/harness-meta"
-import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
-import { APEX_SURFACE, ROW_ACTIONS, ROW_SURFACE, RowLine, SessionCount } from "@/components/rail/thread-row"
-import { WorktreeMark } from "@/components/rail/worktree-mark"
+import { ArchiveButton, ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
+import { ApexFold, ROW_ACTIONS, ROW_SURFACE, RowEnd } from "@/components/rail/thread-row"
+import { purposeWords, titleTone } from "@/lib/rail-marks"
+import { useApexFins } from "@/state/fin-pips"
 import { archivedLive, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
 import { copyAge, formatRelative, workspaceName } from "@/lib/format"
 import {
@@ -19,7 +17,7 @@ import {
   sessionStateText,
   type FoldedThread,
 } from "@/lib/thread-fold"
-import { ReadyBesideMark, ThreadMark, ThreadStatusEnd } from "@/components/rail/thread-status"
+import { ThreadMark } from "@/components/rail/thread-status"
 import { threadStatus, useThreads, type ThreadStatus } from "@/state/threads"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { acpForThread } from "@/state/acp"
@@ -33,7 +31,6 @@ import { rowThread, useThreadGroups } from "@/state/thread-groups"
 import { useThreadPurposes } from "@/state/thread-purposes"
 import { useThreadTitles } from "@/state/thread-titles"
 import { openFoldedThread } from "@/state/thread-sessions"
-import { useWorktrees, worktreeAt } from "@/state/worktrees"
 import { cn } from "@/lib/utils"
 
 const IDLE: ThreadStatus = { kind: "idle" }
@@ -57,12 +54,14 @@ export const LiveAgentRow = memo(function LiveAgentRow({
   useHarnessIdentity()
   const archived = useThreadArchives((state) => archivedLive(presence, state.keys))
   const thread = useThreadGroups((state) => folded?.thread ?? rowThread(presence, state.threadOf))
-  const setup = useThreadPurposes((state) => (thread ? state.byThread[thread]?.kind : undefined) ?? presence.purpose) === "setup"
-  const checkout = useWorktrees((state) => worktreeAt(state.worktrees, presence.cwd)?.worktree.path)
+  const recordedPurpose = useThreadPurposes((state) => (thread ? state.byThread[thread] : undefined))
+  const purposeKind = recordedPurpose?.kind ?? presence.purpose
+  const setup = purposeKind === "setup"
   // Lit by the same rule as `ThreadRow`: a thread open in the viewer is the
   // selection; otherwise the live conversation on screen is.
   const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
   const apex = useIsApex(thread)
+  const fins = useApexFins(thread, apex)
   const viewedMember = useThreads((state) => {
     const path = state.opening?.ref.path ?? state.viewing?.ref.path
     return path === undefined ? undefined : Boolean(folded?.members.some((member) => member.kind === "native" && member.ref.path === path))
@@ -146,7 +145,16 @@ export const LiveAgentRow = memo(function LiveAgentRow({
             : label,
         ].filter(Boolean).join(", ")}
         data-thread-row
-        data-tip={where ? `${title} · ${where}${presence.waitingOn ? ` · ${presence.waitingOn}` : ""}` : undefined}
+        data-thread-id={thread}
+        // What the row no longer draws (where it runs, its branch, its Sessions, setup) is its tip.
+        data-tip={[
+          title,
+          where ? `${where}${presence.waitingOn ? ` · ${presence.waitingOn}` : ""}` : status.kind === "idle" ? undefined : label,
+          fins.label,
+          foldState ? `${foldState.sessions.length} sessions` : undefined,
+          purposeKind ? purposeWords(purposeKind, recordedPurpose?.project) : undefined,
+          presence.worktreeBranch ? `Worktree on ${presence.worktreeBranch}` : undefined,
+        ].filter(Boolean).join("\n")}
         data-flip-key={presence.key}
         data-conversation-id={presence.key}
         data-thread-indent={indent || undefined}
@@ -154,52 +162,52 @@ export const LiveAgentRow = memo(function LiveAgentRow({
         aria-current={lit || undefined}
         onClick={open}
         data-apex-row={apex || undefined}
-        className={cn("pressable", ROW_SURFACE, apex && APEX_SURFACE, indent ? "pl-2" : "pl-1.5")}
+        data-apex-open={apex ? fins.open : undefined}
+        data-fin-counts={fins.label}
+        data-thread-purpose={setup ? "setup" : undefined}
+        className={cn("pressable", ROW_SURFACE)}
       >
-        <RowLine apex={apex}>
-        <ThreadMark
-          status={status}
-          state={!otherSession && presence.status === "starting" ? "starting" : undefined}
-          harness={markHarness}
-          lit={lit}
-          cut={lit ? "var(--raised)" : undefined}
-          label={otherSession ? undefined : label}
-        />
-        <span className={cn("min-w-0 flex-[1_1_60%] truncate text-ui", lit ? "font-medium text-foreground" : "text-foreground/85")}>
+        {apex && thread ? (
+          <ApexFold thread={thread} open={fins.open} />
+        ) : (
+          <ThreadMark
+            status={status}
+            state={!otherSession && presence.status === "starting" ? "starting" : undefined}
+            harness={markHarness}
+            lit={lit}
+            cut={lit ? "var(--raised)" : undefined}
+            label={otherSession ? undefined : label}
+            size={18}
+          />
+        )}
+        <span data-row-title className={cn("rail-fade min-w-0 flex-1 text-ui", titleTone(lit, status))}>
           {title}
         </span>
-        <ThreadPurposeChip thread={thread} starting={presence.purpose} />
         {presence.elsewhere && (!routed || place !== "device") ? <PlaceMark place={place} data-elsewhere={place} className="text-faint/80" /> : null}
-        {folded ? <SessionCount count={folded.members.length} /> : null}
-        {/* The branch its owner's worktree is on, as a row this Mac made one for wears it. */}
-        {presence.worktreeBranch ? <WorktreeMark worktree={{ branch: presence.worktreeBranch }} summary={undefined} /> : null}
         {!indent ? (
-          <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint">
+          <span className="max-w-[6rem] shrink-[2] truncate text-label text-faint">
             {threadFolderKey(presence) ? workspaceName(presence.workspace ?? presence.cwd) : "tmp"}
           </span>
         ) : null}
+        <RowEnd status={status} updatedAt={presence.movedAt === undefined ? undefined : new Date(presence.movedAt).toISOString()} finsWorking={fins.working}>
+          {quiet ? (
+            <span data-last-seen title={`Last seen ${copyAge(presence.quietSince!)}`} className="tabular text-label text-faint">
+              {/* "seen", so it doesn't read as an idle row's time of its last change. */}
+              seen {formatRelative(presence.quietSince!)}
+            </span>
+          ) : undefined}
+        </RowEnd>
         <span
           data-tip-quiet
           className={cn("rail-row-actions", ROW_ACTIONS)}
           onClick={(event) => event.stopPropagation()}
         >
+          <ArchiveButton {...menu} />
           <ThreadActions {...menu} />
         </span>
-        {checkout ? <AppMarkIcon checkout={checkout} /> : null}
-        {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
-        {quiet ? (
-          <span data-last-seen title={`Last seen ${copyAge(presence.quietSince!)}`} className="tabular shrink-0 text-label text-faint">
-            {/* "seen", so it doesn't read as an idle row's time of its last change. */}
-            seen {formatRelative(presence.quietSince!)}
-          </span>
-        ) : (
-          <ThreadStatusEnd status={status} updatedAt={presence.movedAt === undefined ? undefined : new Date(presence.movedAt).toISOString()} />
-        )}
-        </RowLine>
-        {apex ? <ApexShiverLine thread={thread} /> : null}
       </div>
     </ThreadContextMenu>
-    {apex ? <ApexAsks apex={thread} apexTitle={title} indent={indent} /> : null}
+    {apex ? <ApexAsks apex={thread} apexTitle={title} open={fins.open} /> : null}
     </>
   )
 })

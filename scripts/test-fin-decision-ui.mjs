@@ -120,9 +120,9 @@ async function check() {
   await evaluate("(() => { const el = document.querySelector('[data-shiver-scroller]'); el.scrollTop = 0; return true })()")
   console.log("PASS: the Shiver card says Done · needs you with its options, recommended first")
 
-  // 2. The rail's pips count it, and the Inbox lists it with its buttons.
-  const pips = await evaluate("document.querySelector('.thread-jump-scope [data-apex-row] [data-fin-pips]')?.getAttribute('aria-label') ?? ''")
-  assert.equal(pips, "12 Fins: 3 need you · 5 working · 2 queued · 1 idle · 1 done")
+  // 2. The rail Apex's counts say it, and the Inbox lists it with its buttons.
+  const counted = await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]')?.dataset.finCounts ?? ''")
+  assert.equal(counted, "12 Fins: 3 need you · 5 working · 2 queued · 1 idle · 1 done")
   await evaluate("document.querySelector('[data-rail-top-row=\"inbox\"]').click(); true")
   await until("Boolean(document.querySelector('[data-inbox]'))", "the Inbox")
   const item = await evaluate(`(() => { const node = [...document.querySelectorAll('[data-inbox-item]')].find((each) => each.innerText.includes('Merge #371 into main?')); if (!node) return null; node.setAttribute('data-decision-test', 'item'); return { kind: node.dataset.inboxKind, text: node.innerText.replace(/\\s+/g, ' '), buttons: [...node.querySelectorAll('[data-inbox-answer]')].map((button) => button.innerText.replace(/\\s+/g, ' ').trim()) } })()`)
@@ -132,7 +132,7 @@ async function check() {
   assert.deepEqual(item.buttons, ["Merge Recommended", "Leave open"])
   assert.equal(await evaluate("[...document.querySelectorAll('[data-inbox-item]')].some((each) => each.innerText.includes('Ship the cached list'))"), false, "the Apex's decision isn't the person's")
   await shoot("inbox-row", "[data-decision-test=item]")
-  console.log("PASS: the rail's pips and the Inbox say it")
+  console.log("PASS: the rail Apex's counts and the Inbox say it")
 
   // 3. Answered in place: the answer reaches the Apex's host and the Fin's row says who answered.
   await evaluate("document.querySelector('[data-decision-test=item] [data-inbox-answer=\"0\"]').click(); true")

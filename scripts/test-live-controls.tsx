@@ -17,9 +17,8 @@ import { agentActivity, startLabel, switchLabel } from "../src/state/agent-activ
 import { noteComposing } from "../src/state/prewarm"
 import { cn } from "../src/lib/utils"
 import { ActivityMark } from "../src/components/ui/activity-mark"
-import { FolderActivity } from "../src/components/rail/rail-activity"
-import { ThreadMark, ThreadStatusEnd } from "../src/components/rail/thread-status"
-import type { ThreadFolder } from "../src/lib/thread-folders"
+import { ThreadMark } from "../src/components/rail/thread-status"
+import { RowEnd } from "../src/components/rail/thread-row"
 import { AttachmentStrip, InlineAttachment } from "../src/components/composer/attachments"
 import { MentionMenu } from "../src/components/composer/mention-menu"
 import type { Attachment } from "../src/lib/attachments"
@@ -753,26 +752,19 @@ const setupMarkup = markerExchange(mcpServerFailedEvent("linear", "could not con
 assert.doesNotMatch(setupMarkup, /MCP server|>linear|>drive|could not connect/, "no MCP line in the conversation")
 assert.match(setupMarkup, /Model changed<\/span><span class="[^"]*">gpt-5 → gpt-5-mini/, "the turn marker beside them keeps its line")
 assert.doesNotMatch(setupMarkup, /aria-expanded/, "and nothing opens onto the servers")
-const activeFolder: ThreadFolder = {key:"flage",name:"flage",cwd:"/flage",refs:[],current:false,pinned:false,pinRank:-1,latest:"",order:"",priority:1,running:0,active:1,needsInput:0,failed:0,unread:0}
-const folderMarkup = renderToStaticMarkup(<FolderActivity folder={activeFolder} />)
-assert.match(folderMarkup, /1 running/)
-assert.match(folderMarkup, /running outside this Mako/)
-assert.match(folderMarkup, /data-live-mark="working"/, "the folder's chip wears the working fin")
-assert.doesNotMatch(folderMarkup, /1 active|animate-spin|lucide-loader/)
-assert.match(renderToStaticMarkup(<FolderActivity folder={{...activeFolder,running:2}} />), /3 running/)
-assert.equal(renderToStaticMarkup(<FolderActivity folder={{...activeFolder,active:0}} />), "")
-assert.doesNotMatch(renderToStaticMarkup(<FolderActivity folder={{...activeFolder,failed:1}} />), /<canvas/)
 const activeMarkup = renderToStaticMarkup(<ThreadMark status={{kind:"external-active"}} harness="codex" />)
 assert.match(activeMarkup, /data-live-mark="working"/, "work in another app wears the comet")
 assert.doesNotMatch(activeMarkup, /<canvas/, "the row's mark is no orb")
 const openStatus = {kind:"external-open", app:"codex"} as const
-const openMarkup = renderToStaticMarkup(<>{[<ThreadMark key="mark" status={openStatus} harness="codex" />, <ThreadStatusEnd key="end" status={openStatus} updatedAt={new Date(Date.now() - 5 * 60_000).toISOString()} />]}</>)
+const openMarkup = renderToStaticMarkup(<>{[<ThreadMark key="mark" status={openStatus} harness="codex" />, <RowEnd key="end" status={openStatus} updatedAt={new Date(Date.now() - 5 * 60_000).toISOString()} />]}</>)
 assert.doesNotMatch(openMarkup, /<canvas/)
 assert.match(openMarkup, /data-live-mark="open"/)
 assert.match(openMarkup, /Open in Codex/)
 assert.match(openMarkup, />5m</, "the open state keeps the time")
-assert.match(renderToStaticMarkup(<ThreadStatusEnd status={{kind:"needs-permission", since:0}} />), />Needs you</, "a row that needs the person says so where its time stood")
-assert.match(renderToStaticMarkup(<ThreadStatusEnd status={{kind:"failed", at:0}} />), />Failed</)
+// The calm rail: a row that needs the person says so with its fin and title, its trailing slot keeps the time; a failure
+// says "Failed" there, faint, the fin already listing over.
+assert.match(renderToStaticMarkup(<RowEnd status={{kind:"needs-permission", since:0}} updatedAt={new Date(Date.now() - 5 * 60_000).toISOString()} />), />5m</)
+assert.match(renderToStaticMarkup(<RowEnd status={{kind:"failed", at:0}} />), /data-status-end="failed"[^>]*>Failed</)
 
 // Commands the provider advertised lead the slash menu, in its own words
 // and named by provider — nothing the session did not report is shown.

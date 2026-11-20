@@ -5,61 +5,77 @@ import { memo } from "react"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { FinMark } from "@/components/stage/child-tabs"
 import { useNeedsYouFins } from "@/state/fin-pips"
-import { openFinInApex, useApexView, useFinOpenable } from "@/state/apex-fins"
+import { openFinInApex, useApexView, useFinOpenable, useThreadChildren } from "@/state/apex-fins"
 import { cn } from "@/lib/utils"
 
 /**
- * Under an Apex's rail row, each of its Fins that waits on the person, set in to the Apex's title and pips so the
- * indent is the branch (the rail draws no lines): its mark, its title and "Needs you". Every other Fin stays out of the rail; its state is in the Apex's pips. A row opens
- * its Fin in place in the Apex's Thread, as the Agents panel does. `indent` matches the Apex row's own inset.
+ * An Apex's Fins under its rail row, as Capy hangs a captain's crew: a 1 px line from the Apex's avatar and a square
+ * elbow into each. Folded (the default) only the Fins that wait on the person show, each with its ask beside its
+ * title; open, every Fin still in play shows, those that need the person first, then the finished as one line. A row
+ * opens its Fin in place in the Apex's Thread, as the Agents panel does. The counts are the Apex's tip and Overview.
  */
-export const ApexAsks = memo(function ApexAsks({ apex, apexTitle, indent }: { apex: string | undefined; apexTitle: string; indent?: boolean }) {
-  const fins = useNeedsYouFins(apex)
-  if (!apex || !fins.length) return null
-  return fins.map((agent) => <AskingFin key={agent.nativeId} apex={apex} apexTitle={apexTitle} agent={agent} indent={indent} />)
+export const ApexAsks = memo(function ApexAsks({ apex, apexTitle, open = false }: { apex: string | undefined; apexTitle: string; open?: boolean }) {
+  const asking = useNeedsYouFins(apex)
+  const all = useThreadChildren(open ? apex : undefined)
+  if (!apex) return null
+  const asks = new Set(asking.map((agent) => agent.nativeId))
+  const live = open ? all.filter((agent) => !asks.has(agent.nativeId) && childStateOf(agent).kind !== "ended") : []
+  const shown = [...asking, ...live]
+  const finished = open ? all.filter((agent) => !asks.has(agent.nativeId) && childStateOf(agent).kind === "ended").length : 0
+  if (!shown.length && !finished) return null
+  return (
+    <div data-apex-fins={apex} data-apex-fins-open={open || undefined}>
+      {shown.map((agent, index) => (
+        <FinRow key={agent.nativeId} apex={apex} apexTitle={apexTitle} agent={agent} needs={asks.has(agent.nativeId)} last={index === shown.length - 1 && !finished} />
+      ))}
+      {finished ? (
+        <div data-fins-finished={finished} className="relative flex h-7 items-center pl-[52px] text-label text-faint">
+          <span aria-hidden className="rail-branch" data-last />
+          {finished} finished
+        </div>
+      ) : null}
+    </div>
+  )
 })
 
 /** What a row says of a Fin this window can't open: it runs on a device whose row isn't here. */
 export const NOT_OPENABLE = "Not openable from here: it runs on another device, and its Thread isn't listed yet"
 
-const AskingFin = memo(function AskingFin({ apex, apexTitle, agent, indent }: { apex: string; apexTitle: string; agent: NativeAgent; indent?: boolean }) {
+const FinRow = memo(function FinRow({ apex, apexTitle, agent, needs, last }: { apex: string; apexTitle: string; agent: NativeAgent; needs: boolean; last: boolean }) {
   useHarnessIdentity()
   const thread = agent.child?.thread
   const lit = useApexView((state) => thread !== undefined && state.open?.child === thread)
   const state = childStateOf(agent)
   // A Fin on another device whose row this window doesn't hold opens nothing: the row says so.
   const openable = useFinOpenable(agent)
-  // A Fin on another device says which, as its row there would.
+  // A Fin on another device says which, in its tip, as its row there would.
   const where = agent.child?.place ? placeDevice(agent.child.place) : undefined
-  const open = openAsk(state)
-  const asked = open ? askWords(open) : childLine(state)
+  const ask = openAsk(state)
+  const line = ask ? askWords(ask) : childLine(state)
   return (
     <button
       type="button"
-      data-asking-fin={thread}
+      data-asking-fin={needs ? thread : undefined}
+      data-fin-row={thread}
+      data-fin-place={where}
       data-active={lit || undefined}
       data-openable={openable}
       aria-disabled={openable ? undefined : true}
-      data-tip={[agent.title, childLine(state), openable ? undefined : NOT_OPENABLE].filter(Boolean).join("\n")}
+      aria-label={[agent.title, needs ? "needs you" : undefined, line, where ? `on ${where}` : undefined].filter(Boolean).join(", ")}
+      data-tip={[agent.title, needs ? `Needs you${line ? `: ${line}` : ""}` : line, where ? `On ${where}` : undefined, openable ? undefined : NOT_OPENABLE].filter(Boolean).join("\n")}
       onClick={() => openFinInApex(apex, apexTitle, agent)}
       className={cn(
-        "group relative flex min-h-7 w-full items-center gap-2 py-1 pr-1.5 text-left transition-colors duration-100 hover:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised",
-        indent ? "pl-9" : "pl-[34px]",
+        "rail-calm group relative flex h-7 w-full items-center gap-2 pr-1.5 pl-[30px] text-left transition-colors duration-100 hover:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised",
         !openable && "cursor-default opacity-60 hover:bg-transparent",
       )}
     >
-      <FinMark agent={agent} state={state} lit={lit} cut={lit ? "var(--raised)" : undefined} />
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="flex min-w-0 items-center gap-2">
-          <span data-asking-title className={cn("min-w-0 flex-1 truncate text-ui", lit ? "font-medium text-foreground" : "text-foreground/85")}>
-            {agent.title}
-            {where ? <span data-fin-place={where} className="text-label text-faint"> · {where}</span> : null}
-          </span>
-          <span className="shrink-0 text-label font-medium text-attention">Needs you</span>
-        </span>
-        {/* What it needs, under its name: "Needs you" is never the whole of it. */}
-        {asked ? <span data-asking-line className="truncate text-label text-faint">{asked}</span> : null}
+      <span aria-hidden className="rail-branch" data-last={last || undefined} />
+      <FinMark agent={agent} state={state} lit={lit} cut={lit ? "var(--raised)" : undefined} size={16} />
+      <span data-asking-title className={cn("rail-fade min-w-0 flex-1 text-ui", lit ? "font-medium text-foreground" : needs ? "text-foreground" : "text-foreground/65")}>
+        {agent.title}
       </span>
+      {/* What it needs, beside its name: "Needs you" is never the whole of it, and the fin already says it needs you. */}
+      {needs && line ? <span data-asking-line className="max-w-[48%] shrink truncate text-label text-faint">{line}</span> : null}
     </button>
   )
 })

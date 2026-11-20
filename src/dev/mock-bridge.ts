@@ -103,6 +103,9 @@ import { openAsk } from "@mako/host/contracts/children"
 import { apexWorktrees, apexWorktreeSummaries, benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
+/** The fixture GitHub owner's avatar: a mark on its own ground, as an owner's logo is. */
+const ACME_AVATAR = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#24292f"/><path d="M32 12 52 50H12Z" fill="#f6f8fa"/><path d="M32 30 41 47H23Z" fill="#24292f"/></svg>')}`
+
 const MOCK_PULLS: PullRequestListing[] = [
   { number: 812, title: "Retry billing webhooks with backoff", state: "open", draft: false, url: "https://github.com/you/mako/pull/812", head: "mako/billing-webhooks", base: "main", author: "you", updatedAt: "2026-10-12T09:10:00Z" },
   { number: 806, title: "Queue payments behind the retry budget", state: "open", draft: true, url: "https://github.com/you/mako/pull/806", head: "mako/payments-queue", base: "main", author: "ada", updatedAt: "2026-10-11T16:40:00Z" },
@@ -1831,7 +1834,8 @@ export function installMockBridge() {
       return sinceOpen
     },
     rerunChecks: async () => 0,
-    repoAvatar: async () => undefined,
+    // The fixture's GitHub owner (`acme`, `projectSettingsOf`) has a picture; any other owner has none.
+    repoAvatar: async (owner: string) => (owner.split("/")[0] === "acme" ? ACME_AVATAR : undefined),
     // A GitHub-style identicon, so screenshots of the identity show a picture as GitHub would draw one.
     userAvatar: async () =>
       new URLSearchParams(globalThis.location?.search).get("github") === "off" ? undefined : MOCK_GITHUB_AVATAR,

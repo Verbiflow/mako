@@ -94,6 +94,18 @@ export function automationsOn(state: AutomationsState): number {
   return state.projects.reduce((sum, reading) => sum + reading.automations.filter((view) => view.local.enabled).length, 0)
 }
 
+/**
+ * Automations whose newest run failed or didn't start after `seenAt` (when the person last opened Automations): what
+ * the Inbox counts for them, beside the proposals that reach it as their agents' asks. Opening Automations reads them.
+ */
+export function failedAutomationRuns(state: { projects: ReadonlyArray<{ automations: ReadonlyArray<{ lastRun?: Pick<AutomationRun, "status" | "at" | "endedAt"> }> }> }, seenAt: number): number {
+  return state.projects.reduce(
+    (sum, reading) =>
+      sum + reading.automations.filter((view) => (view.lastRun?.status === "failed" || view.lastRun?.status === "failed-to-start") && (view.lastRun.endedAt ?? view.lastRun.at) > seenAt).length,
+    0
+  )
+}
+
 /** Proposals waiting on the person, across projects. */
 export function pendingProposals(state: AutomationsState): number {
   return state.projects.reduce((sum, reading) => sum + reading.proposals.filter((proposal) => proposal.status === "pending").length, 0)
