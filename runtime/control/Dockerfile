@@ -4,7 +4,10 @@ WORKDIR /opt/mako-control
 # Install from the complete prepared packages: npm must see bin files when it
 # creates executable links. A manifest-only install silently omits those links.
 COPY . .
+# The install keeps only what runs (prune-install.mjs, scripts/linux-host's): no type declarations, source maps or
+# TypeScript sources, in this stage, so the runtime's own stages copy none of them.
 RUN --mount=type=cache,target=/root/.npm npm ci --ignore-scripts --omit=dev --no-audit --no-fund \
+    && node prune-install.mjs . && rm prune-install.mjs \
     && test -x node_modules/.bin/mako-control
 
 # Mako's video helper (native/video-linux/mako-video.c, which the release

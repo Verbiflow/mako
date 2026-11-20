@@ -1,4 +1,4 @@
-import { closeSync, openSync, readSync, realpathSync, statSync } from "node:fs"
+import { closeSync, openSync, readdirSync, readFileSync, readSync, realpathSync, statSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { resolveExecutable } from "../../base/executable.js"
 import {
@@ -95,6 +95,7 @@ export const openCodeUpdateSource: ProviderUpdateSource = {
   supportsVersion: isOpenCodeV2,
   release: openCodeRelease,
   install: [npmInstall("@opencode/cli", OPENCODE_RELEASE)],
+  unusedBuilds: openCodeUnusedBuilds,
   installations: [
     {
       id: "opencode2",
@@ -145,4 +146,29 @@ function sameOpenCodeBinary(left: string, right: string): boolean {
   } catch {
     return left === right
   }
+}
+
+/**
+ * The builds `@opencode/cli` downloaded beside the one it runs: its postinstall links or copies its pick into the
+ * package's `bin/` (`opencode.exe`, whatever the platform), so none of the platform packages under it runs again. Only
+ * that layout is touched; a launcher anywhere else (Homebrew's, a script) leaves everything where it is.
+ */
+export function openCodeUnusedBuilds(executable: string): string[] {
+  let launcher: string
+  let name: unknown
+  try {
+    launcher = realpathSync(executable)
+    name = JSON.parse(readFileSync(join(dirname(dirname(launcher)), "package.json"), "utf8")).name
+  } catch {
+    return []
+  }
+  if (name !== "@opencode/cli" || basename(dirname(launcher)) !== "bin") return []
+  const builds = join(dirname(dirname(launcher)), "node_modules", "@opencode")
+  let names: string[]
+  try {
+    names = readdirSync(builds)
+  } catch {
+    return []
+  }
+  return names.filter((build) => build.startsWith("cli-")).map((build) => join(builds, build))
 }

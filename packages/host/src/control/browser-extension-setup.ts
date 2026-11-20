@@ -5,6 +5,7 @@ import {
   readFile,
   readdir,
   rename,
+  rm,
   writeFile,
 } from "node:fs/promises"
 import { homedir } from "node:os"
@@ -14,8 +15,10 @@ import { headlessNodeExecutable } from "../base/headless-node.js"
 import { onMac, onWindows } from "../base/platform.js"
 import { chromiumProfileRoots } from "../base/chromium-profiles.js"
 import type { BrowserExtensionSetup } from "../contracts/browser-extension.js"
+import { registerWindowsNativeHosts, removeWindowsNativeHosts } from "./browser-extension-windows.js"
 
 const manifestSchema = z.object({ key: z.string().min(1) })
+const nativeHostManifestSchema = z.object({ path: z.string() })
 
 /** Electron can read ASAR entries, but fs.cp cannot traverse virtual directories. */
 async function extensionFiles(source: string) {
@@ -72,8 +75,6 @@ export async function prepareBrowserExtension(
   executable: string,
   home = homedir()
 ): Promise<BrowserExtensionSetup> {
-  if (onWindows())
-    throw new Error("Browser extension setup is not yet available on Windows")
   const source = join(appPath, "dist-browser-extension")
   const manifest = manifestSchema.parse(
     JSON.parse(await readFile(join(source, "manifest.json"), "utf8"))
@@ -90,6 +91,16 @@ export async function prepareBrowserExtension(
   const directory = join(home, ".mako", "browser-extension-package")
   const bin = join(home, ".mako", "bin")
   await mkdir(bin, { recursive: true, mode: 0o700 })
+  if (onWindows()) {
+    await registerWindowsNativeHosts({
+      bin,
+      node: headlessNodeExecutable(executable),
+      entry: join(appPath, "dist-electron", "browser-native-host-entry.js"),
+      extensionId,
+    })
+    await publishExtension(files, directory)
+    return { directory, extensionId }
+  }
   const helper = join(bin, "mako-browser-host")
   const temporary = `${helper}.${process.pid}.tmp`
   const nodeExecutable = headlessNodeExecutable(executable)
@@ -143,4 +154,27 @@ export async function prepareBrowserExtension(
   }
   await publishExtension(files, directory)
   return { directory, extensionId }
+}
+
+/**
+ * Undoes `prepareBrowserExtension`'s registration: on Windows each vendor key naming Mako's manifest, elsewhere each
+ * profile root's manifest naming Mako's helper; then the helpers. The unpacked extension's files stay, as the browser
+ * still loads them until the person removes it; it then finds no host and says Mako isn't connected.
+ */
+export async function removeBrowserExtension(home = homedir()): Promise<void> {
+  const bin = join(home, ".mako", "bin")
+  if (onWindows()) {
+    await removeWindowsNativeHosts(bin)
+    return
+  }
+  const base = onMac() ? join(home, "Library", "Application Support") : join(home, ".config")
+  for (const profile of await chromiumProfileRoots(base)) {
+    const manifest = join(profile, "NativeMessagingHosts", "dev.mako.browser.json")
+    const named = await readFile(manifest, "utf8")
+      .then((text) => nativeHostManifestSchema.safeParse(JSON.parse(text)))
+      .catch(() => undefined)
+    if (named?.success && named.data.path.startsWith(`${bin}/`)) await rm(manifest, { force: true })
+  }
+  for (const name of await readdir(bin).catch(() => []))
+    if (/^mako-browser-host(-[a-f0-9]{16})?$/.test(name)) await rm(join(bin, name), { force: true })
 }

@@ -2,10 +2,11 @@ import { configureOpenCodePermissions } from "@mako/host/harnesses/opencode/perm
 import { openCodeLaunchAccess } from "@mako/host/harnesses/opencode/access"
 import { accessModeId } from "@mako/host/contracts/access"
 import assert from "node:assert/strict"
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
+import { chmod, link, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { OpenCodeVersions, openCodeDatabasePaths, resolveOpenCodeInstallation } from "@mako/host/harnesses/opencode/installation"
+import { openCodeUnusedBuilds } from "@mako/host/harnesses/opencode/updates"
 
 const root = await mkdtemp(join(tmpdir(), "mako-opencode-runtime-"))
 try {
@@ -56,5 +57,20 @@ try {
   assert.deepEqual(openCodeDatabasePaths({ XDG_DATA_HOME: root, OPENCODE_DB: "custom.db" }), [join(root, "opencode", "custom.db")])
   assert.deepEqual(openCodeDatabasePaths({ OPENCODE_DB: join(root, "exact.db") }), [join(root, "exact.db")])
   assert.deepEqual(openCodeDatabasePaths({ OPENCODE_DB: ":memory:" }), [])
+  // npm's layout of `@opencode/cli`: every build for the OS and CPU under it, the picked one linked into its `bin/`.
+  const cli = join(root, "prefix", "lib", "node_modules", "@opencode", "cli")
+  await mkdir(join(cli, "bin"), { recursive: true })
+  await writeFile(join(cli, "package.json"), JSON.stringify({ name: "@opencode/cli" }))
+  for (const build of ["cli-linux-x64", "cli-linux-x64-baseline", "cli-linux-x64-musl"]) {
+    await mkdir(join(cli, "node_modules", "@opencode", build, "bin"), { recursive: true })
+    await writeFile(join(cli, "node_modules", "@opencode", build, "bin", "opencode"), "a build")
+  }
+  await link(join(cli, "node_modules", "@opencode", "cli-linux-x64", "bin", "opencode"), join(cli, "bin", "opencode.exe"))
+  await mkdir(join(root, "prefix", "bin"), { recursive: true })
+  await symlink(join(cli, "bin", "opencode.exe"), join(root, "prefix", "bin", "opencode"))
+  assert.deepEqual(openCodeUnusedBuilds(join(root, "prefix", "bin", "opencode")).map((folder) => folder.split("/").pop()).sort(), ["cli-linux-x64", "cli-linux-x64-baseline", "cli-linux-x64-musl"], "every build under the package, the linked one too: its bin keeps the file")
+  await writeFile(join(root, "brew-opencode"), "#!/bin/sh\n")
+  assert.deepEqual(openCodeUnusedBuilds(join(root, "brew-opencode")), [], "a launcher outside npm's layout leaves everything")
+  assert.deepEqual(openCodeUnusedBuilds(join(root, "missing")), [])
   console.log("OpenCode runtime: actual version beats filename, every OpenCode 2 release and newer ones, prereleases before the API 2.0.4 released refused, explicit mismatch/unknown refused, one version check per executable, a failing executable named, launch rulesets merge into user configuration, configured database roots preserved")
 } finally { await rm(root, { recursive: true, force: true }) }
