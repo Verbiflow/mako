@@ -209,7 +209,7 @@ export class ControlPreviews {
     const entry = this.entries.get(conversationId)
     if (!entry) return sender.end({ kind: "gone", reason: "Nothing is shown for this conversation" })
     if (entry.preview.activity.kind !== "browser" && !(entry.preview.activity.kind === "computer" && this.videoCapture))
-      return sender.end({ kind: "failed", reason: "Only a browser tab's preview streams as video here; an app's window needs Mako's desktop app" })
+      return sender.end({ kind: "failed", reason: "Only a browser tab's preview streams as video here; an app's window needs Mako's desktop app, or an X display" })
     const video = (entry.video ??= new PreviewVideo(() => this.paused(entry), this.videoOptions))
     this.videoStreams.set(stream, conversationId)
     video.watch(stream, box, {
@@ -252,7 +252,7 @@ export class ControlPreviews {
       const window = entry.preview.window
       if (!window || !entry.authorize) return video.show(undefined)
       const encoded = this.videoCapture?.window(window)
-      if (!encoded) return video.end({ kind: "failed", reason: "An app's window streams as video only while Mako's desktop app is open" })
+      if (!encoded) return video.end({ kind: "failed", reason: "An app's window streams as video only while Mako's desktop app is open, or from an X display" })
       return video.show({ key: JSON.stringify(["window", window.pid, window.windowId]), sources: { encoded } })
     }
     const { target } = entry

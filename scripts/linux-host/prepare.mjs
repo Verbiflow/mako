@@ -15,6 +15,7 @@ import { buildsDirectory, buildsFile, fetchBuilds, readBuilds } from "../lib/har
  *           image installs the host from the same lockfile the Mac app ships
  *   proof/  the kit in scripts/linux-host that installs the harnesses and proves the host,
  *           and in proof/measure, scripts/measure-host.mjs with the fixtures it runs
+ *   video/  the video helper's source (native/video-linux), which the image compiles against Debian's libraries
  *   media/  the FFmpeg recipe, its manifest and the source archives it pins, each checked by its hash, which the
  *           image builds as the Mac does, with no network
  *   harnesses/  the harness builds Mako keeps (vendor/harness-builds/sources.json) and that list, each archive checked
@@ -56,6 +57,7 @@ for (const { name, files: published } of packed) {
 for (const file of ["host-process.mjs", "install-harnesses.mjs", "seed-harnesses.mjs", "prove.mjs"]) await copy(join("scripts/linux-host", file), join("proof", file))
 for (const file of ["measure-host.mjs", "lib/scratch-git.mjs", "fixtures/acp-stream-agent.mjs", "fixtures/host-measure-preload.cjs"])
   await copy(join("scripts", file), join("proof/measure/scripts", file))
+await copy("native/video-linux/mako-video.c", "video/mako-video.c")
 for (const file of ["scripts/build-control-media.mjs", "scripts/lib/control-media-sources.mjs", "vendor/control-media/sources.json"])
   await copy(file, join("media", file))
 const media = await readManifest(".")

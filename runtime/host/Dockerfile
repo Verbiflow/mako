@@ -31,12 +31,24 @@ RUN apt-get update && apt-get install -y --no-install-recommends build-essential
 COPY media/ /build/
 RUN --network=none node /build/scripts/build-control-media.mjs
 
+# Mako's video helper (native/video-linux): an X display or window captured when it
+# changes and encoded with OpenH264, for computer use on a machine with a display.
+# Debian's OpenH264, libyuv and libjpeg-turbo are BSD-style; nothing here is GPL.
+FROM node AS video
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev pkg-config \
+      libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcomposite-dev libopenh264-dev libyuv-dev libturbojpeg0-dev \
+    && rm -rf /var/lib/apt/lists/*
+COPY video/mako-video.c /build/
+RUN gcc -O2 -Wall -Werror -o /build/mako-video /build/mako-video.c \
+      $(pkg-config --cflags --libs x11 xext xdamage xfixes xcomposite openh264 libturbojpeg) -lyuv -lm
+
 FROM node AS host
 # Chromium, the machine's own browser, which the host starts headless when an
 # agent first connects to it; and fonts for the pages it renders. Its sandbox
 # needs user namespaces: a VM gives them, Docker's default seccomp profile
 # refuses them, so a container needs a profile that permits them.
 RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-liberation fonts-noto-color-emoji \
+      libopenh264-7 libyuv0 libturbojpeg0 libx11-6 libxext6 libxdamage1 libxfixes3 libxcomposite1 \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd --gid 1000 node && useradd --uid 1000 --gid node --shell /bin/bash --create-home node
 WORKDIR /opt/mako
@@ -48,6 +60,8 @@ RUN --mount=type=cache,target=/root/.npm npm ci --omit=dev --workspace @mako/hos
     && chmod 755 /opt/mako/packages/host/dist/mako-host.js \
     && if node -e 'require.resolve("electron")' 2>/dev/null; then echo "electron resolves in the host's install" >&2; exit 1; fi \
     && mako-host --help >/dev/null
+# The video helper, on PATH, where the host finds it.
+COPY --from=video /build/mako-video /usr/local/bin/mako-video
 # Where the host looks for its media beside its install, as a checkout keeps it.
 COPY --from=media /build/vendor/control-media/linux-x64/ /opt/mako/vendor/control-media/linux-x64/
 USER node
