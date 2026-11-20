@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { writeFile } from "node:fs/promises"
+import { mkdir, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
@@ -106,7 +106,7 @@ async function check() {
 
     guard.at(`streaming its last words (${motion})`)
     events.length = 0
-    await debug.sendCommand("Tracing.start", { traceConfig: { includedCategories: ["devtools.timeline"] }, transferMode: "ReportEvents" })
+    await debug.sendCommand("Tracing.start", { traceConfig: { includedCategories: ["devtools.timeline", "disabled-by-default-devtools.timeline.invalidationTracking"] }, transferMode: "ReportEvents" })
     const { chunks } = await run("window.proseSettle.stream(40)")
     const complete = new Promise((done) => (traced = done))
     await debug.sendCommand("Tracing.end")
@@ -116,7 +116,18 @@ async function check() {
     const styleMs = restyles.reduce((total, event) => total + (event.dur ?? 0), 0) / 1000
     console.log(`[${motion}] Streamed ${chunks} batches into a ${Math.round(chars / 1000)} KB answer of ${elements} elements: ${restyles.length} style recalculations, ${Math.round(styleMs)} ms, the widest ${widest} elements`)
     assert.ok(restyles.length > 0, "the trace saw the answer restyled as it grew")
-    assert.ok(widest <= elements * STREAM_RESTYLE_SHARE, `[${motion}] a block added to the answer restyled ${widest} of its ${elements} elements: the answer, not the block`)
+    const over = restyles.filter((event) => (event.args?.elementCount ?? 0) > elements * STREAM_RESTYLE_SHARE)
+    if (over.length) {
+      // What asked for each recalculation that reached the answer: the invalidations since the one before it.
+      const said = over.map((event) => ({ ms: Math.round(event.dur / 1000), elements: event.args?.elementCount, causes: causes(events, restyles, event) }))
+      // CI uploads what's under MAKO_TEST_EVIDENCE: the whole trace, for what the causes above leave out.
+      const kept = process.env.MAKO_TEST_EVIDENCE ? join(process.env.MAKO_TEST_EVIDENCE, "prose-settle") : undefined
+      if (kept) {
+        await mkdir(kept, { recursive: true })
+        await writeFile(join(kept, `stream-trace-${motion}.json`), JSON.stringify({ traceEvents: events }))
+      }
+      assert.fail(`[${motion}] a block added to the answer restyled ${widest} of its ${elements} elements: the answer, not the block.${kept ? ` Trace kept in ${kept}.` : ""}\n${JSON.stringify(said, null, 1)}`)
+    }
 
     guard.at(`settling it (${motion})`)
     const settled = await run("window.proseSettle.settle()")
@@ -134,4 +145,19 @@ async function check() {
   console.log(`${NAME} passed`)
   guard.done()
   app.exit(0)
+}
+
+/** The invalidations a trace records between `restyle` and the recalculation before it, counted by what they say. */
+function causes(events, restyles, restyle) {
+  const previous = restyles.filter((event) => event.ts + event.dur <= restyle.ts).at(-1)
+  const from = previous ? previous.ts + previous.dur : 0
+  const counts = new Map()
+  for (const event of events) {
+    if (event.ts < from || event.ts > restyle.ts || !/InvalidationTracking$/.test(event.name) || event.name.startsWith("Layout")) continue
+    const data = event.args?.data ?? {}
+    const selectors = (data.selectors ?? []).map((selector) => selector.selector).join(", ")
+    const key = [event.name.replace("InvalidationTracking", ""), data.reason, data.nodeName, data.changedClass, data.changedAttribute, data.changedPseudo, data.changedId, selectors].filter(Boolean).join(" | ")
+    counts.set(key, (counts.get(key) ?? 0) + 1)
+  }
+  return [...counts].sort((a, b) => b[1] - a[1]).slice(0, 12).map(([key, count]) => `${count}× ${key}`)
 }

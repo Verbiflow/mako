@@ -97,7 +97,15 @@ window.proseSettle = {
     start = text.length - tail
     root = createRoot(document.getElementById("root")!)
     flushSync(() => root!.render(shell(<Host initial={text.slice(0, start)} />)))
-    await sleep(500)
+    // What mounting starts finishes before the stream is measured: its fonts, and whatever the mounted answer does
+    // next on its own (previews found, files read), until the page has been still for half a second.
+    await document.fonts.ready
+    let changed = performance.now()
+    const changes = new MutationObserver(() => (changed = performance.now()))
+    changes.observe(document.body, { subtree: true, childList: true, attributes: true, characterData: true })
+    for (const end = performance.now() + 15_000; performance.now() - changed < 500 && performance.now() < end; ) await sleep(100)
+    changes.disconnect()
+    await sleep(100)
     return { chars: text.length }
   },
   async stream(chunk) {
