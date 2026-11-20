@@ -61,7 +61,7 @@ import type { CloudSignIn, CloudSignInInstall } from "./contracts/cloud-sign-ins
 import type { CarriedFile } from "./contracts/machine-agent.js"
 import type { GitHubPerson } from "./contracts/github-person.js"
 import { machineOffer, presentMachine, processMachine } from "./base/machine.js"
-import { hostPlatform, nodePlatform, onMac } from "./base/platform.js"
+import { hostPlatform, nodePlatform, onMac, onWindows } from "./base/platform.js"
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { KeepAwakeSettings } from "./contracts/keep-awake.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
@@ -70,7 +70,7 @@ import { accountBorrowing, BorrowedSimulators, ControlResidency, controlLine, op
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
-import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, AwayNotes, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, recountsWork, WorkingSet, conversationShown, finAsking, ownedSessions, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, CheckoutRepositories, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type ThreadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn, placeLink } from "./conversations/index.js"
+import { AgentAskGate, AutomationTool, HarnessTool, SettingsTool, declareAutomationToolMethods, declareHarnessToolMethods, declareSettingsMethods, FinCapacity, FinCostModel, FinCostSampler, MacCapacity, ThreadActTool, declareAgentAskMethods, declareThreadActMethods, finSlots, openConversations, openMachineTracker, type MachineTracker, type MoveArrivalDeps, declareConversationMethods, declareCloudControlPreviewMethods, CloudArchives, CloudContinues, CloudConversations, CloudFollow, CloudHandOffs, machineLeaving, SHUTDOWN_HOLD_MS, CloudWorktrees, CloudMoves, CloudReadiness, AwayNotes, CloudReturns, HarnessCheck, READY_EVERY_MS, folderRepository, namedUuid, SleepHandOff, sleepWatchHelper, KeepAwake, windowsKeepAwakeHelper, recountsWork, WorkingSet, conversationShown, finAsking, ownedSessions, SessionPublisher, MovesUnderWay, SessionUploads, declareSyncMethods, CloudTurnOnFollower, OwnerFiles, declareTurnOnMethods, CheckoutRepositories, ListedRepositories, TURN_ON_POLL_MS, ownerHold, readBackfill, windowStart, installedReading, registerThreadHistoryTools, threadHistoryTools, type ThreadHistoryTools, registerAgentTools, AgentAnswerSchema, callThreadOf, ThreadMoveTool, ThreadMoveAnswerSchema, declareThreadMoveMethods, registerThreadTools, makoNote, type Conversations, sessionOrderIn, placeLink } from "./conversations/index.js"
 import { openTools, startConversationMcp, watchPluginChanges, declareToolMethods, McpSignIns, declareMcpSignInMethods, type ConversationMcp } from "./tools/index.js"
 import { hostCommand } from "./base/host-command.js"
 import { declareGitMethods, hostGit, machinePullRequestsAs, UtilityRunWhen } from "./git/index.js"
@@ -1825,9 +1825,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     shell.jobs.every("keep Threads at work ready to move", READY_EVERY_MS, () => readiness.refresh(), { needs: [atWork] })
   }
   // This Mac kept awake while its agents work: a turn, background work or a subagent, never a wait on the person, and never a Fin that sits open.
-  const keepAwake = cloudConversations && onMac() ? new KeepAwake({
+  const keepAwake = cloudConversations && (onMac() || onWindows()) ? new KeepAwake({
     file: join(environment.dataRoot, "keep-awake.json"),
-    helper: () => sleepWatchHelper(environment),
+    helper: () => (onWindows() ? windowsKeepAwakeHelper(environment) : sleepWatchHelper(environment)),
     working: () => working.threads(true).length,
     serving: () => lent.count(),
     changed: (state) => emit({ type: "keep-awake", state }),

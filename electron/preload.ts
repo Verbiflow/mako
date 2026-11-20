@@ -50,3 +50,26 @@ const api = createMakoBridge({
   },
 })
 contextBridge.exposeInMainWorld("mako", api)
+
+// Windows draws the caption buttons over the title strip (`titleBarOverlay`); they take the renderer's theme, which
+// the main process can't see, so this reports it whenever the root's `light` class changes.
+interface ThemeRoot { classList: { contains(name: string): boolean } }
+interface ThemeDocument { documentElement: ThemeRoot | null; addEventListener(type: "DOMContentLoaded", listener: () => void): void }
+declare const document: ThemeDocument
+declare class MutationObserver {
+  constructor(callback: () => void)
+  observe(target: ThemeRoot, options: { attributes: boolean; attributeFilter: string[] }): void
+}
+if (process.platform === "win32") {
+  let reported: string | undefined
+  const report = () => {
+    const theme = document.documentElement?.classList.contains("light") ? "light" : "dark"
+    if (theme === reported) return
+    reported = theme
+    ipcRenderer.send("mako:window-theme", theme)
+  }
+  document.addEventListener("DOMContentLoaded", () => {
+    report()
+    if (document.documentElement) new MutationObserver(report).observe(document.documentElement, { attributes: true, attributeFilter: ["class"] })
+  })
+}

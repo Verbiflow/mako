@@ -19,7 +19,8 @@ const npm = process.platform === "win32" ? "npm.cmd" : "npm"
  */
 function lane(name, command, args) {
   return new Promise((resolveLane, reject) => {
-    const child = spawn(command, args, { cwd: root })
+    // Windows runs npm's `.cmd` shim only through a shell (Node refuses to spawn a batch file without one).
+    const child = spawn(command, args, { cwd: root, shell: command.endsWith(".cmd") })
     const tag = `[${name}]`
     child.stdout.on("data", (chunk) => {
       process.stdout.write(chunk.toString().split("\n").join(`\n${tag} `))

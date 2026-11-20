@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
+import { createRequire } from "node:module"
 import { writeFile, rm } from "node:fs/promises"
 import { join, resolve } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
@@ -44,7 +45,9 @@ async function buildAndCheck() {
       MAKO_ASSET_TEST_REPO: resolve("."),
     }
     delete environment.ELECTRON_RUN_AS_NODE
-    const child = spawn(resolve("node_modules/.bin/electron"), [directory], {
+    // Windows's `.bin/electron` is a shell shim Node can't spawn; the package names its executable.
+    const electron = process.platform === "win32" ? createRequire(import.meta.url)("electron") : resolve("node_modules/.bin/electron")
+    const child = spawn(electron, [directory], {
       stdio: "inherit",
       env: environment,
     })

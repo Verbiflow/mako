@@ -76,9 +76,12 @@ export function appDataFor(platform: NodeJS.Platform, home: string, env: NodeJS.
   return env.XDG_CONFIG_HOME ?? join(home, ".config")
 }
 
-/** A bundle keeps the app in `Contents/Resources/app.asar`, or `app` when unpacked. */
+/**
+ * A packaged app keeps itself in `app.asar`, or `app` when unpacked: a Mac bundle's in `Contents/Resources`, a Windows
+ * install's in `resources` beside `Mako.exe`.
+ */
 function bundled(appRoot: string): boolean {
-  return basename(dirname(appRoot)) === "Resources" && /^app(\.asar)?$/.test(basename(appRoot))
+  return /^[Rr]esources$/.test(basename(dirname(appRoot))) && /^app(\.asar)?$/.test(basename(appRoot))
 }
 
 export function resolveHostEnvironment({ env, appRoot, platform, home }: HostEnvironmentInput): HostEnvironment {

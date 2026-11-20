@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { existsSync } from "node:fs"
 import { builtinModules } from "node:module"
-import { posix, join, resolve } from "node:path"
+import { posix, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { listPackage, extractFile } from "@electron/asar"
 import ts from "typescript"
@@ -29,10 +29,12 @@ function importedNames(node) {
   return []
 }
 
-export function assertPackagedImports(app) {
-  const archive = join(app, "Contents/Resources/app.asar")
+/** `resources` is a Mac bundle's `Contents/Resources` unless named: a Windows install's is `resources` beside `Mako.exe`. */
+export function assertPackagedImports(app, resources = join(app, "Contents/Resources")) {
+  const archive = join(resources, "app.asar")
   const files = new Set(
-    listPackage(archive).map((path) => path.replace(/^\//, ""))
+    // Listed with the platform's separator: backslashes on Windows.
+    listPackage(archive).map((path) => path.replaceAll("\\", "/").replace(/^\//, ""))
   )
   let checked = 0
   const sources = new Map()
@@ -40,7 +42,8 @@ export function assertPackagedImports(app) {
   const packages = new Map()
   for (const file of files) {
     if (!file.startsWith("dist-electron/") || (!file.endsWith(".js") && !file.endsWith(".mjs"))) continue
-    const bytes = extractFile(archive, file)
+    // Looked up with the platform's separator, as it was listed.
+    const bytes = extractFile(archive, file.split("/").join(sep))
     assert.ok(
       bytes.length <= 2 * 1024 * 1024,
       `Host module exceeds the package check budget: ${file}`
@@ -120,7 +123,7 @@ export function assertPackagedImports(app) {
         `Packaged export missing: ${item.file} -> ${item.target}: ${name}`
       )
   }
-  const unpacked = join(app, "Contents/Resources/app.asar.unpacked")
+  const unpacked = join(resources, "app.asar.unpacked")
   for (const [name, file] of packages)
     assert.ok(
       files.has(`node_modules/${name}/package.json`) || existsSync(join(unpacked, "node_modules", name, "package.json")),

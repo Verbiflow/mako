@@ -123,7 +123,7 @@ export function TitleBar() {
 /**
  * The strip itself: its left segment the rail's header, as wide as the rail
  * and ruled off where the rail is, and its right cluster. `inset` keeps
- * room for a window's own controls (macOS's traffic lights); a browser's
+ * room for a window's own controls (macOS's traffic lights, Windows's caption buttons); a browser's
  * page has none, so the web's desk draws the same strip without it.
  */
 export function TitleStrip({
@@ -140,12 +140,12 @@ export function TitleStrip({
   const railOpen = usePrefs((prefs) => prefs.railOpen)
   const railWidth = usePrefs((prefs) => prefs.railWidth)
   return (
-    <header className={cn("relative flex h-[38px] shrink-0 items-center bg-shell pr-2", className)}>
+    <header className={cn("relative flex h-[38px] shrink-0 items-center bg-shell", inset ? "window-controls-end" : "pr-2", className)}>
       <div
         style={railOpen ? { width: railWidth } : undefined}
         className={cn(
           "flex h-full shrink-0 items-center gap-1 pr-2",
-          inset ? "pl-[86px]" : "pl-2",
+          inset ? "window-inset" : "pl-2",
         )}
       >
         {leading}

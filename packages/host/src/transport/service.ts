@@ -108,7 +108,9 @@ export interface HostCommand {
 export function hostCommand(input: Pick<RuntimeLaunch, "executable" | "args" | "env">): HostCommand {
   // A packaged app's code is its bundle's app.asar, which Electron's Node mode reads as a folder, and its host the
   // bundle of it (scripts/bundle-main.mjs); a checkout's is what tsc emits, which it rebuilds while it runs.
-  const entry = input.args[0] ? join(input.args[0], "dist-electron", "entry.js") : join(dirname(input.executable), "..", "Resources", "app.asar", "dist-electron", "host", "entry.js")
+  // A Mac bundle's code is in `Contents/Resources` beside `Contents/MacOS`; a Windows install's in `resources` beside `Mako.exe`.
+  const resources = nodePlatform() === "win32" ? join(dirname(input.executable), "resources") : join(dirname(input.executable), "..", "Resources")
+  const entry = input.args[0] ? join(input.args[0], "dist-electron", "entry.js") : join(resources, "app.asar", "dist-electron", "host", "entry.js")
   return {
     executable: headlessNodeExecutable(input.executable),
     args: [...HOST_NODE_OPTIONS, entry],

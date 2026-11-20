@@ -637,6 +637,21 @@ diffs-container {
     -webkit-app-region: no-drag;
   }
 
+  /* A title strip's room for the window's own controls. macOS's traffic lights sit at its start; a window that says
+     where its controls are (Windows's caption buttons over the strip, `titleBarOverlay`) gives `titlebar-area-*`,
+     which leaves its start free and keeps its end clear of them. */
+  .window-inset {
+    padding-left: max(0.5rem, env(titlebar-area-x, 86px));
+  }
+
+  .window-controls-end {
+    padding-right: calc(0.5rem + 100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  }
+
+  .window-controls-clear {
+    padding-right: calc(100vw - env(titlebar-area-x, 0px) - env(titlebar-area-width, 100vw));
+  }
+
   .tabular {
     font-variant-numeric: tabular-nums;
   }
