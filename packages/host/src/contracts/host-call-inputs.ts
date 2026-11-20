@@ -1188,6 +1188,12 @@ const inputs = {
       z.union([z.literal("forFins"), z.literal("forApexes")]),
       z.string(),
     ]),
+  "mako:folders-browse": () =>
+    z.tuple([
+      z.object({ partialPath: z.string(), base: z.string().optional() }),
+    ]),
+  "mako:folders-found": () =>
+    z.tuple([z.object({ within: z.array(z.string()) })]),
   "mako:fork": () =>
     z.tuple([
       z.string(),
@@ -2533,7 +2539,7 @@ const inputs = {
         .optional(),
     ]),
   "mako:open-url": () => z.tuple([z.string()]),
-  "mako:pick-folder": () => z.tuple([]),
+  "mako:pick-folder": () => z.tuple([z.string().optional()]),
   "mako:plan-build-claim": () =>
     z.tuple([
       z.string(),
@@ -2561,6 +2567,13 @@ const inputs = {
   "mako:preferences": () => z.tuple([]),
   "mako:preferences-file": () => z.tuple([]),
   "mako:project-app-setup": () => z.tuple([z.string()]),
+  "mako:project-clone": () =>
+    z.tuple([
+      z.object({ id: z.string(), repository: z.string(), into: z.string() }),
+    ]),
+  "mako:project-clone-cancel": () => z.tuple([z.string()]),
+  "mako:project-create": () =>
+    z.tuple([z.object({ path: z.string(), git: z.boolean() })]),
   "mako:project-settings": () => z.tuple([z.string()]),
   "mako:project-settings-save": () =>
     z.tuple([
@@ -3751,6 +3764,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:fin-move-on-limit", "harnesses"],
   ["mako:fin-policy-save", "harnesses"],
   ["mako:fin-role-rules-save", "harnesses"],
+  ["mako:folders-browse", "workspaces"],
+  ["mako:folders-found", "workspaces"],
   ["mako:fork", "workspaces"],
   ["mako:git-cancel-generation", "git"],
   ["mako:git-changed-since", "git"],
@@ -3909,6 +3924,9 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:preferences", "harnesses"],
   ["mako:preferences-file", "harnesses"],
   ["mako:project-app-setup", "workspaces"],
+  ["mako:project-clone", "workspaces"],
+  ["mako:project-clone-cancel", "workspaces"],
+  ["mako:project-create", "workspaces"],
   ["mako:project-settings", "workspaces"],
   ["mako:project-settings-save", "workspaces"],
   ["mako:prompt", "workspaces"],

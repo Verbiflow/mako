@@ -4,6 +4,7 @@ import { ApplicationDialog, ApplicationNotice } from "@/components/settings/appl
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { CommandPalette } from "@/components/palette/command-palette"
+import { OpenProjectPalette } from "@/components/palette/open-project-palette"
 import { Guide } from "@/components/onboarding/guide"
 import { ConversionOverlay } from "@/components/viewer/conversion-overlay"
 import { usePlugins } from "@/extend/use-plugins"
@@ -165,6 +166,7 @@ export function AppShell() {
           </div>
         </div>
         <CommandPalette />
+        <OpenProjectPalette />
         {/* Settings takes the whole window under the palette's z-50, so the
           palette can still open over it; Radix owns Escape and the focus trap. */}
         {settingsMounted && (

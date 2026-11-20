@@ -40,6 +40,8 @@
     "test:opening-send-ui": "node scripts/test-opening-send-ui.mjs",
     "test:inbox-ui": "node scripts/test-inbox-ui.mjs",
     "test:automations-ui": "node scripts/test-automations-ui.mjs",
+    "test:open-project": "tsx scripts/test-open-project.ts",
+    "test:open-project-ui": "node scripts/test-open-project-ui.mjs",
     "test:rail-ui": "node scripts/test-rail-ui.mjs && node scripts/test-rail-stable-ui.mjs && node scripts/test-kept-session-ui.mjs && node scripts/test-versions-ui.mjs && node scripts/test-store-formats-ui.mjs",
     "test:internal-review-ui": "node scripts/test-internal-review-ui.mjs",
     "test:fin-pips-ui": "node scripts/test-fin-pips-ui.mjs",
@@ -642,7 +644,17 @@
       "identity": "-",
       "extendInfo": {
         "NSScreenCaptureUsageDescription": "Mako captures local application windows only when you ask an agent to inspect them.",
-        "NSAppleEventsUsageDescription": "Mako controls local applications only when you ask an agent to interact with them."
+        "NSAppleEventsUsageDescription": "Mako controls local applications only when you ask an agent to interact with them.",
+        "CFBundleDocumentTypes": [
+          {
+            "CFBundleTypeName": "Folder",
+            "CFBundleTypeRole": "Viewer",
+            "LSHandlerRank": "Alternate",
+            "LSItemContentTypes": [
+              "public.folder"
+            ]
+          }
+        ]
       },
       "target": [
         {

@@ -106,6 +106,10 @@ const reads = [
   "mako:worktree-summaries",
   "mako:worktree-removal",
   "mako:checkout-heads",
+  /** Lists folders under a typed path; writes nothing. */
+  "mako:folders-browse",
+  /** Answers what the last scan of home found, starting one in the background when it's stale; writes nothing. */
+  "mako:folders-found",
   "mako:chat-folders",
   "mako:workspace-moves",
   "mako:workspace-move-hold",
@@ -263,6 +267,10 @@ const reads = [
  * content differs.
  */
 const replays = [
+  /** `ProjectFolders.clone`: the window's clone id; a repeat with other details is refused, and one after the clone ended finds the checkout. */
+  "mako:project-clone",
+  /** Stops the same clone; a clone already over is left as it ended. */
+  "mako:project-clone-cancel",
   /** `ProjectSettingsStore.save`: replaces the project's settings with the same ones. */
   "mako:project-settings-save",
   /** `PreferenceStore.file`: writes the file only when there's none, which a repeat finds there. */

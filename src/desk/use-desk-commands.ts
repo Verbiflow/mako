@@ -45,6 +45,7 @@ import { toggleAutomations } from "@/state/automations-view"
 import { terminalActions, terminalStore } from "@/state/terminal"
 import { terminalGroupFor } from "@/lib/terminal-layout"
 import { toast } from "sonner"
+import { chooseInFinder, openProjectPalette } from "@/state/open-project"
 
 const openPalette = () => {
   window.dispatchEvent(new CustomEvent("mako:palette"))
@@ -281,11 +282,43 @@ const DESK_COMMANDS: DeskCommand[] = [
   },
   {
     id: "workspace.open",
-    title: "Open folder…",
+    title: "Open project…",
     section: "Workspace",
     keys: "mod+o",
+    hint: "A recent project, a folder on this Mac, a path, or a GitHub repository to clone",
+    keywords: "project folder open clone github repository new empty directory path",
     when: () => store.get().machine.chooseFolder,
-    run: () => void actions.pickWorkspace(),
+    run: () => openProjectPalette(),
+  },
+  {
+    id: "workspace.switch-project",
+    title: "Choose a folder…",
+    section: "Workspace",
+    keys: "mod+shift+o",
+    hint: "On a new Thread, its project menu; anywhere else, the folder chooser",
+    keywords: "finder folder chooser project switch",
+    when: () => store.get().machine.chooseFolder,
+    run: () => {
+      const chip = document.querySelector<HTMLButtonElement>("[data-project-chip]")
+      if (chip) chip.click()
+      else chooseInFinder()
+    },
+  },
+  {
+    id: "workspace.clone",
+    title: "Clone from GitHub…",
+    section: "Workspace",
+    keywords: "clone github repository git project",
+    when: () => store.get().machine.chooseFolder,
+    run: () => openProjectPalette({ mode: "clone" }),
+  },
+  {
+    id: "workspace.new-project",
+    title: "New empty project…",
+    section: "Workspace",
+    keywords: "create new empty project folder git init",
+    when: () => store.get().machine.chooseFolder,
+    run: () => openProjectPalette({ mode: "create" }),
   },
   {
     id: "workspace.own-branch",
