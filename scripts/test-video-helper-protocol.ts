@@ -80,7 +80,11 @@ await assert.rejects(new BrowserVideo({ encoded: helperCapture(fake, { kind: "wi
 // A portal capture: its source types and restore token file go to the helper as arguments.
 const portal = new BrowserVideo({ encoded: helperCapture(fake, { kind: "portal", types: "monitor", restore: join(root, "portal.token") }) }, { fps: 30 })
 const leavePortal = await portal.join(viewer)
-assert.deepEqual(read().at(-1), { args: ["portal", "--types", "monitor", "--restore", join(root, "portal.token"), "--fps", "30", "--box", "320x200"] })
+// The newest start line, not the newest line: joining tells the open capture its box again (`BrowserVideo.join`).
+const portalStarted = read().findLastIndex((entry) => entry.args)
+assert.deepEqual(read()[portalStarted], { args: ["portal", "--types", "monitor", "--restore", join(root, "portal.token"), "--fps", "30", "--box", "320x200"] })
+await until(() => read().length > portalStarted + 1, "the viewers' box told to the open portal capture")
+assert.deepEqual(read()[portalStarted + 1], { type: "B", length: 4, width: 320, height: 200 })
 await leavePortal()
 
 // Which desktop a Linux session is, from its environment, and how the helper shows a window on each.
