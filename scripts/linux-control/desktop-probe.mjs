@@ -29,6 +29,8 @@ const { CuaEmbedded } = await import(process.env.MAKO_CUA_EMBEDDED)
 const { linuxDesktop, VideoHelper, helperWindowSource, videoHelperExecutable } = await import("@mako/control-runtime/desktop")
 
 const report = { desktop: kind, session: linuxDesktop(), operations: [], numbers: {} }
+// The session script logs in as a person would (XDG_SESSION_TYPE): without it the host would drive nothing here.
+assert.ok(report.session, "the probe runs in a desktop session the host recognizes")
 const log = (entry) => {
   report.operations.push(entry)
   console.log(JSON.stringify(entry))
@@ -222,7 +224,7 @@ try {
   // Live video: the helper the host starts for a window preview when no desktop app is attached.
   const executable = videoHelperExecutable()
   assert.ok(executable, "the video helper is built")
-  const source = helperWindowSource(window.window_id, work)
+  const source = helperWindowSource(window.window_id, work, linuxDesktop())
   report.liveVideoSource = source
   if (kind === "gnome") {
     // The driver's GNOME Shell helper leaves its agent cursor on screen after foreground input, floating at 30 fps
