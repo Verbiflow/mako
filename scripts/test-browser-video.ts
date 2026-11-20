@@ -15,6 +15,7 @@ import {
   controlVideoCodec,
   decodeControlVideo,
   encodeControlVideo,
+  liveVideoBitrate,
   type ControlVideoPacket,
 } from "../packages/control-runtime/src/contracts/control-video.js"
 
@@ -239,4 +240,61 @@ await other.join(watcher.handle)
 endCapture!("Recording target detached")
 assert.equal(watcher.self.ended, "Recording target detached")
 
-console.log("Browser video: wire format, prompt real encoding by the video helper that decodes, posters and key frames on join and on asking again, slow-viewer recovery, resize, leave and failure passed")
+// The bitrate follows the slowest viewer: down a third while one holds more than a quarter of its allowance
+// untaken, back up after three calm seconds, never above the picture's own (liveVideoBitrate at its box and rate).
+{
+  const rates: number[] = []
+  const ratedVideo = new BrowserVideo({
+    encoded: async () => ({ stop: async () => {}, resized: async () => {}, key() {}, rate: (bitrate) => { rates.push(bitrate) } }),
+  }, { fps: 30 })
+  const slow = viewer({ width: 1280, height: 720 })
+  const leave = await ratedVideo.join(slow.handle)
+  const ceiling = liveVideoBitrate({ width: 1280, height: 720 }, 30)
+  slow.self.backlog = 200 * 1024
+  await wait(2200)
+  assert.ok(rates.length >= 2 && rates[0]! < ceiling && rates[1]! < rates[0]!, `the rate falls while the viewer backs up: ${rates}`)
+  slow.self.backlog = 0
+  const low = rates.at(-1)!
+  await wait(4200)
+  assert.ok(rates.at(-1)! > low && rates.at(-1)! <= ceiling, `and climbs back once it drains: ${rates}`)
+  await leave()
+  ratedVideo.close()
+}
+
+// A screencast's encoder that keys on request is asked, not replaced, for a viewer's key frame.
+{
+  let made = 0, keyed = 0
+  const keying: LiveEncoderFactory = (_size, _fps, unit, drained) => {
+    made++
+    let first = true
+    return {
+      ready: () => true,
+      submit(sent) {
+        queueMicrotask(() => {
+          const common = { width: sent.width, height: sent.height, sequence: sent.sequence, capturedAt: sent.capturedAt, data: Uint8Array.of(0, 0, 0, 1, 0x65) }
+          unit(first ? { ...common, kind: "key", description: Uint8Array.of(1, 0x42, 0, 0x1e) } : { ...common, kind: "delta" })
+          first = false
+          drained()
+        })
+      },
+      key() { keyed++ },
+      close() {},
+    }
+  }
+  let push: ((frame: BrowserFrame) => void) | undefined
+  const keyedVideo = new BrowserVideo({ frames: async (consumer) => { push = consumer.frame; return { stop: async () => {}, resized: async () => {} } } }, { encoder: keying, fps: 1000 })
+  const one = viewer()
+  const leaveOne = await keyedVideo.join(one.handle)
+  push!(frame())
+  await settle()
+  const two = viewer()
+  const leaveTwo = await keyedVideo.join(two.handle)
+  await wait(2100)
+  assert.equal(made, 1, "one encoder throughout")
+  assert.ok(keyed >= 1, "the joining viewer's key frame was asked of it")
+  await leaveTwo()
+  await leaveOne()
+  keyedVideo.close()
+}
+
+console.log("Browser video: wire format, prompt real encoding by the video helper that decodes, posters and key frames on join and on asking again, slow-viewer recovery, resize, leave and failure, the bitrate following the slowest viewer, and an encoder keyed on request passed")

@@ -69,6 +69,10 @@ export class FramesSession implements Session {
     this.#encoder.key()
   }
 
+  rate(bitrate: number): void {
+    this.#encoder.rate(bitrate)
+  }
+
   resize(): void {}
 
   close(): void {
@@ -134,6 +138,8 @@ export function serveLiveVideo(bridge: LiveVideoBridge): void {
         if (!session?.frame) return bridge.send({ type: "ended", session: ask.session, reason: "No such session" })
         void session.frame(ask.data, { sequence: ask.sequence, capturedAt: ask.capturedAt })
         return
+      case "rate":
+        return session?.rate(ask.bitrate)
       case "key":
         return session?.key()
       case "resize":

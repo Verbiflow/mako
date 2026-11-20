@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import type {
-  EncodedVideoSource,
+  VideoSource,
   LiveEncoder,
   LiveEncoderFactory,
   VideoSourceFrame,
@@ -146,7 +146,7 @@ class DesktopFramesEncoder implements LiveEncoder {
  * A capture the desktop app encodes where its pixels are: a desk window as a tab, or an app's window or a display
  * through the system's capturer. Nothing crosses to the host but units.
  */
-export function desktopCapture(channel: LiveVideoChannel, source: LiveVideoSource): EncodedVideoSource {
+export function desktopCapture(channel: LiveVideoChannel, source: LiveVideoSource): VideoSource {
   return async (consumer) => {
     if (!channel.answers("live-video-open")) throw new Error("Mako's desktop app isn't open to capture this.")
     const session = randomUUID()
@@ -173,6 +173,8 @@ export function desktopCapture(channel: LiveVideoChannel, source: LiveVideoSourc
     }
     return {
       key: () => void channel.ask("live-video-key", { session }).catch(() => {}),
+      // A desktop older than the ask keeps the rate it chose.
+      rate: (bitrate) => void channel.ask("live-video-rate", { session, bitrate: Math.round(bitrate) }).catch(() => {}),
       resized: async () => {
         await channel.ask("live-video-resize", { session, box: box() })
       },

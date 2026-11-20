@@ -253,4 +253,29 @@ const tag = (sequence: number): LiveFrameTag => ({ sequence, capturedAt: 1_760_0
   assert.equal(unsampled.admit(frame()), true, "a frame that can't be sampled passes")
 }
 
-console.log("Live video encoder: avcC on every key, key on request and on resize, in-flight limits and the newest held, stall flush, drops, hardware-to-software fallback, and the change gate passed")
+// A rate from the viewers' links reconfigures the encoder in use, below the size's own and never above it, with no
+// new encoder and no key frame; a later encoder starts at it.
+{
+  const { codecs, made } = scripted(() => true)
+  const heard = events()
+  const encoder = new LiveVideoEncoder(30, heard.handlers, codecs)
+  encoder.encode(frame(), tag(1))
+  await wait(1)
+  const own = made[0]!.config!.bitrate!
+  encoder.rate(own / 2)
+  assert.equal(made.length, 1, "the same encoder")
+  assert.equal(made[0]!.config!.bitrate, own / 2)
+  made[0]!.output(0, "key", true)
+  encoder.encode(frame(), tag(2))
+  assert.equal(made[0]!.encodes[1]?.key, false, "no key frame for a new rate")
+  encoder.rate(own * 4)
+  assert.equal(made[0]!.config!.bitrate, own, "never above the size's own")
+  encoder.rate(own / 3)
+  encoder.encode(frame(1920, 1200), tag(3))
+  await wait(1)
+  assert.equal(made.length, 2, "a new size, a new encoder")
+  assert.equal(made[1]!.config!.bitrate, own / 3, "which starts at the viewers' rate")
+  encoder.close()
+}
+
+console.log("Live video encoder: avcC on every key, key on request and on resize, in-flight limits and the newest held, stall flush, drops, hardware-to-software fallback, the viewers' rate, and the change gate passed")

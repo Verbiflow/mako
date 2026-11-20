@@ -799,3 +799,29 @@ Debian's for it, and Mako draws that video's pointer with it), a host with an
 FFmpeg on PATH makes video posters, and the checks decode their results with an
 FFmpeg the CI runner installs. `scripts/linux-host/prove.mjs` checks the host
 image has the helper and no FFmpeg.
+
+## November 20: one source contract, and a bitrate that follows the viewers
+
+`BrowserVideo` now knows one thing about where pictures come from: a
+`VideoSource`, which encodes for itself and hands over `ControlVideoPacket`s,
+and may send posters. The desktop app's captures, the machine browser's tab, the
+video helper's display or window, and the screencast are all one: the
+screencast is `screencastVideo(frames, encoder)`, which owns its pacing, its
+encoders (one per frame size), their failures (three in a row end it) and the
+poster each frame makes. `BrowserVideo` tries its sources in order and moves to
+the next when one can't start or ends, keeps the newest poster for a viewer that
+joins or lost its picture (a fetched one only until the first key frame), asks
+the source for key frames (again after two seconds if none comes; at most one a
+second for viewers that fell behind), and fans units out. An encoder that keys
+on request (the helper's) is asked rather than replaced, so a joining viewer no
+longer costs a new encoder process.
+
+The bitrate follows the slowest viewer, from the acknowledged backlog every
+viewer already reports (`media-ack`): once a second, down a third while one holds
+more than a quarter of its 512 KB allowance untaken, back up a quarter after
+three calm seconds, between 250 kbit/s and what the picture's size and rate get
+(`liveVideoBitrate`). Every source takes it in the encoder it has, with no key
+frame: the helper's `R` command, the WebCodecs encoder's reconfigure (in the
+machine browser's capture page and the desktop's live video page, through a new
+`live-video-rate` ask; an older desktop keeps its own rate). Before this, a slow
+link only skipped to key frames, each a whole picture at full rate.

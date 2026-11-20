@@ -4,7 +4,7 @@ import type {
   BrowserService,
   BrowserFrame,
   BrowserVideoOptions,
-  EncodedVideoSource,
+  VideoSource,
 } from "@mako/control-runtime/browser"
 import type {
   AppshotTarget,
@@ -60,8 +60,8 @@ type Thumbnail = (image: ControlImage) => Promise<ControlImage | null>
  * desktop app can't capture.
  */
 export interface PreviewCapture {
-  tab(target: BrowserTarget): EncodedVideoSource | undefined
-  window(target: AppshotTarget): EncodedVideoSource | undefined
+  tab(target: BrowserTarget): VideoSource | undefined
+  window(target: AppshotTarget): VideoSource | undefined
 }
 
 /** How a preview's remote viewers are sent video: the encoder for a tab's frames, and the captures beside them. */

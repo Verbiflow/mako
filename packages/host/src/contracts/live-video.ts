@@ -59,6 +59,7 @@ export type LiveVideoPageAsk =
   | { type: "open"; session: string; source: LiveVideoPageSource; fps: number; box: { width: number; height: number } | null }
   | { type: "frame"; session: string; data: Uint8Array<ArrayBuffer>; sequence: number; capturedAt: number }
   | { type: "key"; session: string }
+  | { type: "rate"; session: string; bitrate: number }
   | { type: "resize"; session: string; box: { width: number; height: number } | null }
   | { type: "close"; session: string }
 

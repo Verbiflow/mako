@@ -3,7 +3,7 @@ import { existsSync } from "node:fs"
 import { isAbsolute } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { CaptureSize } from "./browser-capture.js"
-import type { EncodedVideoSource, LiveEncoderFactory } from "./browser-video.js"
+import type { VideoSource, LiveEncoderFactory } from "./browser-video.js"
 import { CONTROL_VIDEO_DATA_LIMIT, decodeControlVideo, type ControlVideoPacket } from "./contracts/control-video.js"
 import { resolveExecutable } from "./executable.js"
 import { onLinux } from "./platform.js"
@@ -203,7 +203,7 @@ export class VideoHelper {
 }
 
 /** A display or one window, captured and encoded by the helper, as a live video's source. */
-export function helperCapture(executable: string, source: Extract<VideoHelperSource, { kind: "display" | "window" }>): EncodedVideoSource {
+export function helperCapture(executable: string, source: Extract<VideoHelperSource, { kind: "display" | "window" }>): VideoSource {
   return async (consumer) => {
     // Open once its first unit comes (a capture starts with the picture as it is), or a moment passes with none (a
     // window that isn't on screen sends nothing until it is); a helper that can't capture ends before either.
@@ -227,6 +227,7 @@ export function helperCapture(executable: string, source: Extract<VideoHelperSou
     }
     return {
       key: () => helper.key(),
+      rate: (bitrate) => helper.rate(bitrate),
       resized: async () => helper.box(consumer.size()),
       stop: async () => helper.close(),
     }
@@ -254,6 +255,8 @@ export function helperLiveEncoder(executable: string): LiveEncoderFactory {
           drained()
         })
       },
+      key: () => helper.key(),
+      rate: (bitrate) => helper.rate(bitrate),
       close: () => helper.close(),
     }
   }

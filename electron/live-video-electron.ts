@@ -196,6 +196,10 @@ export function liveVideoAnswers({ directory, frame, page }: LiveVideoAnswersInp
       if (sessions.has(session)) await send({ type: "key", session })
       return null
     },
+    "live-video-rate": async ({ session, bitrate }) => {
+      if (sessions.has(session)) await send({ type: "rate", session, bitrate })
+      return null
+    },
     "live-video-resize": async ({ session, box }) => {
       if (sessions.has(session)) await send({ type: "resize", session, box })
       return null

@@ -115,6 +115,8 @@ export class LiveVideoEncoder<Frame extends LiveFrame = VideoFrame> {
   #held?: { frame: Frame; tag: LiveFrameTag }
   #inFlight: { timestamp: number; tag: LiveFrameTag }[] = []
   #key = true
+  /** The bits a second its viewers take, when they take less than the size's own (`liveVideoBitrate`). */
+  #bitrate?: number
   #timestamp = 0
   /** Counts encoders made; a closed one's late output and errors are ignored. */
   #generation = 0
@@ -142,6 +144,18 @@ export class LiveVideoEncoder<Frame extends LiveFrame = VideoFrame> {
   /** The next frame encodes as a key unit. */
   key(): void {
     this.#key = true
+  }
+
+  /** Encodes at no more than `bitrate` from the next frame, in the encoder it has: no key frame, no new encoder. */
+  rate(bitrate: number): void {
+    this.#bitrate = bitrate
+    const encoder = this.#encoder
+    if (!encoder || this.#closed) return
+    try {
+      encoder.codec.configure(this.#config(encoder.attempt, encoder.width, encoder.height))
+    } catch {
+      // An encoder that won't take a new rate keeps its old one until it's made again.
+    }
   }
 
   /** Takes `frame`: encodes it, or holds it in place of an older held one until there's room. The frame is closed for the caller. */
@@ -251,7 +265,7 @@ export class LiveVideoEncoder<Frame extends LiveFrame = VideoFrame> {
       width,
       height,
       hardwareAcceleration,
-      bitrate: liveVideoBitrate({ width, height }, this.#fps),
+      bitrate: Math.min(this.#bitrate ?? Infinity, liveVideoBitrate({ width, height }, this.#fps)),
       bitrateMode: "variable",
       framerate: this.#fps,
       latencyMode: "realtime",

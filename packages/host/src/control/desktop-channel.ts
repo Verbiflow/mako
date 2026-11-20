@@ -37,6 +37,7 @@ const ASK_TIMEOUT_MS = {
   "live-video-open": 15_000,
   "live-video-frame": 10_000,
   "live-video-key": 5_000,
+  "live-video-rate": 5_000,
   "live-video-resize": 10_000,
   "live-video-close": 5_000,
 } satisfies Record<DesktopMethod, number>
