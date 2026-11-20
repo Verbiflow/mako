@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.327"
+    "version": "2.1.329"
   },
   "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/304a853b-4494-4525-9d29-864bf1941dd8.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/f61ba12b-1039-4338-a129-4a46ac2f5ee5.jsonl",
       "known": [
         {
           "side": "-",
