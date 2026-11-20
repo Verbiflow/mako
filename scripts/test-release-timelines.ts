@@ -8,7 +8,8 @@ import type { ProviderUpdateSource } from "@mako/host/harnesses/update-source"
 
 /**
  * The host's release dates for the record store's evidence pass: read only
- * for harnesses that declare where (`HarnessVersions.releases`), at most once
+ * for harnesses that declare where (`HarnessVersions.releases`) and that the
+ * machine holds a session of, at most once
  * a day, kept in `records/evidence/releases.json`, and a failed read leaves
  * what was kept.
  */
@@ -47,7 +48,20 @@ try {
   assert.equal(readReleaseTimelines(evidence)["npm:@xai-official/grok"]?.checkedAt, kept?.checkedAt, "a failed read leaves what was kept")
   await Promise.all([timelines.refresh(), timelines.refresh()])
   assert.equal(asked.length, 3, "callers at once share one read")
-  console.log("Release timelines: read for declared harnesses at most daily, kept beside the evidence, a failure keeps the last")
+  let held = false
+  const unheld = new ReleaseTimelines({
+    evidence: join(root, "unheld"), sources: () => sources, now: () => now, wanted: () => held,
+    packument: async (npmPackage) => {
+      asked.push(npmPackage)
+      return { time: { created: "2025-10-22T05:02:25.858Z", "1.0.46": "2026-09-30T22:11:16.129Z" } }
+    },
+  })
+  await unheld.refresh()
+  assert.equal(asked.length, 3, "no read for a harness this machine holds no session of")
+  held = true
+  await unheld.refresh()
+  assert.equal(asked.length, 4, "read once it holds one")
+  console.log("Release timelines: read for declared harnesses this machine holds sessions of, at most daily, kept beside the evidence, a failure keeps the last")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

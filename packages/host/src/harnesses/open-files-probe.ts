@@ -2,6 +2,7 @@ import { z } from "zod"
 import { hostProbe } from "../base/host-command.js"
 import type { ProviderActivityResult } from "../threads/index.js"
 import { onMac, onWindows } from "../base/platform.js"
+import { hostStopping, type RunningCommand } from "../base/host-stopping.js"
 
 export type OpenFilesResult =
   | {
@@ -19,8 +20,14 @@ export async function probeOpenFiles({
   signal,
   accept,
   sourcePath,
+  runningIf,
 }: {
   processNames: string[]
+  /**
+   * Whether a process could be one lsof is asked about, where its name alone can't say: Cursor's CLI runs as `node`,
+   * which the host itself is. Without it, a process named in `processNames` is.
+   */
+  runningIf?: (command: RunningCommand) => boolean
   signal: AbortSignal
   accept: (path: string) => boolean
   /** Query a source inode across processes; executable names are not reliable ownership evidence. */
@@ -28,6 +35,10 @@ export async function probeOpenFiles({
 }): Promise<OpenFilesResult> {
   if (onWindows())
     return { kind: "unavailable", reason: "unsupported" }
+  // No process by any of these names, no lsof: what it would find is none (its exit 1). The idle host asked lsof for
+  // each harness every 30 s; one read of the process names now answers them all.
+  if (!sourcePath && !(await anyRunning(processNames, runningIf)))
+    return { kind: "available", paths: [], processFound: false, pids: [], groups: new Map() }
   const command = onMac() ? "/usr/sbin/lsof" : "lsof"
   const args = sourcePath ? ["-Fpgn", "--", sourcePath] : ["-Fpgn", ...processNames.flatMap((name) => ["-c", name])]
   // In the host's probe child (`hostProbe`): lsof's spawn held the host's loop 0.5 s in a 600 s run (2026-11-12).
@@ -71,3 +82,22 @@ async function lsofAnswer(command: string, args: string[], signal: AbortSignal):
 const OUTPUT_BYTES = 16 * 1024 * 1024
 /** A line this long isn't one lsof's fields make. */
 const LINE_BYTES = 64 * 1024
+
+/**
+ * Whether a process runs under one of `names`, matched as `lsof -c` matches them: a name begins the command's, and
+ * `/…/` is a regular expression. True when that can't be told, so lsof answers as before: the host's probes read the
+ * names only on Linux (`HostProbes.commands`), and elsewhere lsof itself is asked.
+ */
+async function anyRunning(names: string[], runningIf?: (command: RunningCommand) => boolean): Promise<boolean> {
+  if (!names.length) return true
+  const running = await hostStopping()?.probes?.commands?.().catch(() => undefined)
+  if (!running) return true
+  if (runningIf) return running.some(runningIf)
+  const matches = names.map((name) => {
+    const pattern = /^\/(.*)\/([bix]*)$/.exec(name)
+    if (!pattern) return (command: string) => command.startsWith(name)
+    const regex = new RegExp(pattern[1]!, pattern[2]!.includes("i") ? "i" : "")
+    return (command: string) => regex.test(command)
+  })
+  return running.some(({ comm }) => matches.some((match) => match(comm)))
+}
