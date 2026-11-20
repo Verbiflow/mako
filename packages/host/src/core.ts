@@ -2733,7 +2733,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         shell.closeSocket()
         step = "closing the conversations"
         sessions.close()
-        const cloudKept = cloudConversations?.dispose()
+        cloudConversations?.dispose()
         late.agentServers?.close()
         threads.close()
         await workspaces.close()
@@ -2747,7 +2747,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         await children.end()
         for (const stop of unfollow) stop()
         step = "writing what it kept"
-        await Promise.all([unknown.flush(), mismatches.flush(), cloudKept])
+        await Promise.all([unknown.flush(), mismatches.flush()])
       } finally {
         sessions.close()
         for (const timer of slow) clearTimeout(timer)

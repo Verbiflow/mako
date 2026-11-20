@@ -875,12 +875,7 @@ export class CloudConversations {
     return this.#ownerCheck.waiting() !== undefined
   }
 
-  /**
-   * Stops following, and writes what a save waiting out `SAVE_MS` held: dropped, a host that stopped within a second
-   * of relaying a batch followed it from an older event on its restart, and listed a conversation it hadn't saved yet
-   * as none (test-cloud-conversations, on loaded CI runners). Resolves once the file is written.
-   */
-  dispose(): Promise<void> {
+  dispose(): void {
     this.#closed = true
     this.#ownerCheck.close()
     this.#options.account()?.checkAccountWaiting?.()
@@ -889,9 +884,7 @@ export class CloudConversations {
     clearTimeout(this.#nativeLook)
     this.#unlisten?.()
     for (const resume of this.#pauses) resume()
-    const held = this.#saving !== undefined
     clearTimeout(this.#saving)
-    this.#saving = undefined
     for (const prepared of this.#prepared.values()) clearTimeout(prepared.watching)
     for (const subscription of this.#following.values()) subscription?.close()
     for (const timer of this.#changes.values()) clearTimeout(timer)
@@ -901,8 +894,6 @@ export class CloudConversations {
     this.controlPreviews.close()
     this.#session?.session.close()
     this.#session = undefined
-    const written = held ? this.#save() : this.#writing
-    return written.catch((error: Error) => hostWarn("cloud-conversations", "couldn't remember the cloud conversations", { error: error.message }))
   }
 
   /**
