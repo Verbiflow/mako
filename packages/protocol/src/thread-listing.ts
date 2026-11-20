@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
 import { ContinueRepositorySchema, ListedContinueSchema } from "./continue-rows.js"
-import { ASKING_VERSION, CONTINUE_VERSION, FINS_VERSION, FIN_STATES_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, SESSION_ORDER_VERSION, WAITING_FOR_VERSION } from "./version.js"
+import { ASKING_VERSION, CONTINUE_VERSION, FINS_VERSION, FIN_STATES_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, SESSION_ORDER_VERSION, THREAD_MARKS_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 import { WaitingForSchema } from "./attention.js"
 
@@ -196,6 +196,10 @@ export type ListedFin = z.infer<typeof ListedFinSchema>
 export const LISTED_LINEAGE = 8
 const GenerationSchema = z.number().int().positive()
 
+/** Where a Thread's work stands, as the person marks it: Linear's statuses, every device the same. */
+export const ListedWorkStatusSchema = z.enum(["backlog", "in-progress", "in-review", "done"])
+export type ListedWorkStatus = z.infer<typeof ListedWorkStatusSchema>
+
 /** One Session as its owner says it: everything but where it runs, which the cloud knows from who said it. */
 export const ReportedSessionSchema = z
   .object({
@@ -283,6 +287,14 @@ export const ReportedSessionSchema = z
      * a host before it, whose rows rank as they arrive.
      */
     order: z.number().int().min(0).max(100_000).optional(),
+    /**
+     * Where its Thread's work stands, as the person marked it on its owner (`backlog`, `in-progress`, `in-review`,
+     * `done`; a merged pull request marks `done` too), and since when, ms (link version 29 on). Absent: no status.
+     */
+    workStatus: ListedWorkStatusSchema.optional(),
+    workStatusAt: z.number().int().nonnegative().optional(),
+    /** The person marked its Thread to read again (link version 29 on); opening it on any device reads it. */
+    markedUnread: z.literal(true).optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -412,11 +424,19 @@ function finStateOf19(state: ListedFinState): ListedFinState {
  * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= SESSION_ORDER_VERSION) return [...rows]
+  if (version >= THREAD_MARKS_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
+    // Before version 29 a gateway knows no Thread marks: the row goes without them.
+    delete older.workStatus
+    delete older.workStatusAt
+    delete older.markedUnread
+    if (version >= SESSION_ORDER_VERSION) {
+      kept.push(older)
+      continue
+    }
     // Before version 22 a gateway knows no `order`: the row goes without, and ranks where it arrives.
     delete older.order
     if (version >= FIN_STATES_VERSION) {
@@ -548,6 +568,9 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.repository?.url === right.repository?.url &&
     left.repository?.branch === right.repository?.branch &&
     left.forkOf === right.forkOf &&
+    left.workStatus === right.workStatus &&
+    left.workStatusAt === right.workStatusAt &&
+    left.markedUnread === right.markedUnread &&
     left.continued?.op === right.continued?.op &&
     left.continued?.phase === right.continued?.phase &&
     left.continued?.reason === right.continued?.reason &&

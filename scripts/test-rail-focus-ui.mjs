@@ -82,12 +82,12 @@ async function checkWindow() {
       await new Promise((resolveWait) => setTimeout(resolveWait, 30))
     }
   }
-  // Each folder's "More" count as the rail shows it.
-  const counts = () => evaluate(`Object.fromEntries([...document.querySelectorAll('.thread-jump-scope section')].map(section => [section.querySelector('[data-flip-key^="folder:"]')?.dataset.flipKey, [...section.querySelectorAll('button')].find(button => button.textContent.startsWith('More'))?.querySelector('span')?.textContent ?? null]).filter(([key]) => key))`)
+  // Each folder's "Show N more" count as the rail shows it.
+  const counts = () => evaluate(`Object.fromEntries([...document.querySelectorAll('.thread-jump-scope section')].map(section => [section.querySelector('[data-flip-key^="folder:"]')?.dataset.flipKey, section.querySelector('[data-folder-more]')?.dataset.folderMore ?? null]).filter(([key]) => key))`)
   const calls = () => evaluate("({ ...window.__railCalls })")
 
   await window.loadURL(`${base}?mock`)
-  await until(`document.querySelector('[aria-label="Thread view"]') !== null`)
+  await until(`document.querySelector('[data-rail-threads-heading]') !== null`, "the rail")
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 264, theme: 'dark'}))`)
   // The host's side: a 1,500-session catalogue answered with the rail list.
   await evaluate(`Promise.all([import('/packages/host/src/contracts/thread-list.ts'), import('/src/state/threads.ts')]).then(async ([{threadList}, {threads}]) => {

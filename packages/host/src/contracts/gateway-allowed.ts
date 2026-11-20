@@ -25,6 +25,7 @@ const ALLOWED: readonly string[] = [
   "mako:thread-create-session",
   "mako:thread-archive",
   "mako:thread-rename",
+  "mako:thread-mark",
   "mako:thread-move",
   "mako:thread-return",
   "mako:worktrees",

@@ -1,8 +1,9 @@
 import { finsWord } from "@mako/host/contracts/agents"
-import { childGroup, childStateOf, type Rollup } from "@mako/host/contracts/children"
+import { childGroup, childStateOf, rollupLabel, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { threadAsking, threadRollup } from "@/state/fin-rollup"
 import { threadChildren, useRailAcp, type AcpState } from "@/state/acp-state"
+import { usePrefs } from "@/state/prefs"
 
 /**
  * One letter per Fin, in `orderedChildren`' order: `n` needs the person, `w` working, `l` working while it asks its
@@ -60,4 +61,17 @@ export function settledWords(pips: Pips): string {
   const { done, idle, total } = pipsCounts(pips)
   if (done + idle === 0 || done + idle === total) return finsWord(total)
   return [finsWord(total), done ? `${done} done` : "", idle ? `${idle} idle` : ""].filter(Boolean).join(" · ")
+}
+
+/** An Apex's Fins as its row reads them: whether any works (the ring), their counts in words (the tip), and whether it's open. */
+export interface ApexFins {
+  working: boolean
+  label: string | undefined
+  open: boolean
+}
+
+export function useApexFins(thread: string | undefined, apex: boolean): ApexFins {
+  const pips = useRailAcp((state) => (apex ? apexPips(state, thread) : ""))
+  const open = usePrefs((prefs) => Boolean(apex && thread && prefs.openApexes.includes(thread)))
+  return { working: /[wl]/.test(pips), label: pips ? rollupLabel(pipsCounts(pips)) : undefined, open }
 }

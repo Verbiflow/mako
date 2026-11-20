@@ -101,10 +101,10 @@ async function check() {
       await until(`Boolean(${rowOf(copyTitle)})`, "the kept copy's row")
       const copyTip = await evaluate(`${rowOf(copyTitle)}.closest('[data-tip]')?.dataset.tip ?? ${rowOf(copyTitle)}.dataset.tip ?? ''`)
       assert.match(copyTip, /Mako's copy · .+ deleted this session/, "the copy's tip says it's Mako's copy")
-      assert.equal(await evaluate(`${rowOf(copyTitle)}.querySelector('[data-kept]')?.dataset.kept`), "copy")
+      assert.equal(await evaluate(`${rowOf(copyTitle)}.dataset.kept`), "copy")
       const recordsTip = await evaluate(`${rowOf(recordsTitle)}.closest('[data-tip]')?.dataset.tip ?? ${rowOf(recordsTitle)}.dataset.tip ?? ''`)
       assert.match(recordsTip, /Kept by Mako · .+ deleted this session/, "the records' tip says Mako kept it")
-      assert.equal(await evaluate(`${rowOf(recordsTitle)}.querySelector('[data-kept]')?.dataset.kept`), "records")
+      assert.equal(await evaluate(`${rowOf(recordsTitle)}.dataset.kept`), "records")
 
       // The copy, opened: its first line says what it is, and the composer offers what's possible.
       await openRow(copyTitle)

@@ -275,7 +275,7 @@ const CROSSING = (up) => `(() => {
 
 const FORMS = [
   { form: "desk", path: "/?mock&app=apex&turns=260&idle=1", width: 1440, height: 900, mobile: false,
-    open: "(() => { const row = [...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')); row?.click(); return Boolean(row) })()" },
+    open: "(() => { const row = document.querySelector('.thread-jump-scope [data-apex-row]'); row?.click(); return Boolean(row) })()" },
   { form: "laptop browser", path: "/scripts/web-desk.html?app=apex&thread=apex&turns=260&idle=1", width: 1280, height: 800, mobile: false },
   { form: "phone", path: "/scripts/phone-apex.html?app=apex&turns=260&idle=1", width: 390, height: 844, mobile: true,
     open: "(() => { const row = document.querySelector('[data-thread]'); row?.click(); return Boolean(row) })()" },
@@ -488,7 +488,7 @@ async function check() {
       for (let round = 0; round < 3; round += 1) {
         await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Refactor the composer')).click(); true")
         await wait(500)
-        await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
+        await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]').click(); true")
         await until(`document.querySelectorAll(${JSON.stringify(ROW)}).length > 2`, `${form}: its rows again`)
         await wait(500)
       }

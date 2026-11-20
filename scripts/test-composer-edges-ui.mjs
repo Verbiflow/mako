@@ -126,8 +126,8 @@ async function check() {
 
   // The phone's dock: what it draws over the box lines up with it too.
   await load("/scripts/phone-apex.html?app=apex&fins=limit", 390, 844, true)
-  await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone's list")
-  await evaluate("document.querySelector('[data-thread]').click(); true")
+  await until("Boolean(document.querySelector('[data-thread][data-apex-row]'))", "the phone's list")
+  await evaluate("document.querySelector('[data-thread][data-apex-row]').click(); true")
   await until("Boolean(document.querySelector('.composer-box, .web-dock textarea'))", "the phone's composer")
   await until("Boolean(document.querySelector('.web-composer-field'))", "the phone's field")
   const conversation = await evaluate("document.querySelector('[data-conversation]').dataset.conversation")
@@ -145,8 +145,8 @@ async function check() {
   await lined("on the phone", ".web-composer-field", ["[data-probe=queue]", "[data-probe=ask]", "[data-probe=tray]"])
   await capture("phone.png")
   await load("/scripts/phone-apex.html?app=apex&fins=limit", 820, 1180, true)
-  await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the iPad's list")
-  await evaluate("document.querySelector('[data-thread]').click(); true")
+  await until("Boolean(document.querySelector('[data-thread][data-apex-row]'))", "the iPad's list")
+  await evaluate("document.querySelector('[data-thread][data-apex-row]').click(); true")
   await until("Boolean(document.querySelector('.web-composer-field'))", "the iPad's field")
   await evaluate(`(() => {
     const dock = document.querySelector('.web-dock')

@@ -1,4 +1,6 @@
 import { getMako, hasBridge } from "@/lib/bridge"
+import { readThreadMark } from "@/state/thread-marks"
+import { rowThread, threadGroupsStore } from "@/state/thread-groups"
 import { quietly } from "@/lib/quiet-retry"
 import type { EntryOriginal } from "@mako/sessions/record-original"
 import type { RecordRef } from "@mako/sessions/entries"
@@ -639,6 +641,8 @@ export const threadViewingActions = {
       harnessBeforeViewing = threadsStore.get().composerHarness
     threadsStore.set({ composerHarness: liveHarness })
     markThreadReviewed(ref.path)
+    // Opened, it's read: a Mark as unread on its Thread is dropped.
+    readThreadMark(rowThread(ref, threadGroupsStore.get().threadOf))
     // A row another host's conversation owns opens straight into it. Read
     // first, its saved transcript painted only to be replaced by the live one.
     if (adopted && ref.ownedElsewhere) {

@@ -20,6 +20,7 @@ import type {
 import type { ThreadGroup } from "./thread-groups.js"
 import type { SetupAct, SetupActOutcome, SetupView } from "./setup.js"
 import type { ThreadPurpose } from "./thread-purposes.js"
+import type { ThreadMarkChange, ThreadMarkEntry } from "./thread-marks.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
 import type { ProjectAppSetup } from "./project-app.js"
 import type { WorktreeRetentionSettings, WorktreeRetentionReport, ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummariesHeld, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./thread-worktrees.js"
@@ -195,6 +196,13 @@ export function createMakoBridge(transport: BridgeTransport) {
     /** `title: null` gives the Thread's name back to automatic titles. */
     renameThread: (operationId: string, thread: string, title: string | null, original?: string) =>
       invokeTrustedHost<ThreadTitleEntry>("mako:thread-rename", operationId, thread, title, original),
+    threadMarks: () => invokeTrustedHost<ThreadMarkEntry[]>("mako:thread-marks"),
+    /** A Thread's workflow status (`status: null` clears it) or Mark as unread; `operationId` makes a repeat change nothing again. */
+    markThread: (operationId: string, thread: string, change: ThreadMarkChange) =>
+      invokeTrustedHost<ThreadMarkEntry>("mako:thread-mark", operationId, thread, change),
+    /** Moves a chat's folder (`folder`, under Mako's Chats) to `to`, makes it a Git repository, and its conversations go on there. */
+    makeChatProject: (request: { folder: string; to: string }) =>
+      invokeTrustedHost<{ path: string }>("mako:chat-make-project", request),
     importThreadTitles: (entries: Array<{ thread: string; title: string }>) =>
       invokeTrustedHost<ThreadTitleEntry[]>("mako:thread-titles-import", entries),
     worktrees: () => invokeTrustedHost<ThreadWorktrees>("mako:worktrees"),
@@ -1019,8 +1027,9 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<PullRequest | null>("mako:merge-pull", strategy, as),
     /** How many failed GitHub Actions runs were re-run. */
     rerunChecks: () => invokeTrustedHost<number>("mako:rerun-checks"),
-    repoAvatar: (repo: string) =>
-      invokeTrustedHost<string | undefined>("mako:repo-avatar", repo),
+    /** A GitHub owner's public avatar as a data URL (`owner` or `owner/name`; only the owner is used), kept by the host. */
+    repoAvatar: (owner: string) =>
+      invokeTrustedHost<string | undefined>("mako:repo-avatar", owner),
     userAvatar: () => invokeTrustedHost<string | undefined>("mako:user-avatar"),
 
     usage: () => invokeTrustedHost<UsageSummary>("mako:usage"),

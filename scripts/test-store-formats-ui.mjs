@@ -90,7 +90,8 @@ async function check() {
   }
   const bounds = (selector, pad = 12) => evaluate(`(() => { const r = (${selector}).getBoundingClientRect(); return { x: Math.max(0, Math.floor(r.x - ${pad})), y: Math.max(0, Math.floor(r.y - ${pad})), width: Math.ceil(r.width + ${pad * 2}), height: Math.ceil(r.height + ${pad * 2}) } })()`)
   const field = "[data-composer] textarea"
-  const railLine = "document.querySelector('aside [data-store-format=\"threads\"]')"
+  // The rail's line is one of the footer's "N to resolve" lines (the calm rail): opened from there.
+  const railLine = "document.querySelector('[data-rail-issue-lines] [data-store-format=\"threads\"]')"
   const open = async (query, theme) => {
     guard.at(`opening ${query} in ${theme}`)
     await window.loadURL(`${process.env.MAKO_STORE_FORMATS_CHECK_URL}?mock&${query}`)
@@ -108,7 +109,9 @@ async function check() {
     for (const theme of ["dark", "light"]) {
       // The rail: every Thread still listed, one quiet line above the footer.
       await open("app=newer-stores", theme)
-      await until(`Boolean(${railLine})`, "the rail's line")
+      await until("Boolean(document.querySelector('[data-rail-issues]:not([hidden])'))", "the footer's N to resolve")
+      await click("document.querySelector('[data-rail-issues]')")
+      await until(`Boolean(${railLine})`, "the rail's line, in the footer's open lines")
       assert.ok(await evaluate("document.querySelectorAll('[data-thread-row]').length > 0"), "the rail lists the Threads")
       assert.equal(await evaluate(`${railLine}.querySelector('p').textContent`), "A newer Mako (0.163.0) updated your Threads; this one can show them but not change them. Update Mako to edit.")
       assert.equal(await evaluate(`${railLine}.querySelector('[data-update-mako]').textContent`), "Update")
@@ -162,6 +165,8 @@ async function check() {
       await open("app=newer-stores&later=1", theme)
       // The host's own answer had every store this build's: whatever shows came with the event.
       assert.equal(await evaluate("window.mako.storeFormats().then((formats) => formats.stores.every((row) => row.access === 'write'))"), true, "nothing is said of stores this build writes")
+      await until("Boolean(document.querySelector('[data-rail-issues]:not([hidden])'))", "the footer's N to resolve after a newer Mako changed the store", 8000)
+      await click("document.querySelector('[data-rail-issues]')")
       await until(`Boolean(${railLine})`, "the line after a newer Mako changed the store", 8000)
       await capture(`rail-line-later-${theme}.png`, await bounds(railLine, 8))
     }

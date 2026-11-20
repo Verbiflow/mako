@@ -166,11 +166,11 @@ async function check() {
       await load(path, width, height, mobile)
       if (form === "desk") {
         await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the rail")
-        await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
+        await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]').click(); true")
       }
       if (form === "phone") {
-        await until("Boolean(document.querySelector('[data-thread]'))", "the list")
-        await evaluate("document.querySelector('[data-thread]').click(); true")
+        await until("Boolean(document.querySelector('[data-thread][data-apex-row]'))", "the list")
+        await evaluate("document.querySelector('[data-thread][data-apex-row]').click(); true")
       }
       await until(`Boolean(${VIEW}) && Boolean(document.querySelector('[data-shiver]'))`, "the Apex")
       await install()
@@ -278,7 +278,7 @@ async function check() {
   // What's mounted on the desk stays a window however many turns arrive, for a reader up or at the end.
   await load("/?mock&app=apex&turns=260", 1440, 900)
   await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the long Apex's rail")
-  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
+  await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]').click(); true")
   await until(`Boolean(${VIEW}) && Boolean(document.querySelector('[data-shiver]'))`, "the long Apex")
   await install()
   await wait(400)
@@ -311,7 +311,7 @@ async function check() {
   // Crossing into a window under a reader who's up: they stay where they are, and what's mounted falls.
   await load("/?mock&app=apex&turns=12", 1440, 900)
   await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the Apex just short of a window's rail")
-  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
+  await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]').click(); true")
   await until(`Boolean(${VIEW}) && Boolean(document.querySelector('[data-shiver]'))`, "the Apex just short of a window")
   await install()
   await wait(400)

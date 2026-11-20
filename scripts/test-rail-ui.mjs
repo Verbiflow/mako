@@ -119,18 +119,18 @@ async function checkWindow() {
   const victimRef = await evaluate(`import('/src/state/threads.ts').then(({threadsStore}) => threadsStore.get().threads.find(ref => ref.path === ${JSON.stringify(victim)}))`)
   assert.ok(victimRef, "the last folder has a native row")
 
-  // 1. Status changes the mark and the chip, never the place.
+  // 1. Status changes the row's mark, never the place; the project says nothing of it while open (the calm rail).
   await evaluate(`import('/src/state/threads.ts').then(({setThreadRunning}) => setThreadRunning(${JSON.stringify(victim)}, true))`)
-  await until(`document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(lastFolder)}] [data-folder-activity="working"]')?.textContent === '1 running'`, "folder chip shows the run")
+  await until(`document.querySelector('.thread-jump-scope [data-thread-row][data-flip-key=${JSON.stringify(victim)}] [data-live-mark="working"]') !== null`, "the row's fin works")
+  assert.equal(await evaluate(`document.querySelectorAll('.thread-jump-scope [data-folder-activity]').length`), 0, "no project chip counts it")
   assert.deepEqual(await folderOrder(), before, "a thread starting work must not lift its folder")
   await evaluate(`import('/src/state/threads.ts').then(({applyThreadRun}) => applyThreadRun({path: ${JSON.stringify(victim)}, harness: ${JSON.stringify(victimRef.harness)}, status: 'done'}))`)
-  await until(`document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(lastFolder)}] [data-folder-activity="complete"]')?.textContent === '1 to review'`, "folder chip shows the unread reply")
+  await until(`document.querySelector('.thread-jump-scope [data-thread-row][data-flip-key=${JSON.stringify(victim)}] [data-live-mark="unread"]') !== null`, "the row's fin wears the unread answer")
   assert.deepEqual(await folderOrder(), before, "a finished turn must not lift its folder")
-  console.log("PASS: working and finished-unread change the chip, not the folder's place")
+  console.log("PASS: working and finished-unread change the row's fin, not the folder's place")
 
   // 1b. The unread answer is one fresh mark on its row; a failure is an
-  // outcome you acknowledge by opening the thread, and its folder's chip
-  // stops reporting it the moment you do.
+  // outcome you acknowledge by opening the thread.
   const victimRow = `.thread-jump-scope [data-thread-row][data-flip-key=${JSON.stringify(victim)}]`
   await until(`document.querySelector(${JSON.stringify(`${victimRow} .review-dot`)}) !== null`, "the finished row wears the unread mark")
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(`${victimRow} .review-dot`)}).hasAttribute('data-new')`), true, "an answer that just finished arrives; it is not painted still")
@@ -142,17 +142,14 @@ async function checkWindow() {
   const failFolder = before[0]
   const failing = (await rowsIn(failFolder))[1]
   assert.ok(failing, "the first folder has a second row to fail")
-  const failFolderChip = (state) => `document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(failFolder)}] [data-folder-activity="${state}"]')`
   await evaluate(`import('/src/state/threads.ts').then(({applyThreadRun}) => { applyThreadRun({path: ${JSON.stringify(failing)}, harness: ${JSON.stringify(victimRef.harness)}, status: 'running'}); applyThreadRun({path: ${JSON.stringify(failing)}, harness: ${JSON.stringify(victimRef.harness)}, status: 'failed', error: 'The provider exited'}) })`)
   const failingRow = `.thread-jump-scope [data-thread-row][data-flip-key=${JSON.stringify(failing)}]`
   await until(`document.querySelector(${JSON.stringify(`${failingRow} [data-live-mark="failed"]`)}) !== null`, "the failed row wears the failure")
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(`${failingRow} [data-status-end="failed"]`)})?.textContent`), "Failed", "and says so where its time stood")
-  await until(`${failFolderChip("failed")}?.textContent === '1 failed'`, "the folder chip reports the unseen failure")
   assert.deepEqual(await folderOrder(), before, "a failure must not lift its folder")
   await capture("rail-failed.png")
   await click(failingRow)
   await until(`document.querySelector(${JSON.stringify(`${failingRow} [data-live-mark="failed"]`)}) === null`, "opening the failed thread stands its mark down")
-  await until(`${failFolderChip("failed")} === null`, "the folder chip stops reporting a failure you have seen")
   await evaluate(`import('/src/state/threads.ts').then(({threads}) => threads.closeViewer())`)
   await move(900, 500)
   await frames()
@@ -258,7 +255,7 @@ async function checkWindow() {
   // 3c. A row's controls float over its trailing edge: the pointer shows
   // them without taking any width from the title.
   const firstRow = `document.querySelectorAll(${JSON.stringify(tipRows)})[0]`
-  const titleWidth = () => evaluate(`${firstRow}.querySelector('span.truncate').getBoundingClientRect().width`)
+  const titleWidth = () => evaluate(`${firstRow}.querySelector('[data-row-title]').getBoundingClientRect().width`)
   const controlsShown = `((controls) => controls.offsetParent !== null && getComputedStyle(controls).opacity === '1')(${firstRow}.querySelector('.rail-row-actions'))`
   const restingWidth = await titleWidth()
   assert.equal(await evaluate(controlsShown), false, "a row's controls are hidden at rest")
@@ -333,37 +330,33 @@ async function checkWindow() {
   console.log("PASS: reduced motion is honoured")
   await page.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [] })
 
-  // 8. A Thread Mako starts to set a project up says so on its row, and keeps
-  // saying so once the host has recorded it; no other row does.
-  const purposeRows = () => evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].filter(row => row.querySelector('[data-thread-purpose]')).map(row => ({ text: row.textContent, label: row.getAttribute('aria-label'), chip: row.querySelector('[data-thread-purpose]').textContent, tip: row.querySelector('[data-thread-purpose]').dataset.tip }))`)
+  // 8. A Thread Mako starts to set a project up says so in its row's tip, and keeps saying so once the host has
+  // recorded it; no other row does. The row draws no chip for it (the calm rail).
+  const purposeRows = () => evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row][data-thread-purpose]')].map(row => ({ text: row.textContent, label: row.getAttribute('aria-label'), kind: row.dataset.threadPurpose, tip: row.dataset.tip ?? '', chip: row.querySelector('[data-thread-purpose]') !== null }))`)
   await window.loadURL(`${base}?mock&app=setup`)
   await until(`document.querySelector('[data-app-control]') !== null && document.querySelectorAll('.thread-jump-scope [data-thread-row]').length > 0`, "the setup desk rendered")
   assert.deepEqual(await purposeRows(), [], "no row is a setup Thread before one starts")
   await evaluate(`(() => { const trigger = document.querySelector('[data-app-control]'); trigger.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0, pointerType: 'mouse' })); trigger.click(); return true })()`)
   await until(`document.querySelector('[data-app-action="set-up"]') !== null`, "the setup choices opened")
   await evaluate(`(document.querySelector('[data-app-action="set-up"]').click(), true)`)
-  await until(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].some(row => row.textContent.includes('Set up mako') && row.querySelector('[data-thread-purpose="setup"]'))`, "the new setup Thread's row shows Setup")
+  await until(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row][data-thread-purpose="setup"]')].some(row => row.textContent.includes('Set up mako'))`, "the new setup Thread's row is marked setup")
   await until(`import('/src/state/acp-state.ts').then(({acpStore}) => Object.values(acpStore.get().conversations).some(conversation => conversation.kind === 'live' && conversation.title === 'Set up mako' && conversation.threadId))`, "the setup Thread is live under its Thread")
-  await until(`document.querySelector('.thread-jump-scope [data-thread-purpose]')?.dataset.tip === 'Mako started this Thread to set up mako'`, "the host's record names the project")
+  await until(`document.querySelector('.thread-jump-scope [data-thread-row][data-thread-purpose]')?.dataset.tip?.includes('Mako started this Thread to set up mako')`, "the host's record names the project in the tip")
   const started = await purposeRows()
   assert.equal(started.length, 1, `one setup row, received ${JSON.stringify(started)}`)
-  assert.equal(started[0].chip, "Setup")
+  assert.equal(started[0].chip, false, "no chip on the row")
   assert.match(started[0].label ?? started[0].text, /Set up mako/)
   if (started[0].label) assert.match(started[0].label, /setup Thread/, "a row that names itself for assistive tech says it's a setup Thread")
-  await capture("rail-setup-chip.png")
-  await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'light'}))`)
-  await until(`document.documentElement.classList.contains('light')`)
-  await capture("rail-setup-chip-light.png")
-  await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
+  await capture("rail-setup.png")
 
   await window.loadURL(`${base}?mock&app=rail`)
-  await until(`document.querySelector('.thread-jump-scope [data-thread-purpose]') !== null`, "the rail desk's setup Thread is marked")
+  await until(`document.querySelector('.thread-jump-scope [data-thread-row][data-thread-purpose]') !== null`, "the rail desk's setup Thread is marked")
   const recorded = await purposeRows()
   assert.equal(recorded.length, 1, `only the Thread recorded as a setup Thread is marked, received ${JSON.stringify(recorded)}`)
   assert.match(recorded[0].text, /Set up api/)
-  assert.equal(recorded[0].tip, "Mako started this Thread to set up api")
-  await capture("rail-setup-chip-recorded.png")
-  console.log("PASS: a setup Thread is marked on its row, and only it")
+  assert.match(recorded[0].tip, /Mako started this Thread to set up api/)
+  await capture("rail-setup-recorded.png")
+  console.log("PASS: a setup Thread says so in its tip, and only it")
 
   guard.done()
   console.log("Rail UI checks clean: stable folders, pointer hold, glides, scrolling, the Inbox, archived filter, reduced motion, setup Threads")

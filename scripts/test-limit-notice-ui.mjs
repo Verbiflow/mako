@@ -202,7 +202,8 @@ async function check() {
   await screen("phone-inbox", phoneTheme)
   await load(`${base}scripts/phone-apex.html?app=apex&fins=limit`)
   await until("document.querySelectorAll('[data-fin-row]').length > 0", "the phone's rows")
-  await evaluate("[...document.querySelectorAll('button, a')].find((each) => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
+  // The Apex's row: its Fins counted in its counts (`data-fin-counts`), not its text, on the calm list.
+  await evaluate("[...document.querySelectorAll('[data-thread][data-apex-row]')].find((each) => each.innerText.includes('Mobile polish') && each.dataset.finCounts?.startsWith('12 Fins')).click(); true")
   await until("Boolean(document.querySelector('[data-apex-count]'))", "the phone's Thread")
   // The notice stands in the Shiver card, which mounts after the bar does: the card is what a read of it waits for.
   await until("Boolean(document.querySelector('[data-shiver]'))", "the phone's Shiver card")
@@ -299,7 +300,8 @@ async function check() {
     await load(`${base}${path}`)
     if (mobile) {
       await until("document.querySelectorAll('[data-fin-row]').length > 0", `${name}: its rows`)
-      await evaluate("[...document.querySelectorAll('button, a')].find((each) => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
+      // The Apex's row: its Fins counted in its counts (`data-fin-counts`), not its text, on the calm list.
+      await evaluate("[...document.querySelectorAll('[data-thread][data-apex-row]')].find((each) => each.innerText.includes('Mobile polish') && each.dataset.finCounts?.startsWith('12 Fins')).click(); true")
     }
     await until("Boolean(document.querySelector('[data-apex-count], [data-shiver]'))", `${name}: its Thread`)
     // A phone's page opens the Thread before its conversation is the active one.
@@ -323,7 +325,7 @@ async function check() {
     await load(`${base}${path}`)
     if (mobile) {
       await until("document.querySelectorAll('[data-fin-row]').length > 0", `${name}: rows`)
-      await evaluate("[...document.querySelectorAll('button, a')].find(each => each.innerText.includes('Mobile polish') && each.innerText.includes('12 Fins')).click(); true")
+      await evaluate("[...document.querySelectorAll('[data-thread][data-apex-row]')].find((each) => each.innerText.includes('Mobile polish') && each.dataset.finCounts?.startsWith('12 Fins')).click(); true")
     }
     await until("Boolean(document.querySelector('[data-shiver] [data-limit-notice]'))", `${name}: its notice`)
     const at = await evaluate(`(() => {

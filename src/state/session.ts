@@ -21,6 +21,7 @@ import { applyFileEvents, loadFileEvents } from "@/state/file-events"
 import { applyMcpSignIns, loadMcpSignIns } from "@/state/mcp-sign-ins"
 import { loadUnopened } from "@/state/unopened-conversations"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
+import { applyThreadMarks, loadThreadMarks } from "@/state/thread-marks"
 import { applyWorktreeSummaries, applyWorktreeSummaryChanges, refreshWorktrees, refreshWorktreeSummaries, worktreeSizesWereMeasured } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
@@ -386,6 +387,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "mcp-sign-ins") {
     applyMcpSignIns(event.reading)
+    return
+  }
+  if (event.type === "thread-marks") {
+    applyThreadMarks(event.marks)
     return
   }
   if (event.type === "thread-titles") {
@@ -852,6 +857,7 @@ async function loadGroups() {
     // Saved conversations the host couldn't open, for the rail and Diagnostics; a host without the reading has none.
     loadUnopened().catch(() => undefined),
     quietly("Thread titles", loadThreadTitles).catch((error) => unread("Thread titles", { error })),
+    quietly("Thread marks", loadThreadMarks).catch((error) => unread("Thread marks", { error })),
   ])
 }
 

@@ -48,7 +48,8 @@ export function MenuTrigger(props: ComponentProps<typeof DropdownMenu.Trigger>) 
 }
 
 export function MenuSub(props: ComponentProps<typeof DropdownMenu.Sub>) {
-  return <DropdownMenu.Sub {...props} />
+  const Sub = useContext(Flavor) === "context" ? ContextMenuPrimitive.Sub : DropdownMenu.Sub
+  return <Sub {...props} />
 }
 
 export function MenuRadioGroup(props: ComponentProps<typeof DropdownMenu.RadioGroup>) {
@@ -88,6 +89,16 @@ export function MenuSubContent({
   className,
   ...props
 }: ComponentProps<typeof DropdownMenu.SubContent>) {
+  // A submenu of a right-click menu is the context menu's own: Radix keeps the two kinds apart.
+  const flavor = useContext(Flavor)
+  if (flavor === "context")
+    return (
+      <ContextMenuPrimitive.Portal>
+        <Flavor.Provider value="context">
+          <ContextMenuPrimitive.SubContent sideOffset={6} alignOffset={-4} collisionPadding={8} className={cn(panel, className)} {...props} />
+        </Flavor.Provider>
+      </ContextMenuPrimitive.Portal>
+    )
   return (
     <DropdownMenu.Portal>
       <DropdownMenu.SubContent
@@ -114,14 +125,15 @@ export function MenuSubTrigger({
   children,
   ...props
 }: ComponentProps<typeof DropdownMenu.SubTrigger>) {
+  const SubTrigger = useContext(Flavor) === "context" ? ContextMenuPrimitive.SubTrigger : DropdownMenu.SubTrigger
   return (
-    <DropdownMenu.SubTrigger
+    <SubTrigger
       className={cn(row, "data-[state=open]:bg-fill-hover", className)}
       {...props}
     >
       {children}
-      <ChevronRightIcon className="size-3.5 shrink-0 text-faint" />
-    </DropdownMenu.SubTrigger>
+      <ChevronRightIcon className="ml-auto size-3.5 shrink-0 text-faint" />
+    </SubTrigger>
   )
 }
 

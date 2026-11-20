@@ -105,9 +105,10 @@ async function checkDesk() {
     // 0. Before anything is opened, the rail says what the Mac's rail shows: each project's checkout, the agent a row
     //    ran in before, and the Thread waiting on background work.
     await desk("dark", "list")
-    const heads = await evaluate("[...document.querySelectorAll('[data-flip-key^=\"folder:\"]')].map(node => node.textContent.replace(/\\s+/g, ' ').trim())")
-    assert.ok(heads.some((head) => head.startsWith("api") && head.includes("billing-webhook-retries")), `the api project's branch: ${JSON.stringify(heads)}`)
-    assert.ok(heads.some((head) => head.startsWith("site") && head.includes("Rebasing pricing-table")), `the site project mid-rebase: ${JSON.stringify(heads)}`)
+    // The calm rail: a project row is its avatar and name; its checkout is its tip.
+    const heads = await evaluate("[...document.querySelectorAll('[data-folder-toggle]')].map(node => ({ name: node.textContent.replace(/\\s+/g, ' ').trim(), tip: node.dataset.tip ?? '' }))")
+    assert.ok(heads.some((head) => head.name.endsWith("api") && head.tip.includes("billing-webhook-retries")), `the api project's branch: ${JSON.stringify(heads)}`)
+    assert.ok(heads.some((head) => head.name.endsWith("site") && /Rebasing pricing-table/i.test(head.tip)), `the site project mid-rebase: ${JSON.stringify(heads)}`)
     const busy = "[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Thread Environments'))"
     assert.equal(await evaluate(`${busy}.getAttribute('aria-label').includes('background task')`), true, "the busy Thread waits on its background work, before it's opened")
     assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].find(node => node.textContent.includes('Ship the billing webhooks')).querySelectorAll('.live-mark').length"), 1, "a row wears one mark, its current agent's, whatever it ran in before")
@@ -121,10 +122,12 @@ async function checkDesk() {
     await until("Boolean(document.querySelector('[data-background-work]'))", "the busy Session's background work")
 
     // 1. The desktop's rail: projects, each Thread one row hanging from its project's hairline; four Sessions, one row.
-    const folders = await evaluate("[...document.querySelectorAll('[data-flip-key^=\"folder:\"]')].map(node => node.textContent.trim())")
+    // A project row is its avatar (a letter or a picture) and its name.
+    const folders = await evaluate("[...document.querySelectorAll('[data-folder-toggle]')].map(node => node.querySelector('.rail-fade')?.textContent.trim() ?? '')")
     assert.ok(folders.some((name) => name.startsWith("mako")) && folders.some((name) => name.startsWith("api")), `the rail's projects: ${JSON.stringify(folders)}`)
     assert.ok((await evaluate("document.querySelectorAll('[data-thread-row][data-thread-indent]').length")) >= 4, "Threads are indented under their project")
-    assert.equal(await evaluate("document.querySelectorAll('[aria-label=\"4 sessions\"]').length"), 1, "the busy Thread is one row for its four Sessions")
+    // Its Sessions are its tip's (the calm rail draws no count on the row).
+    assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].filter((row) => /(^|\\n)4 sessions/.test(row.dataset.tip ?? '') || /4 sessions/.test(row.getAttribute('aria-label') ?? '')).length"), 1, "the busy Thread is one row for its four Sessions")
     assert.equal(await evaluate("Boolean(document.querySelector('[data-thread-row][data-active]'))"), true, "the open Thread's row is lit")
     assert.equal(await evaluate("document.querySelector('[data-rail-threads-heading]')?.textContent"), "Projects", "the rail's Projects, with no view switch")
     assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-rail-top-row]')].map(node => node.dataset.railTopRow)"), ["session.new", "view.command-palette", "inbox"], "a browser's rail tops with New thread, Search and the Inbox")

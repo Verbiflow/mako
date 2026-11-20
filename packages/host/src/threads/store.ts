@@ -50,6 +50,7 @@ import { ThreadGroupSchema, type ThreadGroup } from "../contracts/thread-groups.
 import type { RetiredWorktree, ThreadWorktree } from "../contracts/thread-worktrees.js"
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
+import { WorkStatusSchema, type ThreadMarkChange, type ThreadMarkEntry } from "../contracts/thread-marks.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
 import { FinTurnSchema, INTERNAL_RUN_CLOSE, LimitNoticeSchema, ReportSchema, ThreadParentSchema, internalDiscoveredRun, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -126,7 +127,7 @@ export const HELD_BY_TABLE = new Map<string, "edges" | "threads" | "both" | "nei
   agent_report_actions: "neither", agent_spawns: "neither", app_environments: "neither", executions: "neither", fin_moves: "neither",
   limit_notices: "neither", locators: "neither", moves: "neither", operations: "neither", placement_changes: "neither", principals: "neither",
   retired_worktrees: "neither", store_meta: "neither", store_migrations: "neither", thread_environments: "neither", thread_places: "neither",
-  thread_purposes: "neither", thread_reports: "neither", thread_splits: "neither", thread_worktree_repositories: "neither",
+  thread_marks: "neither", thread_purposes: "neither", thread_reports: "neither", thread_splits: "neither", thread_worktree_repositories: "neither",
   thread_worktrees: "neither", title_changes: "neither", title_exchanges: "neither", turn_waits: "neither",
 }))
 const TABLE_WRITE = /^\s*(?:INSERT(?:\s+OR\s+\w+)?\s+INTO|REPLACE\s+INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+["`]?([A-Za-z_]+)/i
@@ -153,6 +154,8 @@ interface OperationContent {
   conversation?: string
   session?: SessionId
   forkOf?: string
+  /** A Thread's marks as changed (`markThread`), in words: `status:done`, `unread:true`. */
+  marks?: string
 }
 
 /** A store whose `reads` is newer than this build: it's left as it is, and the error names the Mako that reads it. */
@@ -576,6 +579,23 @@ const PURPOSE_TABLE = `
 CREATE TABLE IF NOT EXISTS thread_purposes (
   thread_id TEXT PRIMARY KEY REFERENCES threads(id), purpose TEXT NOT NULL, project TEXT NOT NULL, created_at INTEGER NOT NULL);
 `
+/**
+ * What the person marks a Thread with (`contracts/thread-marks.ts`): its workflow status, when and by whom it was set,
+ * the pull request that last set it Done (so a merge marks a Thread Done once), and Mark as unread. `status` is
+ * unchecked so a later build can add one; a build that doesn't know a status shows none. Added without a number.
+ */
+const MARK_TABLE = `
+CREATE TABLE IF NOT EXISTS thread_marks (
+  thread_id TEXT PRIMARY KEY REFERENCES threads(id), status TEXT, status_at INTEGER, status_by TEXT, merged_pull TEXT,
+  unread_at INTEGER, updated_at INTEGER NOT NULL);
+`
+const MarkRowSchema = z.object({
+  thread_id: z.string(),
+  status: z.string().nullable(),
+  status_at: z.number().nullable(),
+  status_by: z.string().nullable(),
+  unread_at: z.number().nullable(),
+})
 const PurposeRowSchema = z.object({ thread_id: z.string(), purpose: z.string(), project: z.string(), created_at: z.number() })
 /**
  * Migration 3, from builds that named Threads automatically. `title` with
@@ -2317,6 +2337,84 @@ export class ThreadStore {
     return [...found.values()]
   }
 
+  /** Every Thread the person marked, following merges into the Thread that stands. */
+  marks(): ThreadMarkEntry[] {
+    const found = new Map<string, ThreadMarkEntry>()
+    for (const row of this.sql("SELECT thread_id, status, status_at, status_by, unread_at FROM thread_marks ORDER BY updated_at").all()) {
+      const parsed = MarkRowSchema.parse(row)
+      const thread = this.thread(ThreadIdSchema.parse(parsed.thread_id))
+      if (!thread) continue
+      const entry = markEntry(thread.id, parsed)
+      if (entry.status !== null || entry.unreadAt !== null) found.set(thread.id, entry)
+    }
+    return [...found.values()]
+  }
+
+  /** One Thread's marks, following merges; an entry of nulls when it has none. */
+  markEntry(id: ThreadId): ThreadMarkEntry | undefined {
+    const thread = this.thread(id)
+    if (!thread) return undefined
+    const row = this.sql("SELECT thread_id, status, status_at, status_by, unread_at FROM thread_marks WHERE thread_id = ?").get(thread.id)
+    return row ? markEntry(thread.id, MarkRowSchema.parse(row)) : { thread: thread.id, status: null, statusAt: null, by: null, unreadAt: null }
+  }
+
+  /** The person's change to a Thread's marks; a repeat of `operationId` changes nothing again. */
+  markThread(input: { operationId: string; thread: ThreadId; change: ThreadMarkChange; actor: Actor }): ThreadMarkEntry {
+    return this.write(() => {
+      const marked = this.receipt(input.operationId, "mark-thread", { thread: input.thread, marks: [input.change.status === undefined ? "" : `status:${input.change.status}`, input.change.unread === undefined ? "" : `unread:${input.change.unread}`].filter(Boolean).join(" ") }, input.actor, () => {
+        const thread = this.thread(input.thread)
+        if (!thread) throw new Error("That Thread no longer exists")
+        const now = this.now()
+        this.sql("INSERT OR IGNORE INTO thread_marks (thread_id, updated_at) VALUES (?, ?)").run(thread.id, now)
+        if (input.change.status !== undefined)
+          this.sql("UPDATE thread_marks SET status = ?, status_at = ?, status_by = ?, updated_at = ? WHERE thread_id = ?")
+            .run(input.change.status, input.change.status === null ? null : now, input.change.status === null ? null : "person", now, thread.id)
+        if (input.change.unread !== undefined)
+          this.sql("UPDATE thread_marks SET unread_at = ?, updated_at = ? WHERE thread_id = ?").run(input.change.unread ? now : null, now, thread.id)
+        return { thread: thread.id }
+      }, z.object({ thread: ThreadIdSchema }))
+      const entry = this.markEntry(marked.thread)
+      if (!entry) throw new Error("That Thread no longer exists")
+      return entry
+    })
+  }
+
+  /**
+   * A Thread's pull request merged: it's Done, once per pull request (`pull`, its URL), so a person who moves it back
+   * keeps their status through every later reading of the same merge. Undefined when nothing changed.
+   */
+  markPullMerged(id: ThreadId, pull: string): ThreadMarkEntry | undefined {
+    return this.write(() => {
+      const thread = this.thread(id)
+      if (!thread) return undefined
+      const now = this.now()
+      this.sql("INSERT OR IGNORE INTO thread_marks (thread_id, updated_at) VALUES (?, ?)").run(thread.id, now)
+      const changed = this.sql(`UPDATE thread_marks SET status = 'done', status_at = ?, status_by = 'pull', merged_pull = ?, updated_at = ?
+        WHERE thread_id = ? AND merged_pull IS NOT ? AND status IS NOT 'done'`).run(now, pull, now, thread.id, pull)
+      if (!changed.changes) {
+        // Already Done (by the person, or an earlier merge): this pull request is counted all the same.
+        this.sql("UPDATE thread_marks SET merged_pull = ? WHERE thread_id = ? AND merged_pull IS NOT ?").run(pull, thread.id, pull)
+        return undefined
+      }
+      return this.markEntry(thread.id)
+    })
+  }
+
+  /**
+   * Each of these Threads' marks, as a report of many reads them (`marksOf`): one read of the marks table, which holds
+   * only the Threads the person marked, never a lookup per Thread.
+   */
+  marksOf(ids: Iterable<ThreadId>): Map<ThreadId, ThreadMarkEntry> {
+    const wanted = new Set(ids)
+    const marks = new Map<ThreadId, ThreadMarkEntry>()
+    if (!wanted.size) return marks
+    for (const entry of this.marks()) {
+      const id = ThreadIdSchema.parse(entry.thread)
+      if (wanted.has(id)) marks.set(id, entry)
+    }
+    return marks
+  }
+
   /** An app's values on this device, marked as used now. */
   useEnvironment(app: AppKey): ThreadEnvironmentValues | undefined {
     return this.write(() => {
@@ -3607,6 +3705,7 @@ export class ThreadStore {
     this.keepOneWorktreePerThread()
     this.db.exec(ENVIRONMENT_TABLE)
     this.db.exec(PURPOSE_TABLE)
+    this.db.exec(MARK_TABLE)
     this.db.exec(EDGE_TABLES)
     this.closeInternalRuns()
     // Delegate, retired, made forks with a task; their Sessions are forks.
@@ -4031,4 +4130,15 @@ export function uniqueName(title: string, taken: ReadonlySet<string>): string {
   const base = words.slice(0, 60)
   if (!taken.has(base)) return base
   for (let index = 2; ; index += 1) if (!taken.has(`${base}-${index}`)) return `${base}-${index}`
+}
+
+function markEntry(thread: string, row: z.infer<typeof MarkRowSchema>): ThreadMarkEntry {
+  const status = WorkStatusSchema.safeParse(row.status)
+  return {
+    thread,
+    status: status.success ? status.data : null,
+    statusAt: status.success ? row.status_at : null,
+    by: status.success ? (row.status_by === "pull" ? "pull" : "person") : null,
+    unreadAt: row.unread_at,
+  }
 }

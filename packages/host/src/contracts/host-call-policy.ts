@@ -102,6 +102,9 @@ const reads = [
   "mako:worktree-review-diffs",
   "mako:worktree-branches",
   "mako:project-settings",
+  "mako:thread-marks",
+  /** A GitHub owner's avatar, kept on disk once fetched: asking again reaches the same picture. */
+  "mako:repo-avatar",
   "mako:worktree-pulls",
   "mako:worktree-summaries",
   "mako:worktree-removal",
@@ -422,6 +425,8 @@ const replays = [
   "mako:live-continue-turn",
   /** `ThreadStore.renameThread` and `clearThreadTitle`: the operation id is receipted. */
   "mako:thread-rename",
+  /** `ThreadStore.markThread`: the operation id is receipted. */
+  "mako:thread-mark",
   /** Importing names only fills Threads that have none, so a repeat changes nothing. */
   "mako:thread-titles-import",
   /** Choosing a task's model a second time is the same choice. */

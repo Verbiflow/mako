@@ -1,30 +1,4 @@
-import type { ThreadFolder } from "@/lib/thread-folders"
-import { LiveMark } from "@/components/ui/live-mark"
-import type { LiveMarkState } from "@/lib/live-mark-state"
 import { Skeleton } from "@/components/ui/skeleton"
-
-export function FolderActivity({ folder }: { folder: ThreadFolder }) {
-  const running = folder.running + folder.active
-  const state = folder.needsInput ? "waiting" : folder.failed ? "failed" : running ? "working" : folder.unread ? "complete" : "idle"
-  if (state === "idle") return null
-  const mark: LiveMarkState = state === "waiting" ? "needs" : state === "failed" ? "failed" : state === "working" ? "working" : "unread"
-  const label = folder.needsInput ? `${folder.needsInput} ${folder.needsInput === 1 ? "needs" : "need"} you`
-    : folder.failed ? `${folder.failed} failed`
-    : running ? `${running} running` : `${folder.unread} to review`
-  const description = [
-    folder.running ? `${folder.running} running in this Mako` : null,
-    folder.active ? `${folder.active} running outside this Mako` : null,
-    folder.needsInput ? `${folder.needsInput} awaiting approval` : null,
-    folder.failed ? `${folder.failed} failed` : null,
-    folder.unread ? `${folder.unread} replies to review` : null,
-  ].filter(Boolean).join(", ")
-  return (
-    <span data-folder-activity={state} title={description} aria-label={`${folder.name}: ${description}`} className="flex shrink-0 items-center gap-1 text-label text-muted-foreground">
-      <LiveMark state={mark} size={16} />
-      <span>{label}</span>
-    </span>
-  )
-}
 
 /**
  * The catalog warming up, drawn as the thing it is about to become: two

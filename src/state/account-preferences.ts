@@ -1,11 +1,12 @@
 import type { PreferenceValues } from "@mako/host/contracts/preferences"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { prefsStore, setPref } from "@/state/prefs"
+import { applyProjectOrder } from "@/state/project-order"
 
 /**
  * The preferences that follow the person's account (`contracts/preferences.ts`) as this window shows them. The host
- * keeps them for the account; this window applies what it says and hands it the person's changes. Today that's the
- * theme: chosen here, it's every window's, the web app's and the phone's.
+ * keeps them for the account; this window applies what it says and hands it the person's changes: the theme, chosen
+ * here, is every window's, the web app's and the phone's, and so is the order the rail's projects were dragged to.
  */
 
 /** The theme the host said last: a change to `prefs.theme` that only applies it isn't the person's, and isn't sent. */
@@ -13,6 +14,7 @@ let applied: string | undefined
 let following = false
 
 export function applyPreferences(values: PreferenceValues): void {
+  applyProjectOrder(values["rail.projectOrder"])
   // The account holds no theme: this window keeps its own until the person chooses one somewhere.
   if (values.theme === undefined) return
   applied = values.theme

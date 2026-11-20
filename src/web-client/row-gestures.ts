@@ -118,7 +118,8 @@ export function useRowGestures(container: RefObject<HTMLElement | null>, row: Re
     const start = (event: TouchEvent) => {
       const finger = event.touches[0]
       if (leaving || event.touches.length !== 1 || !finger) return
-      if (event.target instanceof Element && event.target.closest("[data-swipe-action]")) return
+      // Its action, and a control of its own (an Apex's fold), are pressed for themselves.
+      if (event.target instanceof Element && event.target.closest("[data-swipe-action], [data-row-fold]")) return
       touch = { x: finger.clientX, y: finger.clientY, at: performance.now(), from: catchElement(front).x }
       mode = "undecided"
       held = false

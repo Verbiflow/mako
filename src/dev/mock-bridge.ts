@@ -31,6 +31,7 @@ import { mockStorage } from "./mock-storage"
 import { mockProjects } from "./mock-projects"
 import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
+import type { ThreadMarkChange, ThreadMarkEntry } from "@mako/host/contracts/thread-marks"
 import type { FileWriters, RewindPreview, WorkspaceSnapshot } from "@mako/host/contracts/workspace-snapshots"
 import type { UtilityModelOption, UtilityTask, UtilityTaskState, UtilityWorkChoices, UtilityWorkSettings } from "@mako/host/contracts/utility-work"
 import type { NativeRequestInput, NativeRequest } from "@mako/host/contracts/native-requests"
@@ -103,6 +104,18 @@ import { openAsk } from "@mako/host/contracts/children"
 import { apexWorktrees, apexWorktreeSummaries, benchChild, benchApexes, CHURN, apexRefs, apexSnapshots, apexSummaries, placedSnapshot, APEX_CONVERSATION, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
 /** The repository's pull requests as the `#` menu finds them. */
+/** A row the fixture didn't place gets the Thread id the host's store would give it: one per path, the same every read. */
+function withThreadId(ref: ThreadRef): ThreadRef {
+  if (ref.threadId) return ref
+  let hash = 0x811c9dc5
+  for (const char of ref.path) hash = Math.imul(hash ^ char.charCodeAt(0), 0x01000193) >>> 0
+  const hex = hash.toString(16).padStart(8, "0")
+  return { ...ref, threadId: `${hex}-0000-4000-8000-${hex}${hex.slice(0, 4)}` }
+}
+
+/** The fixture GitHub owner's avatar: a mark on its own ground, as an owner's logo is. */
+const ACME_AVATAR = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#24292f"/><path d="M32 12 52 50H12Z" fill="#f6f8fa"/><path d="M32 30 41 47H23Z" fill="#24292f"/></svg>')}`
+
 const MOCK_PULLS: PullRequestListing[] = [
   { number: 812, title: "Retry billing webhooks with backoff", state: "open", draft: false, url: "https://github.com/you/mako/pull/812", head: "mako/billing-webhooks", base: "main", author: "you", updatedAt: "2026-10-12T09:10:00Z" },
   { number: 806, title: "Queue payments behind the retry budget", state: "open", draft: true, url: "https://github.com/you/mako/pull/806", head: "mako/payments-queue", base: "main", author: "ada", updatedAt: "2026-10-11T16:40:00Z" },
@@ -811,6 +824,8 @@ export function installMockBridge() {
   const purposes: ThreadPurpose[] = scene === "rail" ? [...RAIL_PURPOSES] : []
   /** Threads renamed in this page, as the Thread store keeps them. */
   const titles = new Map<string, ThreadTitleEntry>()
+  /** The person's marks on Threads (`mako:thread-marks`), as the host's store keeps them. */
+  const marks = new Map<string, ThreadMarkEntry>()
   if (scene === "busy") titles.set(BUSY_THREAD, { thread: BUSY_THREAD, title: BUSY_TITLE, source: "user" })
   if (scene === "apex") titles.set(APEX_THREAD, { thread: APEX_THREAD, title: APEX_TITLE, source: "user" })
   /** The rail scene's runs are reported once, as the host would after the catalog. */
@@ -1068,6 +1083,19 @@ export function installMockBridge() {
     threadGroups: async () => (scene === "rail" ? RAIL_THREAD_GROUPS : scene === "busy" ? agedGroup() : []),
     threadPurposes: async () => [...purposes],
     threadTitles: async () => [...titles.values()],
+    threadMarks: async () => [...marks.values()],
+    markThread: async (_operationId: string, thread: string, change: ThreadMarkChange) => {
+      const now = Date.now()
+      const held = marks.get(thread) ?? { thread, status: null, statusAt: null, by: null, unreadAt: null }
+      const entry: ThreadMarkEntry = {
+        ...held,
+        ...(change.status !== undefined && { status: change.status, statusAt: change.status === null ? null : now, by: change.status === null ? null : "person" }),
+        ...(change.unread !== undefined && { unreadAt: change.unread ? now : null }),
+      }
+      marks.set(thread, entry)
+      emit({ type: "thread-marks", marks: [entry] })
+      return entry
+    },
     renameThread: async (_operationId: string, thread: string, title: string | null) => {
       const entry: ThreadTitleEntry = title === null ? { thread, title: null } : { thread, title, source: "user" }
       if (title === null) titles.delete(thread)
@@ -1078,6 +1106,7 @@ export function installMockBridge() {
     importThreadTitles: async () => [],
     worktrees: async () => listedWorktrees(),
     chatFolders: async () => ({ root: "/Users/you/Mako/Chats", projects: [] }),
+    makeChatProject: async ({ to }: { folder: string; to: string }) => ({ path: to.replace(/^~\//, "/Users/you/") }),
     checkoutHeads: async (folders: string[]) =>
       Object.fromEntries(
         folders.map((folder) => {
@@ -1831,7 +1860,8 @@ export function installMockBridge() {
       return sinceOpen
     },
     rerunChecks: async () => 0,
-    repoAvatar: async () => undefined,
+    // The fixture's GitHub owner (`acme`, `projectSettingsOf`) has a picture; any other owner has none.
+    repoAvatar: async (owner: string) => (owner.split("/")[0] === "acme" ? ACME_AVATAR : undefined),
     // A GitHub-style identicon, so screenshots of the identity show a picture as GitHub would draw one.
     userAvatar: async () =>
       new URLSearchParams(globalThis.location?.search).get("github") === "off" ? undefined : MOCK_GITHUB_AVATAR,
@@ -1852,7 +1882,8 @@ export function installMockBridge() {
           for (const run of RAIL_RUNS) emit({ type: "thread-run", run })
         }, 1_500)
       }
-      return { ...fixture, threads, activity: {} }
+      // Every catalog row is a Thread's, as the host's store places it: its id stands for the Thread its marks and name are kept on.
+      return { ...fixture, threads: threads.map(withThreadId), activity: {} }
     },
     openThread: async (path: string) => ({
       ref:

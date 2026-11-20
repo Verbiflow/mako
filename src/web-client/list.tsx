@@ -1,18 +1,20 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { FinPips } from "@/components/rail/fin-pips"
-import { apexPips, pipsCounts, pipsOf, settledWords } from "@/state/fin-pips"
-import { useAcp } from "@/state/acp-state"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, LaptopIcon, MoonIcon, ServerIcon, SquarePenIcon } from "lucide-react"
+import { observeVisibleAnimation } from "@/lib/visible-animation"
+import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, MessagesSquareIcon, MoonIcon, ServerIcon, SquarePenIcon } from "lucide-react"
 import { askWords, childLine, childStateOf, childWord, finsAsChildren, rollup, rollupLabel } from "@mako/host/contracts/children"
-import type { LiveSummary } from "@mako/host/contracts/live-conversations"
-import { ApexMark } from "@/components/ui/apex-mark"
+import type { NativeAgent } from "@mako/host/contracts/native-agents"
+import { WORK_STATUS_WORDS } from "@mako/host/contracts/thread-marks"
+import { ApexAvatar } from "@/components/rail/rail-avatars"
+import { WorkGlyph } from "@/components/rail/work-status"
 import { finMarkState, motionOf } from "@/lib/live-mark-state"
-import { shallowEqual } from "@/state/store"
+import { avatarHue, monogram } from "@/lib/rail-marks"
+import { threadChildren, useAcp } from "@/state/acp-state"
+import { personAsks } from "@/state/fin-asks"
+import { createHook, createStore, shallowEqual } from "@/state/store"
 import { Avatar } from "@/components/ui/avatar"
 import { useRowFlip } from "@/components/rail/use-row-flip"
 import { LiveMark } from "@/components/ui/live-mark"
 import type { LiveMarkState } from "@/lib/live-mark-state"
-import { Shimmer } from "@/components/ui/shimmer"
 import { Spinner } from "@/components/ui/spinner"
 import { WebHarnessIcon } from "./harness-icon"
 import { MakoMark } from "@/components/ui/mako-mark"
@@ -39,34 +41,37 @@ import { ConnectMac } from "./connect-mac"
 import { macConnection } from "./mac-connection"
 import { macPlace, useReach } from "./reach"
 import { DiagnosisCard } from "./trouble"
-import { useWebFinAsks, waitingThreads, webInboxCount, type WebFinAsk, asksBesidePlaced } from "./inbox"
+import { placedWaiting, useWebFinAsks, webInboxCount } from "./inbox"
 import { checkList, useListDiagnosis, useTryAgain } from "./trouble-state"
+import { CHATS_KEY, railGroups, type RailGroup } from "./rail-groups"
+import { SetupCard } from "./setup-card"
+import { settleAskedMarks, shownMarks, useAskedMarks, type ShownMarks } from "./thread-marks"
 
 /**
- * The list's sections, as the Inbox counts them: what waits on the person (Threads, and each Fin that asks as a row of
- * its own), what's at work, and the rest, a failure among them wearing its mark. An Apex whose asks are its Fins'
- * stands with the work, its Fins' rows saying what they ask.
+ * What the person folded and unfolded in the list this visit: a project's rows put away, an Apex's Fins all shown, a
+ * project's Done Threads shown. Not kept past the visit: the list opens as the desk's rail does by default.
  */
-function sections(threads: readonly WebThread[], asks: readonly WebFinAsk[], placed: readonly WebThread[]) {
-  const fins = asksBesidePlaced(asks, placed)
-  const needs = waitingThreads(threads, asks, placed)
-  const waiting = new Set(needs.map((thread) => thread.id))
-  const working = threads.filter((thread) => !waiting.has(thread.id) && (thread.standing === "working" || thread.standing === "moving" || thread.standing === "waiting"))
-  const rest = threads.filter((thread) => thread.standing === "idle" || thread.standing === "failed")
-  return [
-    { id: "needs", label: "Needs you", threads: needs, fins },
-    { id: "working", label: "Working", threads: working, fins: NO_FINS },
-    { id: "recent", label: "Recent", threads: rest, fins: NO_FINS },
-  ].filter((section) => section.threads.length > 0 || section.fins.length > 0)
+interface ListFolds {
+  closedProjects: ReadonlySet<string>
+  openApexes: ReadonlySet<string>
+  shownDone: ReadonlySet<string>
+}
+const foldsStore = createStore<ListFolds>({ closedProjects: new Set(), openApexes: new Set(), shownDone: new Set() })
+const useFolds = createHook(foldsStore)
+
+function toggleFold(which: keyof ListFolds, key: string): void {
+  const next = new Set(foldsStore.get()[which])
+  if (!next.delete(key)) next.add(key)
+  foldsStore.set({ ...foldsStore.get(), [which]: next })
 }
 
-const NO_FINS: readonly WebFinAsk[] = []
-
 /**
- * The account's Threads under a finger. On a phone, the first screen: its bar says where you are and holds your
- * account, rows run edge to edge, and New floats at the bottom right in thumb's reach, a small
- * round button that steps aside while the list is scrolled down and comes back on the way up. On a tablet, the rail
- * beside what's open: rows inset and rounded, the one open lit, New at its head and your account at its foot.
+ * The account's Threads under a finger, in the desk's rail's anatomy: grouped by project under each project's tile, an
+ * Apex's Fins hung under it on a 1 px line, where its work stands and when beside each title. On a phone, the first
+ * screen: its bar says where you are and holds your account, Finish setting up heads the rows while there's something
+ * to do, and New floats at the bottom right in thumb's reach, a small round button that steps aside while the list is
+ * scrolled down and comes back on the way up. On a tablet, the rail beside what's open, the one open lit, New at its
+ * head and your account at its foot. A row swipes left to Archive and offers its menu when held.
  */
 export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide, starting = false, settings = false, inbox = false }: { selected?: string; onOpen: (thread: WebThread) => void; onNew: () => void; onSettings: () => void; onInbox?: () => void; wide: boolean; starting?: boolean; settings?: boolean; inbox?: boolean }) {
   const client = useWebClient()
@@ -78,27 +83,43 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
   const { archived, placed } = folded
   const fins = useWebFinAsks()
   const byId = useMemo(() => new Map(threads.map((thread) => [thread.id, thread])), [threads])
-  // A Fin placed on another device opens as its own row, where its device answers; its Apex's row otherwise.
-  const placedById = useMemo(() => new Map(placed.map((thread) => [thread.id, thread])), [placed])
+  // A Fin placed on another device hangs under its Apex's row; one whose Apex isn't listed stands in its project.
+  const { placedByApex, unplaced } = useMemo(() => {
+    const under = new Map<string, WebThread[]>()
+    const alone: WebThread[] = []
+    for (const thread of placed) {
+      const apex = thread.apex?.thread
+      if (apex && byId.has(apex)) under.set(apex, [...(under.get(apex) ?? []), thread])
+      else alone.push(thread)
+    }
+    return { placedByApex: under, unplaced: alone }
+  }, [placed, byId])
   const read = useReadState((state) => state)
+  const asked = useAskedMarks((state) => state)
   // Threads listed here for the first time read as seen: only what happens from now on is news.
   useEffect(() => {
     if (list.phase === "live") noteListed(folded.threads)
   }, [list.phase, folded])
+  // What this browser asked an owner to mark, once its rows say it, is theirs to say again.
+  useEffect(() => settleAskedMarks([...folded.threads, ...folded.placed, ...folded.archived]), [folded])
   const now = useTick(threads.some((thread) => thread.standing === "working"))
+  const groups = useMemo(() => railGroups([...threads, ...unplaced], (thread) => shownMarks(thread, asked), now), [threads, unplaced, asked, now])
   // The held row's menu; `serial` starts each one afresh, a rename half-typed in the last one left behind.
   const [menu, setMenu] = useState<{ thread: WebThread; anchor: HTMLElement | null; open: boolean; serial: number } | undefined>(undefined)
   // Which way each followed move goes, and only that: a step's bytes re-render no row.
   const ways = useMoves((state) => followedWays(state.moves), shallowEqual)
+  const named = computerCount(list) > 1
   const rowProps = (thread: WebThread) => {
     const context = rowContext(thread, read, now, ways[thread.id])
+    const marks = shownMarks(thread, asked)
     return {
       thread,
       selected: thread.id === selected,
       named,
       context,
-      // A dot for news: a run that finished since it was last opened here, or the person's own mark.
-      unread: Boolean(read.unread[thread.id]) || context.done === true,
+      marks,
+      // News: a run that finished since it was last opened here, or a Mark as unread, here or on any device.
+      unread: Boolean(read.unread[thread.id]) || context.done === true || marks.markedUnread,
       swipe: !thread.archived && !thread.quietSince,
       onOpen: () => onOpen(thread),
       onHold: (anchor: HTMLElement | null) => setMenu((last) => ({ thread, anchor, open: true, serial: (last?.serial ?? 0) + 1 })),
@@ -124,7 +145,6 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
   const away = useAwayWhileScrolling(scroller, !wide)
   // Any draw of this list may have moved a row, so each one is a new order to read.
   useRowFlip(scroller, showArchived ? "archived" : "threads", {})
-  const named = computerCount(list) > 1
   return (
     <div data-list={wide ? "rail" : "screen"} className={cn("web-list relative flex min-h-0 flex-1 flex-col", wide ? "bg-shell" : "bg-surface")}>
       <header className="web-bar flex shrink-0 items-center gap-0.5 pr-1.5 pl-4">
@@ -149,35 +169,20 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
         <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
           <ListTrouble />
+          {wide || list.phase === "starting" ? null : <SetupCard onNew={onNew} onSettings={onSettings} />}
           {onInbox && (threads.length > 0 || archived.length > 0) ? <TopChips count={webInboxCount(threads, fins, placed)} open={inbox} onInbox={onInbox} /> : null}
           {threads.length === 0 && archived.length === 0 ? (
             <EmptyList answered={list.phase === "live" || list.asOf !== undefined} onNew={onNew} />
-          ) : (
+          ) : groups.length ? (
             <>
-              {sections(threads, fins, placed).map((section) => (
-                <section key={section.id} aria-labelledby={`section-${section.id}`} data-list-section={section.id} className="web-section">
-                  <h2 id={`section-${section.id}`} className={cn("web-section-label", section.id === "needs" && "text-attention")}>
-                    {section.label}
-                  </h2>
-                  <ul role="list" className="web-rows">
-                    {section.threads.map((thread) => (
-                      <li key={thread.id} data-flip-key={thread.id}>
-                        <ThreadRow {...rowProps(thread)} />
-                      </li>
-                    ))}
-                    {section.fins.map((fin) => {
-                      const apex = placedById.get(fin.ask.fin) ?? byId.get(fin.apex.thread)
-                      return (
-                        <li key={fin.key} data-flip-key={fin.key}>
-                          <FinAskRow fin={fin} onOpen={apex ? () => onOpen(apex) : onInbox} />
-                        </li>
-                      )
-                    })}
-                  </ul>
-                </section>
+              <h2 data-list-heading className="web-section-label pt-4">
+                Projects
+              </h2>
+              {groups.map((group) => (
+                <ProjectGroup key={group.key} group={group} rowProps={rowProps} placedByApex={placedByApex} onOpen={onOpen} />
               ))}
             </>
-          )}
+          ) : null}
           {archived.length ? (
             <section className="pt-5">
               <button type="button" onClick={() => setShowArchived((shown) => !shown)} aria-expanded={showArchived} className="web-section-label pressable flex min-h-11 w-full items-center gap-1.5">
@@ -213,7 +218,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
         thread={menu?.thread}
         open={menu?.open ?? false}
         anchor={menu?.anchor ?? null}
-        unread={menu ? isUnread(read, menu.thread) : false}
+        unread={menu ? isUnread(read, menu.thread) || shownMarks(menu.thread, asked).markedUnread : false}
         onDismiss={() => setMenu((shown) => (shown ? { ...shown, open: false } : shown))}
         onArchive={(thread) => archiveWithUndo(client, thread)}
       />
@@ -226,6 +231,204 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
         </footer>
       ) : null}
     </div>
+  )
+}
+
+type RowProps = Parameters<typeof ThreadRow>[0]
+
+/**
+ * One project: its row (the project's tile and name, a tap folding its Threads away, a dot while folded if one needs
+ * the person), its Threads with each Apex's Fins under it, and its Done Threads past three days as one "N done" line.
+ */
+function ProjectGroup({ group, rowProps, placedByApex, onOpen }: { group: RailGroup; rowProps: (thread: WebThread) => RowProps; placedByApex: ReadonlyMap<string, readonly WebThread[]>; onOpen: (thread: WebThread) => void }) {
+  const closed = useFolds((state) => state.closedProjects.has(group.key))
+  const doneShown = useFolds((state) => state.shownDone.has(group.key))
+  const needs = group.threads.some((thread) => thread.standing === "waiting" && !thread.quietSince)
+  const rows = (threads: readonly WebThread[]) =>
+    threads.map((thread) => (
+      <li key={thread.id} data-flip-key={thread.id}>
+        <ListedThread {...rowProps(thread)} placed={placedByApex.get(thread.id)} onOpenThread={onOpen} />
+      </li>
+    ))
+  return (
+    <section data-project-group={group.key || "chats"} aria-label={group.name} className="web-project">
+      <button type="button" data-project-row aria-expanded={!closed} onClick={() => toggleFold("closedProjects", group.key)} className="web-project-row">
+        {group.key === CHATS_KEY ? (
+          <span aria-hidden className="flex size-5 shrink-0 items-center justify-center text-faint">
+            <MessagesSquareIcon className="size-4" strokeWidth={1.75} />
+          </span>
+        ) : (
+          <ProjectTile name={group.name} folder={group.key} />
+        )}
+        <span data-project-name className="min-w-0 flex-1 truncate text-ui font-medium text-foreground/80">{group.name}</span>
+        {closed && needs ? <span data-folder-needs aria-label="Something here needs you" className="rail-attention-dot" /> : null}
+      </button>
+      {closed ? null : (
+        <>
+          <ul role="list" className="web-rows">
+            {rows(group.threads)}
+          </ul>
+          {group.done.length ? (
+            <>
+              <button type="button" data-done-fold={group.done.length} aria-expanded={doneShown} onClick={() => toggleFold("shownDone", group.key)} className="web-done-line">
+                <WorkGlyph status="done" className="size-3.5" />
+                {group.done.length} done
+                <ChevronRightIcon aria-hidden className={cn("size-3.5 transition-transform duration-200 ease-[var(--ease-out)]", doneShown && "rotate-90")} />
+              </button>
+              {doneShown ? (
+                <ul role="list" className="web-rows" data-done-rows>
+                  {rows(group.done)}
+                </ul>
+              ) : null}
+            </>
+          ) : null}
+        </>
+      )}
+    </section>
+  )
+}
+
+/**
+ * A project's tile, as the desk's rail draws it without a GitHub avatar (which the web has no host to fetch): its
+ * monogram in one of eight hues hashed from its folder.
+ */
+function ProjectTile({ name, folder }: { name: string; folder: string }) {
+  return (
+    <span aria-hidden data-project-avatar="monogram" className={cn("rail-avatar web-tile flex shrink-0 items-center justify-center", `rail-hue-${avatarHue(folder)}`)}>
+      {monogram(name)}
+    </span>
+  )
+}
+
+/** An Apex's Fins as this page knows them: the roster it holds once opened here, or else as its row lists them. */
+function useApexRoster(thread: WebThread): readonly NativeAgent[] {
+  const listed = thread.sessions.find((session) => session.summary.fins)?.summary.fins
+  const held = useAcp((state) => threadChildren(state, thread.id))
+  return held.length ? held : finsAsChildren(listed)
+}
+
+/** A Thread's row, and when it's an Apex, its Fins hung under it. */
+function ListedThread({ placed = NO_THREADS, onOpenThread, ...row }: RowProps & { placed?: readonly WebThread[]; onOpenThread: (thread: WebThread) => void }) {
+  const roster = useApexRoster(row.thread)
+  const open = useFolds((state) => state.openApexes.has(row.thread.id))
+  const hung = useMemo(() => hungFins(roster, placed, open), [roster, placed, open])
+  if (!roster.length && !placed.length) return <ThreadRow {...row} />
+  const counts = rollup(roster)
+  const hangs = hung.placed.length + hung.fins.length + hung.finished > 0
+  return (
+    <>
+      <ThreadRow {...row} apex={{ open, hangs, finsWorking: counts.working > 0, counts: rollupLabel(counts), onToggle: () => toggleFold("openApexes", row.thread.id) }} />
+      {hangs ? <ApexFins apex={row.thread} hung={hung} open={open} onOpen={onOpenThread} /> : null}
+    </>
+  )
+}
+
+const NO_THREADS: readonly WebThread[] = []
+
+/** What hangs under an Apex: its placed Fins and its own to show, what each asks the person, and how many finished. */
+interface HungFins {
+  placed: readonly WebThread[]
+  fins: ReadonlyArray<{ agent: NativeAgent; ask: string | undefined }>
+  finished: number
+}
+
+/**
+ * Folded, the Fins that wait on the person; open, every Fin still in play, those that need the person first, then the
+ * finished counted. A Fin placed on another device is its own Thread's row, which says it rather than the roster.
+ */
+function hungFins(roster: readonly NativeAgent[], placed: readonly WebThread[], open: boolean): HungFins {
+  const asks = new Map(personAsks(roster).map((ask) => [ask.fin, ask]))
+  const own = new Set(placed.map((thread) => thread.id))
+  const fins = roster.filter((agent) => !own.has(agent.child?.thread ?? ""))
+  const asked = (agent: NativeAgent) => asks.has(agent.child?.thread ?? "")
+  const waiting = new Set(placedWaiting(placed).map((thread) => thread.id))
+  const asking = fins.filter(asked)
+  const live = open ? fins.filter((agent) => !asked(agent) && childStateOf(agent).kind !== "ended") : []
+  return {
+    placed: [...placed.filter((thread) => waiting.has(thread.id)), ...(open ? placed.filter((thread) => !waiting.has(thread.id)) : [])],
+    fins: [...asking, ...live].map((agent) => {
+      const ask = asks.get(agent.child?.thread ?? "")
+      return { agent, ask: ask ? askWords(ask) : undefined }
+    }),
+    finished: open ? fins.filter((agent) => !asked(agent) && childStateOf(agent).kind === "ended").length : 0,
+  }
+}
+
+/**
+ * An Apex's Fins under its row, as the desk's rail hangs them: a 1 px line from the Apex's tile and a square elbow into
+ * each, the finished as one line at the end. A Fin opens its Apex, where its card answers it; one placed on another
+ * device opens its own Thread, where that device answers.
+ */
+function ApexFins({ apex, hung, open, onOpen }: { apex: WebThread; hung: HungFins; open: boolean; onOpen: (thread: WebThread) => void }) {
+  const count = hung.placed.length + hung.fins.length
+  const last = (index: number) => index === count - 1 && !hung.finished
+  return (
+    <div data-hung-fins={apex.id} data-hung-fins-open={open || undefined}>
+      {hung.placed.map((thread, index) => (
+        <PlacedFinRow key={thread.id} thread={thread} last={last(index)} onOpen={() => onOpen(thread)} />
+      ))}
+      {hung.fins.map(({ agent, ask }, index) => (
+        <FinRow key={agent.nativeId} agent={agent} ask={ask} last={last(hung.placed.length + index)} onOpen={() => onOpen(apex)} />
+      ))}
+      {hung.finished ? (
+        <div data-fins-finished={hung.finished} className="web-fins-finished">
+          <span aria-hidden className="rail-branch" data-last />
+          {hung.finished} finished
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+/** One Fin of an Apex: its mark, its title, and what it asks the person beside it. */
+function FinRow({ agent, ask, last, onOpen }: { agent: NativeAgent; ask: string | undefined; last: boolean; onOpen: () => void }) {
+  const state = childStateOf(agent)
+  const line = ask ?? childLine(state)
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      data-fin-row={agent.child?.thread}
+      data-asking-fin={ask ? agent.child?.thread : undefined}
+      aria-label={[agent.title, ask ? "needs you" : childWord(state), line].filter(Boolean).join(", ")}
+      className="web-fin-row"
+    >
+      <span aria-hidden className="rail-branch" data-last={last || undefined} />
+      <span className="web-row-mark">
+        <LiveMark kind="fin" state={finMarkState(state)} motion={motionOf(childLine(state))} label={childWord(state)}>
+          <WebHarnessIcon harness={agent.provider} />
+        </LiveMark>
+      </span>
+      <span data-asking-title className={cn("min-w-0 flex-1 truncate text-ui", ask ? "text-foreground" : "text-foreground/65")}>{agent.title}</span>
+      {ask ? (
+        <span data-asking-line className="max-w-[48%] shrink truncate text-label text-faint">
+          {ask}
+        </span>
+      ) : null}
+    </button>
+  )
+}
+
+/** A Fin placed on another device, under its Apex: its own Thread, opened where that device answers it. */
+function PlacedFinRow({ thread, last, onOpen }: { thread: WebThread; last: boolean; onOpen: () => void }) {
+  const detail = rowDetail(thread, true)
+  const asks = thread.standing === "waiting"
+  return (
+    <button type="button" onClick={onOpen} data-thread={thread.id} data-under={thread.apex?.thread} data-standing={thread.standing} aria-label={`${shownTitle(thread)}. ${detail.where ? `On ${detail.where}. ` : ""}${detail.text}.`} className={cn("web-fin-row", thread.quietSince && "opacity-60")}>
+      <span aria-hidden className="rail-branch" data-last={last || undefined} />
+      <span className="web-row-mark">
+        <LiveMark kind="fin" state={STANDING_MARK[thread.standing]}>
+          <WebHarnessIcon harness={thread.sessions[0]?.row.harness ?? "claude"} />
+        </LiveMark>
+      </span>
+      <span className={cn("min-w-0 flex-1 truncate text-ui", asks ? "text-foreground" : "text-foreground/65")}>{shownTitle(thread)}</span>
+      {asks ? (
+        <span data-asking-line className="max-w-[48%] shrink truncate text-label text-faint">
+          {detail.where ? <span data-row-where>{detail.where} · </span> : null}
+          {detail.text}
+        </span>
+      ) : null}
+    </button>
   )
 }
 
@@ -361,20 +564,50 @@ function useTick(on: boolean): number {
   return now
 }
 
+/** An Apex's row's fold: whether its Fins are all shown, whether any is at work, their counts, and the tap that folds. */
+export interface ApexFold {
+  open: boolean
+  /** Fins hang under it: its tile's line runs down to them. */
+  hangs: boolean
+  finsWorking: boolean
+  counts: string
+  onToggle: () => void
+}
+
 /**
- * One Thread in the list. Under a finger it opens as the finger lifts, offers its menu when held, and swipes left to
- * Archive (`row-gestures.ts`). Its title is set in medium, except while it's at work: that doesn't need the person yet.
- * A run that finished since it was last opened here leads its line with "Done" and marks it unread.
+ * A title's tone, as the desk's rail sets it (`titleTone`): the open one full and medium, one that needs the person or
+ * holds news full, a Done one faded, the rest quieter.
  */
-export function ThreadRow({ thread, selected, named, onOpen, context = {}, unread = false, swipe = false, onHold, onArchive }: { thread: WebThread; selected: boolean; named: boolean; onOpen: () => void; context?: RowContext; unread?: boolean; swipe?: boolean; onHold?: (anchor: HTMLElement | null) => void; onArchive?: () => void }) {
+function titleTone(selected: boolean, thread: WebThread, unread: boolean, marks: ShownMarks): string {
+  if (selected) return "font-medium text-foreground"
+  if (unread || thread.standing === "waiting") return "text-foreground"
+  if (marks.workStatus === "done") return "text-foreground/45"
+  return "text-foreground/72"
+}
+
+/**
+ * One Thread in the list, in the desk's rail's anatomy at touch size: its live mark (an Apex's tile, which folds and
+ * unfolds its Fins), its title, what it waits on the person for beside it, then at its end its Fins at work, where it
+ * runs when that's not a Mac, its Status and its time. Under a finger it opens as the finger lifts, offers its menu
+ * when held, and swipes left to Archive (`row-gestures.ts`). News (a run that finished since it was last opened here, a
+ * Mark as unread from any device) wears the unread sphere and a full-tone title; a Done one fades.
+ */
+export function ThreadRow({ thread, selected, named, onOpen, context = {}, marks, unread = false, swipe = false, onHold, onArchive, apex }: { thread: WebThread; selected: boolean; named: boolean; onOpen: () => void; context?: RowContext; marks?: ShownMarks; unread?: boolean; swipe?: boolean; onHold?: (anchor: HTMLElement | null) => void; onArchive?: () => void; apex?: ApexFold }) {
   const detail = rowDetail(thread, named, context)
+  const shown = marks ?? { markedUnread: thread.markedUnread === true, ...(thread.workStatus && { workStatus: thread.workStatus }) }
   const box = useRef<HTMLDivElement>(null)
-  const front = useRef<HTMLButtonElement>(null)
+  const front = useRef<HTMLDivElement>(null)
   useRowGestures(box, front, swipe, { onTap: onOpen, onHold: () => onHold?.(box.current), onArchive: () => onArchive?.() })
-  // A Mac that's off says so on its own rows, dimmed with a moon where its laptop stood, rather than in a line of its own.
-  const Place = detail.move ? (detail.move === "cloud" ? ArrowUpIcon : ArrowDownIcon) : detail.place === "cloud" ? CloudIcon : thread.quietSince ? MoonIcon : detail.place === "machine" ? ServerIcon : LaptopIcon
-  const receding = thread.standing === "working" || thread.standing === "moving"
+  // A Mac that's off says so on its own rows, dimmed with a moon; the cloud and a machine of the person's own are marked,
+  // as the places apart from their Macs; a move under way wears its blinking arrow.
+  const Place = detail.move ? (detail.move === "cloud" ? ArrowUpIcon : ArrowDownIcon) : thread.quietSince ? MoonIcon : detail.place === "cloud" ? CloudIcon : detail.place === "machine" ? ServerIcon : undefined
   const spoken = detail.elapsed ? `${detail.text} for ${detail.elapsed}` : detail.lead ? `${detail.lead}, ${detail.text}` : detail.text
+  const status = shown.workStatus ? WORK_STATUS_WORDS[shown.workStatus] : undefined
+  const keyed = (event: KeyboardEvent) => {
+    if (event.target !== event.currentTarget || (event.key !== "Enter" && event.key !== " ")) return
+    event.preventDefault()
+    onOpen()
+  }
   return (
     <div ref={box} className="web-swipe">
       {swipe ? (
@@ -385,58 +618,86 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, unrea
           </button>
         </div>
       ) : null}
-      <button
+      <div
         ref={front}
-        type="button"
+        role="button"
+        tabIndex={0}
         onClick={onOpen}
+        onKeyDown={keyed}
         aria-current={selected ? "page" : undefined}
-        aria-label={threadLabel(thread, spoken, unread)}
+        aria-label={threadLabel(thread, [spoken, status, apex?.counts].filter(Boolean).join(". "), unread)}
         data-thread={thread.id}
         data-under={thread.apex?.thread}
         data-standing={thread.standing}
         data-moving={detail.move}
         data-unread={unread || undefined}
+        data-work-status={shown.workStatus}
+        data-marked-unread={shown.markedUnread || undefined}
+        data-apex-row={apex ? thread.id : undefined}
+        data-apex-open={apex ? apex.open : undefined}
+        data-fin-counts={apex?.counts}
         className={cn("web-row group relative flex w-full items-center text-left", thread.quietSince && "opacity-60")}
       >
-        <span className="web-row-mark">
-          <WebThreadMark thread={thread} unread={unread} />
-        </span>
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex min-w-0 items-baseline gap-2">
-            <span className={cn("min-w-0 flex-1 truncate text-ui text-foreground", receding ? "font-normal" : "font-medium")}>
-              {shownTitle(thread)}
-              {thread.apex ? <span data-row-apex={thread.apex.thread} className="text-label font-normal text-faint"> · {thread.apex.title}</span> : null}
-            </span>
-            <span className="flex shrink-0 items-center gap-1.5 self-center">
-              <span className="tabular text-label text-faint">{formatRelative(thread.activityAt)}</span>
-            </span>
+        {apex ? (
+          <>
+            {apex.hangs ? <span aria-hidden className="web-apex-stem" /> : null}
+            <button
+              type="button"
+              data-row-fold
+              aria-label={apex.open ? "Fold its Fins" : "Show all its Fins"}
+              aria-expanded={apex.open}
+              onClick={(event) => {
+                event.stopPropagation()
+                apex.onToggle()
+              }}
+              className="web-row-mark web-apex-fold"
+            >
+              <ApexAvatar seed={thread.id} className="size-5" />
+            </button>
+          </>
+        ) : (
+          <span className="web-row-mark">
+            <WebThreadMark thread={thread} unread={unread} />
           </span>
-          <ApexLineOr thread={thread.id} fins={thread.sessions.find((session) => session.summary.fins)?.summary.fins}>
-          <span className="flex min-w-0 items-center gap-1.5 text-label">
-            {detail.place || detail.move ? <Place aria-hidden data-move-mark={detail.move} data-place={detail.move ? undefined : detail.place} className={cn("size-3 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
-            {detail.where ? <span data-row-where className="shrink-0 text-faint">{detail.where} ·</span> : null}
-            {detail.tone === "working" ? (
-              <Shimmer className="min-w-0 truncate">
-                {detail.text}
-                {detail.elapsed ? <span className="tabular"> {detail.elapsed}</span> : null}
-              </Shimmer>
-            ) : (
-              <span className={cn("min-w-0 flex-1 truncate", detail.tone === "attention" ? "text-attention" : detail.tone === "negative" ? "text-negative" : "text-faint")}>
-                {detail.lead ? (
-                  <>
-                    <span data-done className="font-medium text-foreground">
-                      {detail.lead}
-                    </span>
-                    {" · "}
-                  </>
-                ) : null}
-                {detail.text}
-              </span>
-            )}
-          </span>
-          </ApexLineOr>
+        )}
+        <span data-row-title className={cn("min-w-0 flex-1 truncate text-ui", titleTone(selected, thread, unread, shown))}>
+          {shownTitle(thread)}
+          {thread.apex ? <span data-row-apex={thread.apex.thread} className="text-label text-faint"> · {thread.apex.title}</span> : null}
         </span>
-      </button>
+        {detail.tone === "attention" ? (
+          <span data-row-ask className="max-w-[45%] shrink truncate text-label text-faint">
+            {detail.where ? <span data-row-where>{detail.where} · </span> : null}
+            {detail.text}
+          </span>
+        ) : null}
+        <span data-row-end className="flex shrink-0 items-center gap-1.5">
+          {apex ? (
+            <button
+              type="button"
+              data-row-fold
+              tabIndex={-1}
+              aria-hidden
+              onClick={(event) => {
+                event.stopPropagation()
+                apex.onToggle()
+              }}
+              className="web-fold-chevron"
+            >
+              <ChevronRightIcon className={cn("size-3.5 transition-transform duration-200 ease-[var(--ease-out)]", apex.open && "rotate-90")} />
+            </button>
+          ) : null}
+          {apex?.finsWorking ? <span ref={observeVisibleAnimation} data-fins-working className="rail-spin spinner" aria-hidden /> : null}
+          {Place ? <Place aria-hidden data-move-mark={detail.move} data-place={detail.move ? undefined : thread.quietSince ? "quiet" : detail.place} className={cn("size-3.5 shrink-0", detail.move ? "web-move-blink text-foreground" : "text-faint")} /> : null}
+          {shown.workStatus ? <WorkGlyph status={shown.workStatus} className="size-3.5" /> : null}
+          {thread.standing === "failed" ? (
+            <span data-status-end="failed" className="text-label text-negative">
+              Failed
+            </span>
+          ) : (
+            <span className="tabular text-label text-faint">{formatRelative(thread.activityAt)}</span>
+          )}
+        </span>
+      </div>
     </div>
   )
 }
@@ -467,38 +728,6 @@ function TopChips({ count, open, onInbox }: { count: number; open: boolean; onIn
         )}
       </button>
     </nav>
-  )
-}
-
-/** A Fin asking the person, a row of its own under Needs you: its mark and title, then "Mobile polish · its question". */
-export function FinAskRow({ fin, onOpen }: { fin: WebFinAsk; onOpen?: () => void }) {
-  const state = childStateOf(fin.agent)
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      data-fin-row={fin.ask.fin}
-      aria-label={`${fin.ask.title}, in ${fin.apex.title}. ${fin.ask.done ? askWords(fin.ask) : `Needs you: ${fin.ask.question}`}`}
-      className="web-row group relative flex w-full items-center text-left"
-    >
-      <span className="web-row-mark">
-        <LiveMark kind="fin" state={finMarkState(state)} motion={motionOf(childLine(state))} label={childWord(state)}>
-          <WebHarnessIcon harness={fin.ask.harness} />
-        </LiveMark>
-      </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="flex min-w-0 items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate text-ui font-medium text-foreground">{fin.ask.title}</span>
-          <span className="tabular shrink-0 self-center text-label text-faint">{formatRelative(fin.agent.observedAt)}</span>
-        </span>
-        <span className="flex min-w-0 items-center gap-1.5 text-label text-faint">
-          <ApexMark aria-hidden className="size-3 shrink-0" />
-          <span className="min-w-0 truncate">
-            <span data-fin-row-apex>{fin.apex.title}</span> · {askWords(fin.ask)}
-          </span>
-        </span>
-      </span>
-    </button>
   )
 }
 
@@ -533,22 +762,4 @@ function useAwayWhileScrolling(scroller: React.RefObject<HTMLDivElement | null>,
     return () => node.removeEventListener("scroll", scrolled)
   }, [scroller, on])
   return away
-}
-
-/**
- * An Apex's second line: one pip per Fin and how many, where another row says what it's doing, from the snapshot this
- * page holds of it, or else from its row's Fins as its owner listed them (`finsAsChildren`), drawn by the same
- * selectors. Its Fins that need the person are rows of their own under Needs you. Repaints when a pip changes.
- */
-function ApexLineOr({ thread, fins, children }: { thread: string; fins: LiveSummary["fins"]; children: ReactNode }) {
-  const held = useAcp((state) => apexPips(state, thread))
-  const pips = held || (fins ? pipsOf(finsAsChildren(fins), rollup(finsAsChildren(fins))) : "")
-  if (!pips) return children
-  const label = rollupLabel(pipsCounts(pips))
-  return (
-    <span role="img" aria-label={label} data-fin-pips={pips} data-fin-counts={label} className="flex h-4 min-w-0 items-center gap-2 text-label">
-      <FinPips pips={pips} />
-      <span className="tabular min-w-0 truncate text-faint">{settledWords(pips)}</span>
-    </span>
-  )
 }

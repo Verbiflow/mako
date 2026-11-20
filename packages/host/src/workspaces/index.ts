@@ -43,7 +43,7 @@ import { spareInstaller } from "./spare-install.js"
 import { isSpareCheckout } from "./worktree-carry.js"
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
-import { worktreeCheckout } from "../contracts/thread-worktrees.js"
+import { worktreeCheckout, type WorktreeSummary } from "../contracts/thread-worktrees.js"
 import { ThreadIdSchema, type ThreadId } from "../contracts/thread-identity.js"
 import { listExternalEditors, openInExternalEditor } from "./editors.js"
 import { revealAction } from "./reveal-policy.js"
@@ -55,6 +55,7 @@ import { declareMoveMethods } from "./move-methods.js"
 import { declarePlanBuildMethods } from "./plan-build-methods.js"
 import { declareCheckoutHeadMethods } from "./checkout-head-methods.js"
 import { declareProjectMethods, ProjectFolders } from "./project-folders.js"
+import { makeChatProject, type ChatProjectRequest } from "./chat-projects.js"
 import { declareThreadAppMethods } from "./app-methods.js"
 import { declareProjectSettingsMethods, ProjectSettingsStore, type ProjectSettingsDeps } from "./project-settings.js"
 import { forgetGitHubReads, listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "../git/index.js"
@@ -397,6 +398,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     worktrees.followSummaries((summaries) => emit({ type: "worktree-summaries", summaries }))
     worktrees.followSummaryChanges((changes) => {
       emit({ type: "worktree-summary-changes", ...changes })
+      if (!deps.readOnly) markMergedDone(deps.store, changes.changed, emit)
       retention?.changed()
       scratch?.changed()
       threadData?.changed()
@@ -662,6 +664,8 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   const files = declareFileMethods(methods, { withHost, emit, machine })
   methods.handle("mako:pick-folder", (defaultPath?: string) => presentMachine(machine).chooseFolder("Choose a project folder", defaultPath))
   declareProjectMethods(methods, new ProjectFolders({ emit }))
+  /** A chat's folder made a project: moved out of Chats, `git init`, its conversations going on there. */
+  methods.handle("mako:chat-make-project", (request: ChatProjectRequest): Promise<{ path: string }> => makeChatProject(live, request))
   methods.handle("mako:external-editors", () => listExternalEditors())
   methods.handle("mako:open-in-editor", (path: string, editor?: string) =>
     withHost(async (h) => {
@@ -693,3 +697,19 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
 }
 
 export { declareRemoteAppMethods } from "./app-methods.js"
+
+/**
+ * A Thread whose worktree's pull request merged is Done (`ThreadStore.markPullMerged`): once per pull request, so a
+ * Thread the person moved back stays where they put it as the same merge is read again.
+ */
+function markMergedDone(store: ThreadStore | null, changed: readonly WorktreeSummary[], emit: (event: HostEvent) => void): void {
+  const merged = changed.filter((summary) => summary.pull?.state === "merged")
+  if (!store || !merged.length) return
+  const threadOf = new Map(store.worktrees().map((worktree) => [worktree.path, worktree.thread]))
+  const marks = merged.flatMap((summary) => {
+    const thread = threadOf.get(summary.path)
+    const entry = thread && summary.pull ? store.markPullMerged(thread, summary.pull.url) : undefined
+    return entry ? [entry] : []
+  })
+  if (marks.length) emit({ type: "thread-marks", marks })
+}

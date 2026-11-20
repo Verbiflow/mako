@@ -16,6 +16,7 @@ import { ThreadLifecycle, followNativeArchives, type LiveThreads, type NativeQue
 import { declareThreadLifecycleMethods } from "./lifecycle-methods.js"
 import { declareThreadGroupMethods } from "./group-methods.js"
 import { declareThreadTitleMethods } from "./title-methods.js"
+import { declareThreadMarkMethods } from "./mark-methods.js"
 import { declareChatFolderMethods } from "./chat-folder-methods.js"
 import { Lineage } from "./lineage.js"
 import { daemonLoginEnabled, setDaemonLogin, type DaemonApp } from "./daemon-login.js"
@@ -246,6 +247,7 @@ export function declareThreadMethods(methods: MethodTable, { threads, live, nati
   followNativeArchives(lifecycle, (subscriber) => catalog.subscribe(subscriber), emit)
   declareThreadGroupMethods(methods, store, (thread) => live.announceGroup(thread), threads.storeProblem, (message) => hostWarn("threads", "a Thread group change failed", { error: message }))
   declareThreadTitleMethods(methods, { store, emit })
+  declareThreadMarkMethods(methods, { store, emit })
   declareChatFolderMethods(methods)
   return lifecycle
 }
