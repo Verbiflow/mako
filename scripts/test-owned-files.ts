@@ -36,7 +36,7 @@ const owner = spawn(process.execPath, ["--import", "tsx", join(import.meta.dirna
 after(() => owner.kill())
 await once(owner.stdout, "data")
 
-const renditions = new MediaRenditions({ folder: join(root, "renditions"), ffmpeg: () => "ffmpeg-not-here" })
+const renditions = new MediaRenditions({ folder: join(root, "renditions"), ffmpeg: async () => undefined })
 const here: FileOwner = { kind: "socket", socket }
 
 /** The owner's own signed URL for one of its files. */
