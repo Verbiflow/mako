@@ -1932,7 +1932,8 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   box-shadow: inset 0 0 0 1px var(--hairline);
 }
 
-.review-card > * + * {
+/* Not `> * + *`: no rule may have `*` after a sibling combinator (see `.mako-prose > *`). */
+.review-card > :where(:not(:first-child)) {
   border-top: 1px solid var(--hairline);
 }
 
@@ -2195,8 +2196,11 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 /*
  * Every block but the first is spaced from the one above. Not `> * + *`: a sibling rule whose
  * subject is `*` gives Chromium no feature to aim at, so each block added to a streaming answer
- * restyled the whole answer (45 ms an append at 300 KB). `:first-child` only changes when a block
- * is put in front, which a growing answer never does.
+ * restyled the whole answer (45 ms an append at 300 KB). Any such rule anywhere does it, not only
+ * this one: Chromium keeps one invalidation set for every `* + *` and `* ~ *` in the stylesheet
+ * and applies it under whichever parent a child joins, so `.review-card > * + *` and a
+ * `[&>*+*]:` utility restyled a streaming answer just the same. `:first-child` only changes when
+ * a block is put in front, which a growing answer never does.
  */
 .mako-prose > * {
   margin-top: 0.75em;
