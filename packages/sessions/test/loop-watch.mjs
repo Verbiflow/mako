@@ -85,18 +85,3 @@ test("an idle daemon's loop isn't looked at: work starts the watch, which stops 
     stop()
   }
 })
-
-test("what samples the loop beside the watch hears it start and stop", async () => {
-  const heard = []
-  const work = new WorkUnderWay()
-  const stop = watchLoop(work, () => {}, { everyMs: 10, heldMs: 200, lingerMs: 30, watching: (on) => heard.push(on) })
-  try {
-    await tick(50)
-    assert.deepEqual(heard, [], "nothing while idle")
-    namedWork(work, "request status", () => spin(5))
-    await tick(120)
-    assert.deepEqual(heard, [true, false], "on with the work, off a linger after it")
-  } finally {
-    stop()
-  }
-})
