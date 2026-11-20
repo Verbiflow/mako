@@ -6,14 +6,15 @@ import type { CaptureSize } from "./browser-capture.js"
 import type { VideoSource, LiveEncoderFactory } from "./browser-video.js"
 import { CONTROL_VIDEO_DATA_LIMIT, decodeControlVideo, type ControlVideoPacket } from "./contracts/control-video.js"
 import { resolveExecutable } from "./executable.js"
-import { onLinux } from "./platform.js"
+import { onLinux, onWindows } from "./platform.js"
 import { spawn } from "./processes.js"
 
 /**
  * Mako's video helper: a small native program that captures and encodes H.264 without FFmpeg
- * (`native/video-linux/mako-video.c` on Linux: XDamage, XShm and XComposite, OpenH264, libyuv, libjpeg-turbo). It
- * captures a display or one window only when its pixels change, or encodes the pictures it's sent. Its units come
- * out as `ControlVideoPacket`s, so nothing here parses H.264.
+ * (`native/video-linux/mako-video.c` on Linux: XDamage, XShm and XComposite, OpenH264, libyuv, libjpeg-turbo;
+ * `native/video-macos/main.swift`: ScreenCaptureKit and VideoToolbox; `native/video-windows/mako-video.cpp`: Windows
+ * Graphics Capture and Media Foundation). It captures a display or one window only when its pixels change, or encodes
+ * the pictures it's sent. Its units come out as `ControlVideoPacket`s, so nothing here parses H.264.
  */
 export type VideoHelperSource =
   | { kind: "display" }
@@ -40,22 +41,34 @@ export interface VideoHelperEvents {
   ended(reason: string): void
 }
 
-/** A checkout's build of it (`scripts/build-video-helper.mjs`), beside this package's `src` and `dist`. */
-const CHECKOUT_BUILD = fileURLToPath(new URL("../../../build/mako-video", import.meta.url))
+/** The helper's file name here: an `.exe` on Windows. */
+export function videoHelperName(): string {
+  return onWindows() ? "mako-video.exe" : "mako-video"
+}
 
 /**
- * Where the helper is: `MAKO_VIDEO_HELPER` (the host sets it to a packaged app's), else `mako-video` on PATH (a Linux
- * machine's), else a checkout's build. None where it isn't installed.
+ * Where the helper is: `MAKO_VIDEO_HELPER` (the host sets it to a packaged app's), else the helper on PATH (a Linux
+ * machine's), else a checkout's build (`scripts/build-video-helper.mjs`, beside this package's `src` and `dist`). None
+ * where it isn't installed.
  */
 export function videoHelperExecutable(): string | undefined {
   const configured = process.env.MAKO_VIDEO_HELPER
   if (configured) return isAbsolute(configured) && existsSync(configured) ? configured : undefined
-  return resolveExecutable("mako-video") ?? (existsSync(CHECKOUT_BUILD) ? CHECKOUT_BUILD : undefined)
+  const checkout = fileURLToPath(new URL(`../../../build/${videoHelperName()}`, import.meta.url))
+  return resolveExecutable(videoHelperName()) ?? (existsSync(checkout) ? checkout : undefined)
 }
 
 /** Whether this machine has an X display the helper can capture (a Wayland session is captured another way). */
 export function x11Display(): boolean {
   return onLinux() && Boolean(process.env.DISPLAY?.trim())
+}
+
+/**
+ * Whether the helper can capture this machine's windows and displays: ScreenCaptureKit on a Mac, Windows Graphics
+ * Capture on Windows, an X display on Linux.
+ */
+export function helperCaptures(): boolean {
+  return !onLinux() || x11Display()
 }
 
 const PICTURE = { jpeg: 0, rgb: 1, rgba: 2 } as const
@@ -87,7 +100,10 @@ export class VideoHelper {
       ...(options.quality ? ["--quality", String(options.quality)] : []),
       ...(options.content ? ["--content", options.content] : []),
     ]
-    this.#child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"] })
+    // A helper written in JavaScript (a test's stand-in) runs under this Node: Windows runs no script by its shebang.
+    const [file, prefix] = /\.[cm]?js$/.test(executable) ? [process.execPath, [executable]] : [executable, []]
+    // A console program under a windowless app opens a console window on Windows unless told not to.
+    this.#child = spawn(file, [...prefix, ...args], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
     this.#child.stdout.on("data", (chunk: Buffer) => this.#read(chunk))
     this.#child.stderr.on("data", (chunk: Buffer) => {
       this.#tail = (this.#tail + chunk.toString()).slice(-4096)
@@ -235,7 +251,8 @@ export function helperCapture(executable: string, source: Extract<VideoHelperSou
 }
 
 /**
- * The screencast's JPEGs encoded by the helper's `frames` mode (VideoToolbox on a Mac, OpenH264 on Linux): one
+ * The screencast's JPEGs encoded by the helper's `frames` mode (VideoToolbox on a Mac, OpenH264 on Linux, Media
+ * Foundation on Windows): one
  * process per encoder, a unit back for each picture with its sequence and capture time.
  */
 export function helperLiveEncoder(executable: string): LiveEncoderFactory {

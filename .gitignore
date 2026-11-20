@@ -56,6 +56,7 @@ build/make-icns
 build/mako-notification-status
 build/mako-sleep-watch
 build/mako-video
+build/mako-video.exe
 release/
 .env*
 
