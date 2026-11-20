@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react"
+import { useCallback, useEffect, useState, type ReactNode } from "react"
 import { ChevronLeftIcon, ChevronRightIcon } from "lucide-react"
 import type { CarriedFilesView, CarriedFileView } from "@mako/host/contracts/cloud-carried-files"
 import type { ProjectAppSetup, RecipeProofSummary, RecipeVersionView, RecipeView } from "@mako/host/contracts/project-app"
@@ -7,8 +7,7 @@ import { Action, Blank, Chip, Eyebrow, ListCard, ListCardRow } from "@/component
 import { Shimmer } from "@/components/ui/shimmer"
 import { SetupPage } from "@/components/setup/setup-page"
 import { Skeleton } from "@/components/ui/skeleton"
-import { recipeChangeContext } from "@/lib/app-setup-context"
-import { threadFolderKey } from "@/lib/thread-folders"
+import { changeWithAgent } from "@/state/recipe-change"
 import { cn } from "@/lib/utils"
 import { appSetupStore, useAppSetup } from "@/state/app-setup"
 import { decideCarriedFiles, keepCarriedFile, readCarriedFiles, useCarriedFiles } from "@/state/carried-files"
@@ -18,32 +17,12 @@ import { IfCanReveal } from "@/components/ui/machine-gate"
 import { setupAgentLabel, startProjectSetup, useSetupAgent } from "@/state/project-setup"
 import { actions } from "@/state/session"
 import { showSetupFor, threadAppDriver, useThreadApp } from "@/state/thread-app"
-import { useThreads } from "@/state/threads"
-import { useWorktrees } from "@/state/worktrees"
+import { useProjectRoots } from "@/state/project-settings"
 
 const HOME = /^\/(?:Users|home)\/[^/]+(?=\/)/
 const shortPath = (path: string) => path.replace(HOME, "~")
 const folderName = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`
-const LISTED = 40
-
-/** The projects the sidebar files Threads under, the ones worked in most recently first. */
-function useProjects(): string[] {
-  const refs = useThreads((state) => state.threads)
-  const folderMap = useWorktrees((state) => state.folderMap)
-  return useMemo(() => {
-    const latest = new Map<string, number>()
-    for (const ref of refs) {
-      if (ref.workspaceMissing) continue
-      const root = threadFolderKey(ref, folderMap)
-      if (!root || !root.startsWith("/")) continue
-      const at = Date.parse(ref.updatedAt ?? ref.startedAt ?? "") || 0
-      latest.set(root, Math.max(latest.get(root) ?? 0, at))
-    }
-    return [...latest].sort((a, b) => b[1] - a[1]).slice(0, LISTED).map(([root]) => root)
-  }, [refs, folderMap])
-}
-
 function close() {
   window.dispatchEvent(new CustomEvent("mako:close-settings"))
 }
@@ -53,22 +32,6 @@ async function newThreadWith(root: string, text: string) {
   close()
   if (!(await actions.newConversationIn(root))) return
   requestAnimationFrame(() => window.dispatchEvent(new CustomEvent("mako:compose", { detail: { text } })))
-}
-
-/** A new Thread with the recipe attached; the person says what to change. */
-async function changeWithAgent(setup: ProjectAppSetup) {
-  const context = recipeChangeContext(setup)
-  if (!context) return
-  close()
-  if (!(await actions.newConversationIn(setup.root))) return
-  requestAnimationFrame(() =>
-    window.dispatchEvent(new CustomEvent("mako:attach", {
-      detail: {
-        files: [{ file: new File([context.text], context.name, { type: "text/markdown" }), contextLabel: context.label }],
-        text: () => "",
-      },
-    }))
-  )
 }
 
 export function AppsSection() {
@@ -85,7 +48,7 @@ export function AppsSection() {
 /* ------------------------------------------------------------------ */
 
 function ProjectList({ onOpen }: { onOpen: (root: string) => void }) {
-  const roots = useProjects()
+  const roots = useProjectRoots()
   const tab = useAppSetup((state) => state.tab)
   const [setups, setSetups] = useState<Record<string, ProjectAppSetup | null>>({})
   const key = roots.join("\n")

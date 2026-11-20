@@ -101,6 +101,7 @@ const reads = [
   "mako:worktree-review",
   "mako:worktree-review-diffs",
   "mako:worktree-branches",
+  "mako:project-settings",
   "mako:worktree-pulls",
   "mako:worktree-summaries",
   "mako:worktree-removal",
@@ -270,6 +271,10 @@ const replays = [
   "mako:project-clone",
   /** Stops the same clone; a clone already over is left as it ended. */
   "mako:project-clone-cancel",
+  /** `ProjectSettingsStore.save`: replaces the project's settings with the same ones. */
+  "mako:project-settings-save",
+  /** `PreferenceStore.file`: writes the file only when there's none, which a repeat finds there. */
+  "mako:preferences-file",
   /** Replaces the same retirement settings; never removes a checkout in this call. */
   "mako:worktree-retention-set",
   /** Replaces the same scratch settings; preview does not remove anything. */

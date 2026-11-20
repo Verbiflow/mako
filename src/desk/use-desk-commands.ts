@@ -8,6 +8,7 @@ import {
   type DeskCommand,
 } from "@/extend/commands"
 import { installBuiltins } from "@/desk/builtins"
+import { installProjectCommands } from "@/desk/project-commands"
 import { actions, currentTurnRunning, store } from "@/state/session"
 import { git } from "@/state/git"
 import { commitDrafts, draftRepository } from "@/state/commit-drafts"
@@ -722,7 +723,7 @@ const DESK_COMMANDS: DeskCommand[] = [
  */
 export function useDeskCommands() {
   useEffect(() => {
-    const disposers = [registerCommands(DESK_COMMANDS), installBuiltins()]
+    const disposers = [registerCommands(DESK_COMMANDS), installBuiltins(), installProjectCommands()]
     return () => disposers.forEach((dispose) => dispose())
   }, [])
 

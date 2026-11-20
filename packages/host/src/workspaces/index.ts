@@ -56,6 +56,7 @@ import { declarePlanBuildMethods } from "./plan-build-methods.js"
 import { declareCheckoutHeadMethods } from "./checkout-head-methods.js"
 import { declareProjectMethods, ProjectFolders } from "./project-folders.js"
 import { declareThreadAppMethods } from "./app-methods.js"
+import { declareProjectSettingsMethods, ProjectSettingsStore, type ProjectSettingsDeps } from "./project-settings.js"
 import { forgetGitHubReads, listBranchPulls, listPullHeads, pullRequestTools, registerPullRequestTools } from "../git/index.js"
 import type { MakoTools } from "../tools/index.js"
 import type { WorkspaceConversations } from "./conversations.js"
@@ -120,6 +121,8 @@ export interface Workspaces {
   processes: ThreadProcesses | null
   /** Beside the Thread store, so every profile sharing the store shares its worktrees. */
   worktrees: ThreadWorktreeService | null
+  /** What the person set for each project in Settings › Projects (the branch its new Threads start from). */
+  projectSettings: ProjectSettingsDeps | null
   /** Automatic retirement is off until the person enables it in Settings, but for the worktrees of Fins closed as finished. */
   retention: WorktreeRetention | null
   scratch: ThreadScratch | null
@@ -253,6 +256,8 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
   }
   const borrowing = shared ? CheckoutBorrowing.open(git, deps.readOnly ? undefined : join(shared, "borrowing")) : undefined
   if (borrowing && !deps.readOnly) deps.jobs.every("keep what worktrees borrowed", 60 * 60_000, () => borrowing.keep())
+  // What the person set for each project in Settings › Projects, beside the Thread store so every profile reads the same.
+  const projectSettings = shared ? new ProjectSettingsStore(join(shared, "project-settings.json")) : null
   const worktrees = store && shared
     ? new ThreadWorktreeService(git, join(shared, "worktrees"), store, deps.inUse, deps.working, processes && environments ? {
         stop: async (thread) => { await processes.stop(AppKeySchema.parse(thread)) },
@@ -284,7 +289,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
         // A row asks for its worktree's branch as it's drawn (`CheckoutHeadService`), so what's followed there is what windows show.
         shown: (path) => checkoutHeads.known(path) !== undefined,
         heard: (path) => deps.trees?.covers(path) ?? false,
-      })
+      }, (repoRoot) => projectSettings ? projectSettings.baseBranch(repoRoot) : Promise.resolve(undefined))
     : null
   // A worktree's files changing is heard from the tree watches the host already keeps, never from one of its own.
   if (worktrees) deps.trees?.follow((root, paths) => worktrees.filesHeard(root, paths))
@@ -411,6 +416,12 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     environments,
     processes,
     worktrees,
+    projectSettings: worktrees && projectSettings ? {
+      git,
+      store: projectSettings,
+      automatic: (repoRoot) => worktrees.automaticStart(repoRoot),
+      resolves: (repoRoot, ref) => worktrees.resolves(repoRoot, ref),
+    } : null,
     recipes,
     retention,
     scratch,
@@ -672,6 +683,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   )
   declareAutomationMethods(methods, automations)
   declareWorktreeMethods(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls }, workspaces.retention)
+  declareProjectSettingsMethods(methods, workspaces.projectSettings)
   declareThreadScratchMethods(methods, workspaces.scratch, workspaces.threadData)
   declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
   declarePlanBuildMethods(methods, workspaces.planBuilds)

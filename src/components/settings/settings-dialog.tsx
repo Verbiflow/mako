@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react"
 import { Dialog as DialogPrimitive } from "radix-ui"
-import { ArrowLeftIcon, SearchIcon } from "lucide-react"
+import { ArrowLeftIcon, FileCodeIcon, SearchIcon } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { useUpdates } from "@/state/updates"
+import { openSettingsFile } from "@/state/project-settings"
 import { useThreads } from "@/state/thread-store"
 import {
   SETTINGS_GROUPS,
@@ -22,6 +23,7 @@ import { section as keyboard } from "@/components/settings/sections/keyboard"
 import { section as appshots } from "@/components/settings/sections/appshots"
 import { section as simulators } from "@/components/settings/sections/simulators"
 import { section as apps } from "@/components/settings/sections/apps"
+import { section as projects } from "@/components/settings/sections/projects"
 import { section as git } from "@/components/settings/sections/git"
 import { section as integrations } from "@/components/settings/sections/integrations"
 import { section as mcp } from "@/components/settings/sections/mcp"
@@ -48,6 +50,7 @@ const SECTIONS: readonly SettingsSection[] = [
   editor,
   keyboard,
   appshots,
+  projects,
   git,
   apps,
   integrations,
@@ -247,9 +250,21 @@ export function SettingsDialog({
                 )}
               </div>
 
-              <p className="shrink-0 px-5 py-2.5 text-label text-faint">
-                {version ? `Mako ${version}` : "Mako"}
-              </p>
+              <div className="flex shrink-0 flex-col items-start gap-0.5 px-3 pt-1 pb-2.5">
+                <button
+                  type="button"
+                  data-settings-file
+                  title="Opens preferences.json, where Mako keeps the settings that follow you between devices, in your editor"
+                  onClick={() => void openSettingsFile()}
+                  className="pressable flex h-7 items-center gap-2 px-2 text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+                >
+                  <FileCodeIcon className="size-3.5" />
+                  Open settings file
+                </button>
+                <p className="px-2 text-label text-faint">
+                  {version ? `Mako ${version}` : "Mako"}
+                </p>
+              </div>
             </nav>
 
             <main className="min-w-0 flex-1 overflow-y-auto bg-surface">

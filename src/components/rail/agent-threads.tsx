@@ -63,6 +63,8 @@ import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { useWindowRoutes, windowRoutesStore } from "@/state/window-routes"
 import { prefsStore, setPref, setProjectHidden, toggleGroupCollapsed, togglePinnedProject, usePrefs } from "@/state/prefs"
 import { openAppSetup } from "@/state/app-setup"
+import { openProjectSettings } from "@/state/project-settings"
+import { SlidersHorizontalIcon } from "lucide-react"
 import { desktop } from "@/state/desktop"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { toast } from "sonner"
@@ -1013,6 +1015,9 @@ function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHid
       </MenuItem>
       <MenuSeparator />
       {routed ? null : <>
+        <MenuItem data-folder-action="project-settings" onSelect={() => openProjectSettings(folder.cwd)}>
+          <SlidersHorizontalIcon className="size-3.5" />Project settings
+        </MenuItem>
         <MenuItem data-folder-action="app-setup" onSelect={() => openAppSetup(folder.cwd)}>
           <AppWindowIcon className="size-3.5" />App setup
         </MenuItem>

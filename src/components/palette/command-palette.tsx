@@ -17,6 +17,7 @@ import { useWorkspaceFiles } from "@/state/files"
 import { workspaceFiles } from "@/state/file-tree"
 import type { FileFindResults } from "@mako/host/contracts/file-index"
 import { viewer } from "@/state/viewer"
+import { PROJECT_SETTINGS_COMMAND } from "@/desk/project-commands"
 import { cn } from "@/lib/utils"
 import { SearchIcon } from "lucide-react"
 
@@ -191,6 +192,7 @@ export function CommandPalette() {
       return entries.filter(
         (entry) =>
           !entry.id.startsWith("session:") &&
+          !entry.id.startsWith(PROJECT_SETTINGS_COMMAND) &&
           (!entry.id.startsWith("model:") ||
             entry.section === "Favorite models" ||
             entry.section === "Recent models")
