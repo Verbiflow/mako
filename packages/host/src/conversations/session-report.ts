@@ -1,4 +1,5 @@
 import type { RemoteAppHint } from "../contracts/remote-app.js"
+import type { ThreadMarkEntry } from "../contracts/thread-marks.js"
 import { LISTED_ASK_OPTIONS, LISTED_LINEAGE, LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, rowsForLink, sameHead, type ListedAsking, type ListedHead, type ListedMove, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import type { ThreadRef } from "@mako/sessions"
 import { finAskWaiting } from "../contracts/children.js"
@@ -64,6 +65,8 @@ export type ReportSources = {
   executions(sessions: readonly SessionId[]): ReadonlyMap<SessionId, SessionExecution>
   /** Each of these Threads' names (`ThreadStore.titlesOf`), asked once a report as `executions` is. */
   titles(threads: readonly ThreadId[]): ReadonlyMap<ThreadId, { title?: string; titleSource?: string }>
+  /** What the person marked each of these Threads with (`ThreadStore.marksOf`), asked once a report as `titles` is. */
+  marks?(threads: readonly ThreadId[]): ReadonlyMap<ThreadId, ThreadMarkEntry>
   /** The Session each of these that is a fork was forked from (`ThreadStore.forksOf`), asked once a report as `executions` is. */
   forks?(sessions: readonly SessionId[]): ReadonlyMap<SessionId, SessionId>
   /** A move of this Thread to the cloud under way here (`MovesUnderWay`), said on each of its rows while it goes. */
@@ -266,7 +269,18 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
   const placedSessions = [...conversations.map(({ placed }) => placed.session), ...natives.map(({ session }) => session)]
   const executions = sources.executions(placedSessions)
   const forks = sources.forks?.(placedSessions)
-  const titles = sources.titles([...new Set([...conversations.map(({ placed }) => placed.thread), ...natives.map(({ thread }) => thread)])])
+  const reportedThreads = [...new Set([...conversations.map(({ placed }) => placed.thread), ...natives.map(({ thread }) => thread)])]
+  const titles = sources.titles(reportedThreads)
+  const marks = sources.marks?.(reportedThreads)
+  // What the person marked the Thread with: every device's list shows its status, and that it's to be read again.
+  const marked = (row: ReportedSession, thread: ThreadId) => {
+    const entry = marks?.get(thread)
+    if (entry?.status) {
+      row.workStatus = entry.status
+      if (entry.statusAt !== null) row.workStatusAt = entry.statusAt
+    }
+    if (entry?.unreadAt != null) row.markedUnread = true
+  }
   // What the rail shows of a row besides its state: the project it's filed under and what that has checked out, the
   // worktree it works in, and the agents it ran in before.
   const rail = (folder: string | undefined, worktrees: NativeRow["worktrees"], lineage: readonly string[], harness: string): Pick<ReportedSession, "project" | "worktree" | "lineage" | "repository"> => {
@@ -313,6 +327,7 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     }
     const titled = threadTitle(placed.thread)
     if (titled) row.threadTitle = titled
+    marked(row, placed.thread)
     const move = sources.moving?.(placed.thread)
     if (move) row.move = move
     if (session.cwd) row.folder = session.cwd
@@ -353,6 +368,7 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     }
     const titled = threadTitle(thread)
     if (titled) row.threadTitle = titled
+    marked(row, thread)
     const move = sources.moving?.(thread)
     if (move) row.move = move
     if (ref.title) row.title = line(ref.title)
@@ -395,6 +411,7 @@ function sameShown(left: ReportedSession, right: ReportedSession): boolean {
   // A row no report reworked is the one the link holds: nothing of it is compared, and its Fins aren't written out.
   if (left === right) return true
   return left.session === right.session && left.thread === right.thread && left.threadTitle === right.threadTitle && left.conversation === right.conversation &&
+    left.workStatus === right.workStatus && left.workStatusAt === right.workStatusAt && left.markedUnread === right.markedUnread &&
     left.harness === right.harness && left.title === right.title && left.state === right.state && left.waitingOn === right.waitingOn && left.waitingFor === right.waitingFor &&
     left.folder === right.folder && left.createdAt === right.createdAt && left.generation === right.generation &&
     left.nativeId === right.nativeId && left.capture?.path === right.capture?.path && left.background === right.background &&
@@ -1078,7 +1095,7 @@ export class SessionPublisher {
 
     // A Session archived here leaves every device's list, and a Thread renamed here is renamed there: the owner's word
     // is the one that counts, and no batch says either.
-    if (event.type === "thread-archives" || event.type === "thread-titles") return this.showsChanged()
+    if (event.type === "thread-archives" || event.type === "thread-titles" || event.type === "thread-marks") return this.showsChanged()
     // A project's checkout moved to another branch, or a rebase began or ended: its rows say so beside the project.
     if (event.type === "checkout-heads") return this.changed()
     // A move's steps go to whoever watches the conversation it was asked from, as its window hears them: a device that

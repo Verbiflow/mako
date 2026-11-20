@@ -756,6 +756,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       childThread: (thread) => listedUnderApex(store.edges().of(thread)),
       executions: (ids) => store.executionsOf(ids),
       titles: (ids) => store.titlesOf(ids),
+      marks: (ids) => store.marksOf(ids),
       forks: (ids) => store.forksOf(ids),
       moving: (thread) => movesUnderWay.of(thread),
       // One list for the whole making, indexed once (`worktreeIn`): looked through for every row, twice, it was 600

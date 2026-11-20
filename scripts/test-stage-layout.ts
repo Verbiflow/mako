@@ -156,8 +156,6 @@ const stateFeedback = new Map<string, { animation: string; reduced: RegExp | "gl
   ['.live-mark[data-live-mark="starting"] .live-mark-body', { animation: "live-mark-breathe", reduced: "global" }],
   ['.live-mark[data-live-mark="needs"] .live-mark-water', { animation: "live-mark-breathe", reduced: "global" }],
   ['.live-mark[data-live-mark="lead"] .live-mark-body', { animation: "live-mark-drift", reduced: "global" }],
-  // An Apex's working pips: one veil per row sweeping on `transform`, on the same gate.
-  [".fin-pips-veil", { animation: "fin-pips-wave", reduced: /\.fin-pips-veil\s*\{\s*display:\s*none;/ }],
   // The Shiver card's bar: the working stretch alone sweeps, only while it is on screen (`observeVisibleAnimation`) and motion is allowed.
   [".shiver-bar-working::after", { animation: "shiver-bar-sweep", reduced: "global" }],
 ])

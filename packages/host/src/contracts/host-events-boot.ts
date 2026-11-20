@@ -10,6 +10,7 @@ import type { StoreFormats } from "./store-formats.js"
 import type { FileEventsService } from "./file-events-service.js"
 import type { McpSignIns } from "./mcp-sign-ins.js"
 import type { ThreadTitleEntry } from "./thread-titles.js"
+import type { ThreadMarkEntry } from "./thread-marks.js"
 import type { Entry } from "@mako/sessions/entries"
 import type { WorktreeStep, WorktreeSummary, WorktreeSummaryChanges } from "./thread-worktrees.js"
 import type { MachineOffer } from "./machine-offer.js"
@@ -239,6 +240,8 @@ export type HostEventBody =
   | { type: "mcp-sign-ins"; reading: McpSignIns }
   /** These Threads' names changed, from any host; the rest are as they were. Window-wide. */
   | { type: "thread-titles"; titles: ThreadTitleEntry[] }
+  /** Threads the person (or a merged pull request) marked: their whole marks as they now stand. */
+  | { type: "thread-marks"; marks: ThreadMarkEntry[] }
   /** Sessions were added to another Thread or split into a new one; window-wide. */
   | { type: "thread-removed"; path: string }
   | {

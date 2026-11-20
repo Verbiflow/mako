@@ -3641,7 +3641,7 @@ deliberate action and never rides along with a commit.
   on screen, and `watchApexView` ends the desk's view once anything else shows. `npm run test:side-rail-ui` holds the
   rail, and `test:fin-transitions-ui` each way in through closing, another Thread, a reload and the rail on every form.
 - **One count and one vocabulary for an Apex's Fins.** Every surface (the
-  composer's chip, the Shiver card, the rail's pips, the Overview, the stop
+  composer's chip, the Shiver card, the rail Apex's tip, the Overview, the stop
   card, the phone's row) counts from the Thread's one roster
   (`threadChildren` / `threadRollup` in `src/state/apex-fins.ts`) through
   `rollup`, and words it with `rollupLine`, `rollupChip` or `rollupLabel`
@@ -3948,6 +3948,50 @@ the Inbox and above its Thread's composer, and Keep, Add to setup and the Add
 menu draft the recipe change in a new Thread for the person to send. No value
 is ever shown. `packages/protocol/test/setup.mjs` (in `test:protocol`) covers the
 rows and words; `npm run test:setup` the host's readings and brokers.
+
+## The calm rail
+
+The left rail at rest draws a row's fin, its title and its time, and nothing else; the rest is under the pointer, on
+selection, or in the row's tip (`rail-tip.tsx`). A Thread row is 28 px: the fin (`LiveMark`, 18 px, harness badge),
+the title in 14 px fading at its edge (`.rail-fade`) at 72% (full while it needs the person, holds an unread answer
+or a Mark as unread; 45% once Done), and a trailing slot (`RowEnd`): the status glyph the person set
+(`WorkGlyph`), then the time, or "Failed" in faint grey. Under the pointer the slot gives way to Archive and `⋯`.
+The branch, worktree, Sessions, setup purpose, pin and app went to the tip. The top rows are quiet with one count,
+the Inbox's in the attention hue; Pull requests and Automations say theirs in their tips, and an automation whose
+last run failed since Automations was opened counts in the Inbox (`failedAutomationRuns`), as a proposal does
+through its agent's ask. Customize sidebar (`prefs.railNav`, Setup hidden at first) is in the Projects header's
+`⋯` and a right-click on the top rows. The Projects header's Filter, `+` and `⋯` show under the pointer.
+
+A project row wears a 16 px avatar (`rail-avatars.tsx`): its GitHub owner's public picture when its `origin` is on
+GitHub (`repo-avatars.ts` asks `mako:repo-avatar` with the owner alone; the host fetches
+`https://github.com/<owner>.png` once and keeps it under `<dataRoot>/avatars`), else a monogram on one of eight hues
+hashed from the folder (`.rail-hue-*`). Folded, a project shows only a 6 px attention dot. Projects order as worked
+in unless the person dragged them (`project-drag.ts`, or Move up/down in a project's menu): that order is the
+`rail.projectOrder` preference, which follows the account; unplaced projects follow by `rail-ranks`.
+
+An Apex is a captain (Capy's pattern): its avatar is its Thread's hue with the fin cut out, turning into the fold's
+chevron under the pointer; its Fins hang from it on 1 px square-elbow lines (`.rail-branch`). Folded (the default)
+only the Fins that need the person show, with their asks; open (`prefs.openApexes`, ←/→ on the row) every Fin in
+play, then "N finished". A ring in the trailing slot says its Fins work; their counts are the tip.
+
+A Thread's workflow status (Backlog, In progress, In review, Done) and Mark as unread are the Thread store's
+(`thread_marks`, `contracts/thread-marks.ts`, `mako:thread-mark`, replayed by its operation id), told to windows as
+`thread-marks` and to other devices on the Sessions a host reports (`workStatus`, `markedUnread`, link version 29;
+a link negotiated at 28 drops them in `rowsForLink`, and the marks stay on the Mac).
+A merged pull request of a Thread's worktree marks it Done once per pull request (`markPullMerged`), and a Done
+Thread folds into its project's "N done" after three days. Opening a Thread reads it. ⌘1–9 open the first nine rows
+(holding ⌘ 200 ms shows the keys); ⌘⇧1–9 are the strip's surfaces and ⌃⌘1–5 the model loadout. ⌘- and ⇧-click pick
+rows (`rail-selection.ts`); the footer is then the selection's bar: Mark read (U), Archive (E), Esc. Turn into
+project… moves a chat's folder out of Chats, `git init`s it and moves its conversations with it
+(`mako:chat-make-project`), or nothing moves. The footer is one row: the identity and, while anything wants a look,
+"N to resolve", whose popover holds the MCP, sync, unopened, turn-on and store-format lines and their fixes (its dot
+violet only for a sign-in). Finish setting up (`setup-checklist.ts`) reads real facts, sits above the footer until
+done or put away, and stays in the palette and the account menu. The phone and iPad list (`src/web-client/list.tsx`)
+draws the same anatomy at touch size (52 px rows on a phone, 44 on an iPad, 20 px tiles and fins): projects with their
+tiles (`rail-groups.ts`), an Apex's Fins on the same elbows, status glyphs and "N done", Mark as unread and Status in
+the long-press menu sent to the owner (`thread-marks.ts`), and on the phone a Finish setting up card of what the
+browser knows (`setup-card.tsx`); `test-phone-rail-ui.mjs` holds it. `test-rail-calm-ui.mjs`, `test-rail-calm.ts`,
+`test-thread-marks.ts` and `test-chat-projects.ts` hold it.
 
 ## Automations
 
@@ -5366,7 +5410,7 @@ doesn't keep the account's list between starts: other devices' rows arrive
 when it's read, a second or two after the window opens, and a folder last
 worked in from elsewhere rises then, once.
 `test-rail-order.ts` holds a Mac's window and the web to one order. Status
-is the row's mark and the folder's chip, and a folder with a working,
+is the row's mark (and, folded, the project's one attention dot), and a folder with a working,
 waiting, or unread thread stays visible past the folder page limit instead of
 climbing. An unread answer is a 7px sphere in the text colour
 (`.review-dot`: one static radial gradient between `--mark-highlight`,

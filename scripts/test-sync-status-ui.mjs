@@ -164,6 +164,9 @@ async function checkWindow() {
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
   await until(`Boolean(document.querySelector('.composer-input'))`, "the desk")
   await until(`document.querySelector('[data-sync-rail]') !== null`, "the rail's line")
+  // It's one of the footer's "N to resolve" lines (the calm rail), read once that opens.
+  await evaluate(`document.querySelector('[data-rail-issues]').click(), true`)
+  await until(`Boolean(document.querySelector('[data-sync-rail]')?.closest('[data-state="open"]'))`, "the footer's lines open")
   const rail = await evaluate(`document.querySelector('[data-sync-rail]').innerText`)
   assert.match(rail, /2 Sessions not synced/)
   assert.match(rail, /The account turned down part of it · since /)
@@ -192,6 +195,9 @@ async function checkWindow() {
   await window.loadURL(`${base}?mock&cloud=signed-in&invited&sync=failing-one`)
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({theme: 'dark'}))`)
   await until(`document.querySelector('[data-sync-rail]') !== null`, "the rail's line for one")
+  // It's one of the footer's "N to resolve" lines (the calm rail), read once that opens.
+  await evaluate(`document.querySelector('[data-rail-issues]').click(), true`)
+  await until(`Boolean(document.querySelector('[data-sync-rail]')?.closest('[data-state="open"]'))`, "the footer's lines open")
   const one = await evaluate(`document.querySelector('[data-sync-rail]').innerText`)
   assert.match(one, /“Fix the login race in the session store”\s*isn't synced/)
   assert.match(one, /Claude Code · The account turned down part of it · since /)

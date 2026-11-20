@@ -341,7 +341,7 @@ async function check() {
     await until(`document.querySelectorAll('[data-thread]').length >= 4`, "the phone's list")
     assert.equal(await evaluate(`document.querySelectorAll('[data-thread] [data-place="machine"]').length >= 3`), true, "idle rows on the machine wear a server")
     assert.equal(await evaluate(`document.querySelectorAll('[data-thread] [data-place="device"]').length`), 0, "none a laptop")
-    assert.equal(await evaluate(`[...document.querySelectorAll('[data-thread]')].filter((row) => row.querySelector('[data-place="machine"]')).every((row) => row.innerText.includes('build-box'))`), true, "and say its name, the account having a Mac too")
+    assert.equal(await evaluate(`[...document.querySelectorAll('[data-thread]')].filter((row) => row.querySelector('[data-place="machine"]')).every((row) => row.getAttribute('aria-label').includes('build-box'))`), true, "and name it, the account having a Mac too (the row's one line keeps its name for its label, as the desk's rail keeps it for its tip)")
     await both("web-phone-list-machine")
     const thread = await evaluate(`import('/src/dev/mock-apex-thread.ts').then(({ APEX_THREAD }) => APEX_THREAD)`)
     await window.loadURL(`${new URL("scripts/phone-apex.html", base).href}?machine&open=${thread}`)

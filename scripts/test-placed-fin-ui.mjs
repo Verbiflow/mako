@@ -10,7 +10,7 @@ import { KEPT, testScratch } from "./lib/test-scratch.mjs"
  * bridge's Apex with `&placed=` (`src/dev/mock-apex-thread.ts`): on the desk, under its Apex in the rail and the Shiver
  * card, never as a row of its own, opening its own conversation on its device (Loft) when Loft lists it, and drawn as
  * not openable, opening nothing, when it doesn't; on the phone and in a laptop's browser, under its Apex and, waiting
- * on an approval, a row of its own under Needs you that opens on Loft; with Loft quiet; and with the Apex's own device
+ * on an approval, a row of its own hung under its Apex that opens on Loft; with Loft quiet; and with the Apex's own device
  * off, the Fin's row still saying what it asks. Screenshots of each, dark and light, land in the printed directory
  * (`MAKO_PLACED_UI_SHOTS`; without it they go with the run's scratch folder once it passes). Pass a dev server's URL
  * to use it; with none it serves its own.
@@ -178,7 +178,7 @@ async function check() {
       console.log(`desk, ${scene}: the Fin under its Apex in the rail and the Shiver card, ${scene === "unlisted" ? "drawn as not openable and opening nothing" : "opening Loft's conversation of it"}`)
     }
 
-    // A laptop's browser: the desk's rail from the account's list, the Fin under its Apex, a row of its own under Needs you.
+    // A laptop's browser: the desk's rail from the account's list, the Fin under its Apex, a row of its own under it.
     for (const scene of ["loft", "off"]) {
       for (const theme of ["dark", "light"]) {
         const laptop = await open(`${base}/scripts/web-desk.html?placed=${scene}&theme=${theme}`, { width: 1280, height: 800, phone: true })
@@ -195,24 +195,23 @@ async function check() {
       console.log(`laptop, ${scene}: the Fin under its Apex in the rail, opening Loft's conversation of it`)
     }
 
-    // The phone: under Needs you, the Fin's own row, under its Apex, opening on Loft; with the Apex's device off too.
+    // The phone: the Fin's own row hung under its Apex, opening on Loft; with the Apex's device off too.
     for (const scene of ["loft", "off"]) {
       for (const theme of ["dark", "light"]) {
         const phone = await open(`${base}/scripts/phone-apex.html?app=apex&placed=${scene}&theme=${theme}`, { width: 390, height: 844, phone: true })
-        await phone.until(`Boolean(document.querySelector('[data-list-section="needs"] [data-thread="${FIN_THREAD}"][data-under="${APEX_THREAD}"]'))`, "the placed Fin's row under Needs you, under its Apex")
+        await phone.until(`Boolean(document.querySelector('[data-hung-fins="${APEX_THREAD}"] [data-thread="${FIN_THREAD}"][data-under="${APEX_THREAD}"]'))`, "the placed Fin's row under its Apex")
         const others = await phone.evaluate(`[...document.querySelectorAll('[data-thread="${FIN_THREAD}"]')].filter((node) => !node.dataset.under).length`)
         assert.equal(others, 0, `no Thread row of its own (${scene})`)
-        assert.equal(await phone.evaluate(`document.querySelectorAll('[data-list-section="needs"] [data-thread="${APEX_THREAD}"]').length`), 0, `its Apex's row doesn't stand in for it (${scene})`)
-        assert.equal(await phone.evaluate(`document.querySelectorAll('[data-fin-row="${FIN_THREAD}"]').length`), 0, `listed once under Needs you (${scene})`)
+        assert.equal(await phone.evaluate(`document.querySelectorAll('[data-thread="${FIN_THREAD}"]').length`), 1, `listed once (${scene})`)
         await phone.capture(`phone-list-${scene}-${theme}`)
-        await phone.click(`[data-list-section="needs"] [data-thread="${FIN_THREAD}"]`)
+        await phone.click(`[data-hung-fins="${APEX_THREAD}"] [data-thread="${FIN_THREAD}"]`)
         await phone.until(`Boolean(document.querySelector('[data-thread-screen="${FIN_THREAD}"]'))`, "the Fin's own screen, on Loft")
         await phone.until("Boolean(document.querySelector('[data-permission-card]'))", "its approval")
         await phone.capture(`phone-open-${scene}-${theme}`)
         assert.equal(await phone.evaluate(`document.querySelectorAll('[data-fin-row="${FIN_THREAD}"]').length`), 0, "listed once: its own row, not an ask row of its Apex's too")
         phone.close()
       }
-      console.log(`phone, ${scene}: the Fin's row under Needs you, under its Apex, opening on Loft with its approval`)
+      console.log(`phone, ${scene}: the Fin's row under its Apex, opening on Loft with its approval`)
     }
     console.log("placed Fin UI: ok")
     clearTimeout(watchdog)

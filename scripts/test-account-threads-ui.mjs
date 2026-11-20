@@ -152,7 +152,8 @@ async function checkWindow() {
     const studioLabel = await evaluate(`${studioRow}.getAttribute('aria-label')`)
     assert.match(studioLabel, /on Studio/, "it says where it runs")
     assert.match(studioLabel, /Approve: npm test/, "and what it waits on, as a local approval is said")
-    assert.equal(await evaluate(`${studioRow}.getAttribute('data-tip')`), `${studioTitle} · on Studio · Approve: npm test`)
+    // The row's tip: its title, then where it runs and what it waits on (the calm rail's tips are a line a fact).
+    assert.equal(await evaluate(`${studioRow}.getAttribute('data-tip')`), `${studioTitle}\non Studio · Approve: npm test`)
     await settle()
     await both("listed-waiting", ["[data-thread-row]"])
 
@@ -275,10 +276,11 @@ async function checkWindow() {
     assert.equal(cloud[0].where, "cloud")
     assert.match(cloud[0].label, /2 sessions: Codex[^,]* working, Claude[^,]* idle/)
     assert.equal(shown.filter((row) => listedTitles.slice(0, 3).some((title) => row.text.includes(title))).length, 0, "no Session of another Mac's Thread has a row of its own")
-    // Its first Session is idle; the Thread waits on you all the same, and its project says so.
-    assert.equal(await evaluate(`document.querySelector('.thread-jump-scope [data-folder-activity]')?.dataset.folderActivity`), "waiting", "the project counts the Thread, not its first Session")
-    // This Mac's own folded row says nothing of where it runs; its count says its two Sessions.
-    const local = await evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].filter(row => !row.dataset.tip?.includes(' · on ')).map(row => row.querySelector('[aria-label$=" sessions"]')?.getAttribute('aria-label')).filter(Boolean)`)
+    // Its first Session is idle; the Thread waits on you all the same, and its row's fin says so (the calm rail draws
+    // no project chip; a folded project's one dot reads the same fact).
+    assert.equal(await evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].find(row => row.innerText.includes('Flaky upload on Linux'))?.querySelector('[data-live-mark]')?.dataset.liveMark`), "needs", "the row counts the Thread, not its first Session")
+    // This Mac's own folded row says nothing of where it runs; its tip says its two Sessions.
+    const local = await evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-thread-row]')].filter(row => !row.dataset.tip?.includes('on Studio') && !row.dataset.tip?.includes('on a cloud')).map(row => /(?:^|\\n)(\\d+ sessions)/.exec(row.dataset.tip ?? '')?.[1]).filter(Boolean)`)
     assert.deepEqual(local, ["2 sessions"], `this Mac's Thread with two Sessions is one row: ${JSON.stringify(shown)}`)
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 40 })
     await settle()
@@ -309,7 +311,7 @@ async function checkWindow() {
     await until(`Boolean(${studioRow}?.querySelector('[data-last-seen]'))`, "the quiet Studio's row saying when it was last seen")
     assert.equal(await evaluate(`${studioRow}.querySelector('[data-last-seen]').innerText`), "seen 3h", "in the row's time column, told apart from an idle row's time")
     assert.match(await evaluate(`${studioRow}.getAttribute('aria-label')`), /on Studio, last seen 3 hours ago/)
-    assert.match(await evaluate(`${studioRow}.getAttribute('data-tip')`), /· on Studio, last seen 3 hours ago/)
+    assert.match(await evaluate(`${studioRow}.getAttribute('data-tip')`), /(^|\n)on Studio, last seen 3 hours ago/)
     assert.doesNotMatch(await evaluate(`${studioRow}.getAttribute('aria-label')`), /working|needs your approval/, "nothing there shown at work or asking")
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x: 900, y: 40 })
     await settle()

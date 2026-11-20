@@ -1,14 +1,18 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
-import { memo, useCallback, useEffect, useRef, useState, type ReactNode } from "react"
-import { ArchiveIcon, FolderGit2Icon, PinIcon, XIcon } from "lucide-react"
+import { clearPicked, offerPick, pickByClick, useRailSelection } from "@/state/rail-selection"
+import { railThreadRowKeys } from "@/components/rail/rail-keys"
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { ChevronRightIcon, XIcon } from "lucide-react"
 import { harnessLabel } from "@/components/rail/harness-meta"
-import { ReadyBesideMark, ThreadMark, ThreadStatusEnd } from "@/components/rail/thread-status"
-import { AppMarkIcon } from "@/components/rail/app-mark"
-import { ThreadPurposeChip } from "@/components/rail/purpose-chip"
-import { ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
+import { appMarkLabel, purposeWords, titleTone } from "@/lib/rail-marks"
+import { ThreadMark } from "@/components/rail/thread-status"
+import { ArchiveButton, ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
+import { ApexAvatar } from "@/components/rail/rail-avatars"
+import { JumpCap, WorkGlyph } from "@/components/rail/work-status"
+import { WORK_STATUS_WORDS, type WorkStatus } from "@mako/host/contracts/thread-marks"
+import { useThreadMarks } from "@/state/thread-marks"
 import { archivedThread, nativeThreadTarget, useThreadArchives, type ThreadTarget } from "@/state/thread-lifecycle"
-import { ApexShiverLine } from "@/components/rail/fin-pips"
-import { useIsApex } from "@/state/fin-pips"
+import { useApexFins, useIsApex } from "@/state/fin-pips"
 import { ApexAsks } from "@/components/rail/apex-asks"
 import {
   foldedThreadState,
@@ -18,28 +22,31 @@ import {
   type FoldedThread,
   type FoldRow,
 } from "@/lib/thread-fold"
+import { threadStatusLabel } from "@/lib/live-mark-state"
 import { rowThread, useThreadGroups } from "@/state/thread-groups"
+import { useThreadPurposes } from "@/state/thread-purposes"
 import { renameThreadTitle, useThreadTitles } from "@/state/thread-titles"
 import { openFoldedThread } from "@/state/thread-sessions"
 import { onScreenSession } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
 import { followCheckouts } from "@/state/checkout-heads"
+import { appMarkOf, useThreadApp } from "@/state/thread-app"
 import { useLeavingWorktrees, useWorktrees, useWorktreeSummaries, workingFolder, worktreeAt } from "@/state/worktrees"
 import { worktreeTip } from "@/lib/worktree-marks"
-import { WorktreeMark } from "@/components/rail/worktree-mark"
 import { threadReferenceId, threadToken } from "@/lib/mentions"
-import { workspaceName } from "@/lib/format"
+import { formatRelative, workspaceName } from "@/lib/format"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { checkoutOf, projectFolder } from "@mako/host/contracts/worktree-paths"
 import type { ThreadRef } from "@/lib/types"
 import { cn } from "@/lib/utils"
-import { togglePinned, usePrefs } from "@/state/prefs"
+import { observeVisibleAnimation } from "@/lib/visible-animation"
+import { toggleApexOpen, togglePinned, usePrefs } from "@/state/prefs"
 import { actions, useSession } from "@/state/session"
 import { useTabs, type TabInfo } from "@/state/tabs"
 import { acpForThread, activeAcp } from "@/state/acp"
 import { useRailAcp } from "@/state/acp-state"
 import { keptSessionText } from "@/lib/kept-session"
-import { sameThreadStatus, threadStatus, threads, useThreads } from "@/state/threads"
+import { sameThreadStatus, threadStatus, threads, useThreads, type ThreadStatus } from "@/state/threads"
 import { threadLiveKey } from "@/state/thread-status"
 
 /** The detach control for an attached background tab; lives in the row's hover pill. */
@@ -70,9 +77,12 @@ const Detach = memo(function Detach({ path }: { path: string }) {
   )
 })
 
-/** A rail row's box and paint: hover, an open menu, and the one lit row (`data-active`). */
+/**
+ * A rail row's box and paint: hover, an open menu, and the one lit row (`data-active`). At rest a row is its fin, its
+ * title and its time; under the pointer (`rail-calm`) the trailing slot gives way to the row's actions.
+ */
 export const ROW_SURFACE =
-  "group relative isolate flex h-7 w-full items-center gap-2 pr-1 text-left transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised"
+  "rail-calm group relative isolate flex h-7 w-full items-center gap-2 pr-1 pl-2 text-left transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover data-active:bg-raised data-active:hover:bg-raised data-picked:bg-fill-selected data-picked:hover:bg-fill-selected"
 
 /**
  * A row's floating controls, shown while the row (`group`) is hovered or focused, or a menu of theirs is open.
@@ -83,25 +93,45 @@ export const ROW_SURFACE =
 export const ROW_ACTIONS =
   "pointer-events-none absolute inset-y-0 right-0 z-[1] flex items-center pl-4 pr-1 opacity-0 transition-opacity duration-100 group-hover:pointer-events-auto group-hover:opacity-100 group-focus-visible:pointer-events-auto group-focus-visible:opacity-100 [.group:has(:focus-visible)_&]:pointer-events-auto [.group:has(:focus-visible)_&]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
-/** An Apex's row is two lines, its Shiver's pips under its title (`ApexShiverLine`). */
-export const APEX_SURFACE = "h-11 flex-col items-stretch justify-center gap-[3px]"
-
 /**
- * A row's first line: the row's own flex line for a Thread, a line of its own over an Apex's pips, which holds the
- * row's controls too. The same element either way, so a Thread that starts its first Fin keeps its mark mounted.
+ * A row's one trailing slot at rest: a ring while an Apex's Fins work, the status the person set, then how long ago
+ * the row moved, or "Failed" in its place (faint: the fin already lists over). Hover gives the slot to the row's
+ * actions; ⌘ held, to its jump key.
  */
-export function RowLine({ apex, children }: { apex: boolean; children: ReactNode }) {
-  return <span className={apex ? "relative -mr-1 flex h-5 w-auto min-w-0 items-center gap-2 pr-1" : "contents"}>{children}</span>
+export function RowEnd({ status, updatedAt, finsWorking, work, children }: { status: ThreadStatus; updatedAt?: string; finsWorking?: boolean; work?: WorkStatus | null; children?: ReactNode }) {
+  return (
+    <span data-row-end className="flex min-w-7 shrink-0 items-center justify-end gap-1.5">
+      {finsWorking ? <span ref={observeVisibleAnimation} data-fins-working className="rail-spin spinner" aria-hidden /> : null}
+      {work ? <WorkGlyph status={work} /> : null}
+      {status.kind === "failed" ? (
+        <span data-status-end="failed" className="text-label text-faint">Failed</span>
+      ) : (children ?? (updatedAt ? <span className="tabular text-label text-faint">{formatRelative(updatedAt)}</span> : null))}
+      <JumpCap />
+    </span>
+  )
 }
 
-/** How many Sessions a folded row stands for. */
-export function SessionCount({ count }: { count: number }) {
+/** An Apex's leading mark: its avatar, which turns into the fold's chevron under the pointer or focus. */
+export function ApexFold({ thread, open, label }: { thread: string; open: boolean; label: string }) {
   return (
-    <span
-      aria-label={`${count} sessions`}
-      className="tabular flex h-4 min-w-4 shrink-0 items-center justify-center bg-fill-selected px-1 text-label leading-none text-muted-foreground"
-    >
-      {count}
+    // The avatar stands where a Thread's fin does, and says what the fin would: the Apex's state, a Fin's ask first.
+    <span role="img" aria-label={label} className="relative flex size-[18px] shrink-0 items-center justify-center">
+      <ApexAvatar seed={thread} className="transition-opacity duration-100 group-hover:opacity-0 [.group:has(:focus-visible)_&]:opacity-0" />
+      <button
+        type="button"
+        aria-label={open ? "Fold its Fins" : "Show all its Fins"}
+        aria-expanded={open}
+        data-apex-fold
+        data-tip-quiet
+        onPointerDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation()
+          toggleApexOpen(thread)
+        }}
+        className="absolute inset-0 flex items-center justify-center text-faint opacity-0 transition-opacity duration-100 group-hover:opacity-100 hover:text-foreground focus-visible:opacity-100 [.group:has(:focus-visible)_&]:opacity-100"
+      >
+        <ChevronRightIcon className={cn("size-3.5 transition-transform duration-200 ease-out", open && "rotate-90")} />
+      </button>
     </span>
   )
 }
@@ -148,8 +178,13 @@ export const ThreadRow = memo(function ThreadRow({
   )
   const thread = useThreadGroups((state) => folded?.thread ?? rowThread(ref, state.threadOf))
   const named = useThreadTitles((state) => (thread ? state.byThread[thread]?.title : undefined))
+  const purpose = useThreadPurposes((state) => (thread ? state.byThread[thread] : undefined))
+  const setup = purpose?.kind === "setup"
   const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
   const apex = useIsApex(thread)
+  const fins = useApexFins(thread, apex)
+  const work = useThreadMarks((state) => (thread ? state.byThread[thread]?.status : undefined)) ?? null
+  const markedUnread = useThreadMarks((state) => (thread ? state.byThread[thread]?.unreadAt != null : false))
   const working = status.kind === "working"
   const activeElsewhere = status.kind === "external-active"
   const isPinned = usePrefs((prefs) => prefs.pinnedThreads.includes(ref.path))
@@ -162,12 +197,14 @@ export const ThreadRow = memo(function ThreadRow({
   const made = useLeavingWorktrees((state) => (found && state.byPath[found.path] ? undefined : found))
   const branch = useWorktrees((state) => made?.branch ?? worktreeAt(state.outside, workingFolder(state, ref))?.worktree.branch)
   const summary = useWorktreeSummaries((state) => (made ? state.byPath[made.path] : undefined))
-  // A worktree's app is its Thread's own; the project folder's app is marked on the folder's header.
+  // A worktree's app is its Thread's own; the project folder's app is the project's tip.
   const checkout = useWorktrees((state) => {
     const workingIn = workingFolder(state, ref)
     const within = (worktreeAt(state.worktrees, workingIn) ?? worktreeAt(state.outside, workingIn))?.worktree
     return within && checkoutOf(within)
   })
+  const appState = useThreadApp((store) => (checkout ? appMarkOf(store, checkout)?.state : undefined))
+  const appPort = useThreadApp((store) => (checkout ? appMarkOf(store, checkout)?.port : undefined))
   const project = useWorktrees((state) => projectFolder(ref.worktrees, ref.cwd) ?? (ref.cwd ? state.folderMap(ref.cwd) : undefined))
   const active = useSession((state) => state.meta?.sessionFile === ref.path)
   const selectedPath = useThreads(
@@ -220,6 +257,13 @@ export const ThreadRow = memo(function ThreadRow({
     onPin: () => togglePinned(ref.path),
     onRename: () => setEditing(override ?? named ?? ref.title ?? ""),
   }
+  // ⌘-click and ⇧-click pick the row instead of opening it (`rail-selection.ts`).
+  const pickRow = useMemo(() => ({ key: ref.path, thread, target: nativeThreadTarget(ref) }), [ref, thread])
+  useEffect(() => offerPick(pickRow), [pickRow])
+  const picked = useRailSelection((state) => state.picked.some((row) => row.key === ref.path))
+  const quiet = status.kind === "idle" || (status.kind === "review" && !status.unread)
+  // Marked to read again, a quiet row wears the unread sphere and a full title, as an answer not yet read does.
+  const unreadMark = markedUnread && quiet
 
   return (
     <>
@@ -238,7 +282,9 @@ export const ThreadRow = memo(function ThreadRow({
           // Dropped on the composer instead, it becomes a chip there.
           if (thread) pressTab(event, { thread, title, shown, reference: threadToken(ref.harness, threadReferenceId(ref)) }, event.currentTarget)
         }}
-        onClick={() => {
+        onClick={(event) => {
+          if (pickByClick(pickRow, event, railThreadRowKeys)) return
+          clearPicked()
           if (openedOnPress.current) openedOnPress.current = false
           else open()
         }}
@@ -251,40 +297,58 @@ export const ThreadRow = memo(function ThreadRow({
         onAuxClick={(event) => {
           if (event.button === 1) open()
         }}
-        // The row's full text, shown by the rail's own tip (`rail-tip.tsx`),
-        // never a native `title`: on macOS those arrive late or not at all.
+        // The row's full text, shown by the rail's own tip (`rail-tip.tsx`), never a native `title`: on macOS those
+        // arrive late or not at all. What the row no longer draws (the branch, its Sessions, an app, setup) is here.
         data-tip={[
           title,
+          quiet ? (unreadMark ? "Marked unread" : undefined) : threadStatusLabel(status, markHarness),
+          work ? WORK_STATUS_WORDS[work] : undefined,
+          fins.label,
           foldState
             ? [
                 `${foldState.sessions.length} sessions`,
                 ...foldState.sessions.map((session) => `${harnessLabel(session.harness)} · ${sessionStateText(session.status)}`),
               ].join("\n")
             : undefined,
+          purpose ? purposeWords(purpose.kind, purpose.project) : undefined,
           keptSessionText(ref)?.line,
           ref.nativeArchived && !ref.archived ? `Archived in ${harnessLabel(ref.harness)}` : undefined,
           [
-            ...(ref.lineage ?? []).map((origin) => harnessLabel(origin.harness)),
-            harnessLabel(ref.harness),
-          ].join(" → "),
-          ref.model,
+            [...(ref.lineage ?? []).map((origin) => harnessLabel(origin.harness)), harnessLabel(ref.harness)].join(" → "),
+            ref.model,
+          ].filter(Boolean).join(" · "),
           ref.cwd,
           !made && branch ? `Worktree on ${branch}` : undefined,
+          isPinned ? "Pinned" : undefined,
+          appState ? appMarkLabel(appState, appPort) : undefined,
           "Double-click the title to rename",
           made ? `\n${worktreeTip(made, summary).join("\n")}` : undefined,
         ]
           .filter(Boolean)
           .join("\n")}
         data-active={lit || undefined}
+        data-picked={picked || undefined}
+        aria-selected={picked || undefined}
         data-thread-row
+        data-thread-id={thread}
         data-flip-key={ref.path}
         data-conversation-id={target.kind === "live" ? target.id : undefined}
         data-thread-indent={indent || undefined}
         data-apex-row={apex || undefined}
-        className={cn(ROW_SURFACE, apex && APEX_SURFACE, indent ? "pl-2" : "pl-1.5")}
+        data-apex-open={apex ? fins.open : undefined}
+        data-fin-counts={fins.label}
+        data-thread-purpose={setup ? "setup" : undefined}
+        data-thread-worktree={branch}
+        data-kept={ref.archived ? (ref.copyOnly ? "copy" : "records") : undefined}
+        data-work-status={work ?? undefined}
+        data-marked-unread={unreadMark || undefined}
+        className={ROW_SURFACE}
       >
-        <RowLine apex={apex}>
-        <ThreadMark status={status} harness={markHarness} lit={lit} cut={lit ? "var(--raised)" : undefined} />
+        {apex && thread ? (
+          <ApexFold thread={thread} open={fins.open} label={threadStatusLabel(status, markHarness)} />
+        ) : (
+          <ThreadMark status={status} state={unreadMark ? "unread" : undefined} harness={markHarness} lit={lit} cut={lit ? "var(--raised)" : undefined} size={18} />
+        )}
         {editing !== null ? (
           <input
             autoFocus
@@ -304,42 +368,22 @@ export const ThreadRow = memo(function ThreadRow({
           />
         ) : (
           <span
+            data-row-title
             onDoubleClick={(event) => {
               event.stopPropagation()
               setEditing(override ?? named ?? ref.title ?? "")
             }}
-            className={cn(
-              "min-w-0 flex-[1_1_60%] truncate text-ui",
-              lit ? "font-medium text-foreground" : "text-foreground/85"
-            )}
+            className={cn("rail-fade min-w-0 flex-1 text-ui", titleTone(lit, status, { work, unread: unreadMark }))}
           >
             {title}
           </span>
         )}
-        <ThreadPurposeChip thread={thread} />
-        {folded ? <SessionCount count={folded.members.length} /> : null}
-        {/* The branch itself is in the tip and on the chat's strip; the row
-            spends its width on the title. */}
-        {made ? (
-          <WorktreeMark worktree={made} summary={summary} />
-        ) : branch ? (
-          <FolderGit2Icon data-thread-worktree={branch} className="size-3 shrink-0 text-faint/80" aria-label={`In a worktree on ${branch}`} />
-        ) : null}
         {showFolder && ref.cwd ? (
-          <span className="min-w-10 max-w-[6rem] shrink truncate text-label text-faint/70">
+          <span className="max-w-[6rem] shrink-[2] truncate text-label text-faint/70">
             {threadFolderKey(ref) ? workspaceName(project ?? ref.cwd) : "tmp"}
           </span>
         ) : null}
-        {isPinned ? (
-          <PinIcon className="size-3 shrink-0 fill-current text-foreground/60" aria-label="Pinned" />
-        ) : null}
-        {ref.archived ? (
-          <ArchiveIcon
-            data-kept={ref.copyOnly ? "copy" : "records"}
-            className="size-3 shrink-0 text-faint/70"
-            aria-label={keptSessionText(ref)?.line}
-          />
-        ) : null}
+        <RowEnd status={status} updatedAt={ref.updatedAt} finsWorking={fins.working} work={work} />
         {/* The row's controls float over its trailing edge on hover or focus
             (`.rail-row-actions`), so the title keeps its width. They also stay
             while a menu inside is open: the menu is portaled, so focus leaves
@@ -350,28 +394,13 @@ export const ThreadRow = memo(function ThreadRow({
           className={cn("rail-row-actions", ROW_ACTIONS)}
           onClick={(event) => event.stopPropagation()}
         >
-          <button
-            type="button"
-            aria-label={isPinned ? "Unpin" : "Pin"}
-            onClick={(event) => {
-              event.stopPropagation()
-              togglePinned(ref.path)
-            }}
-            className="pressable flex size-6 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground"
-          >
-            <PinIcon className={cn("size-3", isPinned && "fill-current")} />
-          </button>
+          <ArchiveButton {...menu} />
           <ThreadActions {...menu} />
           <Detach path={ref.path} />
         </span>
-        {checkout ? <AppMarkIcon checkout={checkout} /> : null}
-        {foldState?.readyBeside ? <ReadyBesideMark sessions={foldState.sessions} /> : null}
-        <ThreadStatusEnd status={status} updatedAt={ref.updatedAt} />
-        </RowLine>
-        {apex ? <ApexShiverLine thread={thread} /> : null}
       </div>
     </ThreadContextMenu>
-    {apex ? <ApexAsks apex={thread} apexTitle={title} indent={indent} /> : null}
+    {apex ? <ApexAsks apex={thread} apexTitle={title} open={fins.open} /> : null}
     </>
   )
 })

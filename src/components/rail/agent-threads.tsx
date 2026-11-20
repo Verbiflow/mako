@@ -1,6 +1,15 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
+import { nudgeProject, startProjectDrag, useProjectDrag } from "@/components/rail/project-drag"
+import { ProjectDragLayer } from "@/components/rail/project-drag-layer"
+import { orderByHand, useProjectOrder } from "@/state/project-order"
+import { WorkGlyph } from "@/components/rail/work-status"
+import { foldedAsDone, useThreadMarks } from "@/state/thread-marks"
+import { rowThread } from "@/state/thread-groups"
+import { railThreadRows } from "@/components/rail/rail-keys"
+import { archivePicked, clearPicked, markPickedRead, pickableRows, railSelectionStore, togglePicked } from "@/state/rail-selection"
+import { markThreads, markedUnread } from "@/state/thread-marks"
 import { everyWhileShown } from "@/lib/window-shown"
-import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react"
 import { RailAnnouncer } from "@/components/rail/thread-status"
 import type { RailAsk } from "@/lib/rail-announcement"
 import {
@@ -9,13 +18,11 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover"
 import { LiveAgentRow } from "@/components/rail/active-threads"
-import { AppMarkIcon } from "@/components/rail/app-mark"
 import { threadAppDriver } from "@/state/thread-app"
 import type { AcpPresence } from "@/state/acp-presence"
 import type { ThreadRef } from "@/lib/types"
 import { ROW_SURFACE, ThreadRow } from "@/components/rail/thread-row"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
-import { formatRelative } from "@/lib/format"
 import {
   groupThreadFolders,
   heldFolderRanks,
@@ -49,7 +56,6 @@ import { actions, useCanChooseFolder, useSession } from "@/state/session"
 import { useTabs } from "@/state/tabs"
 import { IfCanChooseFolder, IfCanReveal } from "@/components/ui/machine-gate"
 import { checkoutSentence, followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
-import { CheckoutLabel } from "@/components/rail/checkout-label"
 import { useRailAcp } from "@/state/acp-state"
 import {
   canonicalThreadRefs,
@@ -61,7 +67,7 @@ import {
 } from "@/state/acp-presence"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
 import { useWindowRoutes, windowRoutesStore } from "@/state/window-routes"
-import { prefsStore, setPref, setProjectHidden, toggleGroupCollapsed, togglePinnedProject, usePrefs } from "@/state/prefs"
+import { prefsStore, setPref, setProjectHidden, toggleApexOpen, toggleGroupCollapsed, togglePinnedProject, usePrefs } from "@/state/prefs"
 import { openAppSetup } from "@/state/app-setup"
 import { openProjectSettings } from "@/state/project-settings"
 import { SlidersHorizontalIcon } from "lucide-react"
@@ -86,14 +92,19 @@ import { DraftThreads } from "@/components/rail/draft-threads"
 import { FirstProject } from "@/components/rail/first-project"
 import { FolderDrop } from "@/components/shell/folder-drop"
 import { openProjectPalette } from "@/state/open-project"
-import { RailTop } from "@/components/rail/rail-top"
+import { CustomizeItems, RailTop } from "@/components/rail/rail-top"
 import { useInboxView } from "@/state/inbox"
 import { archivedLive, archivedThread, useThreadArchives } from "@/state/thread-lifecycle"
-import { FolderActivity, RailSkeleton } from "@/components/rail/rail-activity"
+import { RailSkeleton } from "@/components/rail/rail-activity"
+import { ProjectAvatar } from "@/components/rail/rail-avatars"
 import { HarnessIcon } from "@/components/ui/provider-icon"
 import {
   AppWindowIcon,
+  ArchiveIcon,
+  ArrowDownIcon,
+  ArrowUpIcon,
   CheckIcon,
+  ClockIcon,
   ChevronRightIcon,
   ChevronsDownUpIcon,
   ChevronsUpDownIcon,
@@ -101,9 +112,7 @@ import {
   CopyIcon,
   EyeIcon,
   EyeOffIcon,
-  FolderIcon,
   FolderOpenIcon,
-  FolderPlusIcon,
   ListFilterIcon,
   MessagesSquareIcon,
   MoreHorizontalIcon,
@@ -146,6 +155,8 @@ const FOLDER_ROWS = 6
 /** Folders quiet longer than this start out collapsed. */
 const COLD_MS = 7 * 24 * 3600_000
 const LIVE_TIME_MS = 60_000
+/** How long ⌘ is held alone before the rows show their keys: a ⌘K or ⌘N pressed at once shows none. */
+const JUMP_HINT_MS = 200
 
 /** Conversations in a folder, the one that moved last first: another device's by its listed time, this Mac's by its start. */
 function byLatestMove(left: AcpPresence, right: AcpPresence): number {
@@ -189,6 +200,26 @@ function useFoldAway(closed: boolean) {
     timer.current = window.setTimeout(() => setFolding(false), FOLD_MS)
   }, [])
   return { drawn: !closed || folding, folding, fold }
+}
+
+/**
+ * ← folds and → opens what has focus: an Apex's Fins on its row, a project on its header. A project's row is its
+ * header's button, which says whether it's open (`aria-expanded`), so it's toggled only when it isn't already so.
+ */
+function foldByKey(event: ReactKeyboardEvent<HTMLElement>): void {
+  if (!(event.target instanceof HTMLElement) || event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return
+  const open = event.key === "ArrowRight"
+  const apex = event.target.closest<HTMLElement>("[data-thread-row][data-apex-row]")
+  if (apex === event.target && apex.dataset.threadId) {
+    event.preventDefault()
+    toggleApexOpen(apex.dataset.threadId, open)
+    return
+  }
+  const header = event.target.closest<HTMLElement>("[data-folder-toggle]")
+  if (header === event.target) {
+    event.preventDefault()
+    if ((header.getAttribute("aria-expanded") === "true") !== open) header.click()
+  }
 }
 
 function toggleFolder(folder: ThreadFolder): void {
@@ -257,35 +288,72 @@ export function AgentThreads() {
   const { cwd } = useWorkspaceFocus()
   const now = useLiveTime()
 
+  // ⌘ held alone for 200 ms shows the first nine rows' keys; ⌘1–9 opens that row at once, held or not. With rows
+  // picked, U marks them read, E archives them and Escape lets go; with none, U and E act on the focused row.
   useEffect(() => {
-    const rows = () =>
-      [
-        ...(rail.current?.querySelectorAll<HTMLElement>("[data-thread-row]") ??
-          []),
-      ].filter((row) => row.offsetParent !== null)
+    let held: ReturnType<typeof setTimeout> | undefined
+    const hide = () => {
+      clearTimeout(held)
+      held = undefined
+      setJumpHints(false)
+    }
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.isComposing) return
+      if ((event.key === "Meta" || event.key === "Control") && !event.shiftKey && !event.altKey) {
+        clearTimeout(held)
+        held = setTimeout(() => setJumpHints(true), JUMP_HINT_MS)
+        return
+      }
       const mod = event.metaKey || event.ctrlKey
-      setJumpHints(mod && event.shiftKey)
-      if (!mod || !event.shiftKey || !event.code.startsWith("Digit")) return
-      const index = Number(event.code.slice(5)) - 1
-      const row = rows()[index]
-      if (!row || index < 0 || index > 8) return
+      if (mod) {
+        hide()
+        // ⌘1–9 alone: ⌘⇧ digits are the strip's surfaces, ⌃⌘ digits the model loadout.
+        if (event.shiftKey || event.altKey || (event.metaKey && event.ctrlKey) || !/^Digit[1-9]$/.test(event.code)) return
+        const row = railThreadRows()[Number(event.code.slice(5)) - 1]
+        if (!row) return
+        event.preventDefault()
+        row.click()
+        return
+      }
+      if (event.altKey || event.defaultPrevented) return
+      const typing = event.target instanceof HTMLElement && event.target.closest("input, textarea, select, [contenteditable]")
+      if (typing) return
+      const picked = railSelectionStore.get().picked
+      if (event.key === "Escape" && picked.length) {
+        event.preventDefault()
+        clearPicked()
+        return
+      }
+      const key = event.key.toLowerCase()
+      if (key !== "u" && key !== "e") return
+      if (picked.length) {
+        event.preventDefault()
+        void (key === "u" ? markPickedRead() : archivePicked())
+        return
+      }
+      // No rows picked: the row with focus.
+      const focused = event.target instanceof HTMLElement ? event.target.closest<HTMLElement>(".thread-jump-scope [data-thread-row]") : null
+      const row = focused?.dataset.flipKey ? pickableRows([focused.dataset.flipKey])[0] : undefined
+      if (!row || focused !== event.target) return
       event.preventDefault()
-      row.click()
+      if (key === "e") {
+        togglePicked(row)
+        void archivePicked()
+      } else if (row.thread) {
+        void markThreads([row.thread], { unread: !markedUnread(row.thread) })
+      }
     }
     const onKeyUp = (event: KeyboardEvent) => {
-      if (!(event.metaKey || event.ctrlKey) || !event.shiftKey)
-        setJumpHints(false)
+      if (event.key === "Meta" || event.key === "Control" || !(event.metaKey || event.ctrlKey)) hide()
     }
-    const onBlur = () => setJumpHints(false)
     window.addEventListener("keydown", onKeyDown)
     window.addEventListener("keyup", onKeyUp)
-    window.addEventListener("blur", onBlur)
+    window.addEventListener("blur", hide)
     return () => {
+      hide()
       window.removeEventListener("keydown", onKeyDown)
       window.removeEventListener("keyup", onKeyUp)
-      window.removeEventListener("blur", onBlur)
+      window.removeEventListener("blur", hide)
     }
   }, [])
 
@@ -473,9 +541,11 @@ export function AgentThreads() {
     const save = setTimeout(() => saveFolderRanks(workedRanks), SAVE_QUIET_MS)
     return () => clearTimeout(save)
   }, [loaded, unfiltered, workedRanks])
+  // The order the person dragged projects to comes first; the rest keep the order they were last worked in.
+  const handOrder = useProjectOrder((state) => state.order)
   const folders = useMemo(
-    () => orderThreadFolders(grouped, hold?.folderRanks ? heldFolderRanks(hold.folderRanks, folderRanks) : folderRanks, sortBy),
-    [grouped, hold, folderRanks, sortBy]
+    () => orderByHand(orderThreadFolders(grouped, hold?.folderRanks ? heldFolderRanks(hold.folderRanks, folderRanks) : folderRanks, sortBy), sortBy === "recent" ? handOrder : []),
+    [grouped, hold, folderRanks, sortBy, handOrder]
   )
   // Open for this reveal only (`reveal.open`); the person's stored choice for the folder is left as it was.
   const revealedOpen = reveal?.open ? reveal.key : null
@@ -557,12 +627,17 @@ export function AgentThreads() {
   }, [shownCheckouts])
 
   useEffect(() => {
-    const rows =
-      rail.current?.querySelectorAll<HTMLElement>("[data-thread-row]")
-    rows?.forEach((row, index) => {
-      if (index < 9) row.dataset.jumpIndex = String(index + 1)
-      else delete row.dataset.jumpIndex
-    })
+    if (!jumpHints) return
+    // The keys go on the rows as drawn now, the folded ones left out, as ⌘1–9 counts them.
+    const shown = railThreadRows()
+    for (const row of rail.current?.querySelectorAll<HTMLElement>("[data-thread-row]") ?? []) {
+      const index = shown.indexOf(row)
+      const cap = row.querySelector<HTMLElement>("[data-jump-cap]")
+      if (index >= 0 && index < 9) {
+        row.dataset.jumpIndex = String(index + 1)
+        if (cap) cap.textContent = `⌘${index + 1}`
+      } else delete row.dataset.jumpIndex
+    }
   }, [folders, held, jumpHints, shownRefs, shownLive, pages, showAllPinned, showAllFolders, collapsed, showHidden])
 
   return (
@@ -572,6 +647,10 @@ export function AgentThreads() {
       data-jump-hints={jumpHints || undefined}
       data-inbox-open={inboxOpen || undefined}
       onKeyDown={(event) => {
+        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+          foldByKey(event)
+          return
+        }
         if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
         const current =
           event.target instanceof HTMLElement
@@ -589,7 +668,7 @@ export function AgentThreads() {
         event.preventDefault()
         next.focus()
       }}
-      className="thread-jump-scope flex min-h-0 flex-1 flex-col"
+      className="thread-jump-scope group/rail flex min-h-0 flex-1 flex-col"
     >
       <RailAnnouncer asks={asks} />
       <RailTop />
@@ -610,6 +689,7 @@ export function AgentThreads() {
           }
           onPointerEnter={() => setHold((current) => current ?? { ranks, folderRanks: byProject ? folderRanks : null })}
           onPointerLeave={() => setHold(null)}
+          data-rail-scroller
           className="scroll-fade-scroller min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3"
         >
           {!loaded && matched.length === 0 && unboundLiveAgents.length === 0 ? (
@@ -720,6 +800,7 @@ export function AgentThreads() {
         />
         <RailTip scroller={scroller} />
       </div>
+      <ProjectDragLayer />
     </div>
     </FolderDrop>
   )
@@ -783,7 +864,7 @@ function RailHeader({
   }
 
   return (
-    <div className="flex h-8 shrink-0 items-center pr-2 pl-3.5">
+    <div className="mt-2 flex h-7 shrink-0 items-center pr-2 pl-4">
       {grouping === "project" ? (
         <h2 data-rail-threads-heading className="text-label font-medium text-faint">Projects</h2>
       ) : (
@@ -794,20 +875,52 @@ function RailHeader({
         </button>
       )}
       <span className="flex-1" />
-      <HarnessFilter counts={counts} filter={filter} />
-      <IfCanChooseFolder>
-        <button
-          type="button"
-          aria-label="Open project…"
-          title={`Open project… ${formatChord("mod+o").join("")}`}
-          data-rail-open-project
-          onClick={() => openProjectPalette()}
-          className="pressable p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-        >
-          <FolderPlusIcon className="size-3.5" />
-        </button>
-      </IfCanChooseFolder>
+      {/* The header's controls show while the pointer is over the rail, or one of them has focus or its menu open. */}
+      <span data-rail-header-actions className="flex items-center opacity-0 transition-opacity duration-150 group-hover/rail:opacity-100 focus-within:opacity-100 has-[[data-state=open]]:opacity-100 has-[[data-filter-on]]:opacity-100">
+        <HarnessFilter counts={counts} filter={filter} />
+        <IfCanChooseFolder>
+          <button
+            type="button"
+            aria-label="Open project…"
+            title={`Open project… ${formatChord("mod+o").join("")}`}
+            data-rail-open-project
+            onClick={() => openProjectPalette()}
+            className="pressable p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+          >
+            <PlusIcon className="size-3.5" />
+          </button>
+        </IfCanChooseFolder>
+        <Menu modal={false}>
+          <MenuTrigger asChild>
+            <button type="button" aria-label="Sidebar options" data-rail-options className="pressable p-1.5 text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground data-[state=open]:bg-fill-hover data-[state=open]:text-foreground">
+              <MoreHorizontalIcon className="size-3.5" />
+            </button>
+          </MenuTrigger>
+          <MenuContent align="end" sideOffset={4} className="min-w-56">
+            <CustomizeItems />
+            <MenuSeparator />
+            <RailOptionsItems />
+          </MenuContent>
+        </Menu>
+      </span>
     </div>
+  )
+}
+
+/** The Projects header's `⋯`: the other ways to list Threads. */
+function RailOptionsItems() {
+  const grouping = usePrefs((prefs) => prefs.railGrouping)
+  return (
+    <>
+      <MenuItem data-rail-show="archived" onSelect={() => setPref("railGrouping", grouping === "archived" ? "project" : "archived")}>
+        <ArchiveIcon className="size-3.5" />Archived threads
+        {grouping === "archived" ? <CheckIcon className="ml-auto size-3.5" /> : null}
+      </MenuItem>
+      <MenuItem data-rail-show="recent" onSelect={() => setPref("railGrouping", grouping === "recent" ? "project" : "recent")}>
+        <ClockIcon className="size-3.5" />Recent, all projects
+        {grouping === "recent" ? <CheckIcon className="ml-auto size-3.5" /> : null}
+      </MenuItem>
+    </>
   )
 }
 
@@ -846,6 +959,7 @@ function HarnessFilter({
         <button
           type="button"
           aria-label="Filter and sort"
+          data-filter-on={on || undefined}
           className={cn(
             "pressable relative p-1.5 transition-colors duration-100 hover:bg-fill-hover",
             on ? "text-foreground" : "text-faint hover:text-foreground"
@@ -986,11 +1100,16 @@ function HarnessFilter({
 const FOLDER_ACTIONS =
   "pointer-events-none absolute inset-y-0 right-0 flex items-center pl-4 pr-0.5 opacity-0 transition-opacity duration-100 group-hover/folder:pointer-events-auto group-hover/folder:opacity-100 group-focus-visible/folder:pointer-events-auto group-focus-visible/folder:opacity-100 [.rail-folder:has(:focus-visible)_&]:pointer-events-auto [.rail-folder:has(:focus-visible)_&]:opacity-100 has-[[data-state=open]]:pointer-events-auto has-[[data-state=open]]:opacity-100"
 
+/** The project's avatar (or the Chats glyph), which gives way to the chevron under the pointer or focus. */
+const FOLDER_MARK_HIDES =
+  "transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 [.rail-folder:has(:focus-visible)_&]:opacity-0"
+
 /** A project's own actions, from right-click on its header or its `…`. */
-function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHide }: {
+function FolderMenuItems({ folder, closed, hidden, movable, onToggle, onNew, onPin, onHide }: {
   folder: ThreadFolder & { cwd: string }
   closed: boolean
   hidden: boolean
+  movable: boolean
   onToggle: () => void
   onNew?: () => void
   onPin?: () => void
@@ -1013,6 +1132,14 @@ function FolderMenuItems({ folder, closed, hidden, onToggle, onNew, onPin, onHid
       <MenuItem onSelect={onToggle}>
         {closed ? <ChevronsUpDownIcon className="size-3.5" /> : <ChevronsDownUpIcon className="size-3.5" />}{closed ? "Expand" : "Collapse"}
       </MenuItem>
+      {movable ? <>
+        <MenuItem data-folder-action="move-up" onSelect={() => nudgeProject(folder.key, -1)}>
+          <ArrowUpIcon className="size-3.5" />Move up
+        </MenuItem>
+        <MenuItem data-folder-action="move-down" onSelect={() => nudgeProject(folder.key, 1)}>
+          <ArrowDownIcon className="size-3.5" />Move down
+        </MenuItem>
+      </> : null}
       <MenuSeparator />
       {routed ? null : <>
         <MenuItem data-folder-action="project-settings" onSelect={() => openProjectSettings(folder.cwd)}>
@@ -1139,32 +1266,45 @@ const FolderSection = memo(function FolderSection({
   const head = useCheckoutHead(folder.cwd ?? undefined)
   const contentId = `folder-${folder.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`
 
+  // A Thread Done for three days leaves the rows for one "N done" line, which opens them in place.
+  const threadOf = useThreadGroups((state) => state.threadOf)
+  const doneKeys = useThreadMarks((state) => folder.refs.filter((ref) => foldedAsDone(state.byThread[rowThread(ref, threadOf) ?? ""], now)).map((ref) => ref.path).join("\n"))
+  const [showDone, setShowDone] = useState(false)
+  const folded = doneKeys ? new Set(doneKeys.split("\n")) : null
+  const refs = folded ? folder.refs.filter((ref) => !folded.has(ref.path)) : folder.refs
+  const doneRefs = folded && showDone ? folder.refs.filter((ref) => folded.has(ref.path)) : []
   const limit = FOLDER_LEAD_ROWS + pages * PAGE_ROWS
   const shownLive = liveAgents.slice(0, limit)
-  const visible = folder.refs.slice(0, Math.max(0, limit - shownLive.length))
-  const more = folder.refs.length + liveAgents.length - visible.length - shownLive.length
+  const visible = refs.slice(0, Math.max(0, limit - shownLive.length))
+  const more = refs.length + liveAgents.length - visible.length - shownLive.length
   const project = folder.cwd === null ? null : { ...folder, cwd: folder.cwd }
+  // A project with a folder moves by hand, when the list is in the order worked in; a hidden one stays under Hidden.
+  const sortBy = usePrefs((prefs) => prefs.railSortBy)
+  const movable = project !== null && !hidden && sortBy === "recent"
+  const dragging = useProjectDrag((state) => state.drag?.key === folder.key)
   const menuItems = project ? (
-    <FolderMenuItems folder={project} closed={closed} hidden={hidden} onToggle={onToggle} onNew={onNew} onPin={onPin} onHide={(next) => hideProject(project, next)} />
+    <FolderMenuItems folder={project} closed={closed} hidden={hidden} movable={movable} onToggle={onToggle} onNew={onNew} onPin={onPin} onHide={(next) => hideProject(project, next)} />
   ) : null
 
   const header = (
-    <div data-flip-key={`folder:${folder.key}`} data-folder-hidden={hidden || undefined} className="rail-folder group/folder relative flex h-7 w-full items-center transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover">
+    <div data-flip-key={`folder:${folder.key}`} data-folder-hidden={hidden || undefined} className="rail-folder rail-calm group/folder relative flex h-7 w-full items-center transition-colors duration-100 hover:bg-fill-hover data-[state=open]:bg-fill-hover">
       <button
         type="button"
-        title={[folder.cwd ?? folder.name, head ? `On ${checkoutSentence(head)}` : undefined].filter(Boolean).join("\n")}
+        data-folder-toggle={folder.key}
+        onPointerDown={movable && project ? (event) => startProjectDrag(event, { key: folder.key, name: folder.name, folder: project.cwd }) : undefined}
+        data-tip={[folder.cwd ?? folder.name, head ? (head.kind === "branch" ? `On ${checkoutSentence(head)}` : checkoutSentence(head)) : undefined, folder.pinned ? "Pinned" : undefined].filter(Boolean).join("\n")}
         aria-expanded={!closed}
         aria-controls={contentId}
         onClick={onToggle}
-        className={cn("flex min-w-0 flex-1 items-center gap-1.5 self-stretch px-1.5 text-left", hidden && "opacity-55")}
+        className={cn("flex min-w-0 flex-1 items-center gap-2 self-stretch px-2 text-left", hidden && "opacity-55")}
       >
-        {/* The folder glyph turns into the disclosure chevron under the
+        {/* The project's avatar turns into the disclosure chevron under the
             pointer, so the row carries one leading mark instead of two. */}
-        <span className="relative flex size-3.5 shrink-0 items-center justify-center text-faint">
-          {closed ? (
-            <FolderIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 [.rail-folder:has(:focus-visible)_&]:opacity-0" />
+        <span className="relative flex size-[18px] shrink-0 items-center justify-center text-faint">
+          {folder.cwd ? (
+            <ProjectAvatar name={folder.name} folder={folder.cwd} className={FOLDER_MARK_HIDES} />
           ) : (
-            <FolderOpenIcon className="size-3.5 transition-opacity duration-100 group-hover/folder:opacity-0 group-focus-visible/folder:opacity-0 [.rail-folder:has(:focus-visible)_&]:opacity-0" />
+            <MessagesSquareIcon className={cn("size-[15px] stroke-[1.75]", FOLDER_MARK_HIDES)} />
           )}
           <ChevronRightIcon
             className={cn(
@@ -1173,30 +1313,13 @@ const FolderSection = memo(function FolderSection({
             )}
           />
         </span>
-        <span
-          className={cn(
-            "min-w-8 shrink truncate text-ui",
-            folder.current
-              ? "font-medium text-foreground"
-              : "text-foreground/80"
-          )}
-        >
+        <span className={cn("rail-fade min-w-8 flex-1 text-ui font-medium", folder.current ? "text-foreground" : "text-foreground/80")}>
           {folder.name}
         </span>
-        {/* The main checkout's own branch; it gives way before the name does. */}
-        {head ? <CheckoutLabel head={head} className="min-w-8 shrink-[4] text-label text-faint/80" /> : null}
-        <span className="flex-1" />
-        {folder.cwd ? <AppMarkIcon checkout={folder.cwd} /> : null}
-        <FolderActivity folder={folder} />
-        {/* Open, the newest row already shows this time. */}
-        {closed && !folder.priority && folder.latest ? (
-          <span className="tabular shrink-0 pr-0.5 text-label text-faint/60">
-            {formatRelative(folder.latest)}
-          </span>
-        ) : null}
-        {folder.pinned ? (
-          <PinIcon className="size-3 shrink-0 fill-current text-faint/70" />
-        ) : null}
+        {/* Folded away, a project says only that something inside needs the person. */}
+        <span data-row-end className="flex shrink-0 items-center pr-1.5">
+          {closed && (folder.needsInput || folder.failed) ? <span data-folder-needs aria-label="Something here needs you" className="rail-attention-dot" /> : null}
+        </span>
       </button>
       <span data-tip-quiet className={cn("rail-row-actions", FOLDER_ACTIONS)}>
         {onNew ? (
@@ -1208,32 +1331,6 @@ const FolderSection = memo(function FolderSection({
             className="pressable flex size-6 shrink-0 items-center justify-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
           >
             <PlusIcon className="size-3.5" />
-          </button>
-        ) : null}
-        {hidden && project ? (
-          <button
-            type="button"
-            aria-label={`Show ${folder.name}`}
-            title="Show this project in the list again"
-            onClick={() => hideProject(project, false)}
-            className="pressable flex size-6 shrink-0 items-center justify-center text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
-          >
-            <EyeIcon className="size-3.5" />
-          </button>
-        ) : onPin ? (
-          <button
-            type="button"
-            aria-label={folder.pinned ? "Unpin folder" : "Pin folder"}
-            title={folder.pinned ? "Unpin folder" : "Pin folder"}
-            onClick={onPin}
-            className={cn(
-              "pressable flex size-6 shrink-0 items-center justify-center transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
-              folder.pinned ? "text-foreground/70" : "text-faint"
-            )}
-          >
-            <PinIcon
-              className={cn("size-3", folder.pinned && "fill-current")}
-            />
           </button>
         ) : null}
         {menuItems ? (
@@ -1255,7 +1352,7 @@ const FolderSection = memo(function FolderSection({
   )
 
   return (
-    <section className="pb-1">
+    <section data-project-section={folder.key} data-project-name={folder.name} data-project-movable={movable || undefined} data-dragging={dragging || undefined} className={cn("pb-2 transition-opacity duration-150", dragging && "opacity-35")}>
       {menuItems ? (
         <ContextMenu modal={false}>
           <ContextMenuTrigger asChild>{header}</ContextMenuTrigger>
@@ -1286,22 +1383,37 @@ const FolderSection = memo(function FolderSection({
             <button
               type="button"
               onClick={() => onPages(folder.key, pages + 1)}
-              className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              data-folder-more={more}
+              className="flex h-7 w-full items-center pl-9 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
-              More
-              <span className="tabular ml-1 text-label text-faint/60">
-                {more}
-              </span>
+              Show {more} more
             </button>
           ) : pages > 0 ? (
             <button
               type="button"
               onClick={() => onPages(folder.key, 0)}
-              className="flex h-6 w-full items-center pl-7 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              data-folder-less
+              className="flex h-7 w-full items-center pl-9 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
-              Less
+              Show less
             </button>
           ) : null}
+          {folded ? (
+            <button
+              type="button"
+              aria-expanded={showDone}
+              data-folder-done={folded.size}
+              onClick={() => setShowDone((current) => !current)}
+              className="flex h-7 w-full items-center gap-2 pl-[30px] text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+            >
+              <WorkGlyph status="done" className="text-faint" />
+              {showDone ? "Fold the done" : `${folded.size} done`}
+            </button>
+          ) : null}
+          {/* The Done Threads it holds, under it, all of them: they're out of the project's paging. */}
+          {doneRefs.map((ref) => (
+            <ThreadRow key={ref.path} threadRef={ref} folded={fold.byLead.get(ref.path)} indent />
+          ))}
           </> : null}
         </div>
       </div>

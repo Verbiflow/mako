@@ -6,7 +6,7 @@ import { cloneParent, tildePath } from "@/lib/project-query"
 import type { ThreadRef } from "@/lib/types"
 import { chatFolderOf } from "@mako/host/contracts/chat-folders"
 import type { CloneProgress, CloneState, FolderBrowse, FoundCheckout, FoundCheckouts } from "@mako/host/contracts/projects"
-import { chatFoldersStore } from "@/state/chat-folders"
+import { chatFoldersStore, refreshChatFolders } from "@/state/chat-folders"
 import { prefsStore, setPref } from "@/state/prefs"
 import { railRanksStore } from "@/state/rail-ranks"
 import { actions, store } from "@/state/session"
@@ -47,6 +47,8 @@ interface OpenProjectState {
   /** The host's home folder, once an answer says it. */
   home: string | undefined
   clones: Record<string, CloneView>
+  /** A chat being turned into a project (Turn into project…): Create moves its folder there instead of making one. */
+  adopt?: { folder: string; title: string }
 }
 
 export const openProjectStore = createStore<OpenProjectState>({ open: false, mode: "open", query: "", opened: 0, found: undefined, home: undefined, clones: {} })
@@ -113,15 +115,15 @@ export function cloneDirectory(recent: readonly RecentProject[] = recentProjects
   return prefsStore.get().cloneInto ?? cloneParent(recent.map((each) => each.path), openProjectStore.get().home)
 }
 
-export function openProjectPalette(options: { query?: string; mode?: OpenProjectMode } = {}): void {
+export function openProjectPalette(options: { query?: string; mode?: OpenProjectMode; adopt?: { folder: string; title: string } } = {}): void {
   const { opened } = openProjectStore.get()
-  openProjectStore.set({ open: true, mode: options.mode ?? "open", query: options.query ?? "", opened: opened + 1 })
+  openProjectStore.set({ open: true, mode: options.mode ?? "open", query: options.query ?? "", opened: opened + 1, adopt: options.adopt })
   void loadFound()
 }
 
 /** The palette closes; a clone still going moves to a toast. */
 export function closeProjectPalette(): void {
-  openProjectStore.set({ open: false })
+  openProjectStore.set({ open: false, adopt: undefined })
   for (const clone of Object.values(openProjectStore.get().clones))
     if (!clone.background && clone.state.kind === "cloning") {
       setClone(clone.id, { background: true })
@@ -306,8 +308,10 @@ function cloneToast(clone: CloneView): void {
   dropClone(clone.id)
 }
 
-/** Makes a new project folder (a Git repository when `git`), and opens it. */
+/** Makes a new project folder (a Git repository when `git`), and opens it; or, turning a chat into one, moves it there. */
 export async function createProject(path: string, git: boolean): Promise<string | undefined> {
+  const { adopt } = openProjectStore.get()
+  if (adopt) return makeChatProject(adopt.folder, path)
   try {
     const made = await getMako().createProject({ path, git })
     await openProject(made.path)
@@ -315,6 +319,32 @@ export async function createProject(path: string, git: boolean): Promise<string 
   } catch (error) {
     return error instanceof Error ? error.message : String(error)
   }
+}
+
+/**
+ * Turn into project…: a chat's folder moves out of Mako's Chats to `path`, becomes a Git repository, and its Thread
+ * goes on there, filed under the new project. Its conversations move with it, so the host refuses while one is mid-turn.
+ */
+export async function makeChatProject(folder: string, path: string): Promise<string | undefined> {
+  try {
+    const made = await getMako().makeChatProject({ folder, to: path })
+    openProjectStore.set({ open: false, adopt: undefined })
+    await refreshChatFolders([made.path])
+    toast(`Moved to ${made.path}`, { description: "It's a project now, with its own repository." })
+    return undefined
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+}
+
+/** Opens Create, named for the chat: Create moves the chat's folder there (`makeChatProject`). */
+export function turnChatIntoProject(folder: string, title: string): void {
+  openProjectPalette({ mode: "create", query: projectNameOf(title), adopt: { folder, title } })
+}
+
+/** A folder name from a chat's title: its words, lower-cased and joined by hyphens, at most 40 letters. */
+export function projectNameOf(title: string): string {
+  return title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "").slice(0, 40).replace(/-+$/, "") || "project"
 }
 
 /** The key the composer keeps the words on screen under, as it picks it (`Composer`). */

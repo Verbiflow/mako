@@ -1066,7 +1066,8 @@ export async function openReviewThreads(cwd: string, repo: string, number: numbe
 }
 
 /**
- * The project's avatar, as a data URL.
+ * A project's avatar, as a data URL: its GitHub owner's public picture, by the
+ * owner's name alone (`https://github.com/<owner>.png`), kept per owner.
  *
  * Fetched here and cached to disk rather than pointed at from an `<img>` in
  * the renderer. Two reasons: it works offline after the first look, and the
@@ -1074,18 +1075,15 @@ export async function openReviewThreads(cwd: string, repo: string, number: numbe
  * GitHub goes through one file, which is the only way that claim stays
  * checkable.
  *
- * Failure is silent and returns nothing. A missing logo is a folder icon; it
+ * Failure is silent and returns nothing. A missing logo is a monogram; it
  * is not worth a toast, a retry, or a line in a crash report.
  */
-export async function repoAvatar(
-  cwd: string,
-  repo: string,
-  dir: string
-): Promise<string | undefined> {
-  const owner = repo.split("/")[0]
-  if (!owner) return undefined
+export async function repoAvatar(repository: string, dir: string): Promise<string | undefined> {
+  // Only the owner leaves the Mac, as GitHub's public avatar address names it: no token, no repository.
+  const owner = repository.split("/")[0] ?? ""
+  if (!/^[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38}$/.test(owner)) return undefined
 
-  const file = join(dir, `${owner.replace(/[^\w.-]/g, "-")}.png`)
+  const file = join(dir, `${owner}.png`)
   try {
     return `data:image/png;base64,${(await readFile(file)).toString("base64")}`
   } catch {
@@ -1093,11 +1091,8 @@ export async function repoAvatar(
   }
 
   try {
-    const url = await ghJson(cwd, ["api", `repos/${repo}`], value => isJsonObject(value) ? stringValue(objectValue(value.owner)?.avatar_url) ?? null : null)
-    if (!url) return undefined
-    if (!url.startsWith("https://")) return undefined
-    const response = await hostFetch(`${url}${url.includes("?") ? "&" : "?"}s=128`)
-    if (!response.ok) return undefined
+    const response = await hostFetch(`https://github.com/${owner}.png?size=64`)
+    if (!response.ok || !response.headers.get("content-type")?.startsWith("image/")) return undefined
     const bytes = Buffer.from(await response.arrayBuffer())
     // A logo is a few kilobytes; anything much larger is not one.
     if (bytes.length > 512_000) return undefined

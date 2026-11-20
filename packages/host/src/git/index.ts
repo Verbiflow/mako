@@ -66,7 +66,7 @@ export function declareGitMethods(methods: MethodTable, { worktrees, withHost, g
     })
   )
   methods.handle("mako:rerun-checks", () => withHost((h) => rerunFailedChecks(git, h.gitWorkspace)))
-  methods.handle("mako:repo-avatar", (repo: string) => withHost((h) => repoAvatar(h.gitWorkspace, repo, avatars)))
+  methods.handle("mako:repo-avatar", (owner: string) => repoAvatar(owner, avatars))
   methods.handle("mako:user-avatar", () => withHost((h) => userAvatar(h.gitWorkspace, avatars)))
   return work
 }

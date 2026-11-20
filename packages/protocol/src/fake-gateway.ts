@@ -38,7 +38,7 @@ import type { Progress } from "./borrow.js"
 import type { Advertisement, GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import { type SshClient, SshIncoming, SshOutgoing, SshRefusedError, type SshStream } from "./ssh.js"
 import type { SessionsReport } from "./thread-listing.js"
-import { COMPACT_LIVE_VERSION, LEND_LINK_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS, negotiate } from "./version.js"
+import { COMPACT_LIVE_VERSION, LEND_LINK_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS, negotiate, type VersionRange } from "./version.js"
 import { LINGER_MS, LiveTail, frameFor, logFor, streamNoticeText } from "./live-tail.js"
 import { type LiveForm, WHOLE_LIVE_FORM, readersForm, readsLiveForm } from "./live-form.js"
 import {
@@ -93,6 +93,8 @@ export type FakeGatewayOptions = {
   log?: (line: GatewayLogLine) => void
   /** How long a live stream nobody watches lingers (`LINGER_MS` unless given); 0 lets it go, and tells its runtime, at once. */
   lingerMs?: number
+  /** The link versions this gateway speaks (`SUPPORTED_VERSIONS` unless given): an older gateway's, to hold a runtime to it. */
+  versions?: VersionRange
 }
 
 type Thread = {
@@ -175,6 +177,7 @@ export function createFakeGateway(
   const admissions = new Map<string, number>()
   const activity = new Map<string, { busy: boolean; work: string[]; at: Date }>()
   const reports = new Map<string, SessionsReport[]>()
+  const speaks = options.versions ?? SUPPORTED_VERSIONS
   const advertised = new Map<string, Advertisement[]>()
   const beaten = new Map<string, Array<{ lease: string; progress?: Progress }>>()
   /**
@@ -388,7 +391,7 @@ export function createFakeGateway(
           { status: 400 }
         )
       )
-    const version = negotiate(SUPPORTED_VERSIONS, frame.versions)
+    const version = negotiate(speaks, frame.versions)
     if (version === null)
       return refuse(
         connection,
@@ -399,7 +402,7 @@ export function createFakeGateway(
           "not-applied",
           {
             status: 426,
-            detail: `The runtime speaks ${frame.versions.min} to ${frame.versions.max}; this gateway speaks ${SUPPORTED_VERSIONS.min} to ${SUPPORTED_VERSIONS.max}`,
+            detail: `The runtime speaks ${frame.versions.min} to ${frame.versions.max}; this gateway speaks ${speaks.min} to ${speaks.max}`,
           }
         )
       )

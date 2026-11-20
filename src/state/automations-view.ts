@@ -1,6 +1,7 @@
 import type { AutomationDefinitionInput } from "@mako/host/contracts/automations"
 import { automations, automationsStore, automationView } from "@/state/automations"
 import { automationsPane, inboxViewStore } from "@/state/inbox-view"
+import { setPref } from "@/state/prefs"
 import { createHook, createStore } from "@/state/store"
 import { stage } from "@/state/stage"
 import { viewer } from "@/state/viewer"
@@ -43,6 +44,8 @@ export function openAutomations(route: AutomationsRoute = { kind: "list" }): voi
   automationsViewStore.set({ route })
   automationsPane.open()
   void automations.load(true)
+  // What failed until now is read: the Inbox stops counting it.
+  setPref("automationsSeenAt", Date.now())
 }
 
 export function closeAutomations(): void {

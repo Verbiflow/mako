@@ -15,7 +15,9 @@ import { useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { agentAskCard } from "@/state/agent-asks"
 import { ProposalBlock } from "@/components/automations/automation-proposal"
-import { automations, proposalById, useAutomations } from "@/state/automations"
+import { automations, failedAutomationRuns, proposalById, useAutomations } from "@/state/automations"
+import { openAutomations } from "@/state/automations-view"
+import { usePrefs } from "@/state/prefs"
 import { answerFin, type FinAnswer } from "@/state/fin-asks"
 import { ASK_TOUCH, runChoice, type AskCard as AskWords } from "@/lib/ask-card"
 import { setupAskCard } from "@/state/setup"
@@ -82,7 +84,9 @@ function InboxPane() {
   useHarnessIdentity()
   const model = useInbox((next) => next, sameModel)
   useMinute()
-  const empty = !model.asks.length && !model.toRead.length
+  const seenAt = usePrefs((prefs) => prefs.automationsSeenAt)
+  const failedRuns = useAutomations((state) => failedAutomationRuns(state, seenAt))
+  const empty = !model.asks.length && !model.toRead.length && !failedRuns
   return (
     <section data-inbox aria-label="Inbox" className="absolute inset-0 z-30 flex min-h-0 flex-col bg-surface">
       <header className="shrink-0 px-5 pt-3.5 pb-3">
@@ -106,6 +110,24 @@ function InboxPane() {
                   </li>
                 ))}
               </ul>
+            </section>
+          ) : null}
+          {failedRuns ? (
+            <section aria-label="Automations" data-inbox-section="automations" className={cn(model.asks.length && "pt-5")}>
+              <h2 className="flex h-7 items-center text-label font-medium text-attention">Automations</h2>
+              <button
+                type="button"
+                data-inbox-automations-failed={failedRuns}
+                onClick={() => {
+                  inboxView.close()
+                  openAutomations()
+                }}
+                className="pressable -mx-2 flex h-9 w-[calc(100%+1rem)] items-center gap-2 px-2 text-left text-ui text-foreground transition-colors hover:bg-fill-hover"
+              >
+                <span className="min-w-0 flex-1 truncate">{failedRuns === 1 ? "An automation's last run failed" : `${failedRuns} automations' last runs failed`}</span>
+                <span className="shrink-0 text-label text-faint">Open Automations</span>
+                <ChevronRightIcon className="size-3.5 shrink-0 text-faint" />
+              </button>
             </section>
           ) : null}
           {model.toRead.length ? (

@@ -8,7 +8,7 @@ import { atSize, withMotion } from "./lib/test-window.mjs"
 
 /*
  * Every surface that counts an Apex's Fins, drawn from one roster, says the same numbers in the same words: the
- * composer's chip, the Shiver card, the rail's pips, the Agents panel, the stop card and the phone's row. Written for
+ * composer's chip, the Shiver card, the rail Apex's tip, the Agents panel, the stop card and the phone's row. Written for
  * what the person saw: "Waiting on 4 agents" over "3 Fins working", because the old line counted an idle Fin as
  * work and called Fins agents. On the mock bridge's Apex scene (`?mock&app=apex`), with its roster set to three
  * Fins working (their steps raw shell commands under a home folder) and one idle. Each surface carries the words it
@@ -121,20 +121,20 @@ async function check() {
   const surfaces = {
     "the composer's chip": "[data-agents-toggle]",
     "the Shiver card": "[data-shiver] header",
-    "the rail's pips": "[data-thread-row] [data-fin-pips]",
+    "the rail Apex's tip": "[data-thread-row][data-fin-counts]",
   }
   for (const [surface, selector] of Object.entries(surfaces)) {
     const at = selector === "[data-shiver] header" ? "[data-shiver] [data-fin-counts]" : selector
     assert.equal(await counts(at), label, `${surface} counts the roster as every surface does`)
     // The composer's chip shows the count and says the rest by its name, the line its tooltip reads.
-    const words = selector === "[data-agents-toggle]" ? await evaluate(`document.querySelector(${JSON.stringify(selector)})?.getAttribute("aria-label") ?? ""`) : await text(selector)
+    const words = selector === "[data-agents-toggle]" ? await evaluate(`document.querySelector(${JSON.stringify(selector)})?.getAttribute("aria-label") ?? ""`) : selector.startsWith("[data-thread-row]") ? await evaluate(`document.querySelector(${JSON.stringify(selector)})?.dataset.tip ?? ""`) : await text(selector)
     agrees(surface, words, truth)
   }
-  assert.equal(await evaluate("document.querySelector('[data-thread-row] [data-fin-pips]').dataset.finPips"), "wwwi", "one pip per Fin: three working, one idle")
+  assert.equal(await evaluate("Boolean(document.querySelector('[data-thread-row][data-fin-counts] [data-fins-working]'))"), true, "the Apex's ring says its Fins work")
 
-  // No Fin needs the person, so the Apex's row stops saying so; its mark is the slower comet of work that runs on.
+  // No Fin needs the person, so the Apex's row stops saying so; its ring says its Fins work on.
   await until("![...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes('Mobile polish'))?.innerText.includes('Needs you')", "the Apex's row standing down from Needs you")
-  assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes('Mobile polish')).querySelector('[data-live-mark]')?.dataset.liveMark"), "background", "the Apex's mark says its Fins work on")
+  assert.equal(await evaluate("Boolean([...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes('Mobile polish')).querySelector('[data-apex-avatar]'))"), true, "the Apex wears its avatar, not a fin")
 
   // Nothing says the Apex waits: its turn ended, and its Fins are the Shiver card's, not a background line's.
   assert.equal(await evaluate("Boolean(document.querySelector('[data-background-work]'))"), false, "no background line beside the Shiver card")
@@ -168,12 +168,12 @@ async function check() {
 
   // The phone's list, on the fixture's twelve Fins, counts them as the desktop's rail does on the same roster.
   await window.loadURL(`${base}?mock&app=apex`)
-  await until("Boolean(document.querySelector('[data-thread-row] [data-fin-pips]'))", "the desktop rail's pips")
-  const desktop = await counts("[data-thread-row] [data-fin-pips]")
+  await until("Boolean(document.querySelector('[data-thread-row][data-fin-counts]'))", "the desktop rail's Apex")
+  const desktop = await counts("[data-thread-row][data-fin-counts]")
   await window.loadURL(`${base}scripts/phone-apex.html`)
-  await until("Boolean(document.querySelector('[data-fin-pips]'))", "the phone row's pips")
-  assert.equal(await counts("[data-fin-pips]"), desktop, "the phone's row counts the Fins as the desktop's rail does")
-  agrees("the phone's row", await evaluate("document.querySelector('[data-fin-pips]').getAttribute('aria-label')"), numbers(desktop))
+  await until("Boolean(document.querySelector('[data-apex-row][data-fin-counts]'))", "the phone's Apex row")
+  assert.equal(await counts("[data-apex-row][data-fin-counts]"), desktop, "the phone's row counts the Fins as the desktop's rail does")
+  agrees("the phone's row", await evaluate("document.querySelector('[data-apex-row][data-fin-counts]').getAttribute('aria-label')"), numbers(desktop))
 
   // An older Session of the Apex on screen, its own roster empty, its Thread's Fins in the newest Session's: the chip
   // shows them, as every surface reads a Session's Fins from its Thread (`conversationRoster`). #524's third review

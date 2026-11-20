@@ -94,8 +94,8 @@ async function check() {
 
   const open = async () => {
     await window.loadURL(`${base}?mock&app=apex`)
-    await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.querySelector('[data-fin-pips]'))", "the rail")
-    await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.querySelector('[data-fin-pips]')).click(); true")
+    await until("Boolean(document.querySelector('.thread-jump-scope [data-apex-row]'))", "the rail")
+    await evaluate("document.querySelector('.thread-jump-scope [data-apex-row]').click(); true")
     await until("Boolean(document.querySelector('[data-composer]'))", "the Apex's composer")
     await until("Boolean(document.querySelector('[data-transcript-viewport] [data-exchange]'))", "its transcript")
   }

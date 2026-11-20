@@ -13,13 +13,13 @@ export function RailRow({ icon, label, spoken, open, end, className, ...rest }: 
       aria-current={open ? "page" : undefined}
       data-open={open || undefined}
       className={cn(
-        "pressable group/top flex h-7 w-full items-center gap-2 px-1.5 text-left text-ui text-foreground/85 transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
+        "pressable group/top flex h-7 w-full items-center gap-2 px-2 text-left text-ui text-foreground/72 transition-colors duration-100 hover:bg-fill-hover hover:text-foreground",
         open && "bg-raised text-foreground hover:bg-raised",
         className
       )}
       {...rest}
     >
-      <span aria-hidden className="flex size-4 shrink-0 items-center justify-center text-muted-foreground [&_svg]:size-4">
+      <span aria-hidden className="flex size-4 shrink-0 items-center justify-center text-faint group-hover/top:text-muted-foreground [&_svg]:size-[15px] [&_svg]:stroke-[1.75]">
         {icon}
       </span>
       <span className="min-w-0 flex-1 truncate">{label}</span>

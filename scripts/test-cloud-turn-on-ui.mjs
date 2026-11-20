@@ -234,10 +234,14 @@ async function checkWindow() {
   await until(`!document.querySelector('[data-turn-on-needs="carried"]')`, "answered once")
 
   // 4. The sidebar's line, while it gets ready, once ready, and when something needs the person; it opens Settings.
+  // It's one of the footer's "N to resolve" lines (the calm rail), read once that opens.
   const rail = '[data-turn-on-rail]'
+  const openIssues = () => evaluate(`(() => { const lines = document.querySelector('[data-rail-issue-lines]'); if (lines?.closest('[data-state="open"]')) return true; document.querySelector('[data-rail-issues]')?.click(); return true })()`)
   for (const [scenario, name] of [["starting", "turn-on-09-rail-turning-on"], ["ready", "turn-on-10-rail-ready"], ["stuck", "turn-on-11-rail-stuck"]]) {
     await open(`&invited&turnon=${scenario}`, false)
     await until(`Boolean(document.querySelector('${rail}'))`, `the sidebar line (${scenario})`)
+    await openIssues()
+    await until(`Boolean(document.querySelector('${rail}')?.closest('[data-state="open"]'))`, `the line in the open popover (${scenario})`)
     await both(name, [rail])
   }
   assert.match(await text(rail), /Mako Cloud is ready\nClaude Code is signed out/)
@@ -246,6 +250,8 @@ async function checkWindow() {
   assert.equal(await evaluate(`document.querySelector('${rail}')`), null, "gone once it's on")
   await open("&invited&turnon=ready", false)
   await until(`Boolean(document.querySelector('${rail}'))`, "the sidebar line")
+  await openIssues()
+  await until(`Boolean(document.querySelector('${rail}')?.closest('[data-state="open"]'))`, "the line in the open popover")
   assert.match(await text(rail), /Mako Cloud is ready\nStart your first cloud Thread/)
   await capture("turn-on-12-window-ready")
   await evaluate(`document.querySelector('${rail}').click(), true`)

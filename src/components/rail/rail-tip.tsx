@@ -1,3 +1,4 @@
+import { useProjectDrag } from "@/components/rail/project-drag"
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "react"
 import { createPortal } from "react-dom"
 
@@ -29,6 +30,7 @@ type Tip = { text: string; anchor: DOMRect }
 
 export function RailTip({ scroller }: { scroller: RefObject<HTMLElement | null> }) {
   const [tip, setTip] = useState<Tip | null>(null)
+  const dragging = useProjectDrag((state) => state.drag !== null)
   const node = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -110,7 +112,8 @@ export function RailTip({ scroller }: { scroller: RefObject<HTMLElement | null> 
     element.style.transform = `translate(${left}px, ${top}px)`
   }, [tip])
 
-  if (!tip) return null
+  // A project in the hand isn't a row to read about.
+  if (!tip || dragging) return null
   // A blank line starts a section of its own: a row's branch, under the row.
   const [head = "", ...sections] = tip.text.split("\n\n")
   const [title, ...rest] = head.split("\n")

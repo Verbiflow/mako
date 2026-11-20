@@ -16,6 +16,7 @@ import { startedFromHere } from "./started"
 import type { Started } from "./start"
 import { tapOnLift } from "./taps"
 import { useSeenWhileOpen } from "./read-state"
+import { useReadOnOwnerWhenOpened } from "./thread-marks"
 import { useThread } from "./use-thread"
 import { ReviewLayer } from "./review-layer"
 import { FilesLayer } from "./files-layer"
@@ -132,6 +133,9 @@ export function WebApp() {
   // The Thread on screen is read, here: a run that finishes while it's open never lists as "Done".
   const shownThread = useThread(route.kind === "thread" ? route.thread : route.kind === "new" && route.over?.kind === "thread" ? route.over.thread : "")
   useSeenWhileOpen(shownThread)
+  // And on every device: a Mark as unread on it, here or elsewhere, is dropped on its owner as it opens (the desk's
+  // rail does so itself).
+  useReadOnOwnerWhenOpened(client, desk ? undefined : shownThread)
   const wantsThread = route.kind === "thread" || (route.kind === "new" && route.over?.kind === "thread")
   useEffect(() => {
     if (!wantsThread || threadCode) return

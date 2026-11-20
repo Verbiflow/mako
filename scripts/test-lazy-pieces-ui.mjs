@@ -382,8 +382,8 @@ async function check() {
   const PANEL = "src/components/inspector/agents-panel.tsx"
   const phone = "/scripts/phone-apex.html?app=apex"
   const openSheet = async () => {
-    await until("Boolean(document.querySelector('[data-thread] [data-fin-pips]'))", "the phone's list")
-    await click("[data-thread]")
+    await until("Boolean(document.querySelector('[data-thread][data-apex-row]'))", "the phone's list")
+    await click("[data-thread][data-apex-row]")
     await click("[data-apex-count]")
   }
   const rosterDrawn = "Boolean(document.querySelector('[data-agents-sheet] [data-apex-fins]'))"

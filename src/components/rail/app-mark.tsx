@@ -1,15 +1,9 @@
 import { memo } from "react"
 import { HourglassIcon, PlayIcon, TriangleAlertIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
-import { appMarkOf, useThreadApp, type AppMark } from "@/state/thread-app"
+import { appMarkOf, useThreadApp } from "@/state/thread-app"
+import { appMarkLabel } from "@/lib/rail-marks"
 import { cn } from "@/lib/utils"
-
-function label(state: AppMark["state"], port: number | undefined): string {
-  if (state === "running") return port === undefined ? "App running" : `App running on port ${port}`
-  if (state === "starting") return "App starting"
-  if (state === "waiting") return "App waiting for memory; it starts by itself once there's room"
-  return "App crashed; its Thread has the log"
-}
 
 /**
  * A checkout's app on the sidebar, with the strip's own icons: nothing while
@@ -21,7 +15,7 @@ export const AppMarkIcon = memo(function AppMarkIcon({ checkout }: { checkout: s
   const port = useThreadApp((store) => appMarkOf(store, checkout)?.port)
   if (!state) return null
   const icon = "size-3 shrink-0"
-  const text = label(state, port)
+  const text = appMarkLabel(state, port)
   return (
     <span role="img" aria-label={text} data-tip={text} data-app-mark={state} className="flex shrink-0 items-center">
       {state === "running" ? <PlayIcon aria-hidden className={cn(icon, "fill-current text-positive")} strokeWidth={2.5} />

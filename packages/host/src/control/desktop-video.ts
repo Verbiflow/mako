@@ -1,9 +1,9 @@
 import { randomUUID } from "node:crypto"
-import {
-  type EncodedVideoSource,
-  type LiveEncoder,
-  type LiveEncoderFactory,
-  type VideoSourceFrame,
+import type {
+  EncodedVideoSource,
+  LiveEncoder,
+  LiveEncoderFactory,
+  VideoSourceFrame,
 } from "@mako/control-runtime/browser"
 import { decodeControlVideo } from "@mako/control-runtime/contracts"
 import type { DesktopMethod, DesktopParams, DesktopResult } from "../contracts/desktop-channel.js"

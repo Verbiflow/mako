@@ -7,6 +7,8 @@ import type { ListedFin, ListedSession } from "@mako/protocol/thread-listing"
 import { threadChildren } from "../src/state/apex-fins"
 import { rollup } from "@mako/host/contracts/children"
 import { foldThreads, openingSession, subtitle } from "../src/web-client/threads"
+import { railGroups } from "../src/web-client/rail-groups"
+import { askedMarksStore, settleAskedMarks, shownMarks } from "../src/web-client/thread-marks"
 import { parseRoute, routeHref, type WebRoute } from "../src/web-client/route"
 import { typedRepository } from "../src/web-client/account"
 import { Gateway, GatewayError } from "../src/web-client/gateway"
@@ -1677,4 +1679,51 @@ test("the phone's asking Fins keep one order when they asked in the same moment"
   const keys = (list: WebFinAsk[]) => list.map((each) => each.key)
   assert.deepEqual(keys([...asks].sort(longestWaitingFirst)), ["fin:b:2", "fin:a:1", "fin:c:3", "fin:d:4"], "the longest waiting first, then by key")
   assert.deepEqual(keys([...asks].reverse().sort(longestWaitingFirst)), keys([...asks].sort(longestWaitingFirst)), "whatever order they came in")
+})
+
+test("a Thread's marks and project come from its rows: any row's Status, the newest set, and a Mark as unread from any", () => {
+  const rows = [
+    row(1, { thread: uuid(100), folder: "/Users/ana/api/.mako/worktrees/retry", project: { folder: "/Users/ana/api" }, workStatus: "in-progress", workStatusAt: 1_000 }),
+    row(2, { thread: uuid(100), folder: "/Users/ana/api", workStatus: "in-review", workStatusAt: 2_000, markedUnread: true }),
+    row(3, { thread: uuid(200), folder: undefined }),
+  ]
+  const { threads } = foldThreads({ rows, devices, quiet: new Map(), waiting: new Map(), archived: [] })
+  const api = threads.find((thread) => thread.id === uuid(100))!
+  assert.deepEqual([api.projectFolder, api.workStatus, api.workStatusAt, api.markedUnread], ["/Users/ana/api", "in-review", 2_000, true], "a worktree's Session groups under its project; the newest Status speaks")
+  const chat = threads.find((thread) => thread.id === uuid(200))!
+  assert.deepEqual([chat.projectFolder, chat.workStatus, chat.markedUnread], [undefined, undefined, undefined])
+})
+
+test("the list groups by project in the list's order, the chats last, and Done past three days folds", () => {
+  const now = Date.parse(at(0))
+  const day = 24 * 60 * 60_000
+  const rows = [
+    row(1, { thread: uuid(1), folder: undefined }),
+    row(2, { thread: uuid(2), folder: "/Users/ana/site", state: "waiting" }),
+    row(3, { thread: uuid(3), folder: "/Users/ana/api", workStatus: "done", workStatusAt: now - 4 * day }),
+    row(4, { thread: uuid(4), folder: "/Users/ana/api", workStatus: "done", workStatusAt: now - day }),
+    row(5, { thread: uuid(5), folder: "/Users/ana/api", workStatus: "done" }),
+  ]
+  const { threads } = foldThreads({ rows, devices, quiet: new Map(), waiting: new Map(), archived: [] })
+  const groups = railGroups(threads, (thread) => shownMarks(thread, { status: {}, unread: {} }), now)
+  assert.deepEqual(groups.map((group) => [group.key, group.name, group.threads.map((thread) => thread.id), group.done.map((thread) => thread.id)]), [
+    ["/Users/ana/site", "site", [uuid(2)], []],
+    ["/Users/ana/api", "api", [uuid(5), uuid(4)], [uuid(3)]],
+    ["", "Chats", [uuid(1)], []],
+  ], "the waiting one's project first; Done four days ago folds, a day ago or since an unknown time doesn't")
+})
+
+test("a mark asked of a Thread's owner shows at once, and the rows speak again once they say it", () => {
+  const rows = [row(1, { thread: uuid(1), workStatus: "backlog", workStatusAt: 5 }), row(2, { thread: uuid(2), markedUnread: true })]
+  const listed = () => foldThreads({ rows, devices, quiet: new Map(), waiting: new Map(), archived: [] }).threads
+  const [first, second] = [listed().find((thread) => thread.id === uuid(1))!, listed().find((thread) => thread.id === uuid(2))!]
+  askedMarksStore.set({ status: { [uuid(1)]: { status: "done", at: 9 } }, unread: { [uuid(2)]: false } })
+  assert.deepEqual(shownMarks(first, askedMarksStore.get()), { markedUnread: false, workStatus: "done", workStatusAt: 9 })
+  assert.deepEqual(shownMarks(second, askedMarksStore.get()), { markedUnread: false })
+  settleAskedMarks(listed())
+  assert.deepEqual(askedMarksStore.get(), { status: { [uuid(1)]: { status: "done", at: 9 } }, unread: { [uuid(2)]: false } }, "while the rows still say otherwise, what was asked stands")
+  rows[0] = { ...rows[0]!, workStatus: "done", workStatusAt: 10 }
+  delete rows[1]!.markedUnread
+  settleAskedMarks(listed())
+  assert.deepEqual(askedMarksStore.get(), { status: {}, unread: {} }, "once they say it, they speak")
 })

@@ -1,4 +1,6 @@
 import { useEffect, type ReactNode } from "react"
+import { ListChecksIcon } from "lucide-react"
+import { showSetupChecklist, useSetupLeft } from "@/state/setup-checklist"
 import { FaGithub } from "react-icons/fa"
 import { FcGoogle } from "react-icons/fc"
 import { ChevronRightIcon, CopyIcon, KeyRoundIcon, SettingsIcon } from "lucide-react"
@@ -52,6 +54,7 @@ export function IdentityMenu() {
       </div>
 
       <div className="border-t border-hairline pt-1.5">
+        <FinishSetup />
         <button
           type="button"
           onClick={() => openSettings("agents")}
@@ -63,6 +66,24 @@ export function IdentityMenu() {
         </button>
       </div>
     </div>
+  )
+}
+
+/** Finish setting up, while any step is left: brings the checklist back above the rail's footer, open. */
+function FinishSetup() {
+  const left = useSetupLeft()
+  if (!left) return null
+  return (
+    <button
+      type="button"
+      data-identity-finish-setup={left}
+      onClick={showSetupChecklist}
+      className="pressable flex w-full items-center gap-2 px-2 py-1.5 text-left text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground"
+    >
+      <ListChecksIcon className="size-3.5" />
+      <span className="flex-1">Finish setting up</span>
+      <span className="tabular text-label text-faint">{left} left</span>
+    </button>
   )
 }
 

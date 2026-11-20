@@ -324,7 +324,7 @@ async function checkWindow() {
   await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyUp',key:'j',code:'KeyJ',windowsVirtualKeyCode:74,modifiers:4})
   await until(`document.querySelector('[aria-label="Resize terminal dock"]') === null`)
   await evaluate(`(async () => { const {prefsStore} = await import('/src/state/prefs.ts'); const {applyLiveSnapshot} = await import('/src/state/live-recovery.ts'); const {acp} = await import('/src/state/acp.ts'); prefsStore.set({railGrouping:'project'}); const id = '99999999-9999-4999-8999-999999999999'; applyLiveSnapshot({session:{id,harness:'devin',cwd:'/fixture/only-live-project',title:'Regression live thread',status:'running',connection:'connected',modes:[],currentMode:null,configOptions:[]},revision:1,createdAt:Date.now(),blocks:[],requests:[],permissions:[],base:null}); acp.activate(id); })()`)
-  await until(`document.querySelector('.thread-jump-scope [title="/fixture/only-live-project"]')?.closest('section')?.textContent.includes('Regression live thread')`)
+  await until(`document.querySelector('.thread-jump-scope [data-folder-toggle][data-tip^="/fixture/only-live-project"]')?.closest('section')?.textContent.includes('Regression live thread')`)
   // A reply streams its first token alone, then the rest and a tool call.
   // The prose is rate-limited while the turn runs, so what is on screen must
   // catch up with the full text before the turn ends; StrictMode once left the
@@ -349,18 +349,18 @@ async function checkWindow() {
   assert.equal(await evaluate(`document.querySelector('[data-exchange="acp-request-request-favicon"]').textContent.includes('Read')`), true)
   console.log("PASS: streamed prose catches up with the full text while a turn is still running")
   assert.equal(await evaluate(`document.body.textContent.includes('Running now')`), false)
-  await until(`document.querySelector('.thread-jump-scope [data-folder-activity="working"] [data-live-mark]') !== null`)
-  assert.equal(await evaluate(`document.querySelector('.thread-jump-scope [data-folder-activity="working"]').textContent`), '1 running')
-  await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyDown',key:'Shift',code:'ShiftLeft',windowsVirtualKeyCode:16,modifiers:12})
+  // The project says nothing of its rows at rest (the calm rail): the working row's own fin does.
+  await until(`[...document.querySelectorAll('.thread-jump-scope [data-folder-toggle][data-tip^="/fixture/only-live-project"]')].some((head) => head.closest('section').querySelector('[data-thread-row] [data-live-mark="working"]'))`)
+  assert.equal(await evaluate(`document.querySelectorAll('.thread-jump-scope [data-folder-activity]').length`), 0, "no project chips")
+  // ⌘ held alone 200 ms: each of the first nine rows shows its ⌘N where its time was, its fin left where it is.
+  await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'rawKeyDown',key:'Meta',code:'MetaLeft',windowsVirtualKeyCode:91,modifiers:4})
   await until(`document.querySelector('.thread-jump-scope[data-jump-hints]') !== null`)
-  // Since #337 a row's live mark is at its start, where the jump hint is drawn: the hint stands over the mark while
-  // Shift is held (it ended before an orb at the row's end). Held here as it is, so a move of either is seen.
-  assert.equal(await evaluate(`(() => { const mark = document.querySelector('.thread-jump-scope [data-thread-row][data-jump-index] [data-live-mark]'); const row = mark.closest('[data-thread-row]'); const hint = getComputedStyle(row, '::after'); const left = mark.getBoundingClientRect().left - row.getBoundingClientRect().left; return parseFloat(hint.left) <= left + 2 && parseFloat(hint.left) + parseFloat(hint.width) > left; })()`), true)
+  assert.equal(await evaluate(`(() => { const row = document.querySelector('.thread-jump-scope [data-thread-row][data-jump-index="1"]'); const cap = row.querySelector('[data-jump-cap]'); const mark = row.querySelector('[data-live-mark]').getBoundingClientRect(); const box = cap.getBoundingClientRect(); return cap.textContent === '⌘1' && getComputedStyle(cap).display === 'flex' && box.left > mark.right })()`), true)
   await capture('project-shortcut-hints.png')
-  await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyUp',key:'Shift',code:'ShiftLeft',windowsVirtualKeyCode:16,modifiers:0})
+  await page.debugger.sendCommand('Input.dispatchKeyEvent', {type:'keyUp',key:'Meta',code:'MetaLeft',windowsVirtualKeyCode:91,modifiers:0})
   await until(`document.querySelector('.thread-jump-scope[data-jump-hints]') === null`)
   await capture("project-view.png")
-  const rowSelector = '.thread-jump-scope [data-thread-row][data-jump-index]'
+  const rowSelector = '.thread-jump-scope [data-thread-row][data-jump-index="1"]'
   const move = async (x, y) => { await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }) }
   const rowPoint = await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(rowSelector)}).getBoundingClientRect(); return {x: Math.round(r.x + 40), y: Math.round(r.y + r.height / 2)} })()`)
   await move(rowPoint.x, rowPoint.y)
@@ -381,7 +381,7 @@ async function checkWindow() {
   console.log("PASS: a row's actions menu stays anchored after the pointer leaves the row")
   // The flat recent view is the rail's "Show" choice now (#337 removed the "Thread view" toggle): the same pref.
   await evaluate(`import('/src/state/prefs.ts').then(({setPref}) => setPref('railGrouping', 'recent'))`)
-  await until(`document.querySelector('.thread-jump-scope [title="/fixture/only-live-project"]') === null`)
+  await until(`document.querySelector('.thread-jump-scope [data-folder-toggle][data-tip^="/fixture/only-live-project"]') === null`)
   assert.ok(await evaluate(`document.querySelectorAll('[data-thread-row]').length`) <= 80)
   await capture("recent-view.png")
   console.log("PASS: project-owned running sessions, no global running bucket, and a bounded recent view")
