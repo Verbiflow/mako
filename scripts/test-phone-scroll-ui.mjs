@@ -229,11 +229,19 @@ async function checkScroll() {
     const step = () => { if (Math.abs(node.scrollTop - last) < 0.5) still += 1; else still = 0; last = node.scrollTop; still >= 10 ? resolve(true) : requestAnimationFrame(step) }
     requestAnimationFrame(step)
   })`)
-  /** The turn under the middle of the scroller, for `anchorMoved`. */
+  /**
+   * The turn nearest the middle of the scroller, for `anchorMoved`: the one under it, or beside it when the middle is
+   * in the 28 px between two turns. Taking only a turn under it, a drag that settled with the middle in that space
+   * (82 px in 3,428 of this transcript) found none, and the case failed on reading nothing's place.
+   */
   const markAnchor = () => evaluate(`(() => {
     const node = ${scroller}
     const box = node.getBoundingClientRect()
-    const turn = [...node.querySelectorAll('[data-exchange]')].find(turn => { const r = turn.getBoundingClientRect(); return r.top <= box.top + box.height / 2 && r.bottom > box.top + box.height / 2 })
+    const middle = box.top + box.height / 2
+    const away = (turn) => { const r = turn.getBoundingClientRect(); return Math.max(r.top - middle, middle - r.bottom, 0) }
+    const turns = [...node.querySelectorAll('[data-exchange]')]
+    if (!turns.length) throw new Error('No turn is drawn to mark')
+    const turn = turns.reduce((nearest, turn) => away(turn) < away(nearest) ? turn : nearest)
     window.__anchor = { turn, top: turn.getBoundingClientRect().top }
     return turn.getAttribute('data-exchange')
   })()`)
