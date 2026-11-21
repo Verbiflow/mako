@@ -21,6 +21,7 @@ import { threadHistoryTools } from "@mako/host/conversations/thread-history"
 import { heldReferences } from "@mako/host/conversations/thread-tree"
 import { HARNESSES, TESTED_HARNESSES, AgentsWorld, type Script, type WorldOptions } from "./lib/agents-world.ts"
 import { mapLimit } from "@mako/protocol/map-limit"
+import { saidParts } from "./lib/said-parts.ts"
 
 /**
  * `agents_move` and the one operation under it (`npm run test:fin-move`). A Thread goes on on another harness through
@@ -35,11 +36,23 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 const repo = join(import.meta.dirname, "..")
 let fixtures = 0
 
+/**
+ * Each part said as it ends, and one that hasn't ended in `PART_LIMIT_MS` failed by name with what it waits for. The
+ * suite printed one line, at its end.
+ */
+const PART_LIMIT_MS = 120_000
+const parts = saidParts("fin move", { limitMs: PART_LIMIT_MS, cleanup: () => rmSync(root, { recursive: true, force: true }) })
+
 async function until(what: string, done: () => boolean, timeoutMs = 10_000): Promise<void> {
   const deadline = Date.now() + timeoutMs
-  while (!done()) {
-    if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`)
-    await pause(5)
+  const waited = parts.waitingFor(what)
+  try {
+    while (!done()) {
+      if (Date.now() > deadline) throw new Error(`Timed out waiting for ${what}`)
+      await pause(5)
+    }
+  } finally {
+    waited()
   }
 }
 
@@ -193,11 +206,11 @@ async function outOfUsage(from: string, to: string): Promise<void> {
 
 async function everyPair(): Promise<void> {
   // `PAIRS=0` leaves them out, to run the rest quickly.
-  await mapLimit(process.env.PAIRS === "0" ? [] : [...TARGETS], AT_ONCE, async (pair) => {
+  await mapLimit(process.env.PAIRS === "0" ? [] : [...TARGETS], AT_ONCE, (pair) => parts.part(`${pair.from} to ${pair.to}`, async () => {
     await idle(pair.from, pair.to)
     await stopped(pair.from, pair.to)
     await outOfUsage(pair.from, pair.to)
-  })
+  }))
 }
 
 /** Cases that only one pair needs: what's refused, a repeat, `all`, a Stop landing as it moves. */
@@ -1255,17 +1268,18 @@ async function reading(): Promise<void> {
 
 try {
   mkdirSync(root, { recursive: true })
-  onePath()
-  await refusals()
-  await landing()
-  await reviewed()
-  await grantsAndQuestions()
-  await pinsAndStops()
-  await callersShareIt()
-  await attaching()
-  await reading()
+  await parts.part("one path", onePath)
+  await parts.part("refusals", refusals)
+  await parts.part("landing", landing)
+  await parts.part("reviewed", reviewed)
+  await parts.part("grants and questions", grantsAndQuestions)
+  await parts.part("pins and stops", pinsAndStops)
+  await parts.part("callers share it", callersShareIt)
+  await parts.part("attaching", attaching)
+  await parts.part("reading", reading)
   await everyPair()
   console.log(`moves ok: ${process.env.PAIRS === "0" ? "the rest, without the pairs" : `${TARGETS.length} pairs, each from idle, stopped and out of usage`}`)
 } finally {
+  parts.end()
   rmSync(root, { recursive: true, force: true })
 }
