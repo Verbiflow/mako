@@ -16,6 +16,9 @@ const INHERITED = [
   "TMPDIR", "TEMP", "TMP", "TZ",
   "DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE",
   "WAYLAND_DISPLAY", "GDK_BACKEND", "QT_QPA_PLATFORM",
+  // Which Linux desktop it is (`linuxDesktop`), and where the portal's restore token is kept.
+  "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP", "DESKTOP_SESSION", "SWAYSOCK", "HYPRLAND_INSTANCE_SIGNATURE",
+  "XDG_STATE_HOME", "MAKO_SCREENLESS",
   "MAKO_VIDEO_HELPER", "MAKO_CONTROL_ASYNC_GUARD",
   // Windows: where the helper that narrows the worker's pipe is, and what Node and Windows' own programs need.
   "MAKO_WINDOWS_HELPER", "MAKO_HOST_EXECUTABLE", "SystemRoot", "LOCALAPPDATA", "APPDATA", "USERPROFILE",

@@ -309,7 +309,7 @@ export function openControl(
       window: (target) => {
         const desktop = desktopCapture.window(target)
         if (desktop) return desktop
-        const source = videoHelper && helperWindowSource(target.windowId, join(environment.dataRoot, "computer-use"), linuxDesktop())
+        const source = videoHelper && helperWindowSource(target.windowId, linuxDesktop())
         return source ? helperCapture(videoHelper, source) : undefined
       },
     },

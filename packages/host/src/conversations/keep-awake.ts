@@ -1,7 +1,7 @@
 import { hostSpawn } from "../base/host-command.js"
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises"
-import { dirname } from "node:path"
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises"
+import { dirname, join } from "node:path"
 import type { EventEmitter } from "node:events"
 import { createInterface } from "node:readline"
 import { z } from "zod"
@@ -320,4 +320,16 @@ function spawnHelper(path: string, args: readonly string[]): PowerHelper {
   const child = hostSpawn(path, args, { stdio: ["pipe", "pipe", "pipe"] })
   trackProviderChild(child, { kind: "keep-awake", owner: "host" })
   return child
+}
+
+/**
+ * Windows's power helper: the installed app's own executable, run as an app with `--keep-awake`
+ * (`electron/keep-awake-electron.ts`), holding Electron's `powerSaveBlocker` and speaking the Mac helper's lines. Only a
+ * packaged install has one: a checkout's Electron needs the checkout's path to start, which the helper's arguments
+ * don't carry.
+ */
+export async function windowsKeepAwakeHelper(environment: { appRoot: string; appName: string; packaged: boolean }): Promise<string | undefined> {
+  if (!environment.packaged) return undefined
+  const executable = join(dirname(dirname(environment.appRoot)), `${environment.appName}.exe`)
+  return (await stat(executable).catch(() => undefined)) ? executable : undefined
 }

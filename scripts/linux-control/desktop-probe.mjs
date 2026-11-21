@@ -7,7 +7,7 @@
 //   MAKO_DESKTOP=x11|sway|gnome MAKO_EVIDENCE=/evidence MAKO_CUA_EMBEDDED=… node desktop-probe.mjs
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises"
+import { mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -16,7 +16,7 @@ import { ControlCliProbe } from "../lib/control-cli-probe.mjs"
 
 const run = promisify(execFile)
 const kind = process.env.MAKO_DESKTOP
-assert.ok(["x11", "sway", "gnome", "kde"].includes(kind), "MAKO_DESKTOP is x11, sway, gnome or kde")
+assert.ok(["x11", "sway", "gnome", "kde", "kde6"].includes(kind), "MAKO_DESKTOP is x11, sway, gnome, kde or kde6")
 const evidence = process.env.MAKO_EVIDENCE ?? "/tmp/evidence"
 const repo = new URL("../..", import.meta.url).pathname
 const work = join(homedir(), "mako-desktop-probe")
@@ -26,6 +26,9 @@ await mkdir(evidence, { recursive: true })
 // The host's own module, bundled (README.md): the gate and environment a person's desktop gets.
 assert.ok(process.env.MAKO_CUA_EMBEDDED, "MAKO_CUA_EMBEDDED names the bundled cua-embedded module")
 const { CuaEmbedded } = await import(process.env.MAKO_CUA_EMBEDDED)
+const { readMp4 } = await import(new URL("../../packages/control-runtime/dist/mp4.js", import.meta.url).href)
+// Video never goes through FFmpeg: the run proves it with none to find.
+assert.equal(await run("sh", ["-c", "command -v ffmpeg ffprobe"]).then(() => "found", () => "none"), "none", "no FFmpeg on PATH")
 const { linuxDesktop, VideoHelper, helperWindowSource, videoHelperExecutable } = await import("@mako/control-runtime/desktop")
 
 const report = { desktop: kind, session: linuxDesktop(), operations: [], numbers: {} }
@@ -75,9 +78,8 @@ const cpuSeconds = async (pid) => {
 const applications = join(homedir(), ".local/share/applications")
 await mkdir(applications, { recursive: true })
 const fixtureState = join(work, "fixture.json")
-// The driver splits Exec= on spaces without the desktop entry spec's quoting, so each entry runs a script.
-await writeFile(join(work, "fixture.sh"), `#!/bin/sh\nexec python3 ${repo}scripts/linux-control/fixture.py "Mako fixture" ${fixtureState}\n`, { mode: 0o755 })
-await writeFile(join(applications, "mako-fixture.desktop"), `[Desktop Entry]\nType=Application\nName=Mako Fixture\nExec=${join(work, "fixture.sh")}\n`)
+// Exec= as the desktop entry spec quotes it: a title with a space in quotes, and a field code the launch drops.
+await writeFile(join(applications, "mako-fixture.desktop"), `[Desktop Entry]\nType=Application\nName=Mako Fixture\nExec=python3 "${repo}scripts/linux-control/fixture.py" "Mako fixture" "${fixtureState}" %U\n`)
 // Terminals: xterm (X11 itself, or XWayland under Sway) and foot (native Wayland). Each writes the line it's typed.
 const terminals = [
   { name: "xterm", title: "Mako xterm", command: (title, out) => `xterm -T "${title}" -e sh -c 'read line; echo "$line" > ${out}; sleep 60'` },
@@ -177,8 +179,7 @@ try {
   // An X11 app under XWayland on a Wayland desktop: the same GTK fixture with GDK's X11 backend.
   if (kind !== "x11") {
     const xState = join(work, "xwayland.json")
-    await writeFile(join(work, "xwayland.sh"), `#!/bin/sh\nGDK_BACKEND=x11 exec python3 ${repo}scripts/linux-control/fixture.py "Mako XWayland fixture" ${xState}\n`, { mode: 0o755 })
-    await writeFile(join(applications, "mako-xwayland.desktop"), `[Desktop Entry]\nType=Application\nName=Mako XWayland Fixture\nExec=${join(work, "xwayland.sh")}\n`)
+    await writeFile(join(applications, "mako-xwayland.desktop"), `[Desktop Entry]\nType=Application\nName=Mako XWayland Fixture\nExec=env GDK_BACKEND=x11 python3 "${repo}scripts/linux-control/fixture.py" "Mako XWayland fixture" "${xState}"\n`)
     await step("xwayland: launch, list, type and save in an X11 GTK app", async () => {
       await program(`return await control.native('launch_app',{name:'Mako XWayland Fixture'})`)
       const state = await until(() => read(xState))
@@ -224,24 +225,42 @@ try {
   // Live video: the helper the host starts for a window preview when no desktop app is attached.
   const executable = videoHelperExecutable()
   assert.ok(executable, "the video helper is built")
-  const source = helperWindowSource(window.window_id, work, linuxDesktop())
+  const source = helperWindowSource(window.window_id, linuxDesktop())
   report.liveVideoSource = source
-  if (kind === "gnome") {
-    // The driver's GNOME Shell helper leaves its agent cursor on screen after foreground input, floating at 30 fps
-    // for ever (winrects@cua's 33 ms repaint): real damage, which the idle numbers would otherwise count. Measured
-    // both ways: here with it, and below once it's hidden.
-    report.numbers.agentCursorIdle = await step("live video: idle buffers with the driver's GNOME agent cursor still shown", async () => {
-      const child = spawn(executable, ["portal", "--types", source.types, "--restore", source.restore, "--fps", "30"], { stdio: ["pipe", "pipe", "pipe"] })
-      let stderr = ""
-      child.stderr.on("data", (bytes) => (stderr += bytes))
-      await delay(6000)
-      child.stdin.end()
-      await new Promise((done) => child.once("close", done))
-      return JSON.parse(stderr.trim().split("\n").at(-1))
-    }, { optional: true })
-    await run("gdbus", ["call", "--session", "--dest", "org.cua.WinRects", "--object-path", "/org/cua/WinRects", "--method", "org.cua.WinRects.HideCursor"]).catch(() => undefined)
-  }
   const { Mp4Writer } = await import(new URL("../../packages/control-runtime/dist/mp4.js", import.meta.url).href)
+  if (kind === "gnome") {
+    // After foreground input on GNOME: the driver's Shell helper used to leave its agent cursor floating at 30 fps for
+    // ever. Its cursor now holds still at rest, and the embedded daemon (--no-overlay) shows none.
+    // Closing the terminals above animates for a moment: the measure starts once that's over.
+    await delay(2000)
+    report.numbers.agentCursorIdle = await step("live video: GNOME stays still after foreground input", async () => {
+      // Its units kept as an MP4 beside the evidence, so what changed can be seen frame by frame.
+      const path = join(evidence, "gnome-after-input.mp4")
+      await rm(path, { force: true })
+      const mp4 = new Mp4Writer(path, 1000 / 30)
+      const opened = performance.now()
+      let writing = Promise.resolve()
+      const times = []
+      const still = new VideoHelper(executable, source, { fps: 30 }, {
+        unit: (packet) => {
+          const at = performance.now() - opened
+          times.push(at)
+          writing = writing.then(() => mp4.add(packet, at))
+        },
+        ended: () => {},
+      })
+      await delay(6000)
+      still.close()
+      await still.exited
+      await writing
+      await mp4.finish()
+      // The windows the terminals left repaint for a moment; then nothing moves. The floating cursor redrew at 20 to
+      // 26 fps for as long as it was up.
+      const settled = times.filter((at) => at > 3000).length
+      assert.equal(settled, 0, `the screen kept changing: ${times.length} frames in 6 s, ${settled} in its last 3 s (${path})`)
+      return { frames: times.length, lastThreeSeconds: settled, seconds: 6 }
+    }, { optional: true })
+  }
   await step("live video: first frame, idle cost, frames under activity, its units as MP4", async () => {
     const units = []
     let ended
@@ -284,8 +303,7 @@ try {
     await helper.exited
     await writing
     await mp4.finish()
-    const probed = JSON.parse((await run("ffprobe", ["-v", "error", "-count_frames", "-show_format", "-show_streams", "-of", "json", mp4Path])).stdout)
-    const video = probed.streams.find((stream) => stream.codec_type === "video")
+    const video = await readMp4(mp4Path)
     const median = (values) => (values.length ? Math.round([...values].sort((a, b) => a - b)[values.length >> 1]) : null)
     return {
       firstFrameMs: first,
@@ -295,7 +313,7 @@ try {
       totalUnits: units.length,
       encodeLagMs: median(units.map((unit) => unit.lag)),
       actionToFrameMs: median(toFrame),
-      mp4: { codec: video.codec_name, width: video.width, height: video.height, frames: Number(video.nb_read_frames), seconds: Number(probed.format.duration) },
+      mp4: { codec: video.codec, width: video.width, height: video.height, frames: video.packets.length, seconds: video.duration },
     }
   }, { optional: true })
 
@@ -305,24 +323,20 @@ try {
       const answers = async () => (await readFile(consent, "utf8").catch(() => "")).split("\n").filter(Boolean).length
       const before = await answers()
       const token = (await readFile(source.restore, "utf8").catch(() => "")).length > 0
-      if (kind === "gnome")
-        await run("gdbus", ["call", "--session", "--dest", "org.cua.WinRects", "--object-path", "/org/cua/WinRects", "--method", "org.cua.WinRects.HideCursor"]).catch(() => undefined)
       // The helper itself, so its summary says what PipeWire sent and what it skipped as undamaged.
       const opened = performance.now()
-      const child = spawn(executable, ["portal", "--types", source.types, "--restore", source.restore, "--fps", "30"], { stdio: ["pipe", "pipe", "pipe"] })
+      const child = spawn(executable, ["portal", "--types", source.types, "--restore", source.restore, ...(source.still ? ["--still", "screenshot"] : []), "--fps", "30"], { stdio: ["pipe", "pipe", "pipe"] })
       let first
       let stderr = ""
       child.stdout.once("data", () => (first = performance.now()))
       child.stderr.on("data", (bytes) => (stderr += bytes))
-      // xdg-desktop-portal-wlr sends a later session's first picture only once something changes on screen.
-      const waitedForDamage = !(await until(() => first, 3000).catch(() => undefined))
-      if (waitedForDamage) await program(`const w=control.window(${JSON.stringify(target)});await w.locator({role:'TextArea',name:'Exact text'}).setValue('restored');return 1`)
-      await until(() => first, 30_000)
+      // On wlroots a still screen's first picture is the Screenshot portal's: nothing on screen changes here.
+      await until(() => first, 10_000)
       await delay(6000)
       child.stdin.end()
       await new Promise((done) => child.once("close", done))
       const summary = JSON.parse(stderr.trim().split("\n").at(-1))
-      return { tokenKept: token, firstFrameMs: Math.round(first - opened), waitedForDamage, dialogsAnsweredBefore: before, dialogsAnsweredAfter: await answers(), idleSixSeconds: summary }
+      return { tokenKept: token, firstFrameMs: Math.round(first - opened), stillScreenshot: stderr.includes("Screenshot portal"), dialogsAnsweredBefore: before, dialogsAnsweredAfter: await answers(), idleSixSeconds: summary }
     }, { optional: true })
 
   const recording = await step("record: start a recording of the GTK window", async () => {
@@ -336,14 +350,31 @@ try {
     await program(`const w=control.window(${JSON.stringify(target)});await w.locator({role:'TextArea',name:'Exact text'}).setValue('recorded ${i}');return 1`)
     await delay(300)
   }
+  // A pointer action while recording: the driver's journal records where it landed, and finishing draws it in.
+  const clicked = await program(`await control.native('bring_to_front',{pid:${fixture.pid},window_id:${window.window_id},foreground:true});return await control.native('click',{pid:${fixture.pid},window_id:${window.window_id},x:${Math.round(window.bounds.width / 2)},y:${window.bounds.height - 16},delivery_mode:'foreground',foreground:true})`).then(() => true, (error) => String(error.message).slice(0, 300))
+  await delay(500)
   if (recording) await step("record: stop and read the MP4 back", async () => {
     const done = await cli(["record", "stop", "--input", join(work, "recording.json"), "--wait"])
     assert.equal(done.status, "finished", JSON.stringify(done))
-    const probed = JSON.parse((await run("ffprobe", ["-v", "error", "-count_frames", "-show_format", "-show_streams", "-of", "json", done.video])).stdout)
-    const video = probed.streams.find((s) => s.codec_type === "video")
-    assert.ok(Number(probed.format.duration) > 0)
+    // Read back by Mediabunny, as Mako reads its recordings: no FFmpeg anywhere in the run.
+    const video = await readMp4(done.video)
+    assert.ok(video && video.duration > 0 && video.packets.length > 0, JSON.stringify(video))
     await run("cp", [done.video, join(evidence, `${kind}-recording.mp4`)])
-    return { codec: video.codec_name, width: video.width, height: video.height, frames: Number(video.nb_read_frames), seconds: Number(probed.format.duration), bytes: Number(probed.format.size), id: recording.id }
+    const turns = (await readdir(done.directory)).filter((name) => name.startsWith("turn-")).length
+    // Pointer events in the timeline mean the video was re-encoded with them drawn in: on Linux only the helper's
+    // composite mode does that.
+    const timeline = done.timeline ? JSON.parse(await readFile(done.timeline, "utf8")) : {}
+    const pointers = Array.isArray(timeline.pointer) ? timeline.pointer.length : 0
+    const journal = []
+    for (const turn of (await readdir(done.directory)).filter((name) => name.startsWith("turn-"))) {
+      const action = JSON.parse(await readFile(join(done.directory, turn, "action.json"), "utf8").catch(() => "{}"))
+      journal.push([action.tool, action.pointer_dispatches?.length ?? null, action.result_error ?? null])
+    }
+    // Where the driver journals a pointer dispatch (X11; its Wayland input paths journal none), it is drawn in.
+    const dispatched = journal.reduce((total, [, points]) => total + (points ?? 0), 0)
+    assert.equal(pointers, dispatched, `every journaled pointer dispatch is in the timeline: ${JSON.stringify(journal)}`)
+    if (kind === "x11" && clicked === true) assert.ok(pointers > 0, "the click is drawn into the video")
+    return { codec: video.codec, width: video.width, height: video.height, frames: video.packets.length, seconds: video.duration, bytes: (await stat(done.video)).size, pointerClick: clicked, journalTurns: turns, pointersDrawn: pointers, id: recording.id }
   })
 } finally {
   await writeFile(join(evidence, `desktop-${kind}.json`), JSON.stringify(report, null, 2))
@@ -359,11 +390,7 @@ const unsupported = {
   gnome: [],
   sway: [
     "xwayland: screenshot of the X11 GTK app's window",
-    "type: keys into xterm once it's focused (foreground)",
     "windows: find the foot window",
-    // xdg-desktop-portal-wlr sends a buffer only on damage: a later session on a still screen waits for a change.
-    "live video: a second portal session restores the person's answer; its idle buffers",
-    "record: start a recording of the GTK window",
   ],
   kde: [
     "screenshot: the GTK window",
@@ -376,9 +403,11 @@ const unsupported = {
     "live video: a second portal session restores the person's answer; its idle buffers",
     "record: start a recording of the GTK window",
   ],
-}[kind]
-const regressions = failed.filter((name) => !unsupported.includes(name))
-const nowPassing = unsupported.filter((name) => report.operations.some((operation) => operation.name === name && operation.ok))
+}
+unsupported.kde6 = unsupported.kde
+const known = unsupported[kind]
+const regressions = failed.filter((name) => !known.includes(name))
+const nowPassing = known.filter((name) => report.operations.some((operation) => operation.name === name && operation.ok))
 console.log(JSON.stringify({ desktop: kind, passed: report.operations.length - failed.length, failed, regressions, nowPassing }))
 // The fixture apps and terminals the driver launched outlive the probe; the session's end takes them.
 process.exit(regressions.length ? 1 : 0)

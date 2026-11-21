@@ -5,9 +5,10 @@
 //          a checkout's hosts share this build, which `build:electron` makes.
 //   Linux  native/video-linux/mako-video.c against the system's X11, OpenH264, libyuv and libjpeg-turbo (Debian:
 //          libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcomposite-dev libopenh264-dev libyuv-dev
-//          libturbojpeg0-dev). The machine image compiles it the same way (runtime/host/Dockerfile). Where GIO and
-//          PipeWire's headers are installed too (libglib2.0-dev libpipewire-0.3-dev), it also captures through the
-//          ScreenCast portal, as a Wayland desktop needs; --portal requires them.
+//          libturbojpeg0-dev). The machine image compiles it the same way (runtime/host/Dockerfile). Where GIO,
+//          gdk-pixbuf and PipeWire's headers are installed too (libglib2.0-dev libgdk-pixbuf-2.0-dev
+//          libpipewire-0.3-dev), it also captures through the ScreenCast portal, as a Wayland desktop needs; --portal
+//          requires them.
 //   Windows native/video-windows/mako-video.cpp: Windows Graphics Capture and Media Foundation, with MSVC from the
 //          Visual Studio Build Tools (found with vswhere) and the Windows SDK's C++/WinRT headers. The C runtime is
 //          linked in (/MT), so the .exe needs nothing beside it but Windows 10 1903 or later.
@@ -72,7 +73,7 @@ try {
   } else {
     const libraries = (names) => execFileSync("pkg-config", ["--cflags", "--libs", ...names], { encoding: "utf8" }).trim().split(/\s+/)
     const flags = libraries(["x11", "xext", "xdamage", "xfixes", "xcomposite", "openh264", "libturbojpeg"])
-    const portalNames = ["gio-2.0", "gio-unix-2.0", "libpipewire-0.3"]
+    const portalNames = ["gio-2.0", "gio-unix-2.0", "gdk-pixbuf-2.0", "libpipewire-0.3"]
     let portalFlags = []
     try {
       portalFlags = ["-DMAKO_PORTAL", ...libraries(portalNames)]

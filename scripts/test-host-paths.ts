@@ -7,7 +7,7 @@
 import assert from "node:assert/strict"
 import { homedir } from "node:os"
 import { join } from "node:path"
-import { expandPath, trimmedPath, typedWholePath, wholePathAdvice, windowsSharePath } from "@mako/host/workspaces/project-folders"
+import { expandPath, trimmedPath, typedWholePath, wholePathAdvice, windowsDevicePath, windowsSharePath } from "@mako/host/workspaces/project-folders"
 
 for (const typed of ["/Users/someone/app", "~/app"]) {
   assert.ok(typedWholePath(typed, false), typed)
@@ -19,6 +19,9 @@ for (const typed of ["C:\\Users\\someone\\app", "c:/work/app", "~\\app", "\\\\se
 }
 for (const typed of ["app", "C:app", "..\\app", "\\\\server", "\\\\?\\C:\\work", "\\\\.\\pipe\\x", "//?/C:/work", "//./C:/work"]) assert.ok(!typedWholePath(typed, true), `${typed} isn't whole`)
 assert.ok(windowsSharePath("\\\\server\\share") && windowsSharePath("//server/share") && !windowsSharePath("C:\\work"))
+// WebDAV's forms are shares too, and a device path is one whichever way its slashes lean.
+assert.ok(windowsSharePath("\\\\server@SSL\\dav") && windowsSharePath("\\\\server@SSL@8443\\dav") && windowsSharePath("C:\\x\\server@SSL\\dav"))
+assert.ok(windowsDevicePath("\\\\?\\UNC\\server\\share") && windowsDevicePath("//./pipe/x") && !windowsDevicePath("C:\\work"))
 assert.equal(trimmedPath("C:\\work\\app\\\\", true), "C:\\work\\app")
 assert.equal(trimmedPath("C:\\", true), "C:\\", "a drive keeps its own separator")
 assert.equal(trimmedPath("/work/app//", false), "/work/app")

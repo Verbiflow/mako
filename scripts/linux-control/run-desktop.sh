@@ -1,7 +1,7 @@
 #!/bin/sh
 # Mako's computer control on one private Linux desktop in a container (Dockerfile.desktop), with no network:
 #
-#   sh run-desktop.sh x11|sway|gnome|kde <root> <driver> <evidence>
+#   sh run-desktop.sh x11|sway|gnome|kde|kde6 <root> <driver> <evidence>
 #
 # <root> is a checkout, or a payload laid out like one, with Linux node_modules, the control packages built
 # (`npm run build:control-runtime`) and the host's embedded driver bundled at build/cua-embedded.mjs (see README.md);
@@ -15,7 +15,7 @@ mkdir -p "$4"
 evidence=$(cd "$4" && pwd)
 chmod 777 "$evidence"
 target=desktop
-case "$kind" in gnome | kde) target=$kind ;; esac
+case "$kind" in gnome | kde | kde6) target=$kind ;; esac
 image="mako-linux-desktop:$target"
 docker build -q -t "$image" --target "$target" - <"$root/scripts/linux-control/Dockerfile.desktop" >/dev/null
 name="mako-linux-desktop-$kind-$$"

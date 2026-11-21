@@ -1,0 +1,570 @@
+diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
+index c6d0942..bc07f41 100644
+--- a/libs/cua-driver/rust/Cargo.lock
++++ b/libs/cua-driver/rust/Cargo.lock
+@@ -1151,7 +1151,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -1190,7 +1190,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-bindgen"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "cbindgen",
+  "uniffi",
+@@ -1198,7 +1198,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-contract"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "schemars",
+  "serde",
+@@ -1208,7 +1208,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-core"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -1246,7 +1246,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-sdk"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "async-trait",
+  "core-foundation",
+@@ -1269,7 +1269,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-testkit"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "core-foundation",
+  "image",
+@@ -1284,7 +1284,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-uia"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "anyhow",
+  "cua-driver-core",
+@@ -1299,7 +1299,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cursor-overlay"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "anyhow",
+  "cua-driver-contract",
+@@ -1316,7 +1316,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cursor-theme-cli"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "anyhow",
+  "cursor-overlay",
+@@ -3240,7 +3240,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+ 
+ [[package]]
+ name = "pip-preview"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "serde_json",
+ ]
+@@ -3298,7 +3298,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+ 
+ [[package]]
+ name = "platform-linux"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "anyhow",
+  "ashpd",
+@@ -3352,7 +3352,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "platform-macos"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -3392,7 +3392,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "platform-windows"
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
+index 671fd9d..c5f29a1 100644
+--- a/libs/cua-driver/rust/Cargo.toml
++++ b/libs/cua-driver/rust/Cargo.toml
+@@ -17,7 +17,7 @@ members = [
+ ]
+ 
+ [workspace.package]
+-version = "0.28.2+mako.26"
++version = "0.28.2+mako.28"
+ edition = "2021"
+ authors = ["trycua"]
+ license = "MIT"
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/installed_apps.rs b/libs/cua-driver/rust/crates/platform-linux/src/installed_apps.rs
+index 4268e0a..ce5dbbe 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/installed_apps.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/installed_apps.rs
+@@ -133,7 +133,7 @@ fn parse_desktop_file(path: &Path, bundle_id: &str) -> Option<InstalledApp> {
+ 
+     let name = string_key(&entry, "Name")?;
+     let exec_raw = string_key(&entry, "Exec")?;
+-    let launch_path = strip_exec_field_codes(&exec_raw);
++    let launch_path = strip_exec_field_codes(&unescape_value(&exec_raw));
+     if launch_path.is_empty() {
+         return None;
+     }
+@@ -229,8 +229,10 @@ fn strip_exec_field_codes(exec: &str) -> String {
+     let mut chars = exec.chars().peekable();
+     while let Some(c) = chars.next() {
+         if c == '%' {
+-            // Consume the field-code letter, drop both.
+-            chars.next();
++            // `%%` is a literal percent sign; any other field code is dropped with its letter.
++            if chars.next() == Some('%') {
++                out.push('%');
++            }
+             continue;
+         }
+         out.push(c);
+@@ -238,6 +240,73 @@ fn strip_exec_field_codes(exec: &str) -> String {
+     out.trim().to_owned()
+ }
+ 
++/// A desktop entry string value's escapes (`\s`, `\n`, `\t`, `\r`, `\\`), undone before `Exec=` is split.
++fn unescape_value(value: &str) -> String {
++    let mut out = String::with_capacity(value.len());
++    let mut chars = value.chars();
++    while let Some(c) = chars.next() {
++        if c != '\\' {
++            out.push(c);
++            continue;
++        }
++        match chars.next() {
++            Some('s') => out.push(' '),
++            Some('n') => out.push('\n'),
++            Some('t') => out.push('\t'),
++            Some('r') => out.push('\r'),
++            Some('\\') => out.push('\\'),
++            Some(other) => {
++                out.push('\\');
++                out.push(other);
++            }
++            None => out.push('\\'),
++        }
++    }
++    out
++}
++
++/// A command line split as the desktop entry spec quotes `Exec=`: arguments separated by spaces, a double-quoted
++/// argument kept whole, and `\"`, `` \` ``, `\$` and `\\` inside quotes (and a backslash outside them) escaping
++/// the next character. `name` and `launch_path` both go through it, so an argument with spaces survives.
++pub(crate) fn exec_argv(command: &str) -> Vec<String> {
++    let mut args = Vec::new();
++    let mut current = String::new();
++    let mut started = false;
++    let mut quoted = false;
++    let mut chars = command.chars();
++    while let Some(c) = chars.next() {
++        match c {
++            '"' => {
++                quoted = !quoted;
++                started = true;
++            }
++            '\\' => {
++                if let Some(next) = chars.next() {
++                    if quoted && !matches!(next, '"' | '`' | '$' | '\\') {
++                        current.push('\\');
++                    }
++                    current.push(next);
++                    started = true;
++                }
++            }
++            c if c.is_whitespace() && !quoted => {
++                if started {
++                    args.push(std::mem::take(&mut current));
++                    started = false;
++                }
++            }
++            c => {
++                current.push(c);
++                started = true;
++            }
++        }
++    }
++    if started {
++        args.push(current);
++    }
++    args
++}
++
+ /// Format Unix epoch seconds as `YYYY-MM-DDTHH:MM:SSZ` (UTC).
+ fn unix_secs_to_rfc3339(secs: i64) -> String {
+     let days = secs.div_euclid(86_400);
+@@ -266,6 +335,17 @@ fn unix_secs_to_rfc3339(secs: i64) -> String {
+ 
+ #[cfg(test)]
+ mod tests {
++    #[test]
++    fn exec_argv_honours_desktop_entry_quoting() {
++        use super::{exec_argv, strip_exec_field_codes, unescape_value};
++        assert_eq!(exec_argv(r#"python3 /opt/a b/fixture.py"#), ["python3", "/opt/a", "b/fixture.py"]);
++        assert_eq!(exec_argv(r#"python3 "/opt/a b/fixture.py" "Mako fixture""#), ["python3", "/opt/a b/fixture.py", "Mako fixture"]);
++        assert_eq!(exec_argv(r#"sh -c "echo \"hi\" \$HOME \\ \x""#), ["sh", "-c", r#"echo "hi" $HOME \ \x"#]);
++        assert_eq!(exec_argv(r#"app "" end"#), ["app", "", "end"]);
++        assert_eq!(strip_exec_field_codes("firefox %u --pct 100%%"), "firefox  --pct 100%");
++        assert_eq!(exec_argv(&strip_exec_field_codes(&unescape_value(r#"code\s--new "a\\\\b" %F"#))), ["code", "--new", r#"a\b"#]);
++    }
++
+     use super::*;
+ 
+     #[test]
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/overlay.rs b/libs/cua-driver/rust/crates/platform-linux/src/overlay.rs
+index 69262af..8abe3ab 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/overlay.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/overlay.rs
+@@ -384,8 +384,45 @@ fn dispatch_wayland_overlay_message(msg: &OverlayMsg) -> WaylandOverlayBackend {
+     backend
+ }
+ 
++/// Session keys whose agent cursor was turned off (`set_agent_cursor_enabled(false)`). The Shell helper keeps no
++/// per-session state, so without this a later click re-showed a cursor its session had hidden.
++#[cfg(target_os = "linux")]
++static SHELL_CURSOR_OFF: std::sync::Mutex<Option<HashSet<CursorKey>>> = std::sync::Mutex::new(None);
++
++/// Whether the Shell helper may draw this session's cursor: the daemon has an overlay (not `--no-overlay`) and the
++/// session has not turned its cursor off.
++#[cfg(target_os = "linux")]
++fn shell_cursor_allowed(key: &str) -> bool {
++    let daemon_overlay = RENDER
++        .lock()
++        .ok()
++        .and_then(|guard| guard.as_ref().map(|map| map.template.enabled))
++        .unwrap_or(false);
++    daemon_overlay
++        && !SHELL_CURSOR_OFF
++            .lock()
++            .map(|off| off.as_ref().is_some_and(|keys| keys.contains(key)))
++            .unwrap_or(false)
++}
++
+ #[cfg(target_os = "linux")]
+ fn dispatch_shell_helper_command(key: &str, cmd: &OverlayCommand, semantic: bool) {
++    if let OverlayCommand::SetEnabled(enabled) = cmd {
++        if let Ok(mut off) = SHELL_CURSOR_OFF.lock() {
++            let keys = off.get_or_insert_with(HashSet::new);
++            if *enabled {
++                keys.remove(key);
++            } else {
++                keys.insert(key.to_owned());
++            }
++        }
++    }
++    if !shell_cursor_allowed(key) {
++        if matches!(cmd, OverlayCommand::SetEnabled(false)) {
++            crate::wayland::shell_helper::hide_cursor();
++        }
++        return;
++    }
+     if semantic {
+         crate::wayland::shell_helper::set_cursor_color(&cursor_overlay::session_fill_hex(key));
+     }
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
+index b7ec1ef..800f4de 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
+@@ -1176,10 +1176,12 @@ fn contains_remote_debugging_flag(value: &str) -> bool {
+ /// `Exec=` value with field codes stripped) in the background and return the
+ /// child pid.
+ fn spawn_launch_command(cmd: &str, additional_arguments: &[String]) -> std::io::Result<u32> {
+-    let mut parts = cmd.split_whitespace();
+-    let prog = parts.next().unwrap_or(cmd);
+-    let mut rest: Vec<String> = parts.map(str::to_owned).collect();
++    // Split as the desktop entry spec quotes `Exec=`, so an argument with a space (a path, a title) stays one.
++    let mut parts = crate::installed_apps::exec_argv(cmd).into_iter();
++    let prog = parts.next().unwrap_or_else(|| cmd.to_owned());
++    let mut rest: Vec<String> = parts.collect();
+     rest.extend(additional_arguments.iter().cloned());
++    let prog = prog.as_str();
+     let mut launch = std::process::Command::new(prog);
+     launch
+         .args(&rest)
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
+index af47835..4141f40 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
+@@ -1698,6 +1698,12 @@ pub fn activate_window_for_input_target(
+         return Ok(());
+     }
+ 
++    // An XWayland app under Sway is named by its X11 window id, which no foreign-toplevel handle carries; Sway's
++    // tree does, so its exact container is focused and the focus confirmed there.
++    if std::env::var_os("SWAYSOCK").is_some() && sway_ipc::focus_x11_window(window_id) {
++        return Ok(());
++    }
++
+     anyhow::bail!(
+         "foreground_unavailable: this Wayland compositor does not expose a verified, \
+          target-addressable activation adapter for window {window_id}; refusing global \
+@@ -1712,7 +1718,10 @@ pub fn focused_target(pid: u32, window_id: u64) -> Option<bool> {
+     if std::env::var_os("SWAYSOCK").is_some() {
+         let windows = sway_ipc::list_windows()?;
+         return Some(windows.iter().any(|window| {
+-            window.pid == pid && window.id == window_id && window.visible && window.focused
++            window.pid == pid
++                && (window.id == window_id || window.x11_window == Some(window_id))
++                && window.visible
++                && window.focused
+         }));
+     }
+     shell_helper::focused_target(pid, window_id)
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
+index f65c285..f4ec49c 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
+@@ -715,7 +715,7 @@ mod tests {
+     #[test]
+     fn bundled_helper_v9_retains_host_owned_modifier_badge_chips() {
+         assert!(EXTENSION_SOURCE.contains("GetVersion()"));
+-        assert!(EXTENSION_SOURCE.contains("return 10;"));
++        assert!(EXTENSION_SOURCE.contains("return 11;"));
+         assert!(EXTENSION_SOURCE.contains("SetCursorState"));
+         assert!(EXTENSION_SOURCE.contains("SetCursorColor"));
+         assert!(EXTENSION_SOURCE.contains("SetSessionLabel"));
+@@ -740,7 +740,7 @@ mod tests {
+         assert!(!EXTENSION_SOURCE.contains("function drawModifiers"));
+         let metadata: serde_json::Value =
+             serde_json::from_str(EXTENSION_METADATA).expect("valid bundled helper metadata");
+-        assert_eq!(metadata["version"], 10);
++        assert_eq!(metadata["version"], 11);
+ 
+         for action in [
+             "idle", "observe", "click", "drag", "scroll", "text", "key", "navigate", "app",
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs
+index c9eff6d..589602f 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs
+@@ -19,9 +19,11 @@ struct Rect {
+ #[derive(Clone, Debug, Default, Deserialize)]
+ struct Node {
+     id: u64,
+-    #[serde(default)]
++    // Sway sends `null` for these (an XWayland view has no app_id, a split container no name). Without
++    // `null_default` one XWayland window failed the whole tree, and every Sway lookup with it.
++    #[serde(default, deserialize_with = "null_default")]
+     name: String,
+-    #[serde(default)]
++    #[serde(default, deserialize_with = "null_default")]
+     app_id: String,
+     pid: Option<u32>,
+     #[serde(default)]
+@@ -36,12 +38,23 @@ struct Node {
+     visible: bool,
+     #[serde(default)]
+     fullscreen_mode: i32,
++    /// An XWayland view's X11 window id, which the X11 backend reports for it.
++    #[serde(default)]
++    window: Option<u64>,
+     #[serde(default)]
+     nodes: Vec<Node>,
+     #[serde(default)]
+     floating_nodes: Vec<Node>,
+ }
+ 
++fn null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
++where
++    D: serde::Deserializer<'de>,
++    T: Default + Deserialize<'de>,
++{
++    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
++}
++
+ fn default_visible() -> bool {
+     true
+ }
+@@ -61,6 +74,8 @@ pub struct Window {
+     pub focused: bool,
+     pub visible: bool,
+     pub fullscreen: bool,
++    /// The X11 window id of an XWayland view; none for a native Wayland one.
++    pub x11_window: Option<u64>,
+ }
+ 
+ fn collect(node: &Node, windows: &mut Vec<Window>) {
+@@ -100,6 +115,7 @@ fn collect(node: &Node, windows: &mut Vec<Window>) {
+                 focused: node.focused,
+                 visible: node.visible,
+                 fullscreen: node.fullscreen_mode != 0,
++                x11_window: node.window,
+             });
+         }
+     }
+@@ -204,6 +220,18 @@ pub fn window_for_app_id(app_id: &str) -> Option<Window> {
+         .max_by_key(|window| (window.focused, window.visible))
+ }
+ 
++/// The container of an XWayland view by its X11 window id: the id an X11 window list gives an X app under Sway.
++pub fn window_for_x11_window(xid: u64) -> Option<Window> {
++    list_windows()?.into_iter().find(|window| window.x11_window == Some(xid))
++}
++
++/// Focuses an XWayland view's exact container and waits until Sway reports it focused.
++pub fn focus_x11_window(xid: u64) -> bool {
++    window_for_x11_window(xid).is_some_and(|window| {
++        focus_container(window.id) && wait_for_container_focus(window.id, std::time::Duration::from_millis(500))
++    })
++}
++
+ fn focus_container(id: u64) -> bool {
+     let selector = format!("[con_id={id}]");
+     Command::new("swaymsg")
+@@ -289,6 +317,15 @@ pub fn window_origin_for_title(title: &str) -> Option<(i32, i32)> {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn xwayland_views_carry_their_x11_window() {
++        // As Sway sends them: an XWayland view's app_id is null, a split container's name too.
++        let tree = br#"{"id":1,"name":null,"nodes":[{"id":7,"name":"xterm","app_id":null,"pid":40,"window":6291468,"rect":{"x":0,"y":0,"width":10,"height":10}},{"id":8,"name":"foot","app_id":"foot","pid":41,"rect":{"x":0,"y":0,"width":10,"height":10}}]}"#;
++        let windows = parse_tree(tree).unwrap();
++        assert_eq!(windows[0].x11_window, Some(6291468));
++        assert_eq!(windows[1].x11_window, None);
++    }
++
+     #[test]
+     fn parses_nested_and_floating_windows() {
+         let tree = br#"{
+diff --git a/libs/cua-driver/wayland-helper/winrects@cua/extension.js b/libs/cua-driver/wayland-helper/winrects@cua/extension.js
+index 9addbbb..c5a1ebc 100644
+--- a/libs/cua-driver/wayland-helper/winrects@cua/extension.js
++++ b/libs/cua-driver/wayland-helper/winrects@cua/extension.js
+@@ -710,7 +710,9 @@ export default class WinRectsExtension extends Extension {
+     this._cursor.connect('repaint', (area) => {
+       const cr = area.get_context();
+       const duration = ACTION_DURATIONS[this._action] ?? 1.6;
+-      const elapsed = nowSeconds() - this._actionStarted;
++      // At rest the cursor holds its pose: a floating idle cursor repainted the whole screen 30 times a second for as
++      // long as it stayed up, which a screen cast or a laptop's battery pays for while nothing happens.
++      const elapsed = this._action === 'idle' ? 0 : nowSeconds() - this._actionStarted;
+       const progress = (elapsed % duration) / duration;
+       const floatProgress = (elapsed % FLOAT_DURATION) / FLOAT_DURATION;
+       cr.save();
+@@ -766,8 +768,17 @@ export default class WinRectsExtension extends Extension {
+     this._cursorY = null;
+     this._badgeRevealedAt = null;
+     this._modifierFadeAt = null;
++    this._frameId = 0;
++    this._wake();
++  }
++  /** Runs the 33 ms frame timer while something animates; it stops itself once the cursor and badge are at rest. */
++  _wake() {
++    if (this._frameId || !this._cursor) return;
+     this._frameId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
+-      if (!this._cursor) return GLib.SOURCE_REMOVE;
++      if (!this._cursor) {
++        this._frameId = 0;
++        return GLib.SOURCE_REMOVE;
++      }
+       const now = nowSeconds();
+       if (this._endingAt !== null && now >= this._endingAt) this._setCursorState('idle', '', '');
+       if (
+@@ -775,7 +786,7 @@ export default class WinRectsExtension extends Extension {
+         now - this._actionStarted >= ACTION_DURATIONS[this._action]
+       )
+         this._setCursorState('idle', '', '');
+-      if (this._cursor.visible) this._cursor.queue_repaint();
++      if (this._cursor.visible && this._action !== 'idle') this._cursor.queue_repaint();
+       let labelAlpha = this._badgeRevealedAt === null ? 0 : 1;
+       if (this._badgeRevealedAt !== null) {
+         const badgeElapsed = now - this._badgeRevealedAt;
+@@ -820,6 +831,15 @@ export default class WinRectsExtension extends Extension {
+           this._badge.hide();
+         }
+       }
++      const resting =
++        this._action === 'idle' &&
++        this._badgeRevealedAt === null &&
++        this._modifierFadeAt === null &&
++        this._endingAt === null;
++      if (resting) {
++        this._frameId = 0;
++        return GLib.SOURCE_REMOVE;
++      }
+       return GLib.SOURCE_CONTINUE;
+     });
+   }
+@@ -853,7 +873,7 @@ export default class WinRectsExtension extends Extension {
+     }
+   }
+   GetVersion() {
+-    return 10;
++    return 11;
+   }
+   GetRects() {
+     const actors = global.get_window_actors();
+@@ -1031,6 +1051,7 @@ export default class WinRectsExtension extends Extension {
+       this._setCursorState(action, delivery, target);
+     } else if (this._action === action && !ONE_SHOT_ACTIONS.has(action)) {
+       this._endingAt = nowSeconds() + 0.4;
++      this._wake();
+     }
+   }
+   SetSessionLabel(label) {
+@@ -1071,6 +1092,7 @@ export default class WinRectsExtension extends Extension {
+     this._badgeRevealedAt = nowSeconds();
+     this._badge.opacity = 255;
+     this._badge.show();
++    this._wake();
+   }
+   _setCursorState(action, delivery, target) {
+     this._action = ACTIONS.has(action) ? action : 'idle';
+@@ -1087,6 +1109,7 @@ export default class WinRectsExtension extends Extension {
+     this._actionStarted = nowSeconds();
+     this._endingAt = null;
+     if (this._cursor) this._cursor.queue_repaint();
++    this._wake();
+     if (this._cursorX !== null && this._cursorY !== null)
+       this._positionBadge(this._cursorX, this._cursorY, 0);
+   }
+diff --git a/libs/cua-driver/wayland-helper/winrects@cua/metadata.json b/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
+index a2843ca..280788c 100644
+--- a/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
++++ b/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
+@@ -3,5 +3,5 @@
+   "name": "WinRects",
+   "description": "Expose window geometry, capture, cursor, and verified activation for cua-driver on Wayland.",
+   "shell-version": ["45", "46", "47", "48", "49", "50"],
+-  "version": 10
++  "version": 11
+ }

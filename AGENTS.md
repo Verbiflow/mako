@@ -3132,12 +3132,19 @@ started; never with `MAKO_SCREENLESS=1`) the host starts the same embedded drive
 (`cua-embedded.ts`, with `CUA_DRIVER_RS_ENABLE_WAYLAND=1` on Wayland) and grants
 task sessions as on a Mac. A display alone is no desktop: a CI job under
 `xvfb-run`, a container's Xvfb or a cloud machine's host starts no driver, and
-its computer control stays the standalone runtime's. Without the desktop app, a window's live video is the video helper's:
-XComposite on X11, and on Wayland the monitor the person shares through the
-ScreenCast portal and PipeWire, asked once and restored from
-`computer-use/portal-monitor.token`. The machine browser is never saved as a
+its computer control stays the standalone runtime's. Without the desktop app,
+a window's live video is the video helper's: XComposite on X11, and on Wayland
+the monitor the person shares through the ScreenCast portal and PipeWire, asked
+once and restored from `~/.local/state/mako/portal-monitor.token` (on wlroots,
+whose portal sends nothing until the screen changes, a still screen's first
+frame is the Screenshot portal's). Recordings on a Linux desktop are Mako's own
+too (`NativeRecordings.startHelper`): the same capture into the recording's
+MP4, the driver keeping only its action journal, and the pointer drawn in by
+the helper's `composite` mode, which decodes the recording with OpenH264. No
+Linux video goes through FFmpeg. The machine browser is never saved as a
 desktop person's browser. `scripts/linux-control/run-desktop.sh` proves X11,
-Sway, GNOME and KWin; its README holds the coverage per compositor.
+Sway, GNOME and KWin 5 and 6 with no FFmpeg installed; its README holds the
+coverage per compositor.
 
 Browser actions publish input-mode JSON Schemas (defaults optional, every
 field described, `$defs` kept) through `help`. Input is real:

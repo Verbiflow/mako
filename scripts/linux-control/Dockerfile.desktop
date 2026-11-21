@@ -16,11 +16,13 @@ RUN curl -fsSL https://github.com/emersion/xdg-desktop-portal-wlr/archive/refs/t
 
 FROM ubuntu:24.04 AS desktop
 ENV DEBIAN_FRONTEND=noninteractive
+# On wlroots the driver types through wtype, and xdg-desktop-portal-wlr's Screenshot runs grim; its access check needs
+# the GTK backend beside it, as a Sway desktop has.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      sway xwayland xdg-desktop-portal xdg-desktop-portal-wlr pipewire wireplumber dbus dbus-x11 at-spi2-core \
-      python3-gi gir1.2-gtk-3.0 foot xterm xvfb openbox x11-utils ffmpeg fonts-dejavu-core ca-certificates procps \
+      sway xwayland xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber dbus dbus-x11 at-spi2-core \
+      python3-gi gir1.2-gtk-3.0 foot xterm xvfb openbox x11-utils fonts-dejavu-core ca-certificates procps \
       gcc libc6-dev pkg-config libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcomposite-dev libopenh264-dev libyuv-dev \
-      libturbojpeg0-dev libglib2.0-dev libpipewire-0.3-dev libxkbcommon0 libxi6 libxtst6 \
+      libturbojpeg0-dev libglib2.0-dev libgdk-pixbuf-2.0-dev libpipewire-0.3-dev libxkbcommon0 libxi6 libxtst6 wtype grim \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
 COPY --from=xdpw /xdpw /usr/libexec/xdg-desktop-portal-wlr
@@ -37,3 +39,17 @@ RUN apt-get update && apt-get install -y --no-install-recommends kwin-wayland xd
       qtwayland5 libgl1-mesa-dri libcap2-bin \
     && setcap -r /usr/bin/kwin_wayland \
     && rm -rf /var/lib/apt/lists/*
+
+# KDE Plasma 6's KWin (6.3, Debian 13), headless, with its portal backend.
+FROM debian:trixie AS kde6
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      kwin-wayland xwayland xdg-desktop-portal xdg-desktop-portal-kde pipewire wireplumber dbus dbus-x11 at-spi2-core \
+      python3-gi gir1.2-gtk-3.0 gir1.2-atspi-2.0 foot xterm fonts-dejavu-core ca-certificates procps libcap2-bin \
+      gcc libc6-dev pkg-config libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcomposite-dev libopenh264-dev libyuv-dev \
+      libturbojpeg0-dev libglib2.0-dev libgdk-pixbuf-2.0-dev libpipewire-0.3-dev libxkbcommon0 libxi6 libxtst6 libgl1-mesa-dri \
+      qt6-wayland libxcb-cursor0 \
+    && setcap -r /usr/bin/kwin_wayland \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+RUN useradd --create-home --uid 1001 person

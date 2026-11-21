@@ -1,5 +1,7 @@
 import assert from "node:assert/strict"
+import { readFileSync } from "node:fs"
 import { mkdtemp } from "node:fs/promises"
+import { fileURLToPath } from "node:url"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { NativeRecordings, nativeRecordingRate, type NativeDriverCall } from "../packages/control-runtime/src/native-recording.js"
@@ -24,7 +26,7 @@ const inSession = (driver: ComputerDriverClient, session: string): NativeDriverC
   (name, args, timeout) => driver.callTool(name, { ...args, session }, { timeout })
 const directory = await mkdtemp(join(tmpdir(), "native-recording-lifecycle-"))
 for (const fault of ["none", "lost-receipt", "wrong-id", "wrong-pid", "wrong-window"]) {
-  const manager = new NativeRecordings()
+  const manager = new NativeRecordings(undefined)
   const calls: Array<{
     name: string
     args: Record<string, import("@mako/host/contracts/json").JsonValue>
@@ -122,7 +124,7 @@ for (const fault of ["none", "lost-receipt", "wrong-id", "wrong-pid", "wrong-win
     ["start_recording", "stop_recording"]
   )
 }
-const old = new NativeRecordings()
+const old = new NativeRecordings(undefined)
 await assert.rejects(
   old.start(
     target,
@@ -149,7 +151,7 @@ for (const maxFps of [5, 60]) {
     },
   }}, tools[1]]
   assert.deepEqual(nativeRecordingRate(catalog[0]), {maxFps, configurable:true})
-  const manager = new NativeRecordings()
+  const manager = new NativeRecordings(undefined)
   let starts = 0
   let id = ""
   let output = ""
@@ -177,3 +179,37 @@ for (const maxFps of [5, 60]) {
   await manager.close()
 }
 console.log("Native recording source rate: 5/60 fps backend ceilings, negotiated defaults and refusal before dispatch passed")
+
+{
+  // On X11 the helper captures the window into the recording's MP4; the driver is asked for its action journal only
+  // (no video of its own, so no FFmpeg), and stopping ends both.
+  process.env.MAKO_VIDEO_HELPER = fileURLToPath(new URL("fixtures/fake-video-helper.mjs", import.meta.url))
+  process.env.FAKE_VIDEO_LOG = join(directory, "helper.jsonl")
+  const manager = new NativeRecordings({ session: "x11", compositor: "other", xwayland: false })
+  const calls: Array<{ name: string; args: Record<string, import("@mako/host/contracts/json").JsonValue> }> = []
+  const driver: ComputerDriverClient = {
+    listTools: async () => tools,
+    onClose() {
+      throw new Error("Do not replace the host lifecycle listener")
+    },
+    async close() {},
+    async callTool(name, args) {
+      calls.push({ name, args })
+      return { content: [], structuredContent: {} }
+    },
+  }
+  await assert.rejects(manager.start(target, { directory, fps: 31 }, inSession(driver, "helper"), tools, new AbortController().signal), { code: "unsupported", outcome: "not-dispatched" })
+  const receipt = await manager.start(target, { directory, fps: 30, idle: "keep" }, inSession(driver, "helper"), tools, new AbortController().signal)
+  assert.equal(receipt.status, "recording")
+  const started = calls.find((call) => call.name === "start_recording")
+  assert.equal(started?.args.record_video, false, "the driver records no video")
+  assert.deepEqual(started?.args.window_target, { pid: 42, window_id: 7 })
+  assert.deepEqual(JSON.parse(readFileSync(process.env.FAKE_VIDEO_LOG, "utf8").split("\n")[0]!).args.slice(0, 2), ["window", "7"], "the helper captures the window by its id")
+  await manager.get(target, receipt.id).stop()
+  const done = await manager.get(target, receipt.id).settled()
+  assert.equal(done.status, "finished", JSON.stringify(done))
+  assert.ok(calls.some((call) => call.name === "stop_recording" && call.args.recording_id === receipt.id), "the journal is closed")
+  assert.ok(done.video?.endsWith("recording.mp4"))
+  await manager.close()
+}
+console.log("Helper recording: a Linux desktop's and a job display's windows through mako-video, the driver journaling only")
