@@ -32,7 +32,7 @@ export const CloudFinReservationSchema = CloudFinStartSchema.extend({
 })
 export type CloudFinReservation = z.infer<typeof CloudFinReservationSchema>
 
-export const CloudFinStatusSchema = z.object({
+export const CloudFinStatusSchema = z.lazy(() => z.object({
   at: Ms,
   day: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   unavailable: z.enum(["no-cloud", "policy", "usage", "price", "unresolved"]).optional(),
@@ -42,13 +42,13 @@ export const CloudFinStatusSchema = z.object({
   dailySpendCents: Count.optional(),
   spentTodayCents: Count.optional(),
   reservedTodayCents: Count,
-}).refine((status) => status.unavailable !== undefined || (status.planSandboxes !== undefined && status.sandboxCentsPerHour !== undefined && status.dailySpendCents !== undefined && status.spentTodayCents !== undefined), "An available reading includes plan, price and usage")
+}).refine((status) => status.unavailable !== undefined || (status.planSandboxes !== undefined && status.sandboxCentsPerHour !== undefined && status.dailySpendCents !== undefined && status.spentTodayCents !== undefined), "An available reading includes plan, price and usage"))
 export type CloudFinStatus = z.infer<typeof CloudFinStatusSchema>
 
-export const CloudFinAnswerSchema = z.discriminatedUnion("ok", [
+export const CloudFinAnswerSchema = z.lazy(() => z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), reservation: CloudFinReservationSchema, limits: CloudFinStatusSchema }),
   z.object({ ok: z.literal(false), reason: z.enum(["no-cloud", "policy", "usage", "price", "unresolved", "slots", "spend", "conflict", "cancelled", "missing", "generation"]), limits: CloudFinStatusSchema }),
-])
+]))
 export type CloudFinAnswer = z.infer<typeof CloudFinAnswerSchema>
 
 /** Where a device asks the account to make a reserved start into a Fin's cloud Thread on its own machine. */
@@ -68,10 +68,10 @@ export type CloudFinPlace = z.infer<typeof CloudFinPlaceSchema>
  * How a start was made: its Thread on its machine, the folder there its repository is cloned into (where the Fin's
  * committed source is prepared and verified before its brief), with the reservation as it stands; or why not.
  */
-export const CloudFinPlacedSchema = z.discriminatedUnion("ok", [
+export const CloudFinPlacedSchema = z.lazy(() => z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), thread: CloudThreadId, machine: z.string().regex(/^m-[0-9a-f]{16}$/), folder: z.string().startsWith("/").max(1_024), reservation: CloudFinReservationSchema }),
   z.object({ ok: z.literal(false), reason: z.enum(["no-cloud", "policy", "usage", "price", "unresolved", "slots", "spend", "conflict", "cancelled", "missing", "generation", "thread", "closed"]), detail: z.string().max(2_000) }),
-])
+]))
 export type CloudFinPlaced = z.infer<typeof CloudFinPlacedSchema>
 
 /** A cloud Fin's Thread: a fixed ID of its start's op, so every repeat of that start reaches the one Thread. */

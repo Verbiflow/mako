@@ -11,7 +11,7 @@ export const READ_BUSY_TIMEOUT_MS = 100
 const SQLITE_BUSY = 5
 
 /** What `node:sqlite` throws, as far as telling busy from broken goes. */
-export const SqliteFailure = z.object({ code: z.literal("ERR_SQLITE_ERROR"), errcode: z.number() })
+export const SqliteFailure = z.lazy(() => z.object({ code: z.literal("ERR_SQLITE_ERROR"), errcode: z.number() }))
 export type SqliteFailure = z.infer<typeof SqliteFailure>
 
 /** SQLITE_BUSY or one of its extended codes (recovery, snapshot, timeout). */

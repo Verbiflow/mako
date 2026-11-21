@@ -11,12 +11,12 @@ import { mcpToolName, routeNativeTool, routeShellCall, type CallRoute, type Call
 const SPAWN_TOOLS = new Set(["Agent", "Task", "Workflow"])
 
 /** What routing reads of an `Agent` call (`AgentInput` in the SDK's tool types); any other input reads as none of it. */
-export const ClaudeAgentInput = z.object({
+export const ClaudeAgentInput = z.lazy(() => z.object({
   subagent_type: z.string(),
   run_in_background: z.boolean(),
   isolation: z.string(),
   name: z.string(),
-}).partial().catch({})
+}).partial().catch({}))
 export type ClaudeAgentInput = z.infer<typeof ClaudeAgentInput>
 
 /** Mako's `agents_start` as Claude names an MCP server's tool. */

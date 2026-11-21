@@ -175,7 +175,10 @@ function configureRipgrep(): void {
   if (process.env.CURSOR_RIPGREP_PATH) return
   try {
     const require = createRequire(import.meta.url)
-    const platform = dirname(require.resolve(`@cursor/sdk-${process.platform}-${process.arch}/package.json`))
+    const name = `@cursor/sdk-${process.platform}-${process.arch}`
+    // With the host's install, or beside the SDK Settings installed (`installed.ts`).
+    const installed = process.env.MAKO_CURSOR_SDK_ROOT && join(process.env.MAKO_CURSOR_SDK_ROOT, "node_modules", name)
+    const platform = installed && existsSync(join(installed, "package.json")) ? installed : dirname(require.resolve(`${name}/package.json`))
     const binary = unpackedPath(join(platform, "bin", process.platform === "win32" ? "rg.exe" : "rg"))
     if (existsSync(binary)) process.env.CURSOR_RIPGREP_PATH = binary
     else log("warn", "the platform package has no ripgrep binary")

@@ -38,7 +38,7 @@ import { compareVersions, namesBuild } from "./runtime-version.js"
 export const WriterSourceSchema = z.enum(["record", "observed", "log", "install"])
 export type WriterSource = z.infer<typeof WriterSourceSchema>
 
-export const RecordWriterSchema = z.object({ version: z.string(), source: WriterSourceSchema })
+export const RecordWriterSchema = z.lazy(() => z.object({ version: z.string(), source: WriterSourceSchema }))
 export type RecordWriter = z.infer<typeof RecordWriterSchema>
 
 /**
@@ -46,7 +46,7 @@ export type RecordWriter = z.infer<typeof RecordWriterSchema>
  * whose records state none and that Mako never saw run: read once by the
  * backfill's pass (`fillWriters`), never guessed.
  */
-export const WriterEvidenceSchema = z.object({
+export const WriterEvidenceSchema = z.lazy(() => z.object({
   /** `log` and `install` name versions; `range` bounds them; `unknown` found nothing that does. */
   source: z.enum(["log", "install", "range", "unknown"]),
   versions: z.array(z.string()).optional(),
@@ -74,7 +74,7 @@ export const WriterEvidenceSchema = z.object({
   /** In words, for diagnostics: which file or folder said so. */
   why: z.string(),
   at: z.number(),
-})
+}))
 export type WriterEvidence = z.infer<typeof WriterEvidenceSchema>
 
 /** The evidence rules' version: 2 added release timelines, Mako's pins and Devin.app's launch logs. */
@@ -87,11 +87,11 @@ export const EVIDENCE_RULES = 2
  * version holds `0.0.0-dev`, its ACP handshake's, among `observed`: read
  * through `writersOf`, which leaves out a version that names no build.
  */
-export const SessionWritersSchema = z.object({
+export const SessionWritersSchema = z.lazy(() => z.object({
   record: z.array(z.string()),
   observed: z.array(z.string()),
   evidence: WriterEvidenceSchema.optional(),
-})
+}))
 export type SessionWriters = z.infer<typeof SessionWritersSchema>
 
 /** What a version a capture takes adds to what's known of a file's writers: fed its bytes, it gives the versions they state, in the order they first appear. */

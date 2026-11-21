@@ -62,21 +62,21 @@ export const UsageTotalsSchema = z.object({
 export type UsageTotals = z.infer<typeof UsageTotalsSchema>
 
 /** What one period of a window's chart spent: its cost (an estimate wherever `estimatedCost` is above zero) and its tokens. */
-export const UsageAmountSchema = z.object({
+export const UsageAmountSchema = z.lazy(() => z.object({
   cost: z.number(),
   estimatedCost: z.number(),
   tokens: z.number(),
-})
+}))
 export type UsageAmount = z.infer<typeof UsageAmountSchema>
 
 /** One hour or one local day of a window, whole and by source, so the chart and its readout read the same numbers. */
-export const UsagePeriodSchema = z.object({
+export const UsagePeriodSchema = z.lazy(() => z.object({
   /** When the period starts, in milliseconds since the epoch: an hour, or midnight of a day on this machine's clock. */
   start: z.number(),
   total: UsageAmountSchema,
   /** Each source's part, under the name `UsageWindow.sources` lists it by; a source that spent nothing in the period is absent. */
   sources: z.record(z.string(), UsageAmountSchema),
-})
+}))
 export type UsagePeriod = z.infer<typeof UsagePeriodSchema>
 
 /** The windows Settings › Usage reads, shortest first; the ledger keeps the longest. */
@@ -89,7 +89,7 @@ export type UsageWindowId = (typeof USAGE_WINDOWS)[number]
  * 24 hours by the hour; `week` and `month` are the last 7 and 30 days by the
  * day, from midnight on this machine's clock.
  */
-export const UsageWindowSchema = z.object({
+export const UsageWindowSchema = z.lazy(() => z.object({
   id: z.enum(USAGE_WINDOWS),
   since: z.number(),
   until: z.number(),
@@ -110,16 +110,16 @@ export const UsageWindowSchema = z.object({
   incomplete: z.array(z.string()).optional(),
   /** The `PriceTable`s the estimated part of the cost was priced from; absent when nothing was estimated. */
   priceTables: z.array(z.string()).optional(),
-})
+}))
 export type UsageWindow = z.infer<typeof UsageWindowSchema>
 
 /** Local usage from every supported session format on this machine, over each of `USAGE_WINDOWS`. */
-export const UsageSummarySchema = z.object({
+export const UsageSummarySchema = z.lazy(() => z.object({
   /** One per `USAGE_WINDOWS` entry, in that order. */
   windows: z.array(UsageWindowSchema),
   /** True when some records in the window could not be read, so the totals may be low; the host log names them. */
   truncated: z.boolean(),
-})
+}))
 export type UsageSummary = z.infer<typeof UsageSummarySchema>
 
 /** A summary's window by its id; a summary holds every one of `USAGE_WINDOWS`. */

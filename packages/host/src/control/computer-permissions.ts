@@ -7,6 +7,7 @@ import { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES } from "../application/index.j
 import type { MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
 import type { HostEnvironment } from "../base/host-environment.js"
 import { onMac } from "../base/platform.js"
+import { linuxDesktop, type LinuxDesktop } from "@mako/control-runtime/desktop"
 
 const execute = hostCommand
 
@@ -25,8 +26,17 @@ export interface PrivacyReadings {
 /** The app the grants are for: an installed bundle keeps them across updates unless it's unsigned. */
 export type GrantedApp = Pick<HostEnvironment, "packaged" | "appRoot">
 
-/** With no `readings`, nothing is known yet: the desktop app that can read them isn't attached. */
-export function computerPermissions(app: GrantedApp, readings: PrivacyReadings | undefined): MakoComputerPermissions {
+/**
+ * With no `readings`, nothing is known yet: the desktop app that can read them isn't attached. `desktop` is the Linux
+ * desktop the person is logged into (`linuxDesktop()`), none elsewhere and on a machine with only a display.
+ */
+export function computerPermissions(app: GrantedApp, readings: PrivacyReadings | undefined, desktop: LinuxDesktop | undefined): MakoComputerPermissions {
+  // A Linux desktop has no settings to grant ahead: X11 lets any client read the screen and send input, and on
+  // Wayland the portal asks the person at the first capture or input and keeps their answer (its restore token).
+  // Accessibility is the AT-SPI bus every GNOME and KDE session runs, which the driver reads apps through.
+  if (desktop) {
+    return { supported: true, persistentAcrossUpdates: true, accessibility: true, screenRecording: "granted" }
+  }
   if (!onMac()) {
     return {
       supported: false,
@@ -106,13 +116,13 @@ export async function requestComputerPermissions(
   readings: PrivacyReadings,
   { focus, openUrl }: { focus(): void; openUrl(url: string): Promise<void> }
 ): Promise<MakoComputerPermissions> {
-  if (!onMac()) return computerPermissions(app, readings)
+  if (!onMac()) return computerPermissions(app, readings, linuxDesktop())
   focus()
   if (!readings.accessibility(false)) {
     await resetMakoGrant(app, "Accessibility")
     readings.accessibility(true)
     await new Promise((resolve) => setTimeout(resolve, 500))
-    const permissions = computerPermissions(app, readings)
+    const permissions = computerPermissions(app, readings, linuxDesktop())
     if (!permissions.accessibility)
       await openUrl(privacyPane("Privacy_Accessibility"))
     return permissions
@@ -120,10 +130,10 @@ export async function requestComputerPermissions(
   if (readings.screen() !== "granted") {
     await resetMakoGrant(app, "ScreenCapture")
     await requestScreenRecording()
-    const permissions = computerPermissions(app, readings)
+    const permissions = computerPermissions(app, readings, linuxDesktop())
     if (permissions.screenRecording !== "granted")
       await openUrl(privacyPane("Privacy_ScreenCapture"))
     return permissions
   }
-  return computerPermissions(app, readings)
+  return computerPermissions(app, readings, linuxDesktop())
 }

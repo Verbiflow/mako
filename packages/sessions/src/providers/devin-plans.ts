@@ -41,10 +41,10 @@ const PlanFileEditSchema = z.object({
   diff: content?.map((part) => DiffSchema.safeParse(part)).find((part) => part.success)?.data,
 }))
 /** The `_meta` of Devin's `exit_plan_mode` call and of the permission request it raises. */
-export const DevinExitPlanMetaSchema = z.object({
+export const DevinExitPlanMetaSchema = z.lazy(() => z.object({
   "cognition.ai/isExitPlan": z.literal(true),
   "cognition.ai/planFilePath": z.string(),
-})
+}))
 const ExitPlanSchema = z.object({
   toolCallId: z.string(),
   rawInput: z.object({ plan: z.string().optional() }).nullish(),
@@ -65,7 +65,7 @@ const ToolEndSchema = z.object({ toolCallId: z.string(), status: z.enum(["comple
   .transform(({ toolCallId }) => ({ kind: "tool-end" as const, toolCallId }))
 
 /** An ACP `tool_call` or `tool_call_update`, live or saved, as far as plans need it. */
-export const DevinPlanCallSchema = z.union([PlanFileEditSchema, ExitPlanSchema, DiffUpdateSchema, ToolEndSchema])
+export const DevinPlanCallSchema = z.lazy(() => z.union([PlanFileEditSchema, ExitPlanSchema, DiffUpdateSchema, ToolEndSchema]))
 export type DevinPlanCall = z.infer<typeof DevinPlanCallSchema>
 /** Most calls are none of these, and a failed `safeParse` builds an `Error` each time. */
 const PlanCallRead = DevinPlanCallSchema.optional().catch(undefined)

@@ -23,7 +23,7 @@ export const DECODE_ASIDE_BYTES = 32 * 1024 ** 2
 const ASIDE_HEAP_MB = 6144
 const STDERR_KEPT = 4096
 
-export const AsideJobSchema = z.object({
+export const AsideJobSchema = z.lazy(() => z.object({
   /** The reader's index in `SAVED_HISTORY_READERS`. */
   reader: z.number().int().nonnegative(),
   path: z.string(),
@@ -34,13 +34,13 @@ export const AsideJobSchema = z.object({
   strict: z.boolean(),
   /** The parent's `ReaderPlace`, where its reader was made to read; the machine's own stores without one. */
   place: z.object({ home: z.string(), userRoot: z.string(), kept: z.string() }).optional(),
-})
+}))
 export type AsideJob = z.infer<typeof AsideJobSchema>
 
-export const AsideReplySchema = z.discriminatedUnion("ok", [
+export const AsideReplySchema = z.lazy(() => z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), entries: z.number(), decodeMs: z.number() }),
   z.object({ ok: z.literal(false), error: z.string() }),
-])
+]))
 export type AsideReply = z.infer<typeof AsideReplySchema>
 
 /** A decode aside's end. `started` is false where no child could run, so the caller decodes in its own process instead. */

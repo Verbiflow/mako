@@ -14,7 +14,7 @@ export const WorkspaceSnapshotSchema = z.object({
   shared: z.array(z.string().min(1).max(200)).max(64).optional(),
 })
 export type WorkspaceSnapshot = z.infer<typeof WorkspaceSnapshotSchema>
-export const RunSnapshotsSchema = z.object({
+export const RunSnapshotsSchema = z.lazy(() => z.object({
   before: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("ready"), snapshot: WorkspaceSnapshotSchema }),
     z.object({ kind: z.literal("unavailable"), reason: z.string(), timedOut: z.literal(true).optional() }),
@@ -25,23 +25,23 @@ export const RunSnapshotsSchema = z.object({
       z.object({ kind: z.literal("unavailable"), reason: z.string() }),
     ])
     .optional(),
-})
+}))
 export type RunSnapshots = z.infer<typeof RunSnapshotsSchema>
-export const RewindPlanSchema = z.object({
+export const RewindPlanSchema = z.lazy(() => z.object({
   sourceId: z.string().uuid(),
   fork: ForkInputSchema,
   targetId: z.string().uuid(),
   expectedId: z.string().uuid(),
   /** One repository's share of a rewind across several (a project folder, submodules): the whole rewind's checkpoints and fork, which recovery finishes. */
   whole: z.object({ targetId: z.string().uuid(), expectedId: z.string().uuid(), forkId: z.string().uuid() }).optional(),
-})
+}))
 export type RewindPlan = z.infer<typeof RewindPlanSchema>
-export const RewindInputSchema = z.object({
+export const RewindInputSchema = z.lazy(() => z.object({
   id: z.string().uuid(),
   requestId: z.string().uuid(),
   position: z.enum(["before", "after"]).optional(),
   expectedId: z.string().uuid(),
-})
+}))
 export type RewindInput = z.infer<typeof RewindInputSchema>
 /** Who changed a file since a checkpoint, as the attribution journal knows: a Thread (`sure` when it proved or named the file), the person, or nobody it can name. */
 export type RewindWriter = { kind: "thread"; thread: string; sure: boolean } | { kind: "person" } | { kind: "unknown" }

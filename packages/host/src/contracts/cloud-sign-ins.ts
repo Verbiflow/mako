@@ -20,7 +20,7 @@ export const CLOUD_SIGN_IN_MAX_BYTES = 64 * 1024
  * the cloud keeps the whole pair (`CloudSharedChainSchema`) and is its one
  * refresher; machines get the access alone.
  */
-export const CloudSignInSchema = z
+export const CloudSignInSchema = z.lazy(() => z
   .object({
     harness: CloudSignInHarnessSchema,
     /** Who it signs in as, for Settings: an email or account name, never a secret. */
@@ -33,13 +33,13 @@ export const CloudSignInSchema = z
   .strict()
   .refine((signIn) => new TextEncoder().encode(JSON.stringify(signIn.payload)).length <= CLOUD_SIGN_IN_MAX_BYTES, {
     message: `A sign-in is at most ${CLOUD_SIGN_IN_MAX_BYTES} bytes`,
-  })
+  }))
 export type CloudSignIn = z.infer<typeof CloudSignInSchema>
 /** A whole sign-in, refresh token included, for Mako Cloud to keep: who it is, and the harness's own shape of it. */
 export type CloudSignInChain = Pick<CloudSignIn, "label" | "payload">
 
 /** A sign-in as Mako Cloud lists it, for Settings: never its value. */
-export const CloudSignInListingSchema = z.object({
+export const CloudSignInListingSchema = z.lazy(() => z.object({
   harness: CloudSignInHarnessSchema,
   label: z.string().nullable(),
   expiresAt: z.string().nullable(),
@@ -47,7 +47,7 @@ export const CloudSignInListingSchema = z.object({
   savedAt: z.string(),
   /** Sent by the device asking; another of the account's Macs may have sent the rest. */
   mine: z.boolean(),
-})
+}))
 export type CloudSignInListing = z.infer<typeof CloudSignInListingSchema>
 
 /**
@@ -55,7 +55,7 @@ export type CloudSignInListing = z.infer<typeof CloudSignInListingSchema>
  * and mirrored back to it after every refresh; `own` was signed in once more for the cloud alone. `retrying` still
  * serves machines; `needs-reconnect` is a refresh token the provider refused, signed in again on the Mac.
  */
-export const CloudKeptSignInSchema = z.object({
+export const CloudKeptSignInSchema = z.lazy(() => z.object({
   harness: CloudSignInHarnessSchema,
   label: z.string().nullable(),
   state: z.enum(["connected", "refreshing", "retrying", "needs-reconnect"]),
@@ -80,24 +80,24 @@ export const CloudKeptSignInSchema = z.object({
   waitingSince: z.string().nullable().optional(),
   /** Its refresh is due and waits for this Mac to ask for it, holding its harness's own refresh lock. */
   refreshDue: z.boolean().optional(),
-})
+}))
 export type CloudKeptSignIn = z.infer<typeof CloudKeptSignInSchema>
 
 /** The whole pair of a sign-in this Mac shares, as the cloud last refreshed it, for its harness to run on here. */
-export const CloudSharedChainSchema = z.object({
+export const CloudSharedChainSchema = z.lazy(() => z.object({
   harness: CloudSignInHarnessSchema,
   label: z.string().nullable(),
   token: z.string(),
   expiresAt: z.string().nullable(),
   payload: z.record(z.string(), z.json()),
-})
+}))
 export type CloudSharedChain = z.infer<typeof CloudSharedChainSchema>
 
 /** What sharing a sign-in did: the cloud took it (`seeded`, `adopted`), had it (`current`), or has a newer one (`stale`). */
-export const CloudShareOutcomeSchema = z.object({
+export const CloudShareOutcomeSchema = z.lazy(() => z.object({
   outcome: z.enum(["seeded", "adopted", "current", "stale"]),
   signIn: CloudKeptSignInSchema,
-})
+}))
 export type CloudShareOutcome = z.infer<typeof CloudShareOutcomeSchema>
 
 /** One harness's row in Settings: what this Mac reads, and what it last sent. */

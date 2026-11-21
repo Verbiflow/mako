@@ -209,13 +209,13 @@ export const THREAD_MARKS_VERSION = 29
  */
 export const SUPPORTED_VERSIONS = { min: 1, max: LINK_VERSION } as const
 
-export const VersionRangeSchema = z
+export const VersionRangeSchema = z.lazy(() => z
   .object({
     min: z.number().int().positive(),
     max: z.number().int().positive(),
   })
   .strict()
-  .refine((range) => range.min <= range.max, "min is above max")
+  .refine((range) => range.min <= range.max, "min is above max"))
 
 export type VersionRange = z.infer<typeof VersionRangeSchema>
 

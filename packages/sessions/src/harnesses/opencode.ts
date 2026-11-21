@@ -87,12 +87,12 @@ export const OPENCODE_VOCABULARY = defineVocabulary({
  * assistant message alike. OpenCode counts cached input beside `input` and
  * reasoning beside `output`.
  */
-export const OpenCodeTokens = z.object({
+export const OpenCodeTokens = z.lazy(() => z.object({
   input: tokenCount,
   output: tokenCount,
   reasoning: tokenCount,
   cache: z.object({ read: tokenCount, write: tokenCount }).nullish().catch(undefined),
-})
+}))
 export type OpenCodeTokens = z.infer<typeof OpenCodeTokens>
 
 /** A saved message's `tokens`, which one that never finished a step lacks. */

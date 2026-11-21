@@ -85,7 +85,7 @@ export class IntentOwner {
   }
 }
 
-export const IntentRowSchema = z.object({
+export const IntentRowSchema = z.lazy(() => z.object({
   id: z.number(),
   owner: z.string(),
   scope: z.string(),
@@ -95,7 +95,7 @@ export const IntentRowSchema = z.object({
   session: z.string(),
   began: z.number(),
   ended: z.number().nullable(),
-})
+}))
 export type IntentRow = z.infer<typeof IntentRowSchema>
 
 /**

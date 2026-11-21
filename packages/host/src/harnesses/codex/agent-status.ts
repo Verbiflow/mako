@@ -5,12 +5,12 @@ export const CodexAgentRunSchema = z.object({
   status: z.enum(["inProgress", "completed", "failed", "interrupted"]),
 })
 export type CodexAgentRun = z.infer<typeof CodexAgentRunSchema>
-export const CodexAgentRunsSchema = z.object({
+export const CodexAgentRunsSchema = z.lazy(() => z.object({
   data: z.array(CodexAgentRunSchema.extend({
     itemsView: z.literal("notLoaded"),
     items: z.array(z.unknown()).max(0),
   })).max(1),
-})
+}))
 
 interface StatusSource {
   read(nativeId: string): Promise<CodexAgentRun | null>

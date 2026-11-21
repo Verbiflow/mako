@@ -202,7 +202,7 @@ const NoticeWithdrawnSchema = z.object({ type: z.literal("withdraw"), tags: z.ar
  * What the account's Web Push carries to a browser, which its service worker shows (`readNotice`): a `notice`, shown
  * under its `tag`, or a `withdraw` of what it showed under `tags`.
  */
-export const NoticePayloadSchema = z.union([NoticeWithdrawnSchema, NoticeShownSchema])
+export const NoticePayloadSchema = z.lazy(() => z.union([NoticeWithdrawnSchema, NoticeShownSchema]))
 export type NoticePayload = z.output<typeof NoticePayloadSchema>
 
 /** What a withdrawn notice says for the moment a browser shows it before it closes. */

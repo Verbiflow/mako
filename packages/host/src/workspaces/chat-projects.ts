@@ -13,7 +13,7 @@ import { onWindows } from "../base/platform.js"
 import { expandPath, trimmedPath, typedWholePath, wholePathAdvice } from "./project-folders.js"
 
 /** A chat to turn into a project: its folder under `~/Mako/Chats`, and where the project goes (`~/…` or `/…`). */
-export const ChatProjectRequestSchema = z.object({ folder: z.string().min(1).max(4096), to: z.string().min(1).max(4096) }).strict()
+export const ChatProjectRequestSchema = z.lazy(() => z.object({ folder: z.string().min(1).max(4096), to: z.string().min(1).max(4096) }).strict())
 export type ChatProjectRequest = z.infer<typeof ChatProjectRequestSchema>
 
 /** Whether `path` is `folder` or inside it; on Windows in any case, as its file system names them. */
