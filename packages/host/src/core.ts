@@ -2550,13 +2550,35 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (!shell.closing()) web()?.conversationEvent(event)
   })
 
-  const plugins = fixtureDesk ? null : watchPluginChanges(environment.dataRoot, emit, (root, changed) =>
-    watchBackend(root, [], { events: changed, dropped: changed, gone: changed, muted: (muted) => { if (!muted) changed() } }, { kind: "directory" }))
-  if (plugins) {
+  // The plugins folder is followed for the windows, which are told when it changes: while one is subscribed, and not
+  // otherwise, as a watch nobody hears kept the watcher's child alive on a host with no window and no project. A
+  // window that subscribes after a while with none is told once, having heard nothing of what changed meanwhile.
+  if (!fixtureDesk) {
+    let plugins: ReturnType<typeof watchPluginChanges> | undefined
+    let unheard = false
+    const follow = (subscribed: boolean) => {
+      if (subscribed && !plugins) {
+        const watching = watchPluginChanges(environment.dataRoot, emit, (root, changed) =>
+          watchBackend(root, [], { events: changed, dropped: changed, gone: changed, muted: (muted) => { if (!muted) changed() } }, { kind: "directory" }))
+        plugins = watching
+        void watching.ready.catch((error) => {
+          if (!shell.closing()) hostWarn("plugins", "plugin changes could not be followed", { error: error instanceof Error ? error.message : String(error) })
+        })
+        if (unheard) emit({ type: "plugins-changed" })
+        unheard = false
+      } else if (!subscribed && plugins) {
+        const ending = plugins
+        plugins = undefined
+        unheard = true
+        void ending.close().catch(() => {})
+      }
+    }
+    const unfollow = shell.subscribed.onChange(follow)
+    follow(shell.subscribed.on)
     // Register before readiness: a stop during subscription still joins the late release.
-    shell.stopping.register("plugin calls", () => plugins.close())
-    void plugins.ready.catch((error) => {
-      if (!shell.closing()) hostWarn("plugins", "plugin changes could not be followed", { error: error instanceof Error ? error.message : String(error) })
+    shell.stopping.register("plugin calls", () => {
+      unfollow()
+      return plugins?.close()
     })
   }
   const builds = config.development ? watchOwnBuild(devHostBuildDirectories(environment.appRoot), emit) : []
