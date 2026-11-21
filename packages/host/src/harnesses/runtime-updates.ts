@@ -1026,6 +1026,7 @@ export class RuntimeUpdates {
           .slice(-600)
         throw new UpdaterOutput(tail || `${plan.command} exited with ${ended.code ?? "a signal"}`)
       }
+      await this.sources().find((entry) => entry.key === provider)?.completeInstall?.(env)
       await this.dropUnusedBuilds(provider, env)
       return null
     } catch (error) {
