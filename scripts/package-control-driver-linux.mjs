@@ -121,6 +121,10 @@ try {
   assert.equal(runtimeManifest.features?.portal_input, true, "Linux releases must include the GNOME/KDE portal input backend")
   const elf = (await run("docker", ["run", "--rm", ...mounts, image, "readelf", "-h", "/target/release/cua-driver"])).stdout
   assert.match(elf, arch === "arm64" ? /Machine:\s+AArch64/ : /Machine:\s+Advanced Micro Devices X86-64/, "Executable architecture differs from release target")
+  // No FFmpeg in the Linux build: none of its capture or encoder names or its probe's name is in the binary.
+  const ffmpegNames = (await run("docker", ["run", "--rm", ...mounts, image, "sh", "-c",
+    "grep -a -o -E 'gdigrab|x11grab|libx264|ffprobe' /target/release/cua-driver | sort -u || true"])).stdout.trim()
+  assert.equal(ffmpegNames, "", `FFmpeg's names are in the Linux executable: ${ffmpegNames}`)
   const output = resolve("release/control-driver", manifest.version, platform)
   await mkdir(resolve(output, ".."), { recursive: true })
   await mkdir(output)

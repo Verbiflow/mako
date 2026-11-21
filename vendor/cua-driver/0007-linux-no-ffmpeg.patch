@@ -1,0 +1,992 @@
+diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
+index abf9f5f..b67611a 100644
+--- a/libs/cua-driver/rust/Cargo.lock
++++ b/libs/cua-driver/rust/Cargo.lock
+@@ -1151,7 +1151,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -1190,7 +1190,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-bindgen"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "cbindgen",
+  "uniffi",
+@@ -1198,7 +1198,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-contract"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "schemars",
+  "serde",
+@@ -1208,7 +1208,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-core"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -1246,7 +1246,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-sdk"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "async-trait",
+  "core-foundation",
+@@ -1269,7 +1269,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-testkit"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "core-foundation",
+  "image",
+@@ -1284,7 +1284,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-uia"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "anyhow",
+  "cua-driver-core",
+@@ -1299,7 +1299,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cursor-overlay"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "anyhow",
+  "cua-driver-contract",
+@@ -1316,7 +1316,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cursor-theme-cli"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "anyhow",
+  "cursor-overlay",
+@@ -3240,7 +3240,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+ 
+ [[package]]
+ name = "pip-preview"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "serde_json",
+ ]
+@@ -3298,7 +3298,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+ 
+ [[package]]
+ name = "platform-linux"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "anyhow",
+  "ashpd",
+@@ -3352,7 +3352,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "platform-macos"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -3392,7 +3392,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "platform-windows"
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
+index e30f604..178c9eb 100644
+--- a/libs/cua-driver/rust/Cargo.toml
++++ b/libs/cua-driver/rust/Cargo.toml
+@@ -17,7 +17,7 @@ members = [
+ ]
+ 
+ [workspace.package]
+-version = "0.28.2+mako.29"
++version = "0.28.2+mako.30"
+ edition = "2021"
+ authors = ["trycua"]
+ license = "MIT"
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
+index 042b88a..e3d9f1c 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
+@@ -58,7 +58,7 @@ pub mod element_cache;
+ pub mod element_query;
+ pub mod element_token;
+ pub mod expectation;
+-#[cfg(not(target_os = "windows"))]
++#[cfg(target_os = "macos")]
+ pub mod ffmpeg_install;
+ pub mod health_report;
+ pub mod history;
+@@ -87,12 +87,13 @@ pub mod tool_args;
+ pub mod tool_schema;
+ pub mod video;
+ pub mod video_fmp4;
+-#[cfg(not(target_os = "windows"))]
++#[cfg(target_os = "macos")]
+ pub mod video_ffmpeg;
+-/// Windows records a window through Mako's video helper (`platform_windows::video_helper`) and runs no FFmpeg for
+-/// anything: this build has no FFmpeg path at all, so nothing can resolve `ffmpeg` from `PATH` or the current
+-/// directory. What would probe or render with it reports FFmpeg as absent.
+-#[cfg(target_os = "windows")]
++/// Windows records a window through Mako's video helper (`platform_windows::video_helper`), and Linux records no
++/// video in the driver at all (Mako records with its video helper, `platform_linux::video_none`). Neither runs
++/// FFmpeg for anything: these builds have no FFmpeg path, so nothing can resolve `ffmpeg` or `ffprobe` from `PATH`
++/// or the current directory. What would probe or render with it reports FFmpeg as absent.
++#[cfg(not(target_os = "macos"))]
+ pub mod video_ffmpeg {
+     pub fn find_ffprobe() -> Option<std::path::PathBuf> {
+         None
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_render.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_render.rs
+index 1bd63f5..2a04886 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_render.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_render.rs
+@@ -77,14 +77,10 @@ pub fn render(
+     let traj =
+         load(input_dir).map_err(|e: LoadError| anyhow::anyhow!("load {input_dir:?}: {e}"))?;
+     let ffmpeg = find_ffmpeg().ok_or_else(|| {
+-        if cfg!(target_os = "windows") {
+-            anyhow::anyhow!("Rendering a trajectory video needs ffmpeg, which this Windows build doesn't use")
++        if cfg!(target_os = "macos") {
++            anyhow::anyhow!("ffmpeg not found on PATH. Install with: brew install ffmpeg.")
+         } else {
+-            anyhow::anyhow!(
+-                "ffmpeg not found on PATH. Install with: \
+-                 brew install ffmpeg (macOS), \
+-                 or apt install ffmpeg (Linux)."
+-            )
++            anyhow::anyhow!("Rendering a trajectory video needs ffmpeg, which this build doesn't use")
+         }
+     })?;
+ 
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
+index 178747b..2422412 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
+@@ -47,11 +47,13 @@ const VIDEO_PLATFORM_NOTE: &str = "**Windows records one window** (`window_targe
+     Media Foundation H.264, written as fragmented MP4). No ffmpeg is used, and whole-display video is \
+     refused. Without the helper the per-turn capture (screenshots + action.json) still runs and the \
+     session's `last_error` field carries the diagnostic.\n\n";
+-#[cfg(not(target_os = "windows"))]
+-const VIDEO_PLATFORM_NOTE: &str = "**Windows + Linux use an ffmpeg subprocess** (`gdigrab` / \
+-    `x11grab` + libx264). Requires ffmpeg on PATH (winget install Gyan.FFmpeg / apt install ffmpeg); \
+-    when ffmpeg is missing or fails on startup the per-turn capture (screenshots + action.json) still \
+-    runs and the session's `last_error` field carries the diagnostic.\n\n";
++#[cfg(target_os = "linux")]
++const VIDEO_PLATFORM_NOTE: &str = "**Linux records no video in the driver**: `record_video: true` is \
++    refused, with the diagnostic in the session's `last_error`, and the per-turn capture (screenshots + \
++    action.json) still runs. Mako records the window or the shared screen with its video helper. No \
++    ffmpeg is used.\n\n";
++#[cfg(target_os = "macos")]
++const VIDEO_PLATFORM_NOTE: &str = "";
+ 
+ #[async_trait]
+ impl Tool for StartRecordingTool {
+@@ -182,7 +184,7 @@ impl Tool for StartRecordingTool {
+                     " (video → recording.mp4)".to_string()
+                 } else if video_failed {
+                     let err = state.last_error.clone().unwrap_or_else(|| "unknown".into());
+-                    let hint = if !cfg!(target_os = "windows") && crate::video_ffmpeg::find_ffmpeg().is_none() {
++                    let hint = if cfg!(target_os = "macos") && crate::video_ffmpeg::find_ffmpeg().is_none() {
+                         "\n\nffmpeg was not found. Call install_ffmpeg (then again with \
+                          confirm=true) to install it, then restart recording."
+                     } else {
+@@ -605,6 +607,9 @@ impl Tool for InstallFfmpegTool {
+             description: if cfg!(target_os = "windows") {
+                 "Not used on Windows: this build records windows through the host's video \
+                 helper and runs no ffmpeg. The call is refused."
++            } else if cfg!(target_os = "linux") {
++                "Not used on Linux: this build records no video itself (Mako records with its \
++                video helper) and runs no ffmpeg. The call is refused."
+             } else {
+                 "Install the ffmpeg binary used by start_recording's video \
+                 capture (Linux/Windows; macOS records natively and needs no ffmpeg). \
+@@ -624,15 +629,15 @@ impl Tool for InstallFfmpegTool {
+         })
+     }
+ 
+-    #[cfg(target_os = "windows")]
++    #[cfg(not(target_os = "macos"))]
+     async fn invoke(&self, _args: Value) -> ToolResult {
+         ToolResult::error(
+-            "This Windows build records windows through Mako's video helper and uses no ffmpeg; \
+-             there is nothing to install.",
++            "This build records through Mako's video helper and uses no ffmpeg; there is nothing to \
++             install.",
+         )
+     }
+ 
+-    #[cfg(not(target_os = "windows"))]
++    #[cfg(target_os = "macos")]
+     async fn invoke(&self, args: Value) -> ToolResult {
+         use crate::tool_args::ArgsExt;
+ 
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/tests/recording_shutdown_errors.rs b/libs/cua-driver/rust/crates/cua-driver-core/tests/recording_shutdown_errors.rs
+index 95eb167..40c7624 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/tests/recording_shutdown_errors.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/tests/recording_shutdown_errors.rs
+@@ -1,5 +1,5 @@
+-// FFmpeg is not part of the Windows build (`video_ffmpeg` is a stub there).
+-#![cfg(not(target_os = "windows"))]
++// FFmpeg is not part of the Windows or Linux builds (`video_ffmpeg` is a stub there).
++#![cfg(target_os = "macos")]
+ 
+ use std::{process::Command, sync::Arc};
+ 
+diff --git a/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs b/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs
+index b7246ba..e0c98da 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-sdk/src/runtime.rs
+@@ -679,15 +679,9 @@ fn configure_linux_runtime(prepare_desktop_environment: bool) {
+     cua_driver_core::recording::set_element_bounds_fn(|window_id, pid, index| {
+         platform_linux::recording_hooks::element_window_local_xy(window_id, pid, index)
+     });
+-    if platform_linux::wayland::is_wayland() {
+-        cua_driver_core::video::set_video_backend_factory(Box::new(
+-            platform_linux::video_wayland::WfRecorderVideoBackendFactory,
+-        ));
+-    } else {
+-        cua_driver_core::video::set_video_backend_factory(Box::new(
+-            platform_linux::video_window::X11VideoBackendFactory,
+-        ));
+-    }
++    cua_driver_core::video::set_video_backend_factory(Box::new(
++        platform_linux::video_none::NoVideoBackendFactory,
++    ));
+ }
+ 
+ #[cfg(test)]
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/lib.rs b/libs/cua-driver/rust/crates/platform-linux/src/lib.rs
+index f54758a..ea4c658 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/lib.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/lib.rs
+@@ -62,7 +62,7 @@ pub mod a11y;
+ pub mod recording_hooks;
+ 
+ #[cfg(target_os = "linux")]
+-pub mod video_wayland;
++pub mod video_none;
+ 
+ #[cfg(target_os = "linux")]
+ pub mod wayland;
+@@ -205,6 +205,3 @@ mod display_detection_tests {
+         assert!(!detect_wsl(false, None));
+     }
+ }
+-
+-#[cfg(target_os = "linux")]
+-pub mod video_window;
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/video_none.rs b/libs/cua-driver/rust/crates/platform-linux/src/video_none.rs
+new file mode 100644
+index 0000000..8be78a8
+--- /dev/null
++++ b/libs/cua-driver/rust/crates/platform-linux/src/video_none.rs
+@@ -0,0 +1,27 @@
++//! Linux records no video in the driver. Mako records a window (X11) or the monitor the person shares (Wayland)
++//! with its video helper, `mako-video`, and asks the driver only for its action journal (`record_video: false`).
++//! The FFmpeg-fed X11 and GNOME recorders that lived here are gone, and with them every `ffmpeg` this build ran.
++
++use std::path::Path;
++
++use cua_driver_core::video::{VideoBackend, VideoBackendFactory, WindowVideoTarget};
++
++const REFUSAL: &str = "This Linux build records no video itself: record through Mako, whose video helper \
++    (mako-video) captures the window or the shared screen. No capture was started";
++
++pub struct NoVideoBackendFactory;
++
++impl VideoBackendFactory for NoVideoBackendFactory {
++    fn start(&self, _output_path: &Path) -> anyhow::Result<Box<dyn VideoBackend>> {
++        anyhow::bail!(REFUSAL)
++    }
++
++    fn start_window(
++        &self,
++        _output_path: &Path,
++        _target: WindowVideoTarget,
++        _fps: u32,
++    ) -> anyhow::Result<Box<dyn VideoBackend>> {
++        anyhow::bail!(REFUSAL)
++    }
++}
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/video_wayland.rs b/libs/cua-driver/rust/crates/platform-linux/src/video_wayland.rs
+deleted file mode 100644
+index f5133cf..0000000
+--- a/libs/cua-driver/rust/crates/platform-linux/src/video_wayland.rs
++++ /dev/null
+@@ -1,328 +0,0 @@
+-//! Native Wayland full-desktop video capture.
+-//!
+-//! wlroots compositors use `wf-recorder`. GNOME does not expose the wlroots
+-//! screencopy protocol, so its attested Shell helper supplies compositor-owned
+-//! PNG frames which are encoded into the same MP4 artifact through FFmpeg.
+-
+-use std::io::Read;
+-use std::io::Write;
+-use std::path::{Path, PathBuf};
+-use std::process::{Child, Command, Stdio};
+-use std::sync::mpsc::{self, RecvTimeoutError};
+-use std::time::{Duration, Instant};
+-
+-use cua_driver_core::video::{VideoBackend, VideoBackendFactory, VideoMetadata, WindowVideoTarget};
+-
+-pub struct WfRecorderVideoBackendFactory;
+-
+-impl VideoBackendFactory for WfRecorderVideoBackendFactory {
+-    fn start(&self, output_path: &Path) -> anyhow::Result<Box<dyn VideoBackend>> {
+-        if let Some(first_frame) = crate::wayland::shell_helper::trusted_screenshot_display() {
+-            return GnomeShellVideoBackend::start(output_path, first_frame)
+-                .map(|backend| Box::new(backend) as Box<dyn VideoBackend>);
+-        }
+-        WfRecorderVideoBackend::start(output_path)
+-            .map(|backend| Box::new(backend) as Box<dyn VideoBackend>)
+-    }
+-    fn max_window_fps(&self) -> u32 { 5 }
+-    fn start_window(
+-        &self,
+-        path: &Path,
+-        target: WindowVideoTarget,
+-        fps: u32,
+-    ) -> anyhow::Result<Box<dyn VideoBackend>> {
+-        crate::video_window::start_window_capture(path, fps, move || {
+-            let session = crate::wayland::shell_helper::WindowCaptureSession::new(
+-                u64::from(target.window_id), Some(u32::try_from(target.pid)?))
+-                .ok_or_else(|| anyhow::anyhow!("Exact-window Wayland recording requires the attested GNOME helper v9; no display capture was started"))?;
+-            let first = session
+-                .frame()
+-                .ok_or_else(|| anyhow::anyhow!("The exact GNOME window cannot be captured"))?;
+-            let image = image::load_from_memory(&first)?;
+-            Ok(Box::new(GnomeWindowCapture {
+-                session,
+-                dimensions: (image.width(), image.height()),
+-            }))
+-        })
+-    }
+-}
+-
+-struct GnomeWindowCapture {
+-    session: crate::wayland::shell_helper::WindowCaptureSession,
+-    dimensions: (u32, u32),
+-}
+-impl crate::video_window::WindowCapture for GnomeWindowCapture {
+-    fn dimensions(&self) -> (u32, u32) {
+-        self.dimensions
+-    }
+-    fn frame(&self) -> anyhow::Result<Vec<u8>> {
+-        let frame = self.session.frame().ok_or_else(|| anyhow::anyhow!("Exact GNOME window capture ended: target lost, minimized, moved workspace, or helper unavailable"))?;
+-        let image = image::load_from_memory(&frame)?;
+-        if (image.width(), image.height()) != self.dimensions {
+-            anyhow::bail!("Window resized during recording");
+-        }
+-        Ok(image.into_rgba8().into_raw())
+-    }
+-}
+-
+-struct GnomeShellVideoBackend {
+-    stop_tx: mpsc::Sender<()>,
+-    worker: std::thread::JoinHandle<anyhow::Result<()>>,
+-    output_path: PathBuf,
+-    started_at: Instant,
+-}
+-
+-impl GnomeShellVideoBackend {
+-    fn start(output_path: &Path, first_frame: Vec<u8>) -> anyhow::Result<Self> {
+-        let available = Command::new("ffmpeg")
+-            .arg("-version")
+-            .stdout(Stdio::null())
+-            .stderr(Stdio::null())
+-            .status()
+-            .map(|status| status.success())
+-            .unwrap_or(false);
+-        if !available {
+-            anyhow::bail!("ffmpeg is required for GNOME Wayland video capture");
+-        }
+-        if let Some(parent) = output_path.parent() {
+-            std::fs::create_dir_all(parent)?;
+-        }
+-
+-        let output_path = output_path.to_path_buf();
+-        let worker_output = output_path.clone();
+-        let (stop_tx, stop_rx) = mpsc::channel();
+-        let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+-        let worker = std::thread::spawn(move || {
+-            let result = run_gnome_shell_encoder(&worker_output, first_frame, stop_rx, &ready_tx);
+-            if result.is_err() {
+-                let _ = ready_tx.send(result.as_ref().map(|_| ()).map_err(ToString::to_string));
+-            }
+-            result
+-        });
+-        match ready_rx.recv_timeout(Duration::from_secs(8)) {
+-            Ok(Ok(())) => Ok(Self {
+-                stop_tx,
+-                worker,
+-                output_path,
+-                started_at: Instant::now(),
+-            }),
+-            Ok(Err(error)) => {
+-                let _ = worker.join();
+-                anyhow::bail!("GNOME Wayland video failed to start: {error}")
+-            }
+-            Err(error) => {
+-                let _ = stop_tx.send(());
+-                let _ = worker.join();
+-                anyhow::bail!("GNOME Wayland video startup timed out: {error}")
+-            }
+-        }
+-    }
+-}
+-
+-fn run_gnome_shell_encoder(
+-    output_path: &Path,
+-    first_frame: Vec<u8>,
+-    stop_rx: mpsc::Receiver<()>,
+-    ready_tx: &mpsc::SyncSender<Result<(), String>>,
+-) -> anyhow::Result<()> {
+-    let mut child = Command::new("ffmpeg")
+-        .args([
+-            "-hide_banner",
+-            "-loglevel",
+-            "error",
+-            "-f",
+-            "image2pipe",
+-            "-framerate",
+-            "5",
+-            "-vcodec",
+-            "png",
+-            "-i",
+-            "-",
+-            "-an",
+-            "-vf",
+-            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+-            "-c:v",
+-            "libx264",
+-            "-pix_fmt",
+-            "yuv420p",
+-            "-movflags",
+-            "+faststart",
+-            "-y",
+-        ])
+-        .arg(output_path)
+-        .stdin(Stdio::piped())
+-        .stdout(Stdio::null())
+-        .stderr(Stdio::piped())
+-        .spawn()
+-        .map_err(|error| anyhow::anyhow!("failed to start GNOME FFmpeg encoder: {error}"))?;
+-    let mut stdin = child
+-        .stdin
+-        .take()
+-        .ok_or_else(|| anyhow::anyhow!("GNOME FFmpeg encoder exposed no stdin"))?;
+-    stdin.write_all(&first_frame)?;
+-    stdin.flush()?;
+-    let _ = ready_tx.send(Ok(()));
+-
+-    loop {
+-        match stop_rx.recv_timeout(Duration::from_millis(200)) {
+-            Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+-            Err(RecvTimeoutError::Timeout) => {
+-                let frame = crate::wayland::shell_helper::trusted_screenshot_display()
+-                    .ok_or_else(|| anyhow::anyhow!("trusted GNOME compositor capture stopped"))?;
+-                stdin.write_all(&frame)?;
+-                stdin.flush()?;
+-            }
+-        }
+-    }
+-    drop(stdin);
+-    let output = child.wait_with_output()?;
+-    if !output.status.success() {
+-        anyhow::bail!(
+-            "GNOME FFmpeg encoder exited with {}: {}",
+-            output.status,
+-            String::from_utf8_lossy(&output.stderr)
+-        );
+-    }
+-    if output_path.metadata().map(|meta| meta.len()).unwrap_or(0) == 0 {
+-        anyhow::bail!("GNOME FFmpeg encoder produced an empty artifact");
+-    }
+-    Ok(())
+-}
+-
+-impl VideoBackend for GnomeShellVideoBackend {
+-    fn stop(self: Box<Self>) -> anyhow::Result<VideoMetadata> {
+-        let elapsed = self.started_at.elapsed();
+-        let _ = self.stop_tx.send(());
+-        match self.worker.join() {
+-            Ok(result) => result?,
+-            Err(_) => anyhow::bail!("GNOME Wayland video worker panicked"),
+-        }
+-        Ok(VideoMetadata {
+-            path: self.output_path,
+-            duration_ms: elapsed.as_millis() as u64,
+-            finalized: true,
+-            interruption: None,
+-        })
+-    }
+-}
+-
+-struct WfRecorderVideoBackend {
+-    child: Child,
+-    output_path: PathBuf,
+-    started_at: Instant,
+-    stderr_thread: Option<std::thread::JoinHandle<Vec<u8>>>,
+-}
+-
+-impl WfRecorderVideoBackend {
+-    fn start(output_path: &Path) -> anyhow::Result<Self> {
+-        if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+-            anyhow::bail!("wf-recorder requires WAYLAND_DISPLAY");
+-        }
+-        let available = Command::new("wf-recorder")
+-            .arg("--help")
+-            .stdout(Stdio::null())
+-            .stderr(Stdio::null())
+-            .status()
+-            .map(|status| status.success())
+-            .unwrap_or(false);
+-        if !available {
+-            anyhow::bail!(
+-                "wf-recorder not found on PATH. Install wf-recorder for native Wayland video."
+-            );
+-        }
+-        if let Some(parent) = output_path.parent() {
+-            std::fs::create_dir_all(parent)?;
+-        }
+-
+-        let started_at = Instant::now();
+-        let mut command = Command::new("wf-recorder");
+-        command
+-            .arg("-f")
+-            .arg(output_path)
+-            .args(["--no-damage", "-c", "libx264", "-x", "yuv420p"])
+-            .stdin(Stdio::null())
+-            .stdout(Stdio::null())
+-            .stderr(Stdio::piped());
+-        if let Some(output) = std::env::var_os("CUA_WAYLAND_RECORDING_OUTPUT") {
+-            command.arg("-o").arg(output);
+-        }
+-        let mut child = command
+-            .spawn()
+-            .map_err(|error| anyhow::anyhow!("failed to start wf-recorder: {error}"))?;
+-        let stderr_thread = child.stderr.take().map(|mut stderr| {
+-            std::thread::spawn(move || {
+-                let mut output = Vec::new();
+-                let _ = stderr.read_to_end(&mut output);
+-                if output.len() > 4096 {
+-                    let excess = output.len() - 4096;
+-                    output.drain(..excess);
+-                }
+-                output
+-            })
+-        });
+-
+-        let probe_deadline = Instant::now() + Duration::from_millis(1500);
+-        while Instant::now() < probe_deadline {
+-            if let Some(status) = child.try_wait()? {
+-                let stderr = stderr_thread
+-                    .map(|worker| worker.join().unwrap_or_default())
+-                    .unwrap_or_default();
+-                anyhow::bail!(
+-                    "wf-recorder exited during startup ({status}): {}",
+-                    String::from_utf8_lossy(&stderr)
+-                );
+-            }
+-            std::thread::sleep(Duration::from_millis(100));
+-        }
+-
+-        Ok(Self {
+-            child,
+-            output_path: output_path.to_path_buf(),
+-            started_at,
+-            stderr_thread,
+-        })
+-    }
+-}
+-
+-impl VideoBackend for WfRecorderVideoBackend {
+-    fn stop(mut self: Box<Self>) -> anyhow::Result<VideoMetadata> {
+-        let elapsed = self.started_at.elapsed();
+-        unsafe {
+-            libc::kill(self.child.id() as i32, libc::SIGINT);
+-        }
+-        let deadline = Instant::now() + Duration::from_secs(10);
+-        let finalized = loop {
+-            if let Some(status) = self.child.try_wait()? {
+-                break status.success();
+-            }
+-            if Instant::now() >= deadline {
+-                let _ = self.child.kill();
+-                let _ = self.child.wait();
+-                break false;
+-            }
+-            std::thread::sleep(Duration::from_millis(80));
+-        };
+-        let stderr = self
+-            .stderr_thread
+-            .take()
+-            .and_then(|worker| worker.join().ok())
+-            .unwrap_or_default();
+-        let has_video = self
+-            .output_path
+-            .metadata()
+-            .map(|metadata| metadata.len() > 0)
+-            .unwrap_or(false);
+-        if !finalized || !has_video {
+-            anyhow::bail!(
+-                "wf-recorder did not finalize a playable artifact: {}",
+-                String::from_utf8_lossy(&stderr)
+-            );
+-        }
+-        Ok(VideoMetadata {
+-            path: self.output_path,
+-            duration_ms: elapsed.as_millis() as u64,
+-            finalized: true,
+-            interruption: None,
+-        })
+-    }
+-}
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/video_window.rs b/libs/cua-driver/rust/crates/platform-linux/src/video_window.rs
+deleted file mode 100644
+index b48c9de..0000000
+--- a/libs/cua-driver/rust/crates/platform-linux/src/video_window.rs
++++ /dev/null
+@@ -1,314 +0,0 @@
+-//! Exact-window pixel sources share one bounded, task-owned FFmpeg encoder.
+-use crate::capture::CompositeCapture;
+-use cua_driver_core::video::{VideoBackend, VideoBackendFactory, VideoMetadata, WindowVideoTarget};
+-use std::{
+-    io::{Read, Write},
+-    path::{Path, PathBuf},
+-    process::{Command, Stdio},
+-    sync::{
+-        atomic::{AtomicBool, Ordering},
+-        mpsc, Arc,
+-    },
+-    time::{Duration, Instant},
+-};
+-static ACTIVE: AtomicBool = AtomicBool::new(false);
+-struct Admission;
+-impl Drop for Admission {
+-    fn drop(&mut self) {
+-        ACTIVE.store(false, Ordering::Release);
+-    }
+-}
+-pub struct X11VideoBackendFactory;
+-impl VideoBackendFactory for X11VideoBackendFactory {
+-    fn start(&self, path: &Path) -> anyhow::Result<Box<dyn VideoBackend>> {
+-        cua_driver_core::video_ffmpeg::FfmpegVideoBackendFactory.start(path)
+-    }
+-    fn max_window_fps(&self) -> u32 { 60 }
+-    fn start_window(
+-        &self,
+-        path: &Path,
+-        target: WindowVideoTarget,
+-        fps: u32,
+-    ) -> anyhow::Result<Box<dyn VideoBackend>> {
+-        start_window_capture(path, fps, move || {
+-            Ok(Box::new(CompositeCapture::new(
+-                target.window_id,
+-                u32::try_from(target.pid)?,
+-            )?))
+-        })
+-    }
+-}
+-
+-pub(super) trait WindowCapture {
+-    fn dimensions(&self) -> (u32, u32);
+-    fn frame(&self) -> anyhow::Result<Vec<u8>>;
+-}
+-impl WindowCapture for CompositeCapture {
+-    fn dimensions(&self) -> (u32, u32) {
+-        self.dimensions()
+-    }
+-    fn frame(&self) -> anyhow::Result<Vec<u8>> {
+-        self.frame()
+-    }
+-}
+-
+-pub(super) fn start_window_capture(
+-    path: &Path,
+-    fps: u32,
+-    capture: impl FnOnce() -> anyhow::Result<Box<dyn WindowCapture>> + Send + 'static,
+-) -> anyhow::Result<Box<dyn VideoBackend>> {
+-    if path.exists() {
+-        anyhow::bail!("Recording output exists; choose a new directory");
+-    }
+-    if ACTIVE
+-        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+-        .is_err()
+-    {
+-        anyhow::bail!("A previous window encoder still owns capture");
+-    }
+-    let admission = Admission;
+-    let stop = Arc::new(AtomicBool::new(false));
+-    let worker_stop = stop.clone();
+-    let (ready_tx, ready) = mpsc::sync_channel(1);
+-    let (done_tx, done) = mpsc::sync_channel(1);
+-    let finished = Arc::new(AtomicBool::new(false));
+-    let worker_finished = finished.clone();
+-    let path = path.to_path_buf();
+-    std::thread::spawn(move || {
+-        let _admission = admission;
+-        let result =
+-            capture().and_then(|capture| record(path, capture, fps, worker_stop, ready_tx.clone()));
+-        if let Err(error) = &result {
+-            let _ = ready_tx.try_send(Err(error.to_string()));
+-        }
+-        let _ = done_tx.send(result);
+-        worker_finished.store(true, Ordering::Release);
+-    });
+-    match ready.recv_timeout(Duration::from_secs(5)) {
+-        Ok(Ok(())) => Ok(Box::new(Recording {
+-            stop,
+-            done,
+-            finished,
+-        })),
+-        result => {
+-            stop.store(true, Ordering::Release);
+-            match result {
+-                Ok(Err(error)) => anyhow::bail!(error),
+-                _ => {
+-                    anyhow::bail!("Window recording startup timed out; worker retains cleanup")
+-                }
+-            }
+-        }
+-    }
+-}
+-
+-struct Recording {
+-    stop: Arc<AtomicBool>,
+-    done: mpsc::Receiver<anyhow::Result<VideoMetadata>>,
+-    finished: Arc<AtomicBool>,
+-}
+-impl Drop for Recording {
+-    fn drop(&mut self) {
+-        self.stop.store(true, Ordering::Release);
+-    }
+-}
+-impl VideoBackend for Recording {
+-    fn is_recording(&self) -> bool {
+-        !self.finished.load(Ordering::Acquire)
+-    }
+-    fn stop(self: Box<Self>) -> anyhow::Result<VideoMetadata> {
+-        self.stop.store(true, Ordering::Release);
+-        self.done
+-            .recv_timeout(Duration::from_secs(10))
+-            .map_err(|_| anyhow::anyhow!("Window encoder cleanup is still pending"))?
+-    }
+-}
+-struct Encoder(std::process::Child);
+-impl Drop for Encoder {
+-    fn drop(&mut self) {
+-        let _ = self.0.kill();
+-        let _ = self.0.wait();
+-    }
+-}
+-fn record(
+-    path: PathBuf,
+-    capture: Box<dyn WindowCapture>,
+-    fps: u32,
+-    stop: Arc<AtomicBool>,
+-    ready: mpsc::SyncSender<Result<(), String>>,
+-) -> anyhow::Result<VideoMetadata> {
+-    use std::os::fd::AsRawFd;
+-    let (width, height) = capture.dimensions();
+-    let first = capture.frame()?;
+-    if let Some(parent) = path.parent() {
+-        std::fs::create_dir_all(parent)?;
+-    }
+-    let mut encoder = Encoder(
+-        Command::new("ffmpeg")
+-            .args([
+-                "-n",
+-                "-loglevel",
+-                "error",
+-                "-f",
+-                "rawvideo",
+-                "-pixel_format",
+-                "rgba",
+-                "-video_size",
+-                &format!("{width}x{height}"),
+-                "-framerate",
+-                &fps.to_string(),
+-                "-use_wallclock_as_timestamps",
+-                "1",
+-                "-i",
+-                "pipe:0",
+-                "-fps_mode",
+-                "vfr",
+-                "-an",
+-                "-vf",
+-                "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+-                "-c:v",
+-                "libx264",
+-                "-preset",
+-                "ultrafast",
+-                "-crf",
+-                "18",
+-                "-pix_fmt",
+-                "yuv420p",
+-                "-movflags",
+-                "+faststart",
+-            ])
+-            .arg(&path)
+-            .stdin(Stdio::piped())
+-            .stdout(Stdio::null())
+-            .stderr(Stdio::piped())
+-            .spawn()?,
+-    );
+-    let mut input = encoder
+-        .0
+-        .stdin
+-        .take()
+-        .ok_or_else(|| anyhow::anyhow!("Missing encoder input"))?;
+-    let mut stderr = encoder
+-        .0
+-        .stderr
+-        .take()
+-        .ok_or_else(|| anyhow::anyhow!("Missing encoder diagnostics"))?;
+-    let diagnostics = std::thread::spawn(move || {
+-        let mut tail = Vec::new();
+-        let mut buf = [0u8; 4096];
+-        while let Ok(n) = stderr.read(&mut buf) {
+-            if n == 0 {
+-                break;
+-            }
+-            tail.extend_from_slice(&buf[..n]);
+-            if tail.len() > 4096 {
+-                tail.drain(..tail.len() - 4096);
+-            }
+-        }
+-        tail
+-    });
+-    let fd = input.as_raw_fd();
+-    // Nonblocking pipe writes let cancellation break an encoder that stopped reading.
+-    unsafe {
+-        let flags = libc::fcntl(fd, libc::F_GETFL);
+-        if flags < 0 || libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) < 0 {
+-            anyhow::bail!("Cannot make encoder input cancellable");
+-        }
+-    }
+-    let started = Instant::now();
+-    let mut frame = first;
+-    let mut failure = None;
+-    let mut announced = false;
+-    'capture: loop {
+-        if stop.load(Ordering::Acquire) {
+-            break;
+-        }
+-        let mut bytes = frame.as_slice();
+-        let write_deadline = Instant::now() + Duration::from_secs(2);
+-        while !bytes.is_empty() {
+-            if Instant::now() >= write_deadline {
+-                failure = Some("Encoder stopped consuming frames".into());
+-                break 'capture;
+-            }
+-            match input.write(bytes) {
+-                Ok(0) => {
+-                    failure = Some("Encoder closed its input".to_string());
+-                    break 'capture;
+-                }
+-                Ok(n) => bytes = &bytes[n..],
+-                Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
+-                    // A fixed sleep here costs one delay for every pipe-sized
+-                    // slice of a frame. Wait for writability instead; the
+-                    // deadline still bounds an encoder that stops reading.
+-                    let mut poll = libc::pollfd { fd, events: libc::POLLOUT, revents: 0 };
+-                    let result = unsafe { libc::poll(&mut poll, 1, 20) };
+-                    if result < 0 {
+-                        let error = std::io::Error::last_os_error();
+-                        if error.kind() != std::io::ErrorKind::Interrupted {
+-                            failure = Some(error.to_string());
+-                            break 'capture;
+-                        }
+-                    }
+-                }
+-                Err(e) => {
+-                    failure = Some(e.to_string());
+-                    break 'capture;
+-                }
+-            }
+-        }
+-        if !announced {
+-            let _ = ready.send(Ok(()));
+-            announced = true;
+-        }
+-        let elapsed = started.elapsed().as_nanos();
+-        // Absolute rational cadence: 60 fps is 16.666... ms, not 16 or 17.
+-        // Skip missed slots under backpressure; never queue catch-up frames.
+-        let next_tick = elapsed * u128::from(fps) / 1_000_000_000 + 1;
+-        let next = Duration::from_nanos((next_tick * 1_000_000_000 / u128::from(fps)) as u64);
+-        std::thread::sleep(next.saturating_sub(started.elapsed()));
+-        if stop.load(Ordering::Acquire) {
+-            break;
+-        }
+-        frame = match capture.frame() {
+-            Ok(frame) => frame,
+-            Err(error) => {
+-                failure = Some(error.to_string());
+-                break;
+-            }
+-        };
+-    }
+-    drop(input);
+-    let deadline = Instant::now() + Duration::from_secs(5);
+-    let mut finalized = false;
+-    loop {
+-        if let Some(status) = encoder.0.try_wait()? {
+-            finalized = status.success();
+-            if !finalized {
+-                failure = Some(format!("Encoder exited {status}"));
+-            }
+-            break;
+-        }
+-        if Instant::now() >= deadline {
+-            encoder.0.kill()?;
+-            let _ = encoder.0.wait();
+-            failure = Some("Encoder finalization timed out".into());
+-            break;
+-        }
+-        std::thread::sleep(Duration::from_millis(20));
+-    }
+-    let tail = diagnostics.join().unwrap_or_default();
+-    if !finalized {
+-        anyhow::bail!(
+-            "{}; {}; partial video: {}",
+-            failure.as_deref().unwrap_or("Encoder did not finalize"),
+-            String::from_utf8_lossy(&tail),
+-            path.display()
+-        );
+-    }
+-    Ok(VideoMetadata {
+-        path,
+-        duration_ms: started.elapsed().as_millis() as u64,
+-        finalized: true,
+-        interruption: failure,
+-    })
+-}

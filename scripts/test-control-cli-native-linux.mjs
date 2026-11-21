@@ -4,12 +4,15 @@ import { createRequire } from "node:module"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { cp, mkdir, mkdtemp, readFile, writeFile, stat } from "node:fs/promises"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
+import { pathToFileURL } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 const run = promisify(execFile)
 const root = process.env.MAKO_RUNTIME_ROOT ?? "/opt/mako-control"
 const require = createRequire(join(root, "package.json"))
 const cli = require.resolve("@mako/control-runtime/cli")
+// Recordings are read back as Mako reads them, with Mediabunny: the runtime image carries no FFmpeg.
+const { readMp4 } = await import(pathToFileURL(join(dirname(cli), "mp4.js")).href)
 const directory = await mkdtemp("/tmp/mako-cli-native-")
 const output = join(directory, "job")
 const config = join(directory, "job.json")
@@ -182,20 +185,9 @@ try {
     "--wait",
   ])
   assert.equal(complete.status, "finished", JSON.stringify(complete))
-  const media = JSON.parse(
-    (
-      await run("ffprobe", [
-        "-v",
-        "error",
-        "-show_format",
-        "-show_streams",
-        "-of",
-        "json",
-        complete.video,
-      ])
-    ).stdout
-  )
-  assert.ok(Number(media.format.duration) > 0)
+  const video = await readMp4(complete.video)
+  assert.ok((video?.duration ?? 0) > 0)
+  const media = { codec: video.codec, width: video.width, height: video.height, duration: video.duration, packets: video.packets.length }
   if (process.env.MAKO_RUNTIME_EVIDENCE) {
     const evidence = process.env.MAKO_RUNTIME_EVIDENCE
     await mkdir(evidence, { recursive: true })
@@ -235,9 +227,9 @@ try {
       jpeg: jpeg.mimeType,
       recording: {
         status: complete.status,
-        width: media.streams[0].width,
-        height: media.streams[0].height,
-        duration: media.format.duration,
+        width: media.width,
+        height: media.height,
+        duration: media.duration,
       },
       concurrentPrograms: results,
       cleanup: launcher,

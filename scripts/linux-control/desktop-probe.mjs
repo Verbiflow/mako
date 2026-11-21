@@ -69,6 +69,14 @@ async function until(fn, ms = 15_000) {
     await delay(50)
   }
 }
+/**
+ * Waits until the wall clock's minute has `seconds` left: the panel's clock repaints when the minute turns (it was
+ * the one frame in a still screen's last seconds, on 2026-11-21), and a stillness measure must not straddle that.
+ */
+const clockHolds = async (seconds) => {
+  const left = 60 - (Date.now() / 1000) % 60
+  if (left < seconds + 1) await delay((left + 0.5) * 1000)
+}
 const cpuSeconds = async (pid) => {
   const fields = (await readFile(`/proc/${pid}/stat`, "utf8")).split(") ")[1].split(" ")
   return (Number(fields[11]) + Number(fields[12])) / 100
@@ -233,32 +241,45 @@ try {
     // ever. Its cursor now holds still at rest, and the embedded daemon (--no-overlay) shows none.
     // Closing the terminals above animates for a moment: the measure starts once that's over.
     await delay(2000)
-    report.numbers.agentCursorIdle = await step("live video: GNOME stays still after foreground input", async () => {
-      // Its units kept as an MP4 beside the evidence, so what changed can be seen frame by frame.
-      const path = join(evidence, "gnome-after-input.mp4")
-      await rm(path, { force: true })
-      const mp4 = new Mp4Writer(path, 1000 / 30)
-      const opened = performance.now()
-      let writing = Promise.resolve()
-      const times = []
-      const still = new VideoHelper(executable, source, { fps: 30 }, {
-        unit: (packet) => {
-          const at = performance.now() - opened
-          times.push(at)
-          writing = writing.then(() => mp4.add(packet, at))
-        },
-        ended: () => {},
-      })
-      await delay(6000)
-      still.close()
-      await still.exited
-      await writing
-      await mp4.finish()
-      // The windows the terminals left repaint for a moment; then nothing moves. The floating cursor redrew at 20 to
-      // 26 fps for as long as it was up.
-      const settled = times.filter((at) => at > 3000).length
-      assert.equal(settled, 0, `the screen kept changing: ${times.length} frames in 6 s, ${settled} in its last 3 s (${path})`)
-      return { frames: times.length, lastThreeSeconds: settled, seconds: 6 }
+    // MAKO_STILL_LOOPS=N repeats it, a foreground click before each, to hold a stray repaint to a count.
+    const rounds = 1 + Number(process.env.MAKO_STILL_LOOPS ?? 0)
+    report.numbers.agentCursorIdle = await step(`live video: GNOME stays still after foreground input${rounds > 1 ? `, ${rounds} times` : ""}`, async () => {
+      const seen = []
+      for (let round = 0; round < rounds; round++) {
+        if (round > 0) {
+          await program(`await control.native('bring_to_front',{pid:${fixture.pid},window_id:${window.window_id},foreground:true});return await control.native('click',{pid:${fixture.pid},window_id:${window.window_id},x:${Math.round(window.bounds.width / 2)},y:${window.bounds.height - 16},delivery_mode:'foreground',foreground:true})`).catch(() => undefined)
+          await cli(["observe", "--target-file", targetFile]).catch(() => undefined)
+          await delay(1500)
+        }
+        await clockHolds(7)
+        // Its units kept as an MP4 beside the evidence, so what changed can be seen frame by frame.
+        const path = join(evidence, `gnome-after-input${round ? `-${round}` : ""}.mp4`)
+        await rm(path, { force: true })
+        const mp4 = new Mp4Writer(path, 1000 / 30)
+        const opened = performance.now()
+        let writing = Promise.resolve()
+        const times = []
+        const still = new VideoHelper(executable, source, { fps: 30 }, {
+          unit: (packet) => {
+            const at = performance.now() - opened
+            times.push(at)
+            writing = writing.then(() => mp4.add(packet, at))
+          },
+          ended: () => {},
+        })
+        await delay(6000)
+        still.close()
+        await still.exited
+        await writing
+        await mp4.finish()
+        // The windows the terminals left, or the click's own feedback, repaint for a moment; then nothing moves. The
+        // floating cursor redrew at 20 to 26 fps for as long as it was up.
+        const settled = times.filter((at) => at > 3000).length
+        assert.equal(settled, 0, `the screen kept changing in round ${round}: ${times.length} frames in 6 s, ${settled} in its last 3 s (${path})`)
+        seen.push(times.length)
+        if (round > 0) await rm(path, { force: true })
+      }
+      return { rounds, frames: seen, lastThreeSeconds: 0, seconds: 6 }
     }, { optional: true })
   }
   await step("live video: first frame, idle cost, frames under activity, its units as MP4", async () => {
@@ -283,6 +304,7 @@ try {
     const first = Math.round(units[0].at - opened)
     const pid = Number((await run("pgrep", ["-n", "-x", "mako-video"])).stdout.trim())
     await delay(1000)
+    await clockHolds(6)
     const idleFrom = units.length
     const idleCpu = await cpuSeconds(pid)
     await delay(5000)
@@ -324,8 +346,9 @@ try {
       const before = await answers()
       const token = (await readFile(source.restore, "utf8").catch(() => "")).length > 0
       // The helper itself, so its summary says what PipeWire sent and what it skipped as undamaged.
+      await clockHolds(10)
       const opened = performance.now()
-      const child = spawn(executable, ["portal", "--types", source.types, "--restore", source.restore, ...(source.still ? ["--still", "screenshot"] : []), "--fps", "30"], { stdio: ["pipe", "pipe", "pipe"] })
+      const child = spawn(executable, ["portal", "--types", source.types, "--restore", source.restore, ...(source.still ? ["--still", "screenshot"] : []), "--cursor", "embedded", "--fps", "30"], { stdio: ["pipe", "pipe", "pipe"] })
       let first
       let stderr = ""
       child.stdout.once("data", () => (first = performance.now()))
@@ -336,7 +359,21 @@ try {
       child.stdin.end()
       await new Promise((done) => child.once("close", done))
       const summary = JSON.parse(stderr.trim().split("\n").at(-1))
-      return { tokenKept: token, firstFrameMs: Math.round(first - opened), stillScreenshot: stderr.includes("Screenshot portal"), dialogsAnsweredBefore: before, dialogsAnsweredAfter: await answers(), idleSixSeconds: summary }
+      return { tokenKept: token, firstFrameMs: Math.round(first - opened), stillScreenshot: stderr.includes("Screenshot portal"), cursor: /cursor (\w+)/.exec(stderr)?.[1] ?? null, dialogsAnsweredBefore: before, dialogsAnsweredAfter: await answers(), idleSixSeconds: summary }
+    }, { optional: true })
+
+  if (source?.kind === "portal" && source.still)
+    await step("live video: a still screen's first frame from the Screenshot portal", async () => {
+      // Taken whatever the stream sent, to prove the path a lost or withheld first frame falls back on.
+      const child = spawn(executable, ["portal", "--types", source.types, "--restore", source.restore, "--still", "screenshot-always", "--fps", "30"], { stdio: ["pipe", "pipe", "pipe"] })
+      let stderr = ""
+      child.stderr.on("data", (bytes) => (stderr += bytes))
+      await until(() => /Screenshot portal/.test(stderr), 30_000).catch(() => undefined)
+      child.stdin.end()
+      await new Promise((done) => child.once("close", done))
+      const took = /first frame from the Screenshot portal in (\d+) ms/.exec(stderr)
+      assert.ok(took, stderr.trim().split("\n").slice(-3).join("; "))
+      return { screenshotMs: Number(took[1]) }
     }, { optional: true })
 
   const recording = await step("record: start a recording of the GTK window", async () => {
@@ -376,6 +413,69 @@ try {
     if (kind === "x11" && clicked === true) assert.ok(pointers > 0, "the click is drawn into the video")
     return { codec: video.codec, width: video.width, height: video.height, frames: video.packets.length, seconds: video.duration, bytes: (await stat(done.video)).size, pointerClick: clicked, journalTurns: turns, pointersDrawn: pointers, id: recording.id }
   })
+  // MAKO_FIRST_FRAME_LOOPS=N: on a still screen, N captures as they were (no fallback) and N with the Screenshot
+  // portal's first frame, counting those that got no picture. It measures the lost first frame the fallback is for.
+  const starts = Number(process.env.MAKO_FIRST_FRAME_LOOPS ?? 0)
+  if (starts > 0 && source?.kind === "portal")
+    await step(`live video: first frame on a still screen, ${starts} captures each way`, async () => {
+      if (kind === "gnome") await run("gdbus", ["call", "--session", "--dest", "org.cua.WinRects", "--object-path", "/org/cua/WinRects", "--method", "org.cua.WinRects.HideCursor"]).catch(() => undefined)
+      await delay(3000)
+      const capture = (extra) => new Promise((done) => {
+        const child = spawn(executable, ["portal", "--types", source.types, "--restore", source.restore, "--fps", "30", ...extra], { stdio: ["pipe", "pipe", "pipe"] })
+        let stderr = ""
+        child.stdout.resume()
+        child.stderr.on("data", (bytes) => (stderr += bytes))
+        setTimeout(() => child.stdin.end(), 1500)
+        const kill = setTimeout(() => child.kill("SIGKILL"), 8000)
+        child.once("close", () => {
+          clearTimeout(kill)
+          const last = stderr.trim().split("\n").at(-1) ?? ""
+          done({ frames: last.startsWith("{") ? JSON.parse(last).frames : -1, screenshot: /Screenshot portal in/.test(stderr) })
+        })
+      })
+      const count = async (extra) => {
+        const result = { none: 0, screenshots: 0, failed: 0 }
+        for (let i = 0; i < starts; i++) {
+          const one = await capture(extra)
+          if (one.frames === 0) result.none++
+          if (one.frames < 0) result.failed++
+          if (one.screenshot) result.screenshots++
+        }
+        return result
+      }
+      const asItWas = await count([])
+      const withFallback = source.still ? await count(["--still", "screenshot"]) : null
+      // What the host asks for must always bring a picture: the fallback where it uses one, the stream alone elsewhere.
+      const used = withFallback ?? asItWas
+      assert.equal(used.none + used.failed, 0, JSON.stringify({ asItWas, withFallback }))
+      return { captures: starts, asItWas, withFallback }
+    }, { optional: true })
+
+  // MAKO_RECORD_LOOPS=N: the same recording N more times, each with a value change and a foreground click, to hold
+  // an intermittent failure to a count. Every failure keeps the receipt's error, which carries the helper's own words.
+  const loops = Number(process.env.MAKO_RECORD_LOOPS ?? 0)
+  if (loops > 0)
+    await step(`record: ${loops} recordings in a row`, async () => {
+      const failures = []
+      const frames = []
+      for (let i = 0; i < loops; i++) {
+        try {
+          const receipt = await cli(["record", "start", "--target-file", targetFile, "--directory", join(work, "recordings"), "--fps", "15"])
+          await writeFile(join(work, "loop.json"), JSON.stringify(receipt))
+          await program(`const w=control.window(${JSON.stringify(target)});await w.locator({role:'TextArea',name:'Exact text'}).setValue('loop ${i}');return 1`)
+          await program(`await control.native('bring_to_front',{pid:${fixture.pid},window_id:${window.window_id},foreground:true});return await control.native('click',{pid:${fixture.pid},window_id:${window.window_id},x:${Math.round(window.bounds.width / 2)},y:${window.bounds.height - 16},delivery_mode:'foreground',foreground:true})`).catch(() => undefined)
+          await cli(["observe", "--target-file", targetFile]).catch(() => undefined)
+          const done = await cli(["record", "stop", "--input", join(work, "loop.json"), "--wait"])
+          const video = done.status === "finished" ? await readMp4(done.video) : undefined
+          if (!video?.packets.length) throw new Error(JSON.stringify(done))
+          frames.push(video.packets.length)
+        } catch (error) {
+          failures.push({ run: i, error: String(error.message).slice(0, 700) })
+        }
+      }
+      assert.equal(failures.length, 0, JSON.stringify(failures))
+      return { recordings: loops, failures: 0, frames }
+    }, { optional: true })
 } finally {
   await writeFile(join(evidence, `desktop-${kind}.json`), JSON.stringify(report, null, 2))
   helper?.close()

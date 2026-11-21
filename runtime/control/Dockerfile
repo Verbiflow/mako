@@ -33,9 +33,10 @@ FROM base AS browser-os
 RUN apt-get update && apt-get install -y --no-install-recommends chromium \
     && rm -rf /var/lib/apt/lists/*
 
-# The shared driver records a native window through an FFmpeg on PATH on Linux; Mako draws its pointer with it too.
+# The shared driver's libraries and the job's private desktop. No FFmpeg: the video helper above records a native
+# window and draws its pointer, and the driver's Linux build has no FFmpeg path.
 FROM base AS native-os
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     libxkbcommon0 libx11-6 libxi6 libxtst6 libxext6 libssl3 libgtk-3-0 \
     dbus-x11 xvfb openbox xauth at-spi2-core \
     && rm -rf /var/lib/apt/lists/*

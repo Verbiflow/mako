@@ -35,7 +35,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends gnome-shell xdg
 
 # KDE Plasma 5.27's KWin, as Kubuntu 24.04 ships it, headless (its virtual backend), with its portal backend.
 FROM desktop AS kde
-RUN apt-get update && apt-get install -y --no-install-recommends kwin-wayland xdg-desktop-portal-kde gir1.2-atspi-2.0 \
+RUN apt-get update && apt-get install -y --no-install-recommends kwin-wayland kwin-common xdg-desktop-portal-kde gir1.2-atspi-2.0 \
       qtwayland5 libgl1-mesa-dri libcap2-bin \
     && setcap -r /usr/bin/kwin_wayland \
     && rm -rf /var/lib/apt/lists/*
@@ -44,7 +44,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends kwin-wayland xd
 FROM debian:trixie AS kde6
 ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      kwin-wayland xwayland xdg-desktop-portal xdg-desktop-portal-kde pipewire wireplumber dbus dbus-x11 at-spi2-core \
+      kwin-wayland kwin-common xwayland xdg-desktop-portal xdg-desktop-portal-kde pipewire wireplumber dbus dbus-x11 at-spi2-core \
       python3-gi gir1.2-gtk-3.0 gir1.2-atspi-2.0 foot xterm fonts-dejavu-core ca-certificates procps libcap2-bin \
       gcc libc6-dev pkg-config libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcomposite-dev libopenh264-dev libyuv-dev \
       libturbojpeg0-dev libglib2.0-dev libgdk-pixbuf-2.0-dev libpipewire-0.3-dev libxkbcommon0 libxi6 libxtst6 libgl1-mesa-dri \

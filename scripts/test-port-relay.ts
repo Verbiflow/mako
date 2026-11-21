@@ -115,8 +115,8 @@ async function signedFilesRelay() {
   const root = await realpath(await mkdtemp(join(tmpdir(), "mako-port-relay-")))
   const renditions = new MediaRenditions({
     folder: join(root, "renditions"),
-    ffmpeg: () => {
-      throw new Error("no ffmpeg here")
+    helper: () => {
+      throw new Error("no video helper here")
     },
   })
   const relay = new PortRelay({ allowed: async () => new Set(), signedFiles: (request) => readSignedFile(request, renditions) })

@@ -80,7 +80,7 @@ export function InlineMedia({ hostRef, path, name, format, file, error, tile, si
               className="block size-full object-cover"
             />
           ) : format === "video" && url ? (
-            // No poster where the host has no FFmpeg to take one: the video's own frame half a second in, as a poster
+            // No poster where the host has no video helper to take one: the video's own frame half a second in, as a poster
             // would be, decoded here once the tile is near.
             <video
               src={`${url}#t=0.5`}
