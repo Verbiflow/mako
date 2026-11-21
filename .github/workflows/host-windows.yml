@@ -13,6 +13,9 @@ on:
       - packages/host/src/harnesses/discovery-process.ts
       - packages/host/src/harnesses/provider-process.ts
       - packages/host/src/git/git-helper.ts
+      - packages/host/src/threads/activity-engine.ts
+      - packages/host/src/threads/catalog.ts
+      - packages/host/src/workspaces/watch-backend.ts
       - packages/host/src/conversations/agent-runs.ts
       - packages/host/src/workspaces/app-probe.ts
       - packages/host/src/workspaces/chat-projects.ts
@@ -38,6 +41,9 @@ on:
       - packages/git/src/process-runner.ts
       - scripts/check-host-children.mjs
       - scripts/windows-host/**
+      - scripts/lib/host-processes.mjs
+      - scripts/test-idle-helpers.mjs
+      - scripts/measure-idle-processes.mjs
       - scripts/test-windows-launch.ts
       - scripts/test-windows-pipes.ts
       - electron/secret-key-link.ts
@@ -97,6 +103,12 @@ jobs:
       - name: The host, its clients, a conversation and a terminal
         if: success() || failure()
         run: node scripts/windows-host/prove.mjs --evidence "${{ runner.temp }}/evidence"
+      - name: An idle host with no window keeps no helper process
+        if: success() || failure()
+        run: node scripts/test-idle-helpers.mjs
+      - name: What the host keeps running and what each process holds, idle, with a window, and after a turn
+        if: success() || failure()
+        run: node scripts/measure-idle-processes.mjs --json "${{ runner.temp }}/evidence/idle-processes.json"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:

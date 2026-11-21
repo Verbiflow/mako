@@ -3,6 +3,7 @@ import { mock } from "node:test"
 import { setTimeout as sleep } from "node:timers/promises"
 import { Foreground } from "@mako/host/base/foreground"
 import { HostJobs } from "@mako/host/base/host-jobs"
+import { HostStopping, hostStopping } from "@mako/host/base/host-stopping"
 
 const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === "Timeout").length
 
@@ -179,6 +180,30 @@ const timers = () => process.getActiveResourcesInfo().filter((kind) => kind === 
   machine.started()
   await sleep(1)
   assert.equal(idle, true, "A machine's routine work goes on once its first harness has started")
+}
+
+// A demand set from a turn of the loop that is no host's (a window's connection) still starts the host's work: the job
+// it resumes and the demand's listeners run as the host (`within`), so what they read of the machine goes through the
+// host's probes and not a process spawned from its thread.
+{
+  const stopping = new HostStopping()
+  const jobs = new HostJobs()
+  jobs.within((work) => stopping.run(work))
+  const wanted = jobs.demand("a window is open")
+  const ran: (HostStopping | undefined)[] = []
+  jobs.every("read the machine", 10, () => { ran.push(hostStopping()) }, { needs: [wanted], firstAfterMs: 0 })
+  const heard: (HostStopping | undefined)[] = []
+  wanted.onChange(() => heard.push(hostStopping()))
+  assert.equal(hostStopping(), undefined, "this turn of the loop is no host's")
+  wanted.set(true)
+  const hung = performance.now() + 10_000
+  while (ran.length < 2) {
+    assert.ok(performance.now() < hung, "the job the demand resumed runs")
+    await sleep(5)
+  }
+  jobs.stop()
+  assert.deepEqual(heard, [stopping], "the demand's listener hears it as the host")
+  assert.ok(ran.every((host) => host === stopping), "and every run of the job it resumed is the host's")
 }
 
 console.log("Host jobs: named, unreferenced, repeating; an overlapping run is skipped, a failure is counted and the job goes on, a name is used once, nothing runs after stop or cancel, the first run can come sooner, a job paused for want of a demand holds no timer until one is on, and a job due while a start holds the foreground waits for it")

@@ -86,9 +86,11 @@ export interface ThreadsDeps {
   jobs: HostJobs
   /** On while any client is subscribed to events; other hosts' Thread changes are followed only for subscribers. */
   subscribed: JobDemand
+  /** On while agents work here: with `subscribed`, who reads what the harnesses' processes do (`ThreadCatalogDeps.activityNeeds`). */
+  atWork?: JobDemand
 }
 
-export function openThreads({ environment, readOnly, ledger, harnesses, readFile, emit, jobs, subscribed }: ThreadsDeps): Threads {
+export function openThreads({ environment, readOnly, ledger, harnesses, readFile, emit, jobs, subscribed, atWork }: ThreadsDeps): Threads {
   const { dataRoot, appData, userRoot } = environment
   const catalogCode = loadedCatalogCode()
   // How this build names itself in a store whose format it raises, so an older build can say which Mako changed it.
@@ -145,6 +147,7 @@ export function openThreads({ environment, readOnly, ledger, harnesses, readFile
       jobs,
       readOnly,
       writer,
+      activityNeeds: atWork ? [subscribed, atWork] : [subscribed],
       emit,
     }),
     archives,
@@ -186,11 +189,12 @@ export interface ThreadMethodsDeps {
 /** Cross-harness threads: every agent's sessions on this machine, and what becomes of them. */
 export function declareThreadMethods(methods: MethodTable, { threads, live, native, nativeStops, homes, emit, archivedThread }: ThreadMethodsDeps): ThreadLifecycle {
   const { catalog, store, archives } = threads
-  methods.handle("mako:threads", (filter?: { cwd?: string; harness?: string }) => ({
-    ready: catalog.ready(),
-    threads: catalog.rail(filter),
-    activity: catalog.activity(),
-  }))
+  methods.handle("mako:threads", async (filter?: { cwd?: string; harness?: string }) => {
+    // A caller that hears no events (a command line) is told what the harnesses' processes do now; a window's list
+    // doesn't wait, and hears it as events.
+    const activity = await catalog.activityNow("listing")
+    return { ready: catalog.ready(), threads: catalog.rail(filter), activity }
+  })
   methods.handle("mako:thread-open", (path: string) => catalog.open(path))
   methods.handle("mako:thread-file", (threadPath: string, filePath: string, purpose?: FileReadPurpose) =>
     catalog.readFile(threadPath, filePath, homes ?? undefined, purpose)

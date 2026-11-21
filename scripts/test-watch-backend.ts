@@ -157,6 +157,54 @@ process.on("message",request=>{
 }
 
 /**
+ * The checkpoints' history child stays between turns only while a turn may come soon (a window subscribed, agents at
+ * work): it then waits its long while, and once nobody may ask soon it goes after the short one, as a child started
+ * then does. It was 25 MB held a quarter of an hour after a turn on a host nobody was at.
+ */
+async function historyKeptBetweenTurns(): Promise<void> {
+  if (process.platform === "win32") return
+  const platform = Object.getOwnPropertyDescriptor(process, "platform")
+  assert.ok(platform)
+  const asMac = <T>(operation: () => T): T => {
+    Object.defineProperty(process, "platform", { ...platform, value: "darwin" })
+    try { return operation() } finally { Object.defineProperty(process, "platform", platform) }
+  }
+  const gone = (pid: number) => {
+    try { process.kill(pid, 0); return false }
+    catch (error) { if (error instanceof Error && "code" in error && error.code === "ESRCH") return true; throw error }
+  }
+  const folder = caseFolder("history-kept"), script = join(folder, "reader.mjs")
+  writeFileSync(script, `setInterval(()=>{},1000);
+process.on("message",request=>{ if(request.t==="mark") process.send({t:"marked",id:request.id,mark:{id:String(process.pid),at:"1"}}) });\n`)
+  const listeners = new Set<(on: boolean) => void>()
+  const near = { on: true, onChange: (listener: (on: boolean) => void) => { listeners.add(listener); return () => listeners.delete(listener) } }
+  const turn = (on: boolean) => { near.on = on; for (const listener of listeners) listener(on) }
+  const scope = new HostStopping()
+  try {
+    await scope.run(async () => {
+      const history = childHistory(script, new WatchReadings(), undefined, 150, { kept: { idleMs: 60_000, while: near }, role: "checkpoints" })
+      const first = Number((await asMac(() => history.mark())).id)
+      await wait(600)
+      assert.equal(gone(first), false, "while a turn may come soon the child waits its long while")
+      assert.equal(Number((await asMac(() => history.mark())).id), first, "and the next turn's mark is the same child's")
+      turn(false)
+      await until("the child goes after the short wait once no turn may come soon", () => gone(first), 5_000)
+      const second = Number((await asMac(() => history.mark())).id)
+      assert.notEqual(second, first, "a mark then starts one")
+      await until("which goes after the short wait too", () => gone(second), 5_000)
+      turn(true)
+      const third = Number((await asMac(() => history.mark())).id)
+      await wait(600)
+      assert.equal(gone(third), false, "and one started once a turn may come again is kept")
+      history.recover?.()
+      await until("the last child is ended", () => gone(third), 5_000)
+    })
+  } finally {
+    await scope.stop()
+  }
+}
+
+/**
  * A turn's checkpoint waits on a mark for half a second, so a mark never waits on the look at fseventsd: on a busy Mac
  * that look's `ps` took seconds and every send captured afresh. A restart the look finds only after the mark is dated
  * when it was found, so a read from that mark still reports its roots lost.
@@ -438,7 +486,7 @@ async function deadRootBeside(): Promise<void> {
 
 // Each case on its own folders and children, so CI can run them on separate shards (`CASES`, scripts/lib/cases.ts).
 try {
-  await runCases([historyReaderTermination, markBesideDaemonLook, sharedChildAndCrash, lateCanary, silentCanary, degradedFseventsd, deadRootBeside])
+  await runCases([historyReaderTermination, historyKeptBetweenTurns, markBesideDaemonLook, sharedChildAndCrash, lateCanary, silentCanary, degradedFseventsd, deadRootBeside])
   // Only something else holding this process open lets an unref'd timer fire.
   setTimeout(() => {
     console.error("the watcher child still holds the process open with no watch left")

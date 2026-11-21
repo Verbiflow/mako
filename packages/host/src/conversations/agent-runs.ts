@@ -84,7 +84,7 @@ export const PROCESS_READS: ProcessReads = {
 
 export interface AgentRunsDeps {
   store(): ThreadStore | undefined
-  catalog: Pick<ThreadCatalog, "nativePath" | "ref" | "page" | "activity" | "subscribe" | "announce"> & Partial<Pick<ThreadCatalog, "readRef">>
+  catalog: Pick<ThreadCatalog, "nativePath" | "ref" | "page" | "activity" | "subscribe" | "announce"> & Partial<Pick<ThreadCatalog, "readRef" | "needActivityWhile">>
   jobs: HostJobs
   /** Whether `harness` has a CLI a conversation's shell can run, so a Session of it can be one started there. */
   runs(harness: string): boolean
@@ -167,6 +167,8 @@ export class AgentRuns {
   constructor(deps: AgentRunsDeps) {
     this.deps = deps
     this.demand = deps.jobs.demand("followed agent runs on this device")
+    // A run's row says what its harness's process does (working, waiting in its own terminal): looked at while any is followed.
+    deps.catalog.needActivityWhile?.(this.demand)
     this.cancelJob = deps.jobs.every("follow agent runs", LIVENESS_MS, () => this.check(), { firstAfterMs: 0, needs: [this.demand] })
     this.unsubscribe = deps.catalog.subscribe((event) => this.catalogEvent(event))
     this.sync()
