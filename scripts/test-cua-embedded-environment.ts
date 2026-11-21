@@ -7,7 +7,7 @@ import { chmod, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promi
 import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
 import { z } from "zod"
-import { CuaEmbedded, driverEnvironment } from "../packages/host/src/control/cua-embedded.js"
+import { CuaEmbedded, driverEnvironment, driverProves } from "../packages/host/src/control/cua-embedded.js"
 
 const Environment = z.record(z.string(), z.string())
 const inherited = {
@@ -29,6 +29,14 @@ assert.deepEqual(passed, {
   CUA_DRIVER_EMBEDDED: "1",
   CUA_DRIVER_PERMISSION_MODE: "standard",
 })
+
+// The proof handshake is asked only of a driver release that has it: an older installed driver starts as before.
+assert.equal(driverProves("cua-driver 0.28.2+mako.31\n"), true)
+assert.equal(driverProves("cua-driver 0.28.2+mako.100"), true)
+assert.equal(driverProves("cua-driver 0.28.2+mako.29"), false)
+assert.equal(driverProves("cua-driver 0.28.2+mako.24"), false)
+assert.equal(driverProves("cua-driver 0.28.2"), false, "upstream's own build has no handshake")
+assert.equal(driverProves(""), false)
 
 // Through the host's own start, on a Mac or Linux (Windows finds programs by another lookup, and its check runs the
 // real driver): a stand-in `cua-driver` on PATH listens on the socket it is given and records its environment.
@@ -69,6 +77,8 @@ process.on("SIGTERM", () => process.exit(0))
       assert.equal(environment.CUA_DRIVER_PERMISSION_MODE, "standard", "the host's own setting is what the daemon has")
       assert.equal(environment.CUA_DRIVER_EMBEDDED, "1")
       assert.equal(environment.CUA_DRIVER_RS_TELEMETRY_ENABLED, "0")
+      // And no key: the handshake is Windows' alone, so a Mac's or Linux machine's driver is never asked to prove itself.
+      assert.equal(environment.CUA_DRIVER_EMBEDDED_HOST_KEY, undefined)
       const hosts = new Set(["CUA_DRIVER_EMBEDDED", "CUA_DRIVER_HOST_BUNDLE_ID", "CUA_DRIVER_PERMISSION_MODE", "CUA_DRIVER_RS_TELEMETRY_ENABLED", "CUA_DRIVER_REQUIRE_FOCUSED_TARGET", "CUA_DRIVER_RS_ENABLE_WAYLAND"])
       assert.deepEqual(driver.filter((name) => !hosts.has(name)), [], "only what the host sets itself")
     }

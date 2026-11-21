@@ -119,19 +119,51 @@ Windows `run_serve`); the two changes Mako makes are in
   a person's `CUA_DRIVER_RS_MCP_HTTP_PORT` or
   `CUA_DRIVER_ENVELOPE_HTTP_PORT` opens no loopback listener beside the pipe
   and no inherited policy or permission setting applies.
+- **The host knows its daemon.** On Windows, where the endpoint is a pipe
+  whose name anyone can take, the host starts a driver of release `+mako.31`
+  or later with a 256-bit key in its environment
+  (`CUA_DRIVER_EMBEDDED_HOST_KEY`, `cua-embedded.ts`). It reads the release
+  from the executable it found itself (`--version`), never from the pipe; an
+  older driver is started without the key, as before, and the host's log says
+  so. A Mac's or Linux machine's driver, on a socket in a folder only this
+  user can open, is never asked. On every connection it makes
+  (`packages/control-runtime/src/driver-daemon.ts`, `connect`) it first sends
+  a random challenge (`prove`) and reads back HMAC-SHA256, under the key, of
+  the challenge, a line feed and the pipe's name (`embedded_host_proof` in
+  `cua-driver-core/src/lib.rs` and the `prove` request in `serve.rs`, both in
+  `0008-windows-daemon-proof.patch`), compared in constant time, before it
+  writes anything of its own. A process holding the pipe's name is sent a
+  challenge and nothing else, and only a proven answer counts as the daemon
+  having started. An answer is good for the one pipe it was asked on.
+- **The key stays with the daemon.** The driver reads the key and the host's
+  pid into memory first thing in `main` and removes both variables from its
+  own environment (`take_embedded_host_secrets`), before it has a thread or a
+  child. Nothing it starts inherits them: not `cmd` or PowerShell, not
+  `mako-video.exe`, not an app `launch_app` opens or that app's own
+  processes. A daemon that exits is replaced on a new pipe name with a new
+  key (`replacement` in `cua-embedded.ts`), so the old name and key open
+  nothing afterwards; the broker reads the new ones when it reconnects.
+- **Older drivers.** A driver before `+mako.31` is started without the proof
+  because installed apps carry one until they update. Once every supported
+  Windows build ships `+mako.31` or later, the host should refuse to start an
+  older driver on Windows (the note is at `PROVING_RELEASE` in
+  `cua-embedded.ts`).
 - **What this does not cover.** The boundary is the user account at the
-  host's integrity level: a process of the same user at that level can write
-  the host's memory and act as it. And the host does not yet have the daemon
-  prove itself: in the moment between a squatting process answering and the
-  daemon's exit being seen, a request already on its way could reach the
-  squatter, which would learn what was asked. A keyed challenge on every
-  connection closes that and needs the daemon's side (the next driver
-  release).
+  host's integrity level: a process of the same user at that level can read
+  the daemon's or the host's memory, key included, and so act as either. It
+  gains nothing over reading the screen and sending input itself, which that
+  user can do.
 
 `scripts/test-control-driver-windows.ts` checks, against the running daemon:
 the host's process is answered, another process of the same user is closed
-on unanswered, a low-integrity one cannot open the pipe, and no TCP port
-listens with the two port variables set in the host's environment.
+on unanswered, a low-integrity one cannot open the pipe, the daemon proves
+itself while a wrong key, an impostor's pipe or the daemon's own proof replayed
+on another pipe is refused with only challenges sent, the daemon's environment
+and those of a program `launch_app` starts and of the video helper hold
+neither the key nor the host's pid, a daemon that is killed comes back on
+another pipe name with another key while a process answering on the old name
+with the old key is sent nothing, and no TCP port listens with the two port
+variables set in the host's environment.
 `scripts/test-cua-embedded-environment.ts` checks the environment a stand-in
 driver is started with on a Mac and Linux.
 
@@ -141,7 +173,10 @@ path instead when the host's trusted lookup finds a program of that name, and
 answers the call itself otherwise (`launchable` in
 `packages/control-runtime/src/driver-broker.ts`). The driver's own fallback, a
 ShellExecute search of the current folder and `PATH`, is never reached with a
-bare name.
+bare name, and from `0008` the driver itself launches only an installed app,
+an absolute path, a `shell:` item or a URL: a bare name, a relative path
+(`sub\tool.exe`, `..\x.exe`) and a drive-relative one (`C:tool.exe`) are
+refused, since each would be read against the current folder.
 
 ## Elevated windows (UIPI)
 

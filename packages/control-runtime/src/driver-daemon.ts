@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto"
+import { createHmac, randomBytes, randomUUID, timingSafeEqual } from "node:crypto"
 import { createConnection, type Socket } from "node:net"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
@@ -30,7 +30,7 @@ export const DaemonReplySchema = z.lazy(() => z.looseObject({
 export type DaemonReply = z.infer<typeof DaemonReplySchema>
 
 export interface DaemonRequest {
-  method: "call" | "list" | "metadata" | "session_begin"
+  method: "call" | "list" | "metadata" | "session_begin" | "prove"
   name?: string
   args?: JsonObject
   /** The transport lease the call belongs to. */
@@ -64,22 +64,24 @@ const REPLY_LIMIT = 64 * 1024 * 1024
 const unreachable = (error: NodeJS.ErrnoException) => ["ENOENT", "ECONNREFUSED", "ENOTSOCK"].includes(error.code ?? "")
 
 /**
- * What a caller knows of the daemon it means to reach. `gone` aborts when the daemon's process has exited:
- * connections to its endpoint are closed then, whoever answers on it, and a call in flight fails as the daemon having
- * stopped.
+ * What a caller knows of the daemon it means to reach. `key` is the secret its host started it with
+ * (`CUA_DRIVER_EMBEDDED_HOST_KEY`): every connection first has the far end prove it holds the key, so a process that
+ * took the daemon's pipe name is told nothing but a random challenge. The proof covers the endpoint's name with the
+ * challenge, and each daemon gets its own name and key, so neither is of use on another. `gone` aborts when the daemon's process has
+ * exited: connections to its endpoint are closed then, whoever answers on it.
  */
 export interface DaemonPeer {
+  key?: string
   gone?: AbortSignal
 }
 
-/** A connection to the daemon's socket, or the reason there is none. */
-function connect(socket: string, peer: DaemonPeer = {}): Promise<Socket> {
-  if (peer.gone?.aborted) return Promise.reject(new DaemonUnavailableError())
-  return new Promise((resolve, reject) => {
+const ProofSchema = z.looseObject({ ok: z.literal(true), result: z.looseObject({ proof: z.string() }) })
+
+/** A connection to the daemon's socket, proven where the caller has its key, or the reason there is none. */
+async function connect(socket: string, peer: DaemonPeer = {}): Promise<Socket> {
+  if (peer.gone?.aborted) throw new DaemonUnavailableError()
+  const connection = await new Promise<Socket>((resolve, reject) => {
     const connection = createConnection(socket)
-    const gone = () => connection.destroy()
-    peer.gone?.addEventListener("abort", gone, { once: true })
-    connection.once("close", () => peer.gone?.removeEventListener("abort", gone))
     const failed = (error: NodeJS.ErrnoException) =>
       reject(unreachable(error) ? new DaemonUnavailableError({ cause: error }) : new DaemonClosedError({ cause: error }))
     connection.once("error", failed)
@@ -88,6 +90,37 @@ function connect(socket: string, peer: DaemonPeer = {}): Promise<Socket> {
       resolve(connection)
     })
   })
+  const gone = () => connection.destroy()
+  peer.gone?.addEventListener("abort", gone, { once: true })
+  connection.once("close", () => peer.gone?.removeEventListener("abort", gone))
+  if (!peer.key) return connection
+  // Nothing of the caller's is written until the far end has answered the challenge with the key.
+  const challenge = randomBytes(32).toString("hex")
+  const timer = setTimeout(() => connection.destroy(), 4_000)
+  try {
+    connection.write(`${JSON.stringify({ method: "prove", args: { challenge } } satisfies DaemonRequest)}\n`)
+    const reply = ProofSchema.safeParse(JSON.parse((await readLine(connection, 64 * 1024)).toString("utf8")))
+    // Keyed over the challenge and this endpoint's name, so an answer is good for the one endpoint it was asked on.
+    const expected = createHmac("sha256", peer.key).update(`${challenge}\n${socket}`).digest()
+    const given = reply.success ? Buffer.from(reply.data.result.proof, "hex") : Buffer.alloc(0)
+    if (given.length !== expected.length || !timingSafeEqual(given, expected)) throw new Error("no proof")
+    return connection
+  } catch (error) {
+    connection.destroy()
+    throw new DaemonUnavailableError({ cause: new Error("What answers on the driver's endpoint is not the driver this host started", { cause: error }) })
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+/** Whether the daemon answers on `socket`, proving itself where a key is given: what its host waits for after starting it. */
+export async function daemonAnswers(socket: string, peer: DaemonPeer = {}): Promise<boolean> {
+  try {
+    ;(await connect(socket, peer)).destroy()
+    return true
+  } catch {
+    return false
+  }
 }
 
 /**

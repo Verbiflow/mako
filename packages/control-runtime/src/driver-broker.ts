@@ -89,8 +89,11 @@ export interface DriverBrokerOptions {
   log?: (message: string, fields: Record<string, string | number | boolean | undefined>) => void
 }
 
-/** The daemon a host started itself: its process's end. */
+/** The daemon a host started itself: the key every connection has it prove, and its process's end. */
 export interface DaemonOwned {
+  /** The endpoint that daemon listens on: its key is asked of that endpoint and no other. */
+  path?: string
+  key?: string
   /** Settles when the daemon's process has exited: its calls in flight fail then, whoever holds its endpoint. */
   exited?: Promise<unknown>
 }
@@ -297,15 +300,22 @@ export class DriverBroker {
 
   private async open(): Promise<Generation> {
     const started = performance.now()
-    // A daemon that just stopped is replaced on the same socket by its owner
-    // (`CuaEmbedded`), which may not have seen the exit yet: ask again briefly.
+    // A daemon that just stopped is replaced by its owner (`CuaEmbedded`), on Windows at a new pipe name with a new
+    // key; the owner may not have seen the exit yet: ask again briefly.
     const deadline = Date.now() + 5_000
     for (;;) {
       const socket = await this.options.socket()
       if (!socket) throw new DriverNotDispatchedError("Mako's computer-use driver isn't available on this Mac; nothing was dispatched.")
-      const { exited } = this.options.daemon?.() ?? {}
+      const owned = this.options.daemon?.() ?? {}
+      // The owner replaced its daemon between the two questions: that key is another endpoint's. Ask again.
+      if (owned.path !== undefined && owned.path !== socket) {
+        if (Date.now() > deadline || this.closed) throw new DaemonUnavailableError()
+        await delay(100)
+        continue
+      }
+      const { key, exited } = owned
       const gone = new AbortController()
-      const peer: DaemonPeer = { gone: gone.signal }
+      const peer: DaemonPeer = { ...(key && { key }), gone: gone.signal }
       const [description, sentinel] = await Promise.allSettled([describeDaemon(socket, peer), openDaemonLease(socket, leaseIdentity(), peer)])
       if (description.status === "fulfilled" && sentinel.status === "fulfilled") {
         if (this.closed) {
