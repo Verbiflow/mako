@@ -25,9 +25,10 @@ export type VideoHelperSource =
    * What the person shares through the ScreenCast portal (Wayland): a window, or a monitor where the portal shares no
    * windows. The portal asks once; `restore` is the file its restore token is kept in, so it doesn't ask again.
    * `still`: the compositor sends a frame only when something changes (wlroots'), so a still screen's first frame
-   * comes from the Screenshot portal.
+   * comes from the Screenshot portal. GNOME sends a first frame itself (60 of 60 still captures) and its Screenshot
+   * portal refuses an unattended request.
    */
-  | { kind: "portal"; types: "monitor" | "window"; restore: string; still?: boolean }
+  | { kind: "portal"; types: "monitor" | "window"; restore: string; still?: boolean; cursor?: "embedded" }
   | { kind: "frames" }
   /** A video's frames under the transparent pictures sent for their times (a recording's pointer); Mac only. */
   | { kind: "overlay"; video: string }
@@ -120,7 +121,7 @@ export class VideoHelper {
         : source.kind === "overlay"
           ? ["overlay", source.video]
           : source.kind === "portal"
-            ? ["portal", "--types", source.types, "--restore", source.restore, ...(source.still ? ["--still", "screenshot"] : [])]
+            ? ["portal", "--types", source.types, "--restore", source.restore, ...(source.still ? ["--still", "screenshot"] : []), ...(source.cursor ? ["--cursor", source.cursor] : [])]
             : [source.kind]),
       "--fps", String(options.fps),
       ...(options.bitrate ? ["--bitrate", String(Math.round(options.bitrate))] : []),
@@ -145,6 +146,11 @@ export class VideoHelper {
       this.#end(ended ?? (last ? `The video helper stopped: ${last}` : `The video helper exited (${code ?? signal})`))
       this.#exit()
     })
+  }
+
+  /** What the helper last said on stderr (its notes and its summary), for a failure's report. */
+  get said(): string {
+    return this.#tail.trim()
   }
 
   /** Whether a picture may be sent now: the last one is in the helper. */

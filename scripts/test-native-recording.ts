@@ -212,4 +212,29 @@ console.log("Native recording source rate: 5/60 fps backend ceilings, negotiated
   assert.ok(done.video?.endsWith("recording.mp4"))
   await manager.close()
 }
-console.log("Helper recording: a Linux desktop's and a job display's windows through mako-video, the driver journaling only")
+if (process.platform === "linux") {
+  // On Wayland the shared monitor is recorded with the screen's own pointer in the picture, and the driver is asked
+  // for nothing. (On a Mac the helper captures windows by id whatever desktop is named.)
+  process.env.XDG_STATE_HOME = join(directory, "state")
+  const manager = new NativeRecordings({ session: "wayland", compositor: "wlroots", xwayland: false })
+  const names: string[] = []
+  const driver: ComputerDriverClient = {
+    listTools: async () => tools,
+    onClose() {
+      throw new Error("Do not replace the host lifecycle listener")
+    },
+    async close() {},
+    async callTool(name) {
+      names.push(name)
+      return { content: [], structuredContent: {} }
+    },
+  }
+  const receipt = await manager.start(target, { directory, fps: 30, idle: "keep" }, inSession(driver, "portal"), tools, new AbortController().signal)
+  const started = readFileSync(process.env.FAKE_VIDEO_LOG!, "utf8").trim().split("\n").map((line): { args?: string[] } => JSON.parse(line)).findLast((entry) => entry.args)
+  assert.deepEqual(started?.args?.slice(0, 9), ["portal", "--types", "monitor", "--restore", join(directory, "state", "mako", "portal-monitor.token"), "--still", "screenshot", "--cursor", "embedded"])
+  await manager.get(target, receipt.id).stop()
+  assert.equal((await manager.get(target, receipt.id).settled()).status, "finished")
+  assert.deepEqual(names, [], "no journal, no driver video")
+  await manager.close()
+}
+console.log("Helper recording: a Linux desktop's and a job display's windows through mako-video, the driver journaling only on X11, the shared monitor with its pointer on Wayland")

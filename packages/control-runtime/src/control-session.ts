@@ -1672,7 +1672,7 @@ export function createControlSession(
             state: "preflight-required",
             scope: recordingDesktop.session === "x11" ? "exact-window" : "display",
             maxFps: HELPER_RECORDING_MAX_FPS,
-            cursor: "dispatched-pointer",
+            cursor: recordingDesktop.session === "x11" ? "dispatched-pointer" : "screen-pointer",
             requires: recordingDesktop.session === "x11" ? ["mako-video"] : ["mako-video with ScreenCast portal capture", "the person's consent to share the screen, asked once"],
             completion: "record().stop() then recording.status()",
           }

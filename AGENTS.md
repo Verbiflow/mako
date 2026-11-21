@@ -3139,9 +3139,10 @@ once and restored from `~/.local/state/mako/portal-monitor.token` (on wlroots,
 whose portal sends nothing until the screen changes, a still screen's first
 frame is the Screenshot portal's). Recordings on a Linux desktop are Mako's own
 too (`NativeRecordings.startHelper`): the same capture into the recording's
-MP4, the driver keeping only its action journal, and the pointer drawn in by
-the helper's `composite` mode, which decodes the recording with OpenH264. No
-Linux video goes through FFmpeg. The machine browser is never saved as a
+MP4. A window by its X id gets its pointer from the driver's action journal,
+drawn in by the helper's `composite` mode (OpenH264 decodes the recording); a
+shared monitor is recorded with the screen's own pointer in the picture. No
+Linux video goes through FFmpeg, in Mako or in the driver's Linux build. The machine browser is never saved as a
 desktop person's browser. `scripts/linux-control/run-desktop.sh` proves X11,
 Sway, GNOME and KWin 5 and 6 with no FFmpeg installed; its README holds the
 coverage per compositor.

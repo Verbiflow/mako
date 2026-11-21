@@ -3,11 +3,29 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.29`. +29 is +28 with `0005-windows-driver.patch` and the version
+`0.28.2+mako.30`. +30 is +29 with `0007-linux-no-ffmpeg.patch` and the
+version. +29 is +28 with `0005-windows-driver.patch` and the version
 (the patch was written beside 0006 as +27 and landed after it, so it is the
 later release despite its number). +28 is +26 with `0006-linux-desktop.patch`
 and the version. +26 is +25 with `0004-stable-wayland-seat-pointer.patch` and
 the version.
+
+### 0007: no FFmpeg in the Linux build
+
+Mako records on Linux with its video helper (`mako-video`: the window on X11,
+the monitor the person shares on Wayland) and draws the pointer there, asking
+the driver only for its action journal (`record_video: false`). The driver's own
+Linux recorders, which piped XComposite and GNOME Shell frames to an `ffmpeg`
+from `PATH`, are removed (`platform-linux/src/video_window.rs`,
+`video_wayland.rs`); `video_none.rs` refuses `record_video: true` and says to
+record through Mako. 0005 compiled `cua-driver-core`'s `video_ffmpeg` and
+`ffmpeg_install` out of the Windows build; this moves those conditions from
+"not Windows" to "macOS only", so the Linux build has the same stub and
+nothing in it can resolve `ffmpeg` or `ffprobe`. `install_ffmpeg` refuses on
+both, and the trajectory renderer says the build uses none. FFmpeg stays only
+in the Mac build's trajectory renderer and its installer tool, which Mako's
+embedded daemon never calls. `cargo test -p cua-driver-core -p platform-linux
+--lib` passes on Linux (644 and 454 tests).
 
 ### 0005: the Windows driver
 

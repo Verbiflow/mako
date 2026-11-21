@@ -19,13 +19,16 @@ export const HELPER_RECORDING_MAX_FPS = 30
 
 /**
  * A path as the driver reports it, spelled as Node spells it: on Windows the driver's canonical form is a verbatim
- * path (`\\?\C:\…`, `\\?\UNC\server\…`) for the same file that `realpath` names `C:\…`.
+ * path (`\\?\C:\…`) for the same file that `realpath` names `C:\…`. Only a drive's path is taken: a recording is
+ * written on this machine, so a verbatim network path (`\\?\UNC\server\…`) or device path is refused rather than
+ * turned into a share's name and opened.
  */
-function plainPath(path: string): string {
+export const driverPath = z.string().transform((path, context) => {
   if (!onWindows() || !path.startsWith("\\\\?\\")) return path
-  return path.startsWith("\\\\?\\UNC\\") ? `\\\\${path.slice(8)}` : path.slice(4)
-}
-const driverPath = z.string().transform(plainPath)
+  if (/^\\\\\?\\[A-Za-z]:\\/.test(path)) return path.slice(4)
+  context.addIssue({ code: "custom", message: "The driver reported a recording path that is not on a local drive" })
+  return z.NEVER
+})
 
 const stateSchema = z.object({
   generation: z.number().int().positive(),
@@ -208,9 +211,9 @@ export class NativeRecordings {
   }
   /**
    * The window (X11) or the shared monitor (Wayland), recorded by the video helper at a constant quality into the
-   * recording's MP4 as its units come. With a pointer asked for, the driver's action journal records where its pointer
-   * actions landed (no video of its own), and finishing draws them in with the helper. The portal asks the person
-   * once, then restores their answer.
+   * recording's MP4 as its units come. With a pointer asked for, a window's comes from the driver's action journal
+   * (where its pointer actions landed; no video of its own), drawn in by the helper when the recording finishes, and
+   * a shared monitor's is the screen's own, in the picture. The portal asks the person once, then restores their answer.
    */
   private async startHelper(
     target: WindowControlTarget,
@@ -221,13 +224,16 @@ export class NativeRecordings {
     signal: AbortSignal
   ) {
     const executable = videoHelperExecutable()
-    const source = helperWindowSource(target.window_id, desktop)
+    const window = helperWindowSource(target.window_id, desktop)
+    // A shared monitor is recorded with its pointer in the picture, where the agent's pointer input moved it. A window
+    // by its X id carries none, so the driver journals where its pointer actions landed and the helper draws them in.
+    const source = window?.kind === "portal" && options.cursor !== false ? { ...window, cursor: "embedded" as const } : window
     if (!executable || !source)
       throw new ControlFault("unsupported", "Recording on this Linux desktop needs Mako's video helper (mako-video); no capture was started.", "not-dispatched")
     const fps = options.fps ?? HELPER_RECORDING_MAX_FPS
     if (fps > HELPER_RECORDING_MAX_FPS)
       throw new ControlFault("unsupported", `This desktop's recording supports up to ${HELPER_RECORDING_MAX_FPS} fps; no capture was started.`, "not-dispatched")
-    const journal = options.cursor !== false && tools.some((tool) => tool.name === "start_recording" && tool.inputSchema.properties?.window_target)
+    const journal = source.kind === "window" && options.cursor !== false && tools.some((tool) => tool.name === "start_recording" && tool.inputSchema.properties?.window_target)
     this.starting = true
     let helper: VideoHelper | undefined
     let writer: Mp4Writer | undefined
@@ -245,23 +251,13 @@ export class NativeRecordings {
         await writing
         await writer?.finish(stopped)
         if (journaling) await call("stop_recording", { recording_id: recording!.id }, 20_000).catch(() => undefined)
-        if (!writer?.frames) throw new Error(failure ?? "The capture sent no picture")
+        if (!writer?.frames) throw new Error(failure ?? `The capture sent no picture${helper?.said ? ` (${helper.said.split("\n").join("; ")})` : ""}`)
         await recording!.attachVideo(join(recording!.directory, "recording.mp4"))
         return failure
       })
       const active = recording
       this.recordings.set(active.id, active)
       this.helpers.add(active.id)
-      if (source.kind === "portal") {
-        // The pointer journal is in the window's terms; on a shared monitor it lands where the window is.
-        const windows = z.object({ windows: z.array(z.looseObject({ window_id: z.number(), bounds: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional() })) })
-        const listed = await call("list_windows", { pid: target.pid }, 5000).then(
-          (result) => windows.safeParse(toolResultData(resultSchema.parse(result))),
-          () => undefined
-        )
-        const bounds = listed?.success ? listed.data.windows.find((window) => window.window_id === target.window_id)?.bounds : undefined
-        if (bounds) active.pointersWithin(bounds)
-      }
       writer = new Mp4Writer(join(active.directory, "recording.mp4"), 1000 / fps)
       active.markStarted()
       origin = performance.now()

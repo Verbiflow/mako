@@ -4,12 +4,15 @@ import { createRequire } from "node:module"
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { cp, mkdir, mkdtemp, readFile, writeFile, stat } from "node:fs/promises"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
+import { pathToFileURL } from "node:url"
 import { setTimeout as delay } from "node:timers/promises"
 const run = promisify(execFile)
 const root = process.env.MAKO_RUNTIME_ROOT ?? "/opt/mako-control"
 const require = createRequire(join(root, "package.json"))
 const cli = require.resolve("@mako/control-runtime/cli")
+// Recordings are read back as Mako reads them, with Mediabunny: the runtime image carries no FFmpeg.
+const { readMp4 } = await import(pathToFileURL(join(dirname(cli), "mp4.js")).href)
 const directory = await mkdtemp("/tmp/mako-cli-linux-")
 let sessionFile
 let stopped = false
@@ -130,21 +133,10 @@ try {
   ])
   assert.equal(complete.status, "finished", JSON.stringify(complete))
   assert.ok((await stat(complete.video)).size > 0)
-  const probe = JSON.parse(
-    (
-      await run("ffprobe", [
-        "-v",
-        "error",
-        "-show_format",
-        "-show_streams",
-        "-of",
-        "json",
-        complete.video,
-      ])
-    ).stdout
-  )
-  assert.ok(Number(probe.format.duration) > 0)
-  assert.ok(probe.streams[0].width > shot.width)
+  const video = await readMp4(complete.video)
+  assert.ok((video?.duration ?? 0) > 0)
+  const probe = { codec: video.codec, width: video.width, height: video.height, duration: video.duration, packets: video.packets.length }
+  assert.ok(probe.width > shot.width)
   // Execute public help against duplicate controls in a real Chromium page.
   const setup = `document.body.insertAdjacentHTML('beforeend', '<form aria-label="Profile"><label>Name<input aria-label="Name"></label><button type="button">Save</button></form>'); window.profileSaves=0; document.querySelector('form button').onclick=()=>window.profileSaves++`
   await program(
@@ -207,9 +199,9 @@ try {
       pixels: { width: shot.width, height: shot.height },
       recording: {
         status: complete.status,
-        width: probe.streams[0].width,
-        height: probe.streams[0].height,
-        duration: probe.format.duration,
+        width: probe.width,
+        height: probe.height,
+        duration: probe.duration,
       },
       publicExamples: {
         scopedEdit: true,

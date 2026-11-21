@@ -22,12 +22,17 @@ asked once and restored from `~/.local/state/mako/portal-monitor.token`. The
 helper encodes a picture only when it changed: XDamage on X11, and on Wayland a
 buffer with an empty damage list or the same pixels as the last one is skipped.
 On wlroots, whose portal sends nothing until something changes, a still
-screen's first frame is the Screenshot portal's (`--still screenshot`).
+screen's first frame is the Screenshot portal's (`--still screenshot`). GNOME
+sends its own first frame (60 of 60 captures of a still screen), and its
+Screenshot portal refuses an unattended request.
 
 Recordings are Mako's own the same way, never FFmpeg's: the helper's capture
-goes into the recording's MP4, the driver keeps only its action journal
-(`record_video: false`), and the pointer is drawn in at the end by the helper's
-`composite` mode, which decodes the recording with OpenH264.
+goes into the recording's MP4. A window recorded by its X id carries no pointer,
+so the driver keeps its action journal (`record_video: false`) and the helper's
+`composite` mode, which decodes the recording with OpenH264, draws the pointer
+in at the end. A shared monitor is recorded with the screen's own pointer in the
+picture (the portal's embedded cursor mode), which the agent's pointer input
+moves. The driver's Linux build has no FFmpeg path at all (0007).
 
 `desktop-probe.mjs` takes the host's own path: the bundled `cua-embedded.ts`,
 the broker, a task session and the `mako-control` CLI. It launches apps from
@@ -52,7 +57,7 @@ checkout. The GNOME and KDE desktops answer the portal's consent dialogs with
 `portal-consent.py` through AT-SPI and log each answer, so a restored session
 shows none. `linux-desktop-control.yml` runs all five on x64.
 
-Coverage on 2026-11-20 (driver 0.28.2+mako.28; Ubuntu 24.04 images, KDE 6.3 on
+Coverage on 2026-11-20 (driver 0.28.2+mako.29; Ubuntu 24.04 images, KDE 6.3 on
 Debian 13):
 
 | | X11 (Openbox) | GNOME 46 Wayland | KDE KWin 5.27 and 6.3 Wayland | wlroots (Sway 1.9) |
@@ -72,8 +77,13 @@ Sway and GNOME, with the driver's GNOME agent cursor at rest (helper v11). The
 Sway image builds xdg-desktop-portal-wlr 0.7.1 with shared-memory screencopy
 allowed, since Ubuntu's refuses a GPU-less compositor, and installs `wtype`,
 `grim` and the GTK portal backend, as a Sway desktop has them. Headless KWin
-declines the ScreenCast portal and offers no target-addressable activation, in
-5.27 and 6.3 alike; a full Plasma session is unproven.
+offers no target-addressable activation and no screen cast, in 5.27 and 6.3
+alike: the KDE portal backend reports that KWin's `zkde_screencast_unstable_v1`
+is not there, with KWin's screencast plugin installed (`kwin-common`), its
+service cache built and its permission checks off, on the virtual backend with
+QPainter compositing. OpenGL compositing did not come up in a GPU-less
+container, so whether a Plasma session on a real or virtual GPU grants the
+portal is still unproven.
 
 ## Recording worker without a desktop
 

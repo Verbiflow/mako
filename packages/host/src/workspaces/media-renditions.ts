@@ -1,7 +1,6 @@
 import { fileSha256 } from "../base/file-hash.js"
-import { findExecutable } from "../base/executable.js"
 import { heavy } from "../base/heavy-packages.js"
-import { hostExecFile } from "../base/host-command.js"
+import { videoPoster, videoPosterHelper } from "@mako/control-runtime/desktop"
 import { createHash } from "node:crypto"
 import { mkdir, readdir, rename, rm, stat } from "node:fs/promises"
 import { join } from "node:path"
@@ -32,38 +31,39 @@ const HASHED_BELOW = 64 * 1024 * 1024
 const HASHES_KEPT = 512
 
 /**
- * An FFmpeg already on this machine's PATH, looked for off the thread; none where there isn't one. Mako ships none: the
- * desktop app and a browser draw a video's own frame where it has no poster.
+ * What takes a video's poster: Mako's video helper (`mako-video`), by its whole path, where it is installed and has a
+ * poster mode (a Mac, Linux). Never an FFmpeg: nothing here looks for one. With none, the desktop app and a browser
+ * draw a video's own frame.
  */
-export async function pathFfmpeg(): Promise<string | undefined> {
-  return (await findExecutable("ffmpeg")) ?? undefined
+export async function posterHelper(): Promise<string | undefined> {
+  return videoPosterHelper()
 }
 
-/** Whether a video read here gets a poster (`posterUrl`): only where FFmpeg is on PATH to take its frame. */
+/** Whether a video read here gets a poster (`posterUrl`): only where the helper is there to take its frame. */
 export async function videoPosters(): Promise<boolean> {
-  return Boolean(await pathFfmpeg())
+  return Boolean(await posterHelper())
 }
 
 export interface MediaRenditionsOptions {
   /** Where renditions are kept, as `<key>.<ext>`. */
   folder: string
-  /** The FFmpeg a video's poster is taken with (`pathFfmpeg`); none for no posters. */
-  ffmpeg?(): Promise<string | undefined>
+  /** The video helper a video's poster is taken with (`posterHelper`); none for no posters. */
+  helper?(): Promise<string | undefined>
 }
 
 /**
  * Posters and thumbnails, made once. A picture's are scaled with sharp and
  * kept by its content's hash, so the copies Mako makes of one attachment (the
  * staged file, the one a conversation keeps) share a rendition and a picture
- * sent again is never scaled twice; a video's poster is a frame FFmpeg takes
- * where one is on PATH, kept by the file's identity, since hashing a
+ * sent again is never scaled twice; a video's poster is a frame Mako's video
+ * helper takes where it is installed, kept by the file's identity, since hashing a
  * recording costs more than its poster. Either way a file the agent rewrites
  * gets a new one. Made only when a preview asks for one, which it does only
  * near the viewport.
  */
 export class MediaRenditions {
   private readonly folder: string
-  private readonly ffmpeg: () => Promise<string | undefined>
+  private readonly helper: () => Promise<string | undefined>
   private readonly asking = new Map<string, Promise<string | null>>()
   private readonly making = new Map<string, Promise<string | null>>()
   private readonly hashes = new Map<string, string>()
@@ -73,10 +73,10 @@ export class MediaRenditions {
 
   constructor(options: MediaRenditionsOptions) {
     this.folder = options.folder
-    this.ffmpeg = options.ffmpeg ?? pathFfmpeg
+    this.helper = options.helper ?? posterHelper
   }
 
-  /** The rendition's path, or null when this file can't have one (no FFmpeg for a poster, no video frame, an unreadable file). */
+  /** The rendition's path, or null when this file can't have one (no helper for a poster, no video frame it reads, an unreadable file). */
   rendition(path: string, identity: FileIdentity, kind: RenditionKind): Promise<string | null> {
     const file = JSON.stringify([path, identity.dev, identity.ino, identity.size, Math.round(identity.mtimeMs)])
     const asked = `${kind}\0${file}`
@@ -120,13 +120,13 @@ export class MediaRenditions {
 
   private async make(path: string, target: string, kind: RenditionKind): Promise<string | null> {
     if (await stat(target).then((info) => info.size > 0, () => false)) return target
-    const executable = kind === "poster" ? await this.ffmpeg() : undefined
+    const executable = kind === "poster" ? await this.helper() : undefined
     if (kind === "poster" && !executable) return null
     await mkdir(this.folder, { recursive: true })
     await this.turn()
     const partial = `${target}.${process.pid}.partial`
     try {
-      const made = executable ? await poster(executable, path, partial) : await picture(path, partial, SIDE[kind])
+      const made = executable ? await videoPoster(executable, path, partial, SIDE.poster, RENDER_TIMEOUT_MS) : await picture(path, partial, SIDE[kind])
       if (!made || !(await stat(partial).then((info) => info.size > 0, () => false))) return null
       await rename(partial, target)
       void this.prune()
@@ -176,20 +176,4 @@ async function picture(path: string, output: string, side: number): Promise<bool
   } catch {
     return false
   }
-}
-
-/** A video's frame half a second in (most recordings open on black), or its first for a shorter clip, as JPEG. */
-async function poster(ffmpeg: string, path: string, output: string): Promise<boolean> {
-  const side = SIDE.poster
-  const scale = `scale=w='min(${side},iw)':h='min(${side},ih)':force_original_aspect_ratio=decrease`
-  for (const seek of [["-ss", "0.5"], []])
-    if (await run(ffmpeg, ["-v", "error", "-nostdin", ...seek, "-i", path, "-frames:v", "1", "-vf", scale, "-q:v", "4", "-f", "mjpeg", "-y", output])
-      && await stat(output).then((info) => info.size > 0, () => false)) return true
-  return false
-}
-
-function run(executable: string, args: string[]): Promise<boolean> {
-  return new Promise((resolve) => {
-    hostExecFile(executable, args, { timeout: RENDER_TIMEOUT_MS, maxBuffer: 64 * 1024 }, (error) => resolve(!error))
-  })
 }

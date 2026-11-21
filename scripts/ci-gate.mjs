@@ -497,8 +497,8 @@ const NEEDS = {
  * test:mcp's parts on the Mac read MCP configurations and computer use, and record nothing (installing took 31 s there).
  */
 const NEEDS_NOTHING = [/scripts\/test-mcp\.ts\b/, /scripts\/test-computer-tools\.ts\b/]
-/** What a part run outside an npm script needs, by its file: recording and live video encode with the video helper. */
-const NEEDS_BY_FILE = [[/scripts\/test-(native-recording|control-recording|control-recording-idle|control-recording-stream|browser-recording|browser-video)\.ts\b/, "video"]]
+/** What a part run outside an npm script needs, by its file: recording and live video encode with the video helper, which also takes a video's poster. */
+const NEEDS_BY_FILE = [[/scripts\/test-(native-recording|control-recording|control-recording-idle|control-recording-stream|browser-recording|browser-video|media-serving)\.ts\b/, "video"]]
 /**
  * Each prints `install-via: <path>`: image (already there), cache, apt or archive (`install-apt-cached.sh`), brew.
  * On Linux, the helper's libraries and FFmpeg come from the .debs `MAKO_APT_DEBS` holds, which the gate job keeps between runs, so a shard that
