@@ -56,6 +56,8 @@ export function deepLinkInArgv(argv: readonly string[], windows = process.platfo
 /** What `localFolderRefusal` reads of a path: `lstat`, which never follows a link to where it points. */
 export interface FolderReader {
   lstat(path: string): Promise<{ isSymbolicLink(): boolean; isDirectory(): boolean }>
+  /** The path the system resolves this one to: its real case and names, and a mapped drive's share. */
+  realpath(path: string): Promise<string>
 }
 
 /**
@@ -81,6 +83,20 @@ export async function localFolderRefusal(path: string, windows: boolean, reader:
   return undefined
 }
 
+/**
+ * The folder a link's path really names, or why it can't be opened: checked as written (`localFolderRefusal`), then
+ * resolved by the system, and the resolved path checked the same way, so `C:\\Work\\app\\..\\..\\Users\\x` is what it
+ * is before anyone is asked, and a mapped drive's share is refused as a share.
+ */
+export async function resolveLinkedFolder(path: string, windows: boolean, reader: FolderReader): Promise<{ folder: string } | { refusal: string }> {
+  const written = await localFolderRefusal(path, windows, reader)
+  if (written) return { refusal: written }
+  const folder = await reader.realpath(path).catch(() => undefined)
+  if (!folder) return { refusal: "it doesn't exist" }
+  const resolved = await localFolderRefusal(folder, windows, reader)
+  return resolved ? { refusal: resolved } : { folder }
+}
+
 export interface ProjectLinkSteps {
   windows: boolean
   reader: FolderReader
@@ -91,14 +107,43 @@ export interface ProjectLinkSteps {
   refused(path: string, reason: string): void
 }
 
-/** A `mako://open` link's folder: opened only when it's a local folder and the person said Open. */
+/**
+ * A `mako://open` link's folder: opened only when it's a local folder and the person said Open. The person is shown
+ * the resolved folder, never the path as written, and that folder is what opens; it is resolved and checked again
+ * after Open, since what a path names can change while a dialog waits.
+ */
 export async function openProjectLink(path: string, steps: ProjectLinkSteps): Promise<"opened" | "declined" | "refused"> {
-  const reason = await localFolderRefusal(path, steps.windows, steps.reader)
-  if (reason) {
-    steps.refused(path, reason)
+  const first = await resolveLinkedFolder(path, steps.windows, steps.reader)
+  if ("refusal" in first) {
+    steps.refused(path, first.refusal)
     return "refused"
   }
-  if (!(await steps.confirm(path))) return "declined"
-  steps.open(path)
+  if (!(await steps.confirm(first.folder))) return "declined"
+  const again = await resolveLinkedFolder(first.folder, steps.windows, steps.reader)
+  if ("refusal" in again || again.folder !== first.folder) {
+    steps.refused(path, "refusal" in again ? again.refusal : "it changed while the question was open")
+    return "refused"
+  }
+  steps.open(first.folder)
   return "opened"
+}
+
+/**
+ * One question at a time: a link that arrives while another's folder is being checked or asked about is dropped, so a
+ * page can't stack dialogs for the person to click through.
+ */
+export function projectLinkOpener(steps: ProjectLinkSteps & { dropped(path: string): void }): (path: string) => Promise<"opened" | "declined" | "refused" | "dropped"> {
+  let busy = false
+  return async (path) => {
+    if (busy) {
+      steps.dropped(path)
+      return "dropped"
+    }
+    busy = true
+    try {
+      return await openProjectLink(path, steps)
+    } finally {
+      busy = false
+    }
+  }
 }
