@@ -105,21 +105,43 @@ Windows `run_serve`); the two changes Mako makes are in
   reused after its process ends, and the daemon ends with the host: it reads
   the host's end of its stdin and exits when that closes (line 1771,
   `wait_for_parent_stdin_eof`, line 724; `CUA_DRIVER_PARENT_LIVENESS_STDIN`).
+- **A daemon that could not start.** A process that takes the pipe's name
+  before the daemon creates it makes the daemon exit at once. The host counts
+  a daemon as started only if it is still running a moment after something
+  first answers on the name (`cua-embedded.ts`, `STARTED_SETTLE_MS`), and when
+  the daemon's process exits the broker closes every connection to its
+  endpoint (`DaemonPeer.gone` in
+  `packages/control-runtime/src/driver-daemon.ts`), so a call in flight fails
+  as the driver having stopped, whoever holds the name.
+- **The daemon's environment is the host's alone.** Every `CUA_DRIVER_*` and
+  `CUA_TELEMETRY_ENABLED` variable the host inherited is dropped before its
+  own are set (`driverEnvironment`, `cua-embedded.ts`), on every platform, so
+  a person's `CUA_DRIVER_RS_MCP_HTTP_PORT` or
+  `CUA_DRIVER_ENVELOPE_HTTP_PORT` opens no loopback listener beside the pipe
+  and no inherited policy or permission setting applies.
 - **What this does not cover.** The boundary is the user account at the
-  host's integrity level. A process of the same user that can write the
-  host's memory can act as the host. One that takes the pipe's name between
-  the host choosing it and the daemon creating it stops the driver from
-  starting; the host's start then fails, but the host does not itself check
-  which process answers on the name before its first request (Node has no
-  call for a pipe's server pid), so a racing process of the same user could
-  answer the host's requests in the driver's place until the daemon's exit is
-  seen. It would learn what an agent asks of the driver; it gains nothing
-  over reading the screen and sending input itself, which that user can do.
-  A handshake like the broker's would close it and needs the daemon's side.
+  host's integrity level: a process of the same user at that level can write
+  the host's memory and act as it. And the host does not yet have the daemon
+  prove itself: in the moment between a squatting process answering and the
+  daemon's exit being seen, a request already on its way could reach the
+  squatter, which would learn what was asked. A keyed challenge on every
+  connection closes that and needs the daemon's side (the next driver
+  release).
 
 `scripts/test-control-driver-windows.ts` checks, against the running daemon:
 the host's process is answered, another process of the same user is closed
-on unanswered, and a low-integrity one cannot open the pipe.
+on unanswered, a low-integrity one cannot open the pipe, and no TCP port
+listens with the two port variables set in the host's environment.
+`scripts/test-cua-embedded-environment.ts` checks the environment a stand-in
+driver is started with on a Mac and Linux.
+
+`launch_app` by a bare name: on Windows the host's broker lets the name
+through only when the driver lists an installed app by it, sends the whole
+path instead when the host's trusted lookup finds a program of that name, and
+answers the call itself otherwise (`launchable` in
+`packages/control-runtime/src/driver-broker.ts`). The driver's own fallback, a
+ShellExecute search of the current folder and `PATH`, is never reached with a
+bare name.
 
 ## Elevated windows (UIPI)
 

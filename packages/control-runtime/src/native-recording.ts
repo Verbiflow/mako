@@ -19,13 +19,16 @@ export const HELPER_RECORDING_MAX_FPS = 30
 
 /**
  * A path as the driver reports it, spelled as Node spells it: on Windows the driver's canonical form is a verbatim
- * path (`\\?\C:\…`, `\\?\UNC\server\…`) for the same file that `realpath` names `C:\…`.
+ * path (`\\?\C:\…`) for the same file that `realpath` names `C:\…`. Only a drive's path is taken: a recording is
+ * written on this machine, so a verbatim network path (`\\?\UNC\server\…`) or device path is refused rather than
+ * turned into a share's name and opened.
  */
-function plainPath(path: string): string {
+export const driverPath = z.string().transform((path, context) => {
   if (!onWindows() || !path.startsWith("\\\\?\\")) return path
-  return path.startsWith("\\\\?\\UNC\\") ? `\\\\${path.slice(8)}` : path.slice(4)
-}
-const driverPath = z.string().transform(plainPath)
+  if (/^\\\\\?\\[A-Za-z]:\\/.test(path)) return path.slice(4)
+  context.addIssue({ code: "custom", message: "The driver reported a recording path that is not on a local drive" })
+  return z.NEVER
+})
 
 const stateSchema = z.object({
   generation: z.number().int().positive(),
