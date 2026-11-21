@@ -11,6 +11,10 @@ import {
 import { childProcessEnv } from "../base/child-environment.js"
 import { TerminalHistoryFilter } from "./history-filter.js"
 import { killTerminalProcessGroups } from "./process-groups.js"
+import { terminalShell } from "./shell.js"
+import { readKeptPipe } from "../base/kept-pipe.js"
+import { requireProof } from "../base/pipe-handshake.js"
+import { restrictPipe } from "../base/pipe-restriction.js"
 import { TerminalSaves } from "./saves.js"
 import type { TerminalSession } from "../contracts/terminal.js"
 import {
@@ -238,12 +242,6 @@ function listSessions() {
     .sort((left, right) => right.createdAt - left.createdAt)
 }
 
-function shellCommand() {
-  if (process.platform === "win32") {
-    return { file: process.env.COMSPEC ?? "powershell.exe", args: [] }
-  }
-  return { file: process.env.SHELL ?? "/bin/sh", args: ["-l"] }
-}
 
 async function createSession(
   request: Extract<TerminalRequest, { type: "create" }>
@@ -262,7 +260,7 @@ async function createSession(
   }
   delete env.ELECTRON_RUN_AS_NODE
   await prepareMacosTerminalLogin()
-  const shell = wrapMacosTerminalLogin(shellCommand(), env)
+  const shell = wrapMacosTerminalLogin(terminalShell(), env)
   const pty = spawnPty(shell.file, shell.args, {
     name: "xterm-256color",
     cwd: request.cwd,
@@ -606,6 +604,13 @@ async function startServer() {
   await chmod(stateDir, 0o700)
   await restore()
   const instance = createServer(accept)
+  if (process.platform === "win32") {
+    // The pipe and secret its client drew for this start and published beside the sessions: every connection proves
+    // it knows the secret before a request is read (`base/pipe-handshake.ts`). One started on any other name refuses.
+    const kept = readKeptPipe(join(stateDir, "pipe.json"), "mako-terminal")
+    if (kept?.pipe !== endpoint) throw new Error("The terminal daemon's pipe isn't the one its profile published")
+    requireProof(instance, () => kept.proof)
+  }
   try {
     await listen(instance)
   } catch (error) {
@@ -617,6 +622,7 @@ async function startServer() {
     await listen(instance)
   }
   server = instance
+  if (process.platform === "win32") void restrictPipe([endpoint], "the terminal daemon's pipe")
   if (process.platform !== "win32") {
     // The path is ours only while it reaches this process. A successor can rebind it between `listen` and any look at
     // it, and an inode read after that is the successor's, which the watch would then never see change. So the inode

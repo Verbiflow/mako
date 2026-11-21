@@ -28,6 +28,10 @@ if (command === "inspect") {
 } else if (command === undefined) {
   // Children set Node mode themselves; a terminal's shell must not start Electron apps as Node.
   delete process.env.ELECTRON_RUN_AS_NODE
+  // Windows looks for a bare program name in the working folder before PATH unless told not to: the host and every
+  // child it starts in a project are told (the host's own launches name programs by whole paths besides).
+  const { onWindows } = await import("./base/platform.js")
+  if (onWindows()) process.env.NoDefaultCurrentDirectoryInExePath = "1"
   forgetStartingRepository()
   // The cache is per data root, and must be on before the host's modules load.
   const { processHostEnvironment } = await import("./base/host-environment.js")

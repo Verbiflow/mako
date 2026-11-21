@@ -1,0 +1,129 @@
+name: Host on Windows
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/actions/install-dependencies/**
+      - .github/workflows/host-windows.yml
+      - packages/host/src/base/**
+      - packages/host/src/transport/**
+      - packages/host/src/terminals/**
+      - packages/host/src/harnesses/account-login.ts
+      - packages/host/src/harnesses/discovery-process.ts
+      - packages/host/src/harnesses/provider-process.ts
+      - packages/host/src/git/git-helper.ts
+      - packages/host/src/conversations/agent-runs.ts
+      - packages/host/src/workspaces/app-probe.ts
+      - packages/host/src/workspaces/chat-projects.ts
+      - packages/host/src/workspaces/index.ts
+      - packages/host/src/workspaces/project-folders.ts
+      - packages/host/src/workspaces/thread-processes.ts
+      - packages/client/src/**
+      - packages/control-runtime/src/executable.ts
+      - packages/sessions/src/private-pipe.ts
+      - packages/sessions/src/daemon.ts
+      - packages/sessions/src/record-locks.ts
+      - packages/host/src/attribution/shared-journal.ts
+      - packages/host/src/git/host-git.ts
+      - native/windows-helper/**
+      - scripts/build-windows-helper.mjs
+      - packages/git/src/process-runner.ts
+      - scripts/check-host-children.mjs
+      - scripts/windows-host/**
+      - scripts/test-windows-launch.ts
+      - scripts/test-windows-pipes.ts
+      - electron/secret-key-link.ts
+      - electron/desktop-link.ts
+      - packages/git/src/run.ts
+      - scripts/test-runtime-response.ts
+      - scripts/test-host-paths.ts
+      - package.json
+      - package-lock.json
+
+permissions:
+  contents: read
+
+concurrency:
+  group: host-windows-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # The host on Windows: started headless, reached on its named pipe by both clients, a conversation on a stand-in
+  # harness run, stopped and closed with its whole tree, a terminal on PowerShell, and the pipe private to its user.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
+      - name: Build the host and its client
+        run: npm run build:control-runtime
+      - name: The Windows helper, which must build here
+        run: node scripts/build-windows-helper.mjs --require
+      - name: Executables, batch-file launches and process trees
+        if: success() || failure()
+        run: npx tsx scripts/test-windows-launch.ts
+      - name: Typed project paths
+        if: success() || failure()
+        run: npx tsx scripts/test-host-paths.ts
+      - name: The runtime's replies, over a named pipe
+        if: success() || failure()
+        run: npx tsx scripts/test-runtime-response.ts
+      - name: An impostor on each pipe hears nothing; no planted program runs
+        if: success() || failure()
+        run: npx tsx scripts/test-windows-pipes.ts
+      - name: The host, its clients, a conversation and a terminal
+        if: success() || failure()
+        run: node scripts/windows-host/prove.mjs --evidence "${{ runner.temp }}/evidence"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: host-windows-evidence
+          path: ${{ runner.temp }}/evidence/
+          retention-days: 14
+          if-no-files-found: ignore
+
+  # The same changes on Linux, which must behave as before: the host's suites, the headless client end to end, the
+  # typecheck and the repository's own rules.
+  ubuntu:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      # test:host runs the host under Electron's Node too.
+      - uses: ./.github/actions/install-dependencies
+      - name: Build the host and its client
+        run: npm run build:control-runtime
+      - run: npx tsx scripts/test-windows-launch.ts
+      - run: npx tsx scripts/test-host-paths.ts
+        if: success() || failure()
+      - run: npx tsx scripts/test-runtime-response.ts
+        if: success() || failure()
+      # The Keychain's own test runs on a Mac, as the gate runs it (`scripts/ci-gate.mjs`).
+      - run: npm run test:host
+        if: success() || failure()
+        env:
+          MAKO_TEST_HOST_EXCEPT: scripts/test-keychain-safe-storage.ts
+      - run: npx tsx scripts/test-mako-client.ts
+        if: success() || failure()
+      - run: npx tsx scripts/test-terminal-daemon.ts
+        if: success() || failure()
+      - run: npm run typecheck
+        if: success() || failure()
+      - run: npm run -s lint:rules
+        if: success() || failure()

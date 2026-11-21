@@ -28,6 +28,8 @@ import { environmentForExecutable } from "../base/executable.js"
 import type { AccountLoginCommand, AccountLoginTarget, AccountLoginTask } from "./account-capability.js"
 import { endProviderProcess, spawnProviderProcess } from "./provider-process.js"
 import { onLinux, onMac, onWindows } from "../base/platform.js"
+import { signalProcessTree } from "../base/process-tree.js"
+import { conptyCommand } from "../base/conpty-command.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { writeChildInput } from "@mako/sessions/child-input"
 
@@ -74,15 +76,8 @@ interface RunningLogin {
 
 function terminate(child: ChildProcessWithoutNullStreams): void {
   if (child.exitCode !== null || child.signalCode !== null) return
-  if (!onWindows() && child.pid) {
-    try {
-      process.kill(-child.pid, "SIGTERM")
-      return
-    } catch {
-      // The group is gone; signal the child alone.
-    }
-  }
-  child.kill("SIGTERM")
+  if (child.pid) signalProcessTree(child.pid, "SIGTERM")
+  else child.kill("SIGTERM")
 }
 
 // eslint-disable-next-line no-control-regex -- ANSI escape sequences are what is being removed.
@@ -100,14 +95,17 @@ function signInUrl(output: string): string | undefined {
 /**
  * The CLI under a pseudo-terminal from the system's `script`. Node's pipes
  * are sockets on macOS, which `script` cannot read its input from, so `cat`
- * hands it a real pipe.
+ * hands it a real pipe. Windows has no `script`: a ConPTY there
+ * (`conptyCommand`).
  */
 interface SpawnedCommand {
   executable: string
   args: string[]
+  env?: NodeJS.ProcessEnv
 }
 
-function terminalCommand(executable: string, args: readonly string[]): SpawnedCommand {
+function terminalCommand(executable: string, args: readonly string[], env: NodeJS.ProcessEnv): SpawnedCommand {
+  if (onWindows()) return conptyCommand(executable, args, env)
   if (onMac())
     return { executable: "/bin/sh", args: ["-c", 'cat | exec script -q /dev/null "$@"', "sh", executable, ...args] }
   if (onLinux()) {
@@ -129,12 +127,12 @@ function commandSession(
   landed: () => Promise<boolean>,
   jobs: HostJobs
 ): Session {
-  const command: SpawnedCommand = launch.terminal ? terminalCommand(launch.executable, launch.args) : { executable: launch.executable, args: [...launch.args] }
   const env = environmentForExecutable(launch.executable, launch.env)
   if (launch.terminal) env.TERM = "xterm-256color"
+  const command: SpawnedCommand = launch.terminal ? terminalCommand(launch.executable, launch.args, env) : { executable: launch.executable, args: [...launch.args] }
   const child = spawnProviderProcess(command.executable, command.args, {
     cwd: homedir(),
-    env,
+    env: command.env ?? env,
     detached: !onWindows(),
     windowsHide: true,
   }, { kind: "account-login", owner: harness })

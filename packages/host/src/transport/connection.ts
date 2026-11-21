@@ -10,10 +10,12 @@ import { hostCallReplay } from "../contracts/host-call-policy.js"
 import { requestRuntimePreview, requestRuntimeVideo } from "./preview.js"
 
 import { readRuntimeResponse, RuntimeResponseLimitError, type RuntimeTransfer } from "./response.js"
+import { runtimeConnection } from "./pipe.js"
 
 
-// No socket, a socket nobody accepts on, or a plain file where the socket was: nothing listens.
-const REFUSED = new Set(["ECONNREFUSED", "ENOENT", "ENOTSOCK"])
+// No socket, a socket nobody accepts on, or a plain file where the socket was: nothing listens. On Windows, a pipe
+// whose server couldn't prove it is the host this start published (`pipe.ts`) is no host either.
+const REFUSED = new Set(["ECONNREFUSED", "ENOENT", "ENOTSOCK", "EMAKOIMPOSTOR"])
 const DROPPED = new Set(["ECONNRESET", "EPIPE", "ECONNABORTED"])
 function socketCode(error: Error): string | undefined {
   if ("code" in error) return String(error.code)
@@ -88,7 +90,7 @@ export async function runtimeRequest<Reply>({
     const req = request(
       {
         ...OWN_CONNECTION,
-        socketPath: socket,
+        ...runtimeConnection(socket),
         path,
         method: call === undefined ? "GET" : "POST",
         headers: Object.fromEntries(headers),
@@ -310,7 +312,7 @@ export function subscribeRuntime(socket: string, client: string, receive: (packe
   if (options.history) headers.set("x-mako-history", "1")
   if (options.eventLimit) headers.set("x-mako-event-limit", String(options.eventLimit))
   if (options.live !== undefined && options.live !== WHOLE_LIVE_FORM) headers.set(LIVE_FORM_HEADER, String(options.live))
-  const req = request({ ...OWN_CONNECTION, socketPath: socket, path: "/events", method: "POST", headers: Object.fromEntries(headers) }, (response) => {
+  const req = request({ ...OWN_CONNECTION, ...runtimeConnection(socket), path: "/events", method: "POST", headers: Object.fromEntries(headers) }, (response) => {
     const lines = new LineAssembler(32 * 1024 * 1024)
     if (response.statusCode !== 200) { response.destroy(); end(`the host answered ${response.statusCode}`); return }
     response.on("data", (chunk: Buffer) => {
@@ -338,7 +340,7 @@ export function subscribeRuntime(socket: string, client: string, receive: (packe
 export function runtimeFile(socket: string, input: Request): Promise<Response> {
   const url = new URL(input.url)
   return new Promise((resolve, reject) => {
-    const req = request({ ...OWN_CONNECTION, socketPath: socket, path: `/file/${url.hostname}${url.pathname}${url.search}`, headers: input.headers.has("range") ? { range: input.headers.get("range") ?? "" } : {} }, (response) => {
+    const req = request({ ...OWN_CONNECTION, ...runtimeConnection(socket), path: `/file/${url.hostname}${url.pathname}${url.search}`, headers: input.headers.has("range") ? { range: input.headers.get("range") ?? "" } : {} }, (response) => {
       const headers = new Headers()
       for (const [key, value] of Object.entries(response.headers)) {
         if (value !== undefined) headers.set(key, Array.isArray(value) ? value.join(", ") : value)

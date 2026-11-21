@@ -1,5 +1,6 @@
 import { stoppingSignal } from "../base/host-stopping.js"
 import { onWindows } from "../base/platform.js"
+import { windowsTaskkill } from "../base/system-tools.js"
 import { execFile, spawn } from "node:child_process"
 import { promisify } from "node:util"
 import { z } from "zod"
@@ -63,7 +64,7 @@ function signalTree(pid: number, name: NodeJS.Signals | 0, failed: (error: Error
     }
   }
   // taskkill answers 128 for a step already gone; only one still there makes its failure the stop's.
-  void run("taskkill", ["/PID", String(pid), "/T", "/F"], { timeout: 5_000, windowsHide: true }).catch(() => {
+  void run(windowsTaskkill(), ["/PID", String(pid), "/T", "/F"], { timeout: 5_000, windowsHide: true }).catch(() => {
     if (signalTree(pid, 0, failed)) failed(new Error(`taskkill could not end the step's process tree (pid ${pid})`))
   })
   return true

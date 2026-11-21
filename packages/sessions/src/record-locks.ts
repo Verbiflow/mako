@@ -1,3 +1,4 @@
+import { exclusiveFileLock, exclusiveFileLockHeld } from "./private-pipe.js"
 import { createHash } from "node:crypto"
 import { closeSync, constants, mkdirSync, openSync, readFileSync } from "node:fs"
 import { createServer, type Server } from "node:net"
@@ -61,6 +62,18 @@ export async function takeLock(path: string): Promise<HeldLock | null> {
     }
     return { release: async () => closeSync(fd) }
   }
+  // Windows: the file itself, opened with no sharing; a pipe named for it was one another account could hold.
+  if (onWindows()) {
+    let lock: ReturnType<typeof exclusiveFileLock>
+    try {
+      lock = exclusiveFileLock(path)
+    } catch (error) {
+      throw new LockUnavailableError(path, error)
+    }
+    if (!lock) return null
+    const held = lock
+    return { release: async () => held.release() }
+  }
   let server: Server | null
   try {
     server = await listen(lockName(path))
@@ -92,6 +105,7 @@ export async function probeLock(path: string): Promise<"held" | "free" | "unknow
     closeSync(fd)
     return "free"
   }
+  if (onWindows()) return exclusiveFileLockHeld(path) ? "held" : "free"
   try {
     const server = await listen(lockName(path))
     if (!server) return "held"

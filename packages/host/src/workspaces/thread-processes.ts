@@ -11,10 +11,12 @@ import { z } from "zod"
 import { inside, workingDirectories } from "./app-probe.js"
 import { STEPS_FOLDER_VARIABLE, stepsOf, type StepRecord } from "./check-steps.js"
 import { belowAgents } from "../base/background-priority.js"
+import { signalProcessTree } from "../base/process-tree.js"
+import { windowsComSpec } from "../base/system-tools.js"
 import { FIT_RUNS } from "../contracts/thread-app.js"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
 import { ContainerEngine, containersBy, type Container, type ContainerLook } from "./container-runtime.js"
-import { onLinux, onMac } from "../base/platform.js"
+import { onLinux, onMac, onWindows } from "../base/platform.js"
 import { childInput } from "@mako/sessions/child-input"
 import { parseTable, PS_ARGS, TableIndex, type Row, type RunLeader } from "./process-table.js"
 import { mapLimit } from "@mako/protocol/map-limit"
@@ -75,6 +77,56 @@ const CONTAINER_CLIENT = /(?:^|\/)(?:docker|docker-compose|podman|podman-compose
  * code behind, and writes that code where the next host can read it.
  */
 const WRAPPER = 'command=$1; exit_file=$2; shift 2; IFS= read -r go || exit 125; [ "$go" = go ] || exit 125; (eval "$command") </dev/null; code=$?; printf "%s\\n" "$code" > "$exit_file"; exit "$code"'
+/**
+ * `WRAPPER` on Windows, which has no `/bin/sh`: Node waits for the same `go`, runs the command through ComSpec with no
+ * input, writes its code to the exit file and exits with it. The run's arguments follow `-e` as `/bin/sh -c`'s do.
+ */
+const WINDOWS_WRAPPER = `
+const [command, exitFile] = process.argv.slice(1)
+delete process.env.ELECTRON_RUN_AS_NODE
+let input = ""
+const run = () => {
+  const named = process.env.ComSpec || process.env.COMSPEC || ""
+  const shell = require("node:path").win32.isAbsolute(named) ? named : require("node:path").win32.join(process.env.SystemRoot || "C:\\\\Windows", "System32", "cmd.exe")
+  const child = require("node:child_process").spawn(shell, ["/d", "/v:off", "/s", "/c", '"' + command + '"'], { stdio: ["ignore", "inherit", "inherit"], windowsVerbatimArguments: true, windowsHide: true })
+  child.on("error", () => process.exit(127))
+  child.on("exit", (code) => {
+    const value = code ?? 1
+    require("node:fs").writeFileSync(exitFile, value + "\\n")
+    process.exit(value)
+  })
+}
+process.stdin.setEncoding("utf8")
+process.stdin.on("data", (chunk) => {
+  input += chunk
+  const end = input.indexOf("\\n")
+  if (end < 0) return
+  process.stdin.destroy()
+  if (input.slice(0, end).trim() !== "go") process.exit(125)
+  run()
+})
+process.stdin.on("end", () => { if (!input.includes("\\n")) process.exit(125) })
+`
+
+/** How a run's command starts: `/bin/sh` and `WRAPPER`, or Node and `WINDOWS_WRAPPER` on Windows. */
+function runCommand(command: string, exit: string, background: boolean): [string, string[]] {
+  if (onWindows()) return [process.execPath, ["-e", WINDOWS_WRAPPER, command, exit]]
+  return background ? belowAgents("/bin/sh", ["-c", WRAPPER, "mako-thread", command, exit]) : ["/bin/sh", ["-c", WRAPPER, "mako-thread", command, exit]]
+}
+
+/** A command line to start: its program, its words, and whether Windows must pass them as written. */
+interface ShellCommand {
+  file: string
+  args: string[]
+  windowsVerbatimArguments: boolean
+}
+
+/** A run's `ready` check as a command line: `/bin/sh -c` elsewhere, ComSpec on Windows. */
+function readyCommand(ready: string): ShellCommand {
+  if (!onWindows()) return { file: "/bin/sh", args: ["-c", ready], windowsVerbatimArguments: false }
+  return { file: windowsComSpec(), args: ["/d", "/v:off", "/s", "/c", `"${ready}"`], windowsVerbatimArguments: true }
+}
+
 /**
  * In the environment of every run, naming its app: a process that left its
  * run's tree still carries it, unless it cleared its environment. Agents'
@@ -1230,11 +1282,15 @@ export class ThreadProcesses {
       env = { ...spec.env, [STEPS_FOLDER_VARIABLE]: folder }
     }
     try {
-      const [shell, args] = spec.background ? belowAgents("/bin/sh", ["-c", WRAPPER, "mako-thread", spec.command, exit]) : ["/bin/sh", ["-c", WRAPPER, "mako-thread", spec.command, exit]]
+      const [shell, args] = runCommand(spec.command, exit, spec.background === true)
+      const runEnv: NodeJS.ProcessEnv = { ...env, [RUN_MARK]: app, [RUN_KEY_MARK]: runTag(app, key) }
+      // Windows' wrapper is Node: plain Node even under Electron's, which the wrapper clears for the command.
+      if (onWindows()) runEnv.ELECTRON_RUN_AS_NODE = "1"
       const child = spawn(shell, args, {
         cwd: spec.cwd,
-        env: { ...env, [RUN_MARK]: app, [RUN_KEY_MARK]: runTag(app, key) },
+        env: runEnv,
         detached: true,
+        windowsHide: true,
         stdio: ["pipe", output.fd, output.fd],
       })
       const pid = await new Promise<number>((resolve, reject) => {
@@ -1296,20 +1352,15 @@ export class ThreadProcesses {
     while (await ours()) {
       if (signal?.aborted) return
       const tried = await new Promise<ReadyFailure | undefined>((done) => {
-        const child = hostSpawn("/bin/sh", ["-c", ready], { cwd: spec.cwd, env: spec.env, stdio: ["ignore", "pipe", "pipe"], detached: true })
+        const check = readyCommand(ready)
+        const child = hostSpawn(check.file, check.args, { cwd: spec.cwd, env: spec.env, stdio: ["ignore", "pipe", "pipe"], detached: true, windowsHide: true, windowsVerbatimArguments: check.windowsVerbatimArguments })
         let output = ""
         const keep = (chunk: Buffer) => {
           output = (output + chunk.toString()).slice(-READY_OUTPUT_CHARS)
         }
         child.stdout?.on("data", keep)
         child.stderr?.on("data", keep)
-        const timer = setTimeout(() => {
-          try {
-            process.kill(-child.pid!, "SIGKILL")
-          } catch {
-            // Over already.
-          }
-        }, READY_TRY_MS)
+        const timer = setTimeout(() => signalProcessTree(child.pid!, "SIGKILL", { orProcess: false, held: true }), READY_TRY_MS)
         child.once("error", (error) => {
           clearTimeout(timer)
           done({ code: null, output: error.message })
@@ -1541,6 +1592,8 @@ async function stopTree(record: Run, graceMs: number, owned: Set<string>, more?:
 }
 
 async function listeningPids(port: number): Promise<number[]> {
+  // Windows has no lsof: no listener is known, as when it matches nothing.
+  if (onWindows()) return []
   let stdout: string
   try {
     ({ stdout } = await hostProbe("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"], {
