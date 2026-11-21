@@ -673,6 +673,13 @@ function nameOf(block: Entry): string | undefined {
   }
 }
 
+/** Whether `update`, landing after `last`, starts a turn of its own, so nothing before it is found by name any more. */
+function opensTurn(update: LiveUpdate, last: Entry | undefined): boolean {
+  if (update.kind === "provider-turn") return true
+  if (update.kind !== "user" || update.steeringFor) return false
+  return !(update.messageId && last?.type === "user" && last.messageId === update.messageId)
+}
+
 function reduce(
   blocks: Entry[],
   updates: LiveUpdate[],
@@ -717,11 +724,18 @@ function reduce(
       if (key !== undefined && !named.has(key)) named.set(key, at)
     }
   }
-  reindex()
+  // The turn's blocks are indexed at the first update that may look one up. A batch that opens a turn (a prompt sent on,
+  // a provider's turn) empties the index before it reads it, and indexing first cost a scan of the whole turn before:
+  // 1 ms for a turn of 12,000 blocks, for each conversation a starting host sends on.
+  let indexed = false
   const findCurrent = (key: string) => named.get(key) ?? -1
   for (; current < updates.length; current++) {
     const update = updates[current]!
     const last = next.at(-1)
+    if (!indexed) {
+      indexed = true
+      if (!opensTurn(update, last)) reindex()
+    }
     // What travels is `sent`; these blocks take `update`, the same values, so a value sent whole again stays the one
     // string the harness sent rather than the old value joined to its new end.
     let sent: LiveUpdate = update

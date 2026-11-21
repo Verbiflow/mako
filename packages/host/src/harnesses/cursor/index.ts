@@ -23,6 +23,7 @@ import { cursorSdkNativeRunner } from "./sdk/native-runner.js"
 import { cursorSkillSource } from "./skills.js"
 import { cursorUsageHistory } from "./usage-history.js"
 import { resolveExecutable } from "../../base/executable.js"
+import { cursorSdkAvailable, installCursorSdk } from "./sdk/installed.js"
 import { scriptInstall } from "../update-source.js"
 import { CURSOR_VERSIONS } from "./versions.js"
 import { cursorPresentation } from "./presentation.js"
@@ -136,7 +137,10 @@ export const installCursor: ProviderModule = (host, context) => {
     // version from, so `cursor-agent update` is both the check and the update.
     updates: {
       provider: "cursor",
-      binary: (env) => resolveExecutable("cursor-agent", env),
+      // Installed is the CLI and the SDK its sessions run on: a host made without Cursor has neither until Settings
+      // installs them, the SDK by `completeInstall` once the CLI's installer is through.
+      binary: (env) => (cursorSdkAvailable() ? resolveExecutable("cursor-agent", env) : null),
+      completeInstall: (env) => installCursorSdk(context.appRoot, env),
       versions: CURSOR_VERSIONS,
       native: {
         label: "Update Cursor Agent",

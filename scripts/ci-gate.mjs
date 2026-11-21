@@ -131,6 +131,8 @@ export const STEPS = [
   [40, "MAKO_TEST_HARNESSES=grok npm run test:fin-move"],
   [40, "MAKO_TEST_HARNESSES=opencode npm run test:fin-move"],
   [40, "MAKO_TEST_HARNESSES=devin npm run test:fin-move"],
+  // What that suite says as it runs: each part as it ends, and one that doesn't end by name (`saidParts`).
+  [2, "tsx scripts/test-said-parts.ts"],
   [20, "npm run test:request-holds"],
   [67, "MAKO_TEST_HARNESSES=claude,codex npm run test:wake-queue"],
   [67, "MAKO_TEST_HARNESSES=cursor,grok npm run test:wake-queue"],
@@ -707,18 +709,27 @@ if (needsOnly) {
   process.exit(0)
 }
 /**
- * Each install starts at once, beside the parts, and only a part that needs it waits for it: awaited first, apt's
- * ffmpeg (17 to 45 s) held every test of the 20 shards that picked a recording part, and decided pr-gate's time
- * (run 43564312836: 8 of the 9 slowest shards installed it; shard 31's 145 s held 45 s of it).
+ * Each install runs beside the lanes' parts, and only a part that needs it waits for it: awaited first, apt's ffmpeg
+ * (17 to 45 s) held every test of the 20 shards that picked a recording part, and decided pr-gate's time (run
+ * 43564312836: 8 of the 9 slowest shards installed it; shard 31's 145 s held 45 s of it). They start once the shard's
+ * `ALONE` parts are done, not with them: started at once, dpkg and the video helper's compile ran on both of a
+ * runner's cores while a part measured the clock "alone", and test-trace-history-holds read a loop held 272 ms where
+ * alone it reads 17 to 40 (main, 2026-11-20, shard 7: the install took the shard's first 39 s, the part its first 3).
  */
-const installing = new Map([...new Set(picked.map(needOf).filter(Boolean))].map((need) => [need, (async () => {
-  let output = ""
-  const began = Date.now()
-  const code = await runSuite("bash", ["-c", INSTALL[need]], { limitMs: 5 * 60_000, quietMs: 5 * 60_000, write: (text) => { output += text } })
-  const via = output.match(/^install-via: (\S+)$/m)?.[1] ?? "nothing"
-  console.log(`::group::install ${need}\n${output}::endgroup::\n${code === 0 ? "installed" : "INSTALL FAILED"}: ${need} in ${Math.round((Date.now() - began) / 1000)} s, via ${via}`)
-  return code
-})()]))
+const installing = new Map()
+function install(need) {
+  if (!installing.has(need)) {
+    installing.set(need, (async () => {
+      let output = ""
+      const began = Date.now()
+      const code = await runSuite("bash", ["-c", INSTALL[need]], { limitMs: 5 * 60_000, quietMs: 5 * 60_000, write: (text) => { output += text } })
+      const via = output.match(/^install-via: (\S+)$/m)?.[1] ?? "nothing"
+      console.log(`::group::install ${need}\n${output}::endgroup::\n${code === 0 ? "installed" : "INSTALL FAILED"}: ${need} in ${Math.round((Date.now() - began) / 1000)} s, via ${via}`)
+      return code
+    })())
+  }
+  return installing.get(need)
+}
 
 // Parts run their scripts' tools as npm would, from the repository's own bin.
 process.env.PATH = `${new URL("../node_modules/.bin", import.meta.url).pathname}:${process.env.PATH}`
@@ -787,7 +798,7 @@ async function lane(steps) {
     // What it waits for an install isn't its own time either.
     const need = needOf(step)
     const installWait = Date.now()
-    if (code === 0 && need && (code = await installing.get(need)) !== 0) write(`${need} didn't install; see "install ${need}" above\n`)
+    if (code === 0 && need && (code = await install(need)) !== 0) write(`${need} didn't install; see "install ${need}" above\n`)
     const installed = Math.round((Date.now() - installWait) / 1000)
     const waiting = Date.now()
     await enter(ALONE.some((rule) => rule.test(command)))
@@ -809,8 +820,9 @@ async function lane(steps) {
     results.push({ command, code, seconds })
   }
 }
-// The measuring parts first, alone, then the lanes side by side.
+// The measuring parts first, alone, then the installs and the lanes side by side.
 await lane(first)
+for (const need of new Set(picked.map(needOf).filter(Boolean))) void install(need)
 await Promise.all(lanes.map(lane))
 clearInterval(heartbeat)
 

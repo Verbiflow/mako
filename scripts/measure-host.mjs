@@ -282,6 +282,21 @@ async function samplesBetween(from, to) {
     heapMb: Math.max(...window.map((row) => row.heapMb)),
   }
 }
+/**
+ * The measured host's heap after a full collection, which its preload makes when asked: what the host holds, where
+ * the sampled heap (`heapMb`) is that and whatever it hasn't collected yet (57 MB in one run and 83 in the next,
+ * 2026-11-21). Undefined where the preload isn't loaded (a packaged app's host).
+ */
+async function collectedHeapMb() {
+  await rm(`${samplesFile}.collected`, { force: true })
+  await writeFile(`${samplesFile}.collect`, "")
+  for (const deadline = Date.now() + 5_000; Date.now() < deadline; await delay(100)) {
+    const collected = await readFile(`${samplesFile}.collected`, "utf8").then(JSON.parse, () => undefined)
+    if (collected) return collected.heapMb
+  }
+  await rm(`${samplesFile}.collect`, { force: true })
+  return undefined
+}
 /** Starts or stops sampling the measured host's loop; the preload notices within its next second. */
 async function sampleTheLoop(on) {
   if (on) await writeFile(loopSwitch, "")
@@ -430,6 +445,7 @@ try {
   report.idle = {
     memory: await processes(host.pid, { footprint: true }),
     ...(await samplesBetween(idleFrom, Date.now())),
+    collectedHeapMb: packaged ? undefined : await collectedHeapMb(),
     ...(loopBefore && loopAfter && { loopChecksPerSecond: Math.round(((loopAfter.delayMs.checks - loopBefore.delayMs.checks) / ((Date.now() - idleFrom) / 1000)) * 10) / 10 }),
   }
 
