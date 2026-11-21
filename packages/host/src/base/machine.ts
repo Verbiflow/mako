@@ -32,6 +32,7 @@ export interface Machine {
   open(path: string, app?: string): Promise<boolean>
   /** Opens an address in the default browser, or the app registered for its scheme. */
   openUrl(url: string): Promise<void>
+  copy(text: string): Promise<void>
   /** The folder the person picks, or null if they cancel; the chooser opens at `defaultPath` when it's given. */
   chooseFolder(prompt: string, defaultPath?: string): Promise<string | null>
   /** The default browser's application path, when the machine says. */
@@ -109,7 +110,7 @@ const DEFAULT_BROWSER = [
 
 const MAC_OFFER: MachineOffer = { fileManager: "finder", chooseFolder: true }
 
-/** The Mac's own commands: `open`, AppleScript's folder chooser, Quick Look and AppKit through JXA. */
+/** The Mac's own commands: `open`, `pbcopy`, AppleScript's folder chooser, Quick Look and AppKit through JXA. */
 export function macMachine(run: RunCommand = runCommand): Machine {
   let browser: Promise<string | undefined> | undefined
   return {
@@ -118,6 +119,7 @@ export function macMachine(run: RunCommand = runCommand): Machine {
     reveal: async (path) => { await succeed(run, "open", ["-R", path]) },
     open: async (path, app) => (await run("open", app ? ["-a", app, path] : [path])).code === 0,
     openUrl: async (url) => { await succeed(run, "open", [url]) },
+    copy: async (text) => { await succeed(run, "pbcopy", [], { input: text }) },
     chooseFolder: async (prompt, defaultPath) => {
       // -128 is AppleScript's "user cancelled"; osascript exits 1 for it.
       const choose = defaultPath
@@ -168,7 +170,8 @@ export interface LinuxMachineInput {
 
 /**
  * A Linux desktop's own commands: `xdg-open`, the file manager over D-Bus,
- * `zenity` or `kdialog` for the folder chooser, each offered only when it is there. A session
+ * `zenity` or `kdialog` for the folder chooser, and `wl-copy`, `xclip` or
+ * `xsel` for the clipboard. Each is offered only when it's there. A session
  * variable and `xdg-open` alone don't prove a folder opens: without an
  * `inode/directory` handler `xdg-open` exits after its launcher detaches and
  * nothing appears, so the file manager is offered only with a handler.
@@ -182,6 +185,11 @@ export function linuxMachine({ env, run = runCommand, find = commandsOnPath(env)
       () => false
     ))
   const chooser = async () => (await find("zenity")) ? "zenity" : (await find("kdialog")) ? "kdialog" : null
+  const clipboard = async () =>
+    env.WAYLAND_DISPLAY && (await find("wl-copy")) ? (["wl-copy", []] as const)
+      : (await find("xclip")) ? (["xclip", ["-selection", "clipboard"]] as const)
+      : (await find("xsel")) ? (["xsel", ["--clipboard", "--input"]] as const)
+      : null
   const offer = () => (probed ??= (async (): Promise<MachineOffer> => {
     const [fileManager, folder] = await Promise.all([folderHandler(), chooser()])
     const missing = [
@@ -218,6 +226,11 @@ export function linuxMachine({ env, run = runCommand, find = commandsOnPath(env)
     async openUrl(url) {
       if (!(await find("xdg-open"))) throw new MachineAbsentError("This machine has no xdg-open to open links with.")
       if (!(await xdgOpen(url))) throw new Error(`xdg-open couldn't open ${url}`)
+    },
+    async copy(text) {
+      const command = await clipboard()
+      if (!command) throw new MachineAbsentError("This machine has no clipboard command (wl-copy, xclip or xsel).")
+      await succeed(run, command[0], [...command[1]], { input: text })
     },
     async chooseFolder(prompt, defaultPath) {
       const command = await chooser()

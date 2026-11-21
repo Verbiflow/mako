@@ -1767,7 +1767,7 @@ test("a grant or a revoke while signed in reads the sign-ins again, with nothing
   const unused = async (): Promise<never> => {
     throw new Error("Not used by the account")
   }
-  const machine: Machine = { kind: "present", offer: unused, reveal: unused, open: unused, openUrl: async (url) => void opened.push(url), chooseFolder: unused, defaultBrowser: unused, thumbnail: unused }
+  const machine: Machine = { kind: "present", offer: unused, reveal: unused, open: unused, openUrl: async (url) => void opened.push(url), copy: unused, chooseFolder: unused, defaultBrowser: unused, thumbnail: unused }
   const registry = new ProviderRegistry<ProviderAccountCapability>()
   const dataRoot = join(scratch, randomUUID())
   const account = declareCloudAccountMethods(

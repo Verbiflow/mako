@@ -107,15 +107,14 @@ try {
   ])
   // The same without B-frames, for the cursor's re-encode: AVFoundation, which decodes a native video on a Mac to draw
   // the pointer on it, reads this FFmpeg-made file's B-frames two frames apart from FFmpeg itself (a driver's
-  // AVFoundation-made video has no such disagreement), which would move the cut's edge, not test it. Baseline, as the
-  // video helper records on Linux, whose OpenH264 decoder draws the pointer there.
+  // AVFoundation-made video has no such disagreement), which would move the cut's edge, not test it.
   const nativeWithoutReordering = join(root, "native-no-b.mp4")
   await execute(inspector, [
     "-v", "error", "-y",
     "-f", "lavfi", "-i", "color=c=0xdc1e1e:s=640x360:r=30:d=2.1",
     "-f", "lavfi", "-i", "color=c=0x1e3cdc:s=640x360:r=30:d=2.9",
     "-filter_complex", "[0:v][1:v]concat=n=2:v=1[v];[v]select='not(between(t\\,2.1\\,4.6))'[o]",
-    "-map", "[o]", "-fps_mode", "vfr", "-c:v", "libx264", "-bf", "0", "-profile:v", "baseline", "-pix_fmt", "yuv420p",
+    "-map", "[o]", "-fps_mode", "vfr", "-c:v", "libx264", "-bf", "0", "-pix_fmt", "yuv420p",
     "-bsf:v", "setts=duration=if(gte(PTS*TB\\,4.96)\\,3/TB\\,DURATION)", nativeWithoutReordering,
   ])
   for (const cursor of [false, true]) {

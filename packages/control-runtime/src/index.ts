@@ -5,7 +5,6 @@ import type { LocalBrowser } from "./browser-discovery.js"
 import { createControlSession } from "./control-session.js"
 import type { ComputerDriverProcess } from "./computer-driver-client.js"
 import type { BrowserCall } from "./browser-tools-runtime.js"
-import { linuxDesktop } from "./platform.js"
 
 export type { ControlSession } from "./control-session.js"
 export type { LocalBrowser } from "./browser-discovery.js"
@@ -40,6 +39,5 @@ export function createControlRuntime(options: ControlRuntimeOptions) {
     browserCall,
     artifacts: options.artifacts,
     previewEnvironment: {},
-    recordingDesktop: linuxDesktop(),
   })
 }

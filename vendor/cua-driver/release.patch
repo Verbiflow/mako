@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
-index a91f724..bc07f41 100644
+index a91f724..c6d0942 100644
 --- a/libs/cua-driver/rust/Cargo.lock
 +++ b/libs/cua-driver/rust/Cargo.lock
 @@ -1151,7 +1151,7 @@ dependencies = [
@@ -7,7 +7,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "cua-driver"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -16,7 +16,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "cua-driver-bindgen"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "cbindgen",
   "uniffi",
@@ -25,7 +25,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "cua-driver-contract"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "schemars",
   "serde",
@@ -34,7 +34,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "cua-driver-core"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -43,7 +43,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "cua-driver-sdk"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "async-trait",
   "core-foundation",
@@ -52,7 +52,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "cua-driver-testkit"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "core-foundation",
   "image",
@@ -61,7 +61,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "cua-driver-uia"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "cua-driver-core",
@@ -70,7 +70,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "cursor-overlay"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "cua-driver-contract",
@@ -79,7 +79,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "cursor-theme-cli"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "cursor-overlay",
@@ -88,7 +88,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "pip-preview"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "serde_json",
  ]
@@ -97,7 +97,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "platform-linux"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "ashpd",
@@ -106,7 +106,7 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "platform-macos"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -115,12 +115,12 @@ index a91f724..bc07f41 100644
  [[package]]
  name = "platform-windows"
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  dependencies = [
   "anyhow",
   "async-trait",
 diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
-index 351b086..c5f29a1 100644
+index 351b086..671fd9d 100644
 --- a/libs/cua-driver/rust/Cargo.toml
 +++ b/libs/cua-driver/rust/Cargo.toml
 @@ -17,7 +17,7 @@ members = [
@@ -128,7 +128,7 @@ index 351b086..c5f29a1 100644
  
  [workspace.package]
 -version = "0.28.2"
-+version = "0.28.2+mako.28"
++version = "0.28.2+mako.26"
  edition = "2021"
  authors = ["trycua"]
  license = "MIT"
@@ -3819,124 +3819,6 @@ index 29a4d2d..2d0c76d 100644
 +        pressed,
 +    );
 +}
-diff --git a/libs/cua-driver/rust/crates/platform-linux/src/installed_apps.rs b/libs/cua-driver/rust/crates/platform-linux/src/installed_apps.rs
-index 4268e0a..ce5dbbe 100644
---- a/libs/cua-driver/rust/crates/platform-linux/src/installed_apps.rs
-+++ b/libs/cua-driver/rust/crates/platform-linux/src/installed_apps.rs
-@@ -133,7 +133,7 @@ fn parse_desktop_file(path: &Path, bundle_id: &str) -> Option<InstalledApp> {
- 
-     let name = string_key(&entry, "Name")?;
-     let exec_raw = string_key(&entry, "Exec")?;
--    let launch_path = strip_exec_field_codes(&exec_raw);
-+    let launch_path = strip_exec_field_codes(&unescape_value(&exec_raw));
-     if launch_path.is_empty() {
-         return None;
-     }
-@@ -229,8 +229,10 @@ fn strip_exec_field_codes(exec: &str) -> String {
-     let mut chars = exec.chars().peekable();
-     while let Some(c) = chars.next() {
-         if c == '%' {
--            // Consume the field-code letter, drop both.
--            chars.next();
-+            // `%%` is a literal percent sign; any other field code is dropped with its letter.
-+            if chars.next() == Some('%') {
-+                out.push('%');
-+            }
-             continue;
-         }
-         out.push(c);
-@@ -238,6 +240,73 @@ fn strip_exec_field_codes(exec: &str) -> String {
-     out.trim().to_owned()
- }
- 
-+/// A desktop entry string value's escapes (`\s`, `\n`, `\t`, `\r`, `\\`), undone before `Exec=` is split.
-+fn unescape_value(value: &str) -> String {
-+    let mut out = String::with_capacity(value.len());
-+    let mut chars = value.chars();
-+    while let Some(c) = chars.next() {
-+        if c != '\\' {
-+            out.push(c);
-+            continue;
-+        }
-+        match chars.next() {
-+            Some('s') => out.push(' '),
-+            Some('n') => out.push('\n'),
-+            Some('t') => out.push('\t'),
-+            Some('r') => out.push('\r'),
-+            Some('\\') => out.push('\\'),
-+            Some(other) => {
-+                out.push('\\');
-+                out.push(other);
-+            }
-+            None => out.push('\\'),
-+        }
-+    }
-+    out
-+}
-+
-+/// A command line split as the desktop entry spec quotes `Exec=`: arguments separated by spaces, a double-quoted
-+/// argument kept whole, and `\"`, `` \` ``, `\$` and `\\` inside quotes (and a backslash outside them) escaping
-+/// the next character. `name` and `launch_path` both go through it, so an argument with spaces survives.
-+pub(crate) fn exec_argv(command: &str) -> Vec<String> {
-+    let mut args = Vec::new();
-+    let mut current = String::new();
-+    let mut started = false;
-+    let mut quoted = false;
-+    let mut chars = command.chars();
-+    while let Some(c) = chars.next() {
-+        match c {
-+            '"' => {
-+                quoted = !quoted;
-+                started = true;
-+            }
-+            '\\' => {
-+                if let Some(next) = chars.next() {
-+                    if quoted && !matches!(next, '"' | '`' | '$' | '\\') {
-+                        current.push('\\');
-+                    }
-+                    current.push(next);
-+                    started = true;
-+                }
-+            }
-+            c if c.is_whitespace() && !quoted => {
-+                if started {
-+                    args.push(std::mem::take(&mut current));
-+                    started = false;
-+                }
-+            }
-+            c => {
-+                current.push(c);
-+                started = true;
-+            }
-+        }
-+    }
-+    if started {
-+        args.push(current);
-+    }
-+    args
-+}
-+
- /// Format Unix epoch seconds as `YYYY-MM-DDTHH:MM:SSZ` (UTC).
- fn unix_secs_to_rfc3339(secs: i64) -> String {
-     let days = secs.div_euclid(86_400);
-@@ -266,6 +335,17 @@ fn unix_secs_to_rfc3339(secs: i64) -> String {
- 
- #[cfg(test)]
- mod tests {
-+    #[test]
-+    fn exec_argv_honours_desktop_entry_quoting() {
-+        use super::{exec_argv, strip_exec_field_codes, unescape_value};
-+        assert_eq!(exec_argv(r#"python3 /opt/a b/fixture.py"#), ["python3", "/opt/a", "b/fixture.py"]);
-+        assert_eq!(exec_argv(r#"python3 "/opt/a b/fixture.py" "Mako fixture""#), ["python3", "/opt/a b/fixture.py", "Mako fixture"]);
-+        assert_eq!(exec_argv(r#"sh -c "echo \"hi\" \$HOME \\ \x""#), ["sh", "-c", r#"echo "hi" $HOME \ \x"#]);
-+        assert_eq!(exec_argv(r#"app "" end"#), ["app", "", "end"]);
-+        assert_eq!(strip_exec_field_codes("firefox %u --pct 100%%"), "firefox  --pct 100%");
-+        assert_eq!(exec_argv(&strip_exec_field_codes(&unescape_value(r#"code\s--new "a\\\\b" %F"#))), ["code", "--new", r#"a\b"#]);
-+    }
-+
-     use super::*;
- 
-     #[test]
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/lib.rs b/libs/cua-driver/rust/crates/platform-linux/src/lib.rs
 index 879aa53..f54758a 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/lib.rs
@@ -3964,58 +3846,8 @@ index 879aa53..f54758a 100644
 +
 +#[cfg(target_os = "linux")]
 +pub mod video_window;
-diff --git a/libs/cua-driver/rust/crates/platform-linux/src/overlay.rs b/libs/cua-driver/rust/crates/platform-linux/src/overlay.rs
-index 69262af..8abe3ab 100644
---- a/libs/cua-driver/rust/crates/platform-linux/src/overlay.rs
-+++ b/libs/cua-driver/rust/crates/platform-linux/src/overlay.rs
-@@ -384,8 +384,45 @@ fn dispatch_wayland_overlay_message(msg: &OverlayMsg) -> WaylandOverlayBackend {
-     backend
- }
- 
-+/// Session keys whose agent cursor was turned off (`set_agent_cursor_enabled(false)`). The Shell helper keeps no
-+/// per-session state, so without this a later click re-showed a cursor its session had hidden.
-+#[cfg(target_os = "linux")]
-+static SHELL_CURSOR_OFF: std::sync::Mutex<Option<HashSet<CursorKey>>> = std::sync::Mutex::new(None);
-+
-+/// Whether the Shell helper may draw this session's cursor: the daemon has an overlay (not `--no-overlay`) and the
-+/// session has not turned its cursor off.
-+#[cfg(target_os = "linux")]
-+fn shell_cursor_allowed(key: &str) -> bool {
-+    let daemon_overlay = RENDER
-+        .lock()
-+        .ok()
-+        .and_then(|guard| guard.as_ref().map(|map| map.template.enabled))
-+        .unwrap_or(false);
-+    daemon_overlay
-+        && !SHELL_CURSOR_OFF
-+            .lock()
-+            .map(|off| off.as_ref().is_some_and(|keys| keys.contains(key)))
-+            .unwrap_or(false)
-+}
-+
- #[cfg(target_os = "linux")]
- fn dispatch_shell_helper_command(key: &str, cmd: &OverlayCommand, semantic: bool) {
-+    if let OverlayCommand::SetEnabled(enabled) = cmd {
-+        if let Ok(mut off) = SHELL_CURSOR_OFF.lock() {
-+            let keys = off.get_or_insert_with(HashSet::new);
-+            if *enabled {
-+                keys.remove(key);
-+            } else {
-+                keys.insert(key.to_owned());
-+            }
-+        }
-+    }
-+    if !shell_cursor_allowed(key) {
-+        if matches!(cmd, OverlayCommand::SetEnabled(false)) {
-+            crate::wayland::shell_helper::hide_cursor();
-+        }
-+        return;
-+    }
-     if semantic {
-         crate::wayland::shell_helper::set_cursor_color(&cursor_overlay::session_fill_hex(key));
-     }
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
-index d835bf1..800f4de 100644
+index d835bf1..b7ec1ef 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/tools/impl_.rs
 @@ -460,8 +460,7 @@ impl Tool for ListWindowsTool {
@@ -4145,23 +3977,7 @@ index d835bf1..800f4de 100644
              checked: None,
              enabled: Some(true),
              selected: None,
-@@ -1165,10 +1176,12 @@ fn contains_remote_debugging_flag(value: &str) -> bool {
- /// `Exec=` value with field codes stripped) in the background and return the
- /// child pid.
- fn spawn_launch_command(cmd: &str, additional_arguments: &[String]) -> std::io::Result<u32> {
--    let mut parts = cmd.split_whitespace();
--    let prog = parts.next().unwrap_or(cmd);
--    let mut rest: Vec<String> = parts.map(str::to_owned).collect();
-+    // Split as the desktop entry spec quotes `Exec=`, so an argument with a space (a path, a title) stays one.
-+    let mut parts = crate::installed_apps::exec_argv(cmd).into_iter();
-+    let prog = parts.next().unwrap_or_else(|| cmd.to_owned());
-+    let mut rest: Vec<String> = parts.collect();
-     rest.extend(additional_arguments.iter().cloned());
-+    let prog = prog.as_str();
-     let mut launch = std::process::Command::new(prog);
-     launch
-         .args(&rest)
-@@ -3363,7 +3376,7 @@ impl Tool for ClickTool {
+@@ -3363,7 +3374,7 @@ impl Tool for ClickTool {
              // sees the cursor "click somewhere else."
              reveal_pointer_action_for(&self.state, &cursor_id, f64::from(sx), f64::from(sy), true)
                  .await;
@@ -4170,7 +3986,7 @@ index d835bf1..800f4de 100644
                  if crate::wayland::wayland_input_enabled() {
                      if !modifiers.is_empty() {
                          anyhow::bail!(
-@@ -3402,6 +3415,9 @@ impl Tool for ClickTool {
+@@ -3402,6 +3413,9 @@ impl Tool for ClickTool {
              Ok(v) => v,
              Err(e) => return e,
          };
@@ -4180,7 +3996,7 @@ index d835bf1..800f4de 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          let count = args.u64_or("count", 1) as usize;
          let isolated_background = isolated_hyprland_background(delivery);
-@@ -3450,6 +3466,23 @@ impl Tool for ClickTool {
+@@ -3450,6 +3464,23 @@ impl Tool for ClickTool {
              cua_driver_core::element_token::ResolvedElement::None => window_id_arg,
          };
  
@@ -4204,7 +4020,7 @@ index d835bf1..800f4de 100644
          if let Some(idx) = elem_idx_resolved {
              let xid_hint = window_id_resolved;
              // Resolve the element's screen center + its window FIRST, so the
-@@ -3457,8 +3490,8 @@ impl Tool for ClickTool {
+@@ -3457,8 +3488,8 @@ impl Tool for ClickTool {
              // matching the coordinate path below and the macOS/Windows backends.
              // Previously perform_action ran inside this spawn_blocking, so the
              // app updated before the cursor visibly arrived.
@@ -4215,7 +4031,7 @@ index d835bf1..800f4de 100644
                      let (cx, cy) = element_screen_center(pid, idx, xid_hint)?;
                      let xid = xid_hint
                          .or_else(|| {
-@@ -3469,10 +3502,11 @@ impl Tool for ClickTool {
+@@ -3469,10 +3500,11 @@ impl Tool for ClickTool {
                          })
                          .unwrap_or(0);
                      Ok((xid, cx, cy))
@@ -4231,7 +4047,7 @@ index d835bf1..800f4de 100644
              if let Some((xid, sx, sy)) = placement {
                  if xid != 0 {
                      crate::overlay::send_command_for(
-@@ -3494,9 +3528,10 @@ impl Tool for ClickTool {
+@@ -3494,9 +3526,10 @@ impl Tool for ClickTool {
                  );
              }
              if element_click_prefers_ax(foreground_hyprland, button, count, !modifiers.is_empty()) {
@@ -4245,7 +4061,7 @@ index d835bf1..800f4de 100644
                  if let Ok(Ok((_action, suspected_noop))) = ax_result {
                      let mut structured = json!({
                          "path": "ax",
-@@ -3524,7 +3559,7 @@ impl Tool for ClickTool {
+@@ -3524,7 +3557,7 @@ impl Tool for ClickTool {
                          "an exact window_id or window-bound element token is required",
                      );
                  };
@@ -4254,7 +4070,7 @@ index d835bf1..800f4de 100644
                      resolve_element_local_coords(pid, idx, Some(xid))
                  })
                  .await;
-@@ -3592,44 +3627,45 @@ impl Tool for ClickTool {
+@@ -3592,44 +3625,45 @@ impl Tool for ClickTool {
  
              // The AX route was unavailable. Fall back to a target-addressed
              // X11 event for toolkits that accept it.
@@ -4334,7 +4150,7 @@ index d835bf1..800f4de 100644
              return match result {
                  // An element click is never driver-verifiable (no read-back) —
                  // verified:false; the caller confirms via screenshot. `effect` is
-@@ -3701,7 +3737,7 @@ impl Tool for ClickTool {
+@@ -3701,7 +3735,7 @@ impl Tool for ClickTool {
          let glide_target = if let Some((sx, sy)) = wayland_output_point {
              Some((sx as f64, sy as f64))
          } else {
@@ -4343,7 +4159,7 @@ index d835bf1..800f4de 100644
                  .await
                  .ok()
                  .and_then(|r| r.ok())
-@@ -3739,7 +3775,7 @@ impl Tool for ClickTool {
+@@ -3739,7 +3773,7 @@ impl Tool for ClickTool {
                  );
              }
              if button == 1 && count == 1 {
@@ -4352,7 +4168,7 @@ index d835bf1..800f4de 100644
                      crate::atspi::perform_action_at_screen_point(pid, xid, output_x, output_y)
                  })
                  .await;
-@@ -3767,107 +3803,108 @@ impl Tool for ClickTool {
+@@ -3767,107 +3801,108 @@ impl Tool for ClickTool {
          // delivery_mode: background (default) = no-focus-steal injection;
          // foreground = activate the target window (EWMH) first, then inject,
          // then restore prior active. Mirrors macOS/Windows.
@@ -4549,7 +4365,7 @@ index d835bf1..800f4de 100644
          let mode_label = if delivery.is_foreground() {
              "foreground"
          } else {
-@@ -3954,8 +3991,10 @@ async fn focus_nested_inject_target(
+@@ -3954,8 +3989,10 @@ async fn focus_nested_inject_target(
      pixel: Option<(f64, f64)>,
  ) -> Result<(), ToolResult> {
      if let Some(index) = element_index {
@@ -4562,7 +4378,7 @@ index d835bf1..800f4de 100644
          {
              Ok(Ok(true)) => Ok(()),
              Ok(Ok(false)) => Err(ToolResult::error(format!(
-@@ -3966,7 +4005,7 @@ async fn focus_nested_inject_target(
+@@ -3966,7 +4003,7 @@ async fn focus_nested_inject_target(
          };
      }
      if let Some((x, y)) = pixel {
@@ -4571,7 +4387,7 @@ index d835bf1..800f4de 100644
              crate::wayland::inject_click(pid, window_id, x, y, 1, 1)
          })
          .await
-@@ -3981,6 +4020,51 @@ async fn focus_nested_inject_target(
+@@ -3981,6 +4018,51 @@ async fn focus_nested_inject_target(
  
  // ── type_text ─────────────────────────────────────────────────────────────────
  
@@ -4623,7 +4439,7 @@ index d835bf1..800f4de 100644
  pub struct TypeTextTool {
      state: Arc<ToolState>,
  }
-@@ -4093,6 +4177,9 @@ impl Tool for TypeTextTool {
+@@ -4093,6 +4175,9 @@ impl Tool for TypeTextTool {
                  }
              }
          };
@@ -4633,7 +4449,7 @@ index d835bf1..800f4de 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          if isolated_hyprland_background(delivery)
              && resolved_elem_idx.is_none()
-@@ -4824,6 +4911,9 @@ impl Tool for PressKeyTool {
+@@ -4824,6 +4909,9 @@ impl Tool for PressKeyTool {
          // Reuses click's translation + delivery_mode; after it, deliver via the plain
          // background path (the focus-click already handled fronting when fg). Pass x,y
          // (no element_index) for Chromium/Electron surfaces the AX path can't focus.
@@ -4643,7 +4459,7 @@ index d835bf1..800f4de 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          if isolated_hyprland_background(delivery) {
              if xid_opt.is_none() {
-@@ -5222,6 +5312,9 @@ impl Tool for HotkeyTool {
+@@ -5222,6 +5310,9 @@ impl Tool for HotkeyTool {
          let key_display = format!("{}+{}", mods.join("+"), key);
          let key_for_wayland = key.clone();
          let mods_for_wayland = mods.clone();
@@ -4653,7 +4469,7 @@ index d835bf1..800f4de 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
  
          if isolated_hyprland_background(delivery) {
-@@ -5524,6 +5617,15 @@ impl Tool for SetValueTool {
+@@ -5524,6 +5615,15 @@ impl Tool for SetValueTool {
                  "set_value requires element_index or element_token to address the target element.",
              ),
          };
@@ -4669,7 +4485,7 @@ index d835bf1..800f4de 100644
          let value_for_task = value.clone();
          let xid = args
              .opt_u64("window_id")
-@@ -5531,9 +5633,10 @@ impl Tool for SetValueTool {
+@@ -5531,9 +5631,10 @@ impl Tool for SetValueTool {
              .unwrap_or(0);
          position_named_session_keyboard_cursor(&self.state, &args, pid, xid, Some(idx), None, true)
              .await;
@@ -4683,7 +4499,7 @@ index d835bf1..800f4de 100644
          match result {
              Ok(Ok(())) => ToolResult::text(format!("Set value of element [{idx}] to '{value}'.")),
              Ok(Err(e)) => ToolResult::error(e.to_string()),
-@@ -5691,7 +5794,7 @@ impl Tool for ScrollTool {
+@@ -5691,7 +5792,7 @@ impl Tool for ScrollTool {
                  )
                  .await;
              }
@@ -4692,7 +4508,7 @@ index d835bf1..800f4de 100644
                  if wayland {
                      crate::wayland::scroll_desktop(x, y, &direction, amount as u32)
                  } else {
-@@ -5750,10 +5853,11 @@ impl Tool for ScrollTool {
+@@ -5750,10 +5851,11 @@ impl Tool for ScrollTool {
          let xid = match xid_opt {
              Some(x) => x,
              None => {
@@ -4708,7 +4524,7 @@ index d835bf1..800f4de 100644
                  match windows.first() {
                      Some(w) => w.xid,
                      None => {
-@@ -5792,7 +5896,7 @@ impl Tool for ScrollTool {
+@@ -5792,7 +5894,7 @@ impl Tool for ScrollTool {
          }
  
          if named_session_cursor_key(&args).is_some() {
@@ -4717,7 +4533,7 @@ index d835bf1..800f4de 100644
                  explicit_keyboard_cursor_target(pid, xid, resolved_element_index, pixel_target)
                      .or_else(|| keyboard_window_center(xid))
              })
-@@ -5808,6 +5912,9 @@ impl Tool for ScrollTool {
+@@ -5808,6 +5910,9 @@ impl Tool for ScrollTool {
              }
          }
  
@@ -4727,7 +4543,7 @@ index d835bf1..800f4de 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          let isolated_background = isolated_hyprland_background(delivery);
          if !isolated_background {
-@@ -5826,7 +5933,7 @@ impl Tool for ScrollTool {
+@@ -5826,7 +5931,7 @@ impl Tool for ScrollTool {
              // coordinate-based compositor fallback.
              if !(crate::wayland::wayland_input_enabled() && is_webkitgtk_embedder(pid)) {
                  let direction_for_ax = direction.clone();
@@ -4736,7 +4552,7 @@ index d835bf1..800f4de 100644
                      crate::atspi::scroll_element(pid, idx, &direction_for_ax, amount, by)
                  })
                  .await;
-@@ -5855,7 +5962,7 @@ impl Tool for ScrollTool {
+@@ -5855,7 +5960,7 @@ impl Tool for ScrollTool {
                  );
              }
              let point = if let Some(index) = resolved_element_index {
@@ -4745,7 +4561,7 @@ index d835bf1..800f4de 100644
                      resolve_element_local_coords(pid, index, Some(xid))
                  })
                  .await
-@@ -5925,7 +6032,7 @@ impl Tool for ScrollTool {
+@@ -5925,7 +6030,7 @@ impl Tool for ScrollTool {
                  );
              };
              let direction_for_inject = direction.clone();
@@ -4754,7 +4570,7 @@ index d835bf1..800f4de 100644
                  crate::wayland::inject_scroll(pid, xid, x, y, &direction_for_inject, amount as u32)
              })
              .await;
-@@ -5957,7 +6064,7 @@ impl Tool for ScrollTool {
+@@ -5957,7 +6062,7 @@ impl Tool for ScrollTool {
                      },
                  ) => {
                      let idx = *element_index;
@@ -4763,7 +4579,7 @@ index d835bf1..800f4de 100644
                          resolve_element_local_coords(pid, idx, Some(xid))
                      })
                      .await
-@@ -5980,7 +6087,7 @@ impl Tool for ScrollTool {
+@@ -5980,7 +6085,7 @@ impl Tool for ScrollTool {
              let output_point = local_point.map(|(x, y)| {
                  crate::wayland::window_local_to_output(xid, x.round() as i32, y.round() as i32)
              });
@@ -4772,7 +4588,7 @@ index d835bf1..800f4de 100644
                  crate::wayland::scroll_at(xid, output_point, &direction_for_wayland, amount as u32)
              })
              .await;
-@@ -6008,7 +6115,7 @@ impl Tool for ScrollTool {
+@@ -6008,7 +6113,7 @@ impl Tool for ScrollTool {
          let element_point = match &resolved {
              cua_driver_core::element_token::ResolvedElement::Element { element_index, .. } => {
                  let idx = *element_index;
@@ -4781,7 +4597,7 @@ index d835bf1..800f4de 100644
                      resolve_element_local_coords(pid, idx, Some(xid))
                  })
                  .await
-@@ -6046,7 +6153,7 @@ impl Tool for ScrollTool {
+@@ -6046,7 +6151,7 @@ impl Tool for ScrollTool {
          let cursor_id_for_task = cursor_id.clone();
          let direction_for_wayland = direction.clone();
          let amount_u32 = amount as u32;
@@ -4790,7 +4606,7 @@ index d835bf1..800f4de 100644
              if crate::wayland::wayland_input_enabled() {
                  return crate::wayland::scroll(xid, &direction_for_wayland, amount_u32);
              }
-@@ -6174,6 +6281,9 @@ impl Tool for DoubleClickTool {
+@@ -6174,6 +6279,9 @@ impl Tool for DoubleClickTool {
              Ok(v) => v,
              Err(e) => return e,
          };
@@ -4800,7 +4616,7 @@ index d835bf1..800f4de 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          if let Some(refusal) = unavailable_chromium_background(pid, delivery) {
              return refusal;
-@@ -6224,16 +6334,19 @@ impl Tool for DoubleClickTool {
+@@ -6224,16 +6332,19 @@ impl Tool for DoubleClickTool {
          };
          if let Some(idx) = elem_idx_resolved {
              let xid_hint = window_id_resolved;
@@ -4827,7 +4643,7 @@ index d835bf1..800f4de 100644
                      {
                          crate::overlay::send_command_for(
                              cursor_id.clone(),
-@@ -6246,7 +6359,7 @@ impl Tool for DoubleClickTool {
+@@ -6246,7 +6357,7 @@ impl Tool for DoubleClickTool {
                      let wayland_point = crate::wayland::wayland_input_enabled()
                          .then(|| crate::wayland::window_local_to_output(xid, lxi, lyi));
                      let cursor_id_for_task = cursor_id.clone();
@@ -4836,7 +4652,7 @@ index d835bf1..800f4de 100644
                          if crate::wayland::is_inject_mode() {
                              return crate::wayland::inject_click(pid, xid, lx, ly, 2, 1);
                          }
-@@ -6320,7 +6433,7 @@ impl Tool for DoubleClickTool {
+@@ -6320,7 +6431,7 @@ impl Tool for DoubleClickTool {
          let glide_target = if let Some((sx, sy)) = wayland_output_point {
              Some((sx as f64, sy as f64))
          } else {
@@ -4845,7 +4661,7 @@ index d835bf1..800f4de 100644
                  .await
                  .ok()
                  .and_then(|r| r.ok())
-@@ -6330,7 +6443,7 @@ impl Tool for DoubleClickTool {
+@@ -6330,7 +6441,7 @@ impl Tool for DoubleClickTool {
          }
          let (xi, yi) = (x as i32, y as i32);
          let cursor_id_for_task = cursor_id.clone();
@@ -4854,7 +4670,7 @@ index d835bf1..800f4de 100644
              if crate::wayland::is_inject_mode() {
                  return crate::wayland::inject_click(pid, xid, x, y, 2, 1);
              }
-@@ -6413,6 +6526,9 @@ impl Tool for RightClickTool {
+@@ -6413,6 +6524,9 @@ impl Tool for RightClickTool {
              Ok(v) => v,
              Err(e) => return e,
          };
@@ -4864,7 +4680,7 @@ index d835bf1..800f4de 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          if let Some(refusal) = unavailable_chromium_background(pid, delivery) {
              return refusal;
-@@ -6463,16 +6579,19 @@ impl Tool for RightClickTool {
+@@ -6463,16 +6577,19 @@ impl Tool for RightClickTool {
          };
          if let Some(idx) = elem_idx_resolved {
              let xid_hint = window_id_resolved;
@@ -4891,7 +4707,7 @@ index d835bf1..800f4de 100644
                      {
                          crate::overlay::send_command_for(
                              cursor_id.clone(),
-@@ -6485,7 +6604,7 @@ impl Tool for RightClickTool {
+@@ -6485,7 +6602,7 @@ impl Tool for RightClickTool {
                      let wayland_point = crate::wayland::wayland_input_enabled()
                          .then(|| crate::wayland::window_local_to_output(xid, lxi, lyi));
                      let cursor_id_for_task = cursor_id.clone();
@@ -4900,7 +4716,7 @@ index d835bf1..800f4de 100644
                          if crate::wayland::is_inject_mode() {
                              return crate::wayland::inject_click(pid, xid, lx, ly, 1, 3);
                          }
-@@ -6559,7 +6678,7 @@ impl Tool for RightClickTool {
+@@ -6559,7 +6676,7 @@ impl Tool for RightClickTool {
          let glide_target = if let Some((sx, sy)) = wayland_output_point {
              Some((sx as f64, sy as f64))
          } else {
@@ -4909,7 +4725,7 @@ index d835bf1..800f4de 100644
                  .await
                  .ok()
                  .and_then(|r| r.ok())
-@@ -6569,7 +6688,7 @@ impl Tool for RightClickTool {
+@@ -6569,7 +6686,7 @@ impl Tool for RightClickTool {
          }
          let (xi, yi) = (x as i32, y as i32);
          let cursor_id_for_task = cursor_id.clone();
@@ -4918,7 +4734,7 @@ index d835bf1..800f4de 100644
              if crate::wayland::is_inject_mode() {
                  return crate::wayland::inject_click(pid, xid, x, y, 1, 3);
              }
-@@ -6676,7 +6795,7 @@ impl Tool for DragTool {
+@@ -6676,7 +6793,7 @@ impl Tool for DragTool {
              let steps = input.steps.unwrap_or(20).clamp(1, 200) as usize;
              let wayland = crate::wayland::wayland_input_enabled();
              let path = if wayland { "wayland_desktop" } else { "xtest" };
@@ -4927,7 +4743,7 @@ index d835bf1..800f4de 100644
                  if wayland {
                      crate::wayland::drag_desktop(
                          from_x.round() as i32,
-@@ -6728,6 +6847,9 @@ impl Tool for DragTool {
+@@ -6728,6 +6845,9 @@ impl Tool for DragTool {
              Some(v) => v,
              None => return ToolResult::error("window_id is required on Linux."),
          };
@@ -4937,7 +4753,7 @@ index d835bf1..800f4de 100644
          let delivery = crate::input::delivery::DeliveryMode::from_args(&args);
          let isolated_background = isolated_hyprland_background(delivery);
          if !isolated_background {
-@@ -6939,10 +7061,12 @@ impl Tool for DragTool {
+@@ -6939,10 +7059,12 @@ impl Tool for DragTool {
          let screen_from = if let Some((from, _)) = wayland_points {
              Some((from.0 as f64, from.1 as f64))
          } else {
@@ -4954,7 +4770,7 @@ index d835bf1..800f4de 100644
          };
          if let Some((sx_from, sy_from)) = screen_from {
              overlay_glide_to_for(&cursor_id, sx_from, sy_from).await;
-@@ -6964,7 +7088,7 @@ impl Tool for DragTool {
+@@ -6964,7 +7086,7 @@ impl Tool for DragTool {
          if crate::wayland::wayland_input_enabled() {
              let steps_u32 = steps as u32;
              let drag_result = if crate::wayland::is_inject_mode() {
@@ -4963,7 +4779,7 @@ index d835bf1..800f4de 100644
                      crate::wayland::inject_drag(
                          pid,
                          xid,
-@@ -6979,7 +7103,7 @@ impl Tool for DragTool {
+@@ -6979,7 +7101,7 @@ impl Tool for DragTool {
                      (from_x.round() as i32, from_y.round() as i32),
                      (to_x.round() as i32, to_y.round() as i32),
                  ));
@@ -4972,7 +4788,7 @@ index d835bf1..800f4de 100644
                      crate::wayland::drag(xid, fxi, fyi, txi, tyi, steps_u32, duration_ms, button)
                  })
              };
-@@ -7015,7 +7139,7 @@ impl Tool for DragTool {
+@@ -7015,7 +7137,7 @@ impl Tool for DragTool {
          }
  
          if delivery.is_foreground() {
@@ -4981,7 +4797,7 @@ index d835bf1..800f4de 100644
                  Ok::<_, anyhow::Error>((
                      window_local_to_screen(xid, from_x, from_y)?,
                      window_local_to_screen(xid, to_x, to_y)?,
-@@ -7027,7 +7151,7 @@ impl Tool for DragTool {
+@@ -7027,7 +7149,7 @@ impl Tool for DragTool {
                  Ok(Err(e)) => return ToolResult::error(e.to_string()),
                  Err(e) => return ToolResult::error(format!("Task error: {e}")),
              };
@@ -4990,7 +4806,7 @@ index d835bf1..800f4de 100644
                  crate::input::with_x11_foreground(xid, 80, || {
                      crate::input::send_drag_xtest_desktop(
                          screen_from_x.round() as i32,
-@@ -7073,7 +7197,7 @@ impl Tool for DragTool {
+@@ -7073,7 +7195,7 @@ impl Tool for DragTool {
              cursor_id.clone(),
              cursor_overlay::OverlayCommand::SetPressed(true),
          );
@@ -4999,7 +4815,7 @@ index d835bf1..800f4de 100644
              crate::input::send_button_down(
                  xid,
                  from_x.round() as i32,
-@@ -7098,7 +7222,7 @@ impl Tool for DragTool {
+@@ -7098,7 +7220,7 @@ impl Tool for DragTool {
                  let t = i as f64 / steps.max(1) as f64;
                  let ix = from_x + (to_x - from_x) * t;
                  let iy = from_y + (to_y - from_y) * t;
@@ -5008,7 +4824,7 @@ index d835bf1..800f4de 100644
                      crate::input::send_motion(
                          xid,
                          ix.round() as i32,
-@@ -7110,8 +7234,10 @@ impl Tool for DragTool {
+@@ -7110,8 +7232,10 @@ impl Tool for DragTool {
                  match motion_result {
                      Ok(Ok(())) => {
                          if let Ok(Ok((sx, sy))) =
@@ -5021,7 +4837,7 @@ index d835bf1..800f4de 100644
                          {
                              self.state
                                  .cursor_registry
-@@ -7138,7 +7264,7 @@ impl Tool for DragTool {
+@@ -7138,7 +7262,7 @@ impl Tool for DragTool {
              }
          }
  
@@ -5030,7 +4846,7 @@ index d835bf1..800f4de 100644
              crate::input::send_button_up(xid, to_x.round() as i32, to_y.round() as i32, button)
          })
          .await;
-@@ -7155,8 +7281,10 @@ impl Tool for DragTool {
+@@ -7155,8 +7279,10 @@ impl Tool for DragTool {
          );
  
          if result.is_ok() {
@@ -5043,7 +4859,7 @@ index d835bf1..800f4de 100644
              {
                  crate::overlay::send_command_for(
                      cursor_id.clone(),
-@@ -7261,7 +7389,8 @@ impl Tool for MouseButtonDownTool {
+@@ -7261,7 +7387,8 @@ impl Tool for MouseButtonDownTool {
              cursor_overlay::OverlayCommand::PinAbove(xid),
          );
          if let Ok(Ok((sx, sy))) =
@@ -5053,7 +4869,7 @@ index d835bf1..800f4de 100644
          {
              overlay_glide_to_for(&cursor_id, sx, sy).await;
              crate::overlay::send_command_for(
-@@ -7277,13 +7406,15 @@ impl Tool for MouseButtonDownTool {
+@@ -7277,13 +7404,15 @@ impl Tool for MouseButtonDownTool {
          // the existing input::send_button_down behaviour.
          let result = if crate::wayland::is_wayland() {
              let cid = cursor_id.clone();
@@ -5072,7 +4888,7 @@ index d835bf1..800f4de 100644
          };
          match result {
              Ok(Ok(())) => {
-@@ -7299,8 +7430,10 @@ impl Tool for MouseButtonDownTool {
+@@ -7299,8 +7428,10 @@ impl Tool for MouseButtonDownTool {
                      .lock()
                      .unwrap()
                      .insert(cursor_id.clone(), hold.clone());
@@ -5085,7 +4901,7 @@ index d835bf1..800f4de 100644
                  {
                      self.state
                          .cursor_registry
-@@ -7412,8 +7545,10 @@ impl Tool for MouseDragTool {
+@@ -7412,8 +7543,10 @@ impl Tool for MouseDragTool {
              cursor_id.clone(),
              cursor_overlay::OverlayCommand::PinAbove(xid),
          );
@@ -5098,7 +4914,7 @@ index d835bf1..800f4de 100644
          {
              overlay_glide_to_for(&cursor_id, sx, sy).await;
              self.state
-@@ -7445,7 +7580,7 @@ impl Tool for MouseDragTool {
+@@ -7445,7 +7578,7 @@ impl Tool for MouseDragTool {
              // X11 keeps the existing input::send_motion path.
              let cid_inner = cursor_id.clone();
              let move_result = if is_wl {
@@ -5107,7 +4923,7 @@ index d835bf1..800f4de 100644
                      crate::wayland::persistent_vptr::move_to(
                          &cid_inner,
                          ix.round() as i32,
-@@ -7454,7 +7589,7 @@ impl Tool for MouseDragTool {
+@@ -7454,7 +7587,7 @@ impl Tool for MouseDragTool {
                  })
                  .await
              } else {
@@ -5116,7 +4932,7 @@ index d835bf1..800f4de 100644
                      crate::input::send_motion(
                          xid,
                          ix.round() as i32,
-@@ -7467,8 +7602,10 @@ impl Tool for MouseDragTool {
+@@ -7467,8 +7600,10 @@ impl Tool for MouseDragTool {
              match move_result {
                  Ok(Ok(())) => {
                      if let Ok(Ok((sx, sy))) =
@@ -5129,7 +4945,7 @@ index d835bf1..800f4de 100644
                      {
                          let heading = if (ix - prev_x).abs() > f64::EPSILON
                              || (iy - prev_y).abs() > f64::EPSILON
-@@ -7508,9 +7645,10 @@ impl Tool for MouseDragTool {
+@@ -7508,9 +7643,10 @@ impl Tool for MouseDragTool {
                      .lock()
                      .unwrap()
                      .insert(cursor_id.clone(), hold.clone());
@@ -5143,7 +4959,7 @@ index d835bf1..800f4de 100644
                  {
                      self.state
                          .cursor_registry
-@@ -7613,7 +7751,8 @@ impl Tool for MouseButtonUpTool {
+@@ -7613,7 +7749,8 @@ impl Tool for MouseButtonUpTool {
              cursor_overlay::OverlayCommand::PinAbove(xid),
          );
          if let Ok(Ok((sx, sy))) =
@@ -5153,7 +4969,7 @@ index d835bf1..800f4de 100644
          {
              overlay_glide_to_for(&cursor_id, sx, sy).await;
          }
-@@ -7626,18 +7765,22 @@ impl Tool for MouseButtonUpTool {
+@@ -7626,18 +7763,22 @@ impl Tool for MouseButtonUpTool {
          // (single logical drag rather than a click pair).
          let result = if crate::wayland::is_wayland() {
              let cid = cursor_id.clone();
@@ -5181,7 +4997,7 @@ index d835bf1..800f4de 100644
                  {
                      self.state
                          .cursor_registry
-@@ -8231,6 +8374,8 @@ impl Tool for GetDesktopStateTool {
+@@ -8231,6 +8372,8 @@ impl Tool for GetDesktopStateTool {
                      is_error: None,
                      structured_content: Some(structured),
                      action_record: None,
@@ -5190,7 +5006,7 @@ index d835bf1..800f4de 100644
                  }
              }
              Ok(Err(e)) => ToolResult::error(format!("Capture error: {e}")),
-@@ -9053,6 +9198,8 @@ impl Tool for ZoomTool {
+@@ -9053,6 +9196,8 @@ impl Tool for ZoomTool {
                          "mime_type": "image/jpeg"
                      })),
                      action_record: None,
@@ -5766,7 +5582,7 @@ index a2691a0..25d4701 100644
  
      /// Pick a pointer device whose announced Region contains `(x, y)`,
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
-index ca0b769..4141f40 100644
+index ca0b769..af47835 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
 @@ -21,6 +21,8 @@ pub mod persistent_vptr;
@@ -6156,20 +5972,7 @@ index ca0b769..4141f40 100644
      Ok(VptrSession {
          conn,
          queue,
-@@ -1416,6 +1698,12 @@ pub fn activate_window_for_input_target(
-         return Ok(());
-     }
- 
-+    // An XWayland app under Sway is named by its X11 window id, which no foreign-toplevel handle carries; Sway's
-+    // tree does, so its exact container is focused and the focus confirmed there.
-+    if std::env::var_os("SWAYSOCK").is_some() && sway_ipc::focus_x11_window(window_id) {
-+        return Ok(());
-+    }
-+
-     anyhow::bail!(
-         "foreground_unavailable: this Wayland compositor does not expose a verified, \
-          target-addressable activation adapter for window {window_id}; refusing global \
-@@ -1423,6 +1711,22 @@ pub fn activate_window_for_input_target(
+@@ -1423,6 +1705,19 @@ pub fn activate_window_for_input_target(
      )
  }
  
@@ -6180,10 +5983,7 @@ index ca0b769..4141f40 100644
 +    if std::env::var_os("SWAYSOCK").is_some() {
 +        let windows = sway_ipc::list_windows()?;
 +        return Some(windows.iter().any(|window| {
-+            window.pid == pid
-+                && (window.id == window_id || window.x11_window == Some(window_id))
-+                && window.visible
-+                && window.focused
++            window.pid == pid && window.id == window_id && window.visible && window.focused
 +        }));
 +    }
 +    shell_helper::focused_target(pid, window_id)
@@ -6192,7 +5992,7 @@ index ca0b769..4141f40 100644
  /// Run a focus-bound keyboard transaction only after a compositor adapter has
  /// confirmed the exact PID/window pair, and restore the previously focused
  /// toplevel afterward. Global virtual-keyboard/libei input is refused when the
-@@ -1851,7 +2155,18 @@ pub fn drag(
+@@ -1851,7 +2146,18 @@ pub fn drag(
      button: u8,
  ) -> anyhow::Result<()> {
      with_libei_fallback(
@@ -6212,7 +6012,7 @@ index ca0b769..4141f40 100644
          || {
              libei_wait_pointer_ready()?;
              activate_window_for_input(window_id)?;
-@@ -1871,7 +2186,7 @@ pub fn drag_desktop(
+@@ -1871,7 +2177,7 @@ pub fn drag_desktop(
      button: u8,
  ) -> anyhow::Result<()> {
      with_libei_fallback(
@@ -6221,7 +6021,7 @@ index ca0b769..4141f40 100644
          || {
              libei_wait_pointer_ready()?;
              libei_drag(from_x, from_y, to_x, to_y, steps, duration_ms, button)
-@@ -1881,6 +2196,7 @@ pub fn drag_desktop(
+@@ -1881,6 +2187,7 @@ pub fn drag_desktop(
  
  /// wlroots virtual-pointer implementation of [`drag`].
  #[allow(clippy::too_many_arguments)]
@@ -6229,7 +6029,7 @@ index ca0b769..4141f40 100644
  fn drag_vptr(
      window_id: Option<u64>,
      from_x: i32,
-@@ -1888,9 +2204,11 @@ fn drag_vptr(
+@@ -1888,9 +2195,11 @@ fn drag_vptr(
      to_x: i32,
      to_y: i32,
      steps: u32,
@@ -6241,7 +6041,7 @@ index ca0b769..4141f40 100644
      std::thread::sleep(std::time::Duration::from_millis(40));
      let (w, h) = (sess.output_w, sess.output_h);
      let btn = evdev_pointer_button(button);
-@@ -1907,17 +2225,28 @@ fn drag_vptr(
+@@ -1907,17 +2216,28 @@ fn drag_vptr(
      std::thread::sleep(std::time::Duration::from_millis(15));
      sess.vptr.button(event_time_ms(), btn, ButtonState::Pressed);
      sess.vptr.frame();
@@ -6271,7 +6071,7 @@ index ca0b769..4141f40 100644
      }
      let (tx, ty) = clamp_xy(to_x, to_y);
      sess.vptr.motion_absolute(event_time_ms(), tx, ty, w, h);
-@@ -1926,6 +2255,9 @@ fn drag_vptr(
+@@ -1926,6 +2246,9 @@ fn drag_vptr(
      sess.vptr
          .button(event_time_ms(), btn, ButtonState::Released);
      sess.vptr.frame();
@@ -6522,7 +6322,7 @@ index 0000000..fd21a55
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
-index 1a791db..f4ec49c 100644
+index 1a791db..f65c285 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
 @@ -41,6 +41,7 @@ const SEMANTIC_CURSOR_API_VERSION: u32 = 8;
@@ -6638,7 +6438,7 @@ index 1a791db..f4ec49c 100644
 +    fn bundled_helper_v9_retains_host_owned_modifier_badge_chips() {
          assert!(EXTENSION_SOURCE.contains("GetVersion()"));
 -        assert!(EXTENSION_SOURCE.contains("return 8;"));
-+        assert!(EXTENSION_SOURCE.contains("return 11;"));
++        assert!(EXTENSION_SOURCE.contains("return 10;"));
          assert!(EXTENSION_SOURCE.contains("SetCursorState"));
          assert!(EXTENSION_SOURCE.contains("SetCursorColor"));
          assert!(EXTENSION_SOURCE.contains("SetSessionLabel"));
@@ -6647,70 +6447,15 @@ index 1a791db..f4ec49c 100644
          let metadata: serde_json::Value =
              serde_json::from_str(EXTENSION_METADATA).expect("valid bundled helper metadata");
 -        assert_eq!(metadata["version"], 8);
-+        assert_eq!(metadata["version"], 11);
++        assert_eq!(metadata["version"], 10);
  
          for action in [
              "idle", "observe", "click", "drag", "scroll", "text", "key", "navigate", "app",
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs
-index bc090b9..589602f 100644
+index bc090b9..c9eff6d 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/sway_ipc.rs
-@@ -19,9 +19,11 @@ struct Rect {
- #[derive(Clone, Debug, Default, Deserialize)]
- struct Node {
-     id: u64,
--    #[serde(default)]
-+    // Sway sends `null` for these (an XWayland view has no app_id, a split container no name). Without
-+    // `null_default` one XWayland window failed the whole tree, and every Sway lookup with it.
-+    #[serde(default, deserialize_with = "null_default")]
-     name: String,
--    #[serde(default)]
-+    #[serde(default, deserialize_with = "null_default")]
-     app_id: String,
-     pid: Option<u32>,
-     #[serde(default)]
-@@ -36,12 +38,23 @@ struct Node {
-     visible: bool,
-     #[serde(default)]
-     fullscreen_mode: i32,
-+    /// An XWayland view's X11 window id, which the X11 backend reports for it.
-+    #[serde(default)]
-+    window: Option<u64>,
-     #[serde(default)]
-     nodes: Vec<Node>,
-     #[serde(default)]
-     floating_nodes: Vec<Node>,
- }
- 
-+fn null_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
-+where
-+    D: serde::Deserializer<'de>,
-+    T: Default + Deserialize<'de>,
-+{
-+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
-+}
-+
- fn default_visible() -> bool {
-     true
- }
-@@ -61,6 +74,8 @@ pub struct Window {
-     pub focused: bool,
-     pub visible: bool,
-     pub fullscreen: bool,
-+    /// The X11 window id of an XWayland view; none for a native Wayland one.
-+    pub x11_window: Option<u64>,
- }
- 
- fn collect(node: &Node, windows: &mut Vec<Window>) {
-@@ -100,6 +115,7 @@ fn collect(node: &Node, windows: &mut Vec<Window>) {
-                 focused: node.focused,
-                 visible: node.visible,
-                 fullscreen: node.fullscreen_mode != 0,
-+                x11_window: node.window,
-             });
-         }
-     }
-@@ -131,6 +147,39 @@ pub fn list_windows() -> Option<Vec<Window>> {
+@@ -131,6 +131,39 @@ pub fn list_windows() -> Option<Vec<Window>> {
      parse_tree(&output.stdout)
  }
  
@@ -6750,41 +6495,6 @@ index bc090b9..589602f 100644
  pub fn window_for_id(id: u64) -> Option<Window> {
      list_windows()?.into_iter().find(|window| window.id == id)
  }
-@@ -171,6 +220,18 @@ pub fn window_for_app_id(app_id: &str) -> Option<Window> {
-         .max_by_key(|window| (window.focused, window.visible))
- }
- 
-+/// The container of an XWayland view by its X11 window id: the id an X11 window list gives an X app under Sway.
-+pub fn window_for_x11_window(xid: u64) -> Option<Window> {
-+    list_windows()?.into_iter().find(|window| window.x11_window == Some(xid))
-+}
-+
-+/// Focuses an XWayland view's exact container and waits until Sway reports it focused.
-+pub fn focus_x11_window(xid: u64) -> bool {
-+    window_for_x11_window(xid).is_some_and(|window| {
-+        focus_container(window.id) && wait_for_container_focus(window.id, std::time::Duration::from_millis(500))
-+    })
-+}
-+
- fn focus_container(id: u64) -> bool {
-     let selector = format!("[con_id={id}]");
-     Command::new("swaymsg")
-@@ -256,6 +317,15 @@ pub fn window_origin_for_title(title: &str) -> Option<(i32, i32)> {
- mod tests {
-     use super::*;
- 
-+    #[test]
-+    fn xwayland_views_carry_their_x11_window() {
-+        // As Sway sends them: an XWayland view's app_id is null, a split container's name too.
-+        let tree = br#"{"id":1,"name":null,"nodes":[{"id":7,"name":"xterm","app_id":null,"pid":40,"window":6291468,"rect":{"x":0,"y":0,"width":10,"height":10}},{"id":8,"name":"foot","app_id":"foot","pid":41,"rect":{"x":0,"y":0,"width":10,"height":10}}]}"#;
-+        let windows = parse_tree(tree).unwrap();
-+        assert_eq!(windows[0].x11_window, Some(6291468));
-+        assert_eq!(windows[1].x11_window, None);
-+    }
-+
-     #[test]
-     fn parses_nested_and_floating_windows() {
-         let tree = br#"{
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/x11/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/x11/mod.rs
 index 11f3b83..06d3cc0 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/x11/mod.rs
@@ -11289,7 +10999,7 @@ index 8e9c373..e7d6735 100644
 +passed. The Mako Linux release includes this helper and its installer alongside
 +the driver; installation into the user's running Shell remains explicit.
 diff --git a/libs/cua-driver/wayland-helper/winrects@cua/extension.js b/libs/cua-driver/wayland-helper/winrects@cua/extension.js
-index 743acc2..c5a1ebc 100644
+index 743acc2..9addbbb 100644
 --- a/libs/cua-driver/wayland-helper/winrects@cua/extension.js
 +++ b/libs/cua-driver/wayland-helper/winrects@cua/extension.js
 @@ -8,10 +8,12 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -11305,71 +11015,16 @@ index 743acc2..c5a1ebc 100644
  <method name="Capture"><arg type="s" direction="out" name="png_base64"/></method>
  <method name="Activate"><arg type="u" direction="in" name="id"/><arg type="b" direction="out" name="activated"/></method>
  <method name="MoveCursor"><arg type="i" direction="in" name="x"/><arg type="i" direction="in" name="y"/></method>
-@@ -708,7 +710,9 @@ export default class WinRectsExtension extends Extension {
-     this._cursor.connect('repaint', (area) => {
-       const cr = area.get_context();
-       const duration = ACTION_DURATIONS[this._action] ?? 1.6;
--      const elapsed = nowSeconds() - this._actionStarted;
-+      // At rest the cursor holds its pose: a floating idle cursor repainted the whole screen 30 times a second for as
-+      // long as it stayed up, which a screen cast or a laptop's battery pays for while nothing happens.
-+      const elapsed = this._action === 'idle' ? 0 : nowSeconds() - this._actionStarted;
-       const progress = (elapsed % duration) / duration;
-       const floatProgress = (elapsed % FLOAT_DURATION) / FLOAT_DURATION;
-       cr.save();
-@@ -764,8 +768,17 @@ export default class WinRectsExtension extends Extension {
-     this._cursorY = null;
-     this._badgeRevealedAt = null;
-     this._modifierFadeAt = null;
-+    this._frameId = 0;
-+    this._wake();
-+  }
-+  /** Runs the 33 ms frame timer while something animates; it stops itself once the cursor and badge are at rest. */
-+  _wake() {
-+    if (this._frameId || !this._cursor) return;
-     this._frameId = GLib.timeout_add(GLib.PRIORITY_DEFAULT, 33, () => {
--      if (!this._cursor) return GLib.SOURCE_REMOVE;
-+      if (!this._cursor) {
-+        this._frameId = 0;
-+        return GLib.SOURCE_REMOVE;
-+      }
-       const now = nowSeconds();
-       if (this._endingAt !== null && now >= this._endingAt) this._setCursorState('idle', '', '');
-       if (
-@@ -773,7 +786,7 @@ export default class WinRectsExtension extends Extension {
-         now - this._actionStarted >= ACTION_DURATIONS[this._action]
-       )
-         this._setCursorState('idle', '', '');
--      if (this._cursor.visible) this._cursor.queue_repaint();
-+      if (this._cursor.visible && this._action !== 'idle') this._cursor.queue_repaint();
-       let labelAlpha = this._badgeRevealedAt === null ? 0 : 1;
-       if (this._badgeRevealedAt !== null) {
-         const badgeElapsed = now - this._badgeRevealedAt;
-@@ -818,6 +831,15 @@ export default class WinRectsExtension extends Extension {
-           this._badge.hide();
-         }
-       }
-+      const resting =
-+        this._action === 'idle' &&
-+        this._badgeRevealedAt === null &&
-+        this._modifierFadeAt === null &&
-+        this._endingAt === null;
-+      if (resting) {
-+        this._frameId = 0;
-+        return GLib.SOURCE_REMOVE;
-+      }
-       return GLib.SOURCE_CONTINUE;
-     });
-   }
-@@ -851,7 +873,7 @@ export default class WinRectsExtension extends Extension {
+@@ -851,7 +853,7 @@ export default class WinRectsExtension extends Extension {
      }
    }
    GetVersion() {
 -    return 8;
-+    return 11;
++    return 10;
    }
    GetRects() {
      const actors = global.get_window_actors();
-@@ -884,6 +906,7 @@ export default class WinRectsExtension extends Extension {
+@@ -884,6 +886,7 @@ export default class WinRectsExtension extends Extension {
          buffer_x: buffer.x,
          buffer_y: buffer.y,
          focused: focusedWindow === w,
@@ -11377,7 +11032,7 @@ index 743acc2..c5a1ebc 100644
          minimized,
          visible: Boolean(actor?.visible) && !minimized,
          stacking,
-@@ -891,6 +914,52 @@ export default class WinRectsExtension extends Extension {
+@@ -891,6 +894,52 @@ export default class WinRectsExtension extends Extension {
      }
      return JSON.stringify(out);
    }
@@ -11430,7 +11085,7 @@ index 743acc2..c5a1ebc 100644
    async CaptureAsync(_params, invocation) {
      try {
        const shooter = new Shell.Screenshot();
-@@ -910,6 +979,10 @@ export default class WinRectsExtension extends Extension {
+@@ -910,6 +959,10 @@ export default class WinRectsExtension extends Extension {
        invocation.return_dbus_error('org.cua.WinRects.CaptureFailed', String(error));
      }
    }
@@ -11441,7 +11096,7 @@ index 743acc2..c5a1ebc 100644
    ActivateAsync([id], invocation) {
      const target = global
        .get_window_actors()
-@@ -919,9 +992,15 @@ export default class WinRectsExtension extends Extension {
+@@ -919,9 +972,15 @@ export default class WinRectsExtension extends Extension {
        invocation.return_value(new GLib.Variant('(b)', [false]));
        return;
      }
@@ -11459,32 +11114,8 @@ index 743acc2..c5a1ebc 100644
        return GLib.SOURCE_REMOVE;
      });
    }
-@@ -972,6 +1051,7 @@ export default class WinRectsExtension extends Extension {
-       this._setCursorState(action, delivery, target);
-     } else if (this._action === action && !ONE_SHOT_ACTIONS.has(action)) {
-       this._endingAt = nowSeconds() + 0.4;
-+      this._wake();
-     }
-   }
-   SetSessionLabel(label) {
-@@ -1012,6 +1092,7 @@ export default class WinRectsExtension extends Extension {
-     this._badgeRevealedAt = nowSeconds();
-     this._badge.opacity = 255;
-     this._badge.show();
-+    this._wake();
-   }
-   _setCursorState(action, delivery, target) {
-     this._action = ACTIONS.has(action) ? action : 'idle';
-@@ -1028,6 +1109,7 @@ export default class WinRectsExtension extends Extension {
-     this._actionStarted = nowSeconds();
-     this._endingAt = null;
-     if (this._cursor) this._cursor.queue_repaint();
-+    this._wake();
-     if (this._cursorX !== null && this._cursorY !== null)
-       this._positionBadge(this._cursorX, this._cursorY, 0);
-   }
 diff --git a/libs/cua-driver/wayland-helper/winrects@cua/metadata.json b/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
-index 3faf86b..280788c 100644
+index 3faf86b..a2843ca 100644
 --- a/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
 +++ b/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
 @@ -3,5 +3,5 @@
@@ -11492,5 +11123,5 @@ index 3faf86b..280788c 100644
    "description": "Expose window geometry, capture, cursor, and verified activation for cua-driver on Wayland.",
    "shell-version": ["45", "46", "47", "48", "49", "50"],
 -  "version": 8
-+  "version": 11
++  "version": 10
  }

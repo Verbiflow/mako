@@ -1,7 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
-import { existsSync, mkdirSync } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, isAbsolute, join } from "node:path"
+import { existsSync } from "node:fs"
+import { isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { CaptureSize } from "./browser-capture.js"
 import type { VideoSource, LiveEncoderFactory } from "./browser-video.js"
@@ -24,15 +23,11 @@ export type VideoHelperSource =
   /**
    * What the person shares through the ScreenCast portal (Wayland): a window, or a monitor where the portal shares no
    * windows. The portal asks once; `restore` is the file its restore token is kept in, so it doesn't ask again.
-   * `still`: the compositor sends a frame only when something changes (wlroots'), so a still screen's first frame
-   * comes from the Screenshot portal.
    */
-  | { kind: "portal"; types: "monitor" | "window"; restore: string; still?: boolean }
+  | { kind: "portal"; types: "monitor" | "window"; restore: string }
   | { kind: "frames" }
   /** A video's frames under the transparent pictures sent for their times (a recording's pointer); Mac only. */
   | { kind: "overlay"; video: string }
-  /** The same on Linux: the video's units are sent (`video`), decoded with OpenH264, and drawn under the pictures. */
-  | { kind: "composite" }
 
 export interface VideoHelperOptions {
   fps: number
@@ -76,20 +71,12 @@ export function videoHelperExecutable(): string | undefined {
  */
 export function helperWindowSource(
   windowId: number,
+  folder: string,
   desktop: LinuxDesktop | undefined
 ): Extract<VideoHelperSource, { kind: "window" | "portal" }> | undefined {
   if (onMac() || onWindows() || desktop?.session === "x11") return { kind: "window", windowId }
-  if (desktop?.session === "wayland") return portalMonitor(desktop)
+  if (desktop?.session === "wayland") return { kind: "portal", types: "monitor", restore: join(folder, "portal-monitor.token") }
   return undefined
-}
-
-/**
- * The monitor the person shares through the portal on a Wayland desktop: live video and recordings alike, so the
- * person is asked once per user, whichever Mako process asks.
- */
-export function portalMonitor(desktop: LinuxDesktop, env: NodeJS.ProcessEnv = process.env): Extract<VideoHelperSource, { kind: "portal" }> {
-  const state = env.XDG_STATE_HOME?.trim() || join(homedir(), ".local", "state")
-  return { kind: "portal", types: "monitor", restore: join(state, "mako", "portal-monitor.token"), still: desktop.compositor === "wlroots" }
 }
 
 const PICTURE = { jpeg: 0, rgb: 1, rgba: 2 } as const
@@ -112,15 +99,13 @@ export class VideoHelper {
   constructor(executable: string, source: VideoHelperSource, options: VideoHelperOptions, events: VideoHelperEvents) {
     this.#events = events
     this.exited = new Promise((resolve) => (this.#exit = resolve))
-    // The helper writes the portal's restore token there, as the person's alone.
-    if (source.kind === "portal") mkdirSync(dirname(source.restore), { recursive: true, mode: 0o700 })
     const args = [
       ...(source.kind === "window"
         ? ["window", String(source.windowId)]
         : source.kind === "overlay"
           ? ["overlay", source.video]
           : source.kind === "portal"
-            ? ["portal", "--types", source.types, "--restore", source.restore, ...(source.still ? ["--still", "screenshot"] : [])]
+            ? ["portal", "--types", source.types, "--restore", source.restore]
             : [source.kind]),
       "--fps", String(options.fps),
       ...(options.bitrate ? ["--bitrate", String(Math.round(options.bitrate))] : []),
@@ -195,17 +180,6 @@ export class VideoHelper {
     }
   }
 
-  /**
-   * One unit of the video underneath a `composite` helper: its length-prefixed NAL units, with the avcC on a key unit.
-   * `taken` once the helper's input has it.
-   */
-  video(data: Uint8Array, description: Uint8Array | undefined, taken: (error?: Error) => void): void {
-    const header = Buffer.alloc(2)
-    header.writeUInt16BE(description?.byteLength ?? 0, 0)
-    const sent = this.#command("V", Buffer.concat([header, description ?? Buffer.alloc(0), data]), (error) => taken(error ?? undefined))
-    if (!sent) taken(new Error(this.#ended ? "The video helper has ended" : "The video helper is closing"))
-  }
-
   /** Its input ends: it encodes what it has, writes its last units and exits. */
   close(): void {
     if (this.#ended || this.#closing) return
@@ -216,7 +190,7 @@ export class VideoHelper {
   }
 
   /** False when the command wasn't sent: the helper has ended or is closing. */
-  #command(type: "K" | "B" | "R" | "F" | "V", body: Uint8Array, written?: (error?: Error | null) => void): boolean {
+  #command(type: "K" | "B" | "R" | "F", body: Uint8Array, written?: (error?: Error | null) => void): boolean {
     if (this.#ended || this.#closing || !this.#child.stdin.writable) return false
     const header = Buffer.alloc(5)
     header.write(type, 0, "latin1")

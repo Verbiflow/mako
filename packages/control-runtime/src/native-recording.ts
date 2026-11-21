@@ -1,4 +1,3 @@
-import { join } from "node:path"
 import { z } from "zod"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 import { toolResultData, toolResultError } from "@mako/control/computer"
@@ -10,12 +9,6 @@ import {
 import type { ComputerDriverResult } from "./computer-driver-client.js"
 import type { JsonObject } from "./json.js"
 import { ControlRecording } from "./control-recording.js"
-import { Mp4Writer } from "./mp4.js"
-import type { LinuxDesktop } from "./platform.js"
-import { VideoHelper, helperWindowSource, videoHelperExecutable } from "./video-helper.js"
-
-/** A helper recording's top rate: what the helper encodes live. */
-export const HELPER_RECORDING_MAX_FPS = 30
 
 const stateSchema = z.object({
   generation: z.number().int().positive(),
@@ -30,13 +23,16 @@ const stateSchema = z.object({
   last_video_path: z.string().nullable(),
   last_error: z.string().nullable(),
 })
-const resultSchema = z.looseObject({
-  content: z.array(z.looseObject({ type: z.string(), text: z.string().optional() })),
-  isError: z.boolean().optional(),
-  structuredContent: z.record(z.string(), z.json()).optional(),
-})
 function data(result: ComputerDriverResult) {
-  const parsed = resultSchema.parse(result)
+  const parsed = z
+    .looseObject({
+      content: z.array(
+        z.looseObject({ type: z.string(), text: z.string().optional() })
+      ),
+      isError: z.boolean().optional(),
+      structuredContent: z.record(z.string(), z.json()).optional(),
+    })
+    .parse(result)
   const error = toolResultError(parsed)
   if (error) throw new Error(error)
   return stateSchema.parse(toolResultData(parsed))
@@ -61,16 +57,7 @@ export type NativeDriverCall = (name: string, args: JsonObject, timeout: number)
 export class NativeRecordings {
   private closed = false
   private starting = false
-  /**
-   * Where Mako records a window itself with the video helper and never the driver's FFmpeg recorder: the window by
-   * its X id on X11 (XComposite), and on Wayland, where nothing outside the compositor may read a window by id, the
-   * monitor the person shares through the ScreenCast portal. The session names it: a person's Linux desktop, or a
-   * standalone job's own X server. None where the driver records (a Mac, Windows).
-   */
-  constructor(private readonly helperDesktop: LinuxDesktop | undefined) {}
   private readonly recordings = new Map<string, ControlRecording>()
-  /** Recordings the video helper makes, whose video the driver knows nothing of. */
-  private readonly helpers = new Set<string>()
   async start(
     target: WindowControlTarget,
     options: RecordingOptions,
@@ -95,8 +82,6 @@ export class NativeRecordings {
         "Finish the current native recording before starting another",
         "not-dispatched"
       )
-    const desktop = this.helperDesktop
-    if (desktop) return this.startHelper(target, options, desktop, call, tools, signal)
     const start = tools.find((tool) => tool.name === "start_recording")
     const stop = tools.find((tool) => tool.name === "stop_recording")
     if (
@@ -196,97 +181,6 @@ export class NativeRecordings {
       this.starting = false
     }
   }
-  /**
-   * The window (X11) or the shared monitor (Wayland), recorded by the video helper at a constant quality into the
-   * recording's MP4 as its units come. With a pointer asked for, the driver's action journal records where its pointer
-   * actions landed (no video of its own), and finishing draws them in with the helper. The portal asks the person
-   * once, then restores their answer.
-   */
-  private async startHelper(
-    target: WindowControlTarget,
-    options: RecordingOptions,
-    desktop: LinuxDesktop,
-    call: NativeDriverCall,
-    tools: Tool[],
-    signal: AbortSignal
-  ) {
-    const executable = videoHelperExecutable()
-    const source = helperWindowSource(target.window_id, desktop)
-    if (!executable || !source)
-      throw new ControlFault("unsupported", "Recording on this Linux desktop needs Mako's video helper (mako-video); no capture was started.", "not-dispatched")
-    const fps = options.fps ?? HELPER_RECORDING_MAX_FPS
-    if (fps > HELPER_RECORDING_MAX_FPS)
-      throw new ControlFault("unsupported", `This desktop's recording supports up to ${HELPER_RECORDING_MAX_FPS} fps; no capture was started.`, "not-dispatched")
-    const journal = options.cursor !== false && tools.some((tool) => tool.name === "start_recording" && tool.inputSchema.properties?.window_target)
-    this.starting = true
-    let helper: VideoHelper | undefined
-    let writer: Mp4Writer | undefined
-    let writing: Promise<void> = Promise.resolve()
-    let failure: string | undefined
-    let recording: ControlRecording | undefined
-    let journaling = false
-    let origin = performance.now()
-    try {
-      recording = await ControlRecording.create(target, { ...options, fps }, async () => {
-        // The picture holds until the recording stops: what happened after its last change is still in the video.
-        const stopped = performance.now() - origin
-        helper?.close()
-        await helper?.exited
-        await writing
-        await writer?.finish(stopped)
-        if (journaling) await call("stop_recording", { recording_id: recording!.id }, 20_000).catch(() => undefined)
-        if (!writer?.frames) throw new Error(failure ?? "The capture sent no picture")
-        await recording!.attachVideo(join(recording!.directory, "recording.mp4"))
-        return failure
-      })
-      const active = recording
-      this.recordings.set(active.id, active)
-      this.helpers.add(active.id)
-      if (source.kind === "portal") {
-        // The pointer journal is in the window's terms; on a shared monitor it lands where the window is.
-        const windows = z.object({ windows: z.array(z.looseObject({ window_id: z.number(), bounds: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional() })) })
-        const listed = await call("list_windows", { pid: target.pid }, 5000).then(
-          (result) => windows.safeParse(toolResultData(resultSchema.parse(result))),
-          () => undefined
-        )
-        const bounds = listed?.success ? listed.data.windows.find((window) => window.window_id === target.window_id)?.bounds : undefined
-        if (bounds) active.pointersWithin(bounds)
-      }
-      writer = new Mp4Writer(join(active.directory, "recording.mp4"), 1000 / fps)
-      active.markStarted()
-      origin = performance.now()
-      let first!: () => void
-      const firstUnit = new Promise<void>((resolve) => (first = resolve))
-      helper = new VideoHelper(executable, source, { fps, quality: 85, content: "screen" }, {
-        unit: (packet) => {
-          first()
-          const at = performance.now() - origin
-          writing = writing.then(() => writer!.add(packet, at)).catch((error: Error) => void (failure ??= error.message))
-        },
-        ended: (reason) => {
-          failure ??= reason
-          first()
-          void active.stop(reason)
-        },
-      })
-      if (journal) {
-        const started = await call("start_recording", { recording_id: active.id, output_dir: active.directory, record_video: false, capture_actions: false, window_target: { pid: target.pid, window_id: target.window_id } }, 20_000).catch(() => undefined)
-        journaling = started !== undefined && !started.isError
-      }
-      // The first picture, or the portal's answer while it asks the person; a still screen's comes from a screenshot.
-      await Promise.race([firstUnit, new Promise((resolve) => setTimeout(resolve, 3000).unref())])
-      if (this.closed || signal.aborted) throw new Error("Recording task ended during capture startup")
-      // The capture refused (the person declined, or the window is gone): no recording was made.
-      if (failure && !writer?.frames)
-        throw new ControlFault("unsupported", `${failure}; no recording was made.`, "not-dispatched")
-      return active.receipt()
-    } catch (error) {
-      if (recording) await recording.stop("Recording could not start")
-      throw error
-    } finally {
-      this.starting = false
-    }
-  }
   get(target: WindowControlTarget, id: string) {
     const recording = this.recordings.get(id)
     if (
@@ -304,7 +198,7 @@ export class NativeRecordings {
     call: NativeDriverCall | undefined
   ) {
     const recording = this.get(target, id)
-    if (recording.receipt().status !== "recording" || this.helpers.has(id)) return recording.receipt()
+    if (recording.receipt().status !== "recording") return recording.receipt()
     if (!call) return recording.stop("Native driver connection ended")
     const result = data(await call("get_recording_state", {}, 5000))
     if (

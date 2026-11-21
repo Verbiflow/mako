@@ -13,67 +13,56 @@ Electron. The commands below also support local isolated development.
 
 On a desktop session the person logged into (`linuxDesktop()`: `XDG_SESSION_TYPE`
 x11 or wayland with its display, or `MAKO_DESKTOP_CONTROL=1`; a bare `DISPLAY`
-such as `xvfb-run`'s is not one), the host starts its embedded driver as it
-does on a Mac, with `CUA_DRIVER_RS_ENABLE_WAYLAND=1` on Wayland, and grants task
-sessions to it. Without the desktop app, a window's live video comes from the
-video helper: XComposite on X11, and on Wayland the monitor the person shares
-through the ScreenCast portal (PipeWire, shared memory or a linear DMA-BUF),
-asked once and restored from `~/.local/state/mako/portal-monitor.token`. The
-helper encodes a picture only when it changed: XDamage on X11, and on Wayland a
-buffer with an empty damage list or the same pixels as the last one is skipped.
-On wlroots, whose portal sends nothing until something changes, a still
-screen's first frame is the Screenshot portal's (`--still screenshot`).
-
-Recordings are Mako's own the same way, never FFmpeg's: the helper's capture
-goes into the recording's MP4, the driver keeps only its action journal
-(`record_video: false`), and the pointer is drawn in at the end by the helper's
-`composite` mode, which decodes the recording with OpenH264.
+such as `xvfb-run`'s is not one), the host
+starts its embedded driver as it does on a Mac, with `CUA_DRIVER_RS_ENABLE_WAYLAND=1`
+on Wayland, and grants task sessions to it. Without the desktop app, a window's
+live video comes from the video helper: XComposite on X11, and on Wayland the
+monitor the person shares through the ScreenCast portal (PipeWire, shared memory
+or a linear DMA-BUF), asked once and restored from
+`<data root>/computer-use/portal-monitor.token`. The helper encodes a picture
+only when it changed: XDamage on X11, and on Wayland a buffer with an empty
+damage list or the same pixels as the last one is skipped.
 
 `desktop-probe.mjs` takes the host's own path: the bundled `cua-embedded.ts`,
 the broker, a task session and the `mako-control` CLI. It launches apps from
-desktop entries (quoted `Exec=` with a field code), lists windows, screenshots,
-reads accessibility, types and clicks into a GTK fixture and into terminals
-(xterm, and foot on Wayland), drives an XWayland GTK app, writes and reads the
-clipboard, then measures live video (first frame, frames and CPU over 5 idle
-seconds, frames under input, its units written to MP4) and records with a
-click, read back with Mediabunny. It refuses to start with `ffmpeg` on PATH;
-the images install none. Each run writes `desktop-<kind>.json` with every
-operation's time. Run one desktop at a time:
+desktop entries, lists windows, screenshots, reads accessibility, types and
+clicks into a GTK fixture and into terminals (xterm, and foot on Wayland), drives
+an XWayland GTK app, writes and reads the clipboard, then measures live video
+(first frame, frames and CPU over 5 idle seconds, frames under input, its units
+written to MP4) and a recording read back with ffprobe. Each run writes
+`desktop-<kind>.json` with every operation's time. Run one desktop at a time:
 
 ```sh
 npm run build:control-runtime
 npx esbuild packages/host/src/control/cua-embedded.ts --bundle --platform=node --format=esm \
   --tsconfig=tsconfig.json --external:@mako/control-runtime/* --external:zod --outfile=build/cua-embedded.mjs
-sh scripts/linux-control/run-desktop.sh x11|sway|gnome|kde|kde6 <root> <driver package> <evidence>
+sh scripts/linux-control/run-desktop.sh x11|sway|gnome|kde <root> <driver package> <evidence>
 ```
 
 `<root>` needs Linux `node_modules`; on a Mac, use a payload laid out like the
 checkout. The GNOME and KDE desktops answer the portal's consent dialogs with
 `portal-consent.py` through AT-SPI and log each answer, so a restored session
-shows none. `linux-desktop-control.yml` runs all five on x64.
+shows none. `linux-desktop-control.yml` runs all four on x64.
 
-Coverage on 2026-11-20 (driver 0.28.2+mako.28; Ubuntu 24.04 images, KDE 6.3 on
-Debian 13):
+Coverage on 2026-11-20 (Ubuntu 24.04 images, driver 0.28.2+mako.26):
 
-| | X11 (Openbox) | GNOME 46 Wayland | KDE KWin 5.27 and 6.3 Wayland | wlroots (Sway 1.9) |
+| | X11 (Openbox) | GNOME 46 Wayland | KDE KWin 5.27 Wayland | wlroots (Sway 1.9) |
 | --- | --- | --- | --- | --- |
-| Window list | EWMH | Shell helper | KWin; native apps without AT-SPI (foot) missing | Sway IPC |
-| Window screenshot | yes | yes | refused (surface identity unproven) | yes, XWayland too |
+| Window list | EWMH | Shell helper | KWin; native apps without AT-SPI (foot) missing | sway IPC; native apps without AT-SPI (foot) missing |
+| Window screenshot | yes | yes | refused (surface identity unproven) | native yes; XWayland refused |
 | AT-SPI read, set value, press | yes | yes | yes | yes |
-| Focus and foreground keys and clicks | yes | libei, after one RemoteDesktop consent | refused: no verified activation | yes (keys through `wtype`), XWayland too |
-| XWayland app | n/a | yes | AT-SPI only | yes |
+| Focus and foreground keys and clicks | yes | libei, after one RemoteDesktop consent | refused: no verified activation | native yes; XWayland refused |
+| XWayland app | n/a | yes | AT-SPI only | AT-SPI only |
 | Clipboard | X selections | yes | yes | wl data-control |
 | Launch by desktop entry | yes | yes | yes | yes |
-| Live video (helper) | XDamage + XComposite | portal, consent once, restored | portal declines in headless KWin | portal (xdpw), still screen from the Screenshot portal |
-| Recording to MP4 | window | shared monitor | refused (portal declines) | shared monitor |
+| Live video (helper) | XDamage + XComposite | portal, consent once, restored | portal declines in headless KWin | portal (xdpw), first frame waits for damage |
+| Recording to MP4 | yes | yes (Shell helper) | refused | refused (needs the GNOME helper) |
 
 Idle cost of live video, 5 s with nothing changing: 0 frames and 0 CPU on X11,
-Sway and GNOME, with the driver's GNOME agent cursor at rest (helper v11). The
-Sway image builds xdg-desktop-portal-wlr 0.7.1 with shared-memory screencopy
-allowed, since Ubuntu's refuses a GPU-less compositor, and installs `wtype`,
-`grim` and the GTK portal backend, as a Sway desktop has them. Headless KWin
-declines the ScreenCast portal and offers no target-addressable activation, in
-5.27 and 6.3 alike; a full Plasma session is unproven.
+Sway and GNOME. On GNOME the driver's own agent cursor (the Shell helper's 33 ms
+repaint) keeps the screen changing at 19–26 fps while it shows; the probe hides
+it before measuring. The Sway image builds xdg-desktop-portal-wlr 0.7.1 with
+shared-memory screencopy allowed, since Ubuntu's refuses a GPU-less compositor.
 
 ## Recording worker without a desktop
 

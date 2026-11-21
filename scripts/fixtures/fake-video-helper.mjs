@@ -14,7 +14,7 @@ if (source === "window" && rest[0] === "0") {
 let sequence = 0
 const unit = (key, width = 64, height = 32, tag = ++sequence, capturedAt = Date.now()) => {
   const packet = encodeControlVideo(key
-    ? { kind: "key", width, height, sequence: tag, capturedAt, data: Uint8Array.of(0, 0, 0, 1, 0x65), description: Uint8Array.of(1, 0x42, 0, 0x1e, 0xff, 0xe1, 0, 7, 0x67, 0x42, 0x00, 0x0a, 0xf8, 0x41, 0xa2, 1, 0, 4, 0x68, 0xce, 0x38, 0x80) }
+    ? { kind: "key", width, height, sequence: tag, capturedAt, data: Uint8Array.of(0, 0, 0, 1, 0x65), description: Uint8Array.of(1, 0x42, 0, 0x1e, 0xff, 0xe1) }
     : { kind: "delta", width, height, sequence: tag, capturedAt, data: Uint8Array.of(0, 0, 0, 1, 0x41) })
   const length = Buffer.alloc(4)
   length.writeUInt32BE(packet.byteLength)
