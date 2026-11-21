@@ -22,8 +22,9 @@ import { CuaDriverVersions } from "../packages/host/src/control/cua-driver-versi
 import { Appshots } from "../packages/host/src/control/appshots.js"
 import { DriverBroker } from "../packages/control-runtime/src/driver-broker.js"
 import { exchange, parseReply } from "../packages/control-runtime/src/driver-daemon.js"
-import { connect } from "node:net"
+import { connect, createServer } from "node:net"
 import { readMp4 } from "../packages/control-runtime/src/mp4.js"
+import { daemonAnswers } from "../packages/control-runtime/src/driver-daemon.js"
 import { driverPath as reportedPath } from "../packages/control-runtime/src/native-recording.js"
 import type { ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
 import type { JsonObject, JsonValue } from "../packages/control-runtime/src/json.js"
@@ -688,6 +689,28 @@ try {
       assert.equal(open, false, `nothing listens on 127.0.0.1:${port}`)
     }
     return { listeners: Number(listeners) }
+  })
+
+  await check("every connection has the daemon prove itself with the host's key", async () => {
+    const address = cua.address()
+    assert.ok(address?.key, "the host gave its daemon a key")
+    assert.equal(await daemonAnswers(address.path, { key: address.key }), true, "the daemon answers the challenge")
+    assert.equal(await daemonAnswers(address.path, { key: "0".repeat(64) }), false, "a wrong key is no proof")
+    // What holds a pipe's name without the key, as a process that took the name first would: never spoken to.
+    const impostor = `\\\\.\\pipe\\mako-cua-impostor-${process.pid}`
+    let heard = ""
+    const server = createServer((connection) => { connection.on("data", (chunk) => { heard += String(chunk); connection.write('{"ok":true,"result":{"proof":"00"}}\n') }); connection.on("error", () => undefined) })
+    await new Promise<void>((done) => server.listen(impostor, done))
+    try {
+      assert.equal(await daemonAnswers(impostor, { key: address.key }), false, "an impostor on a pipe is refused")
+      const impostorBroker = new DriverBroker({ socket: async () => impostor, daemon: () => ({ key: address.key }), own: () => [] })
+      await assert.rejects(impostorBroker.connect({ kind: "appshots", label: "impostor" }), "the broker dispatches nothing to it")
+      await impostorBroker.close()
+      assert.ok(!/"call"|"list"|"metadata"|session_begin/.test(heard), `the impostor heard only challenges: ${heard.slice(0, 200)}`)
+    } finally {
+      server.close()
+    }
+    return { impostorHeard: heard.split("\n").filter(Boolean).length }
   })
 
   await check("launch_app by a bare name runs only an installed app or a program the host's lookup trusts", async () => {

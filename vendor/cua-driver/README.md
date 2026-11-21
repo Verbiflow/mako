@@ -3,12 +3,28 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.30`. +30 is +29 with `0007-linux-no-ffmpeg.patch` and the
+`0.28.2+mako.31`. +31 is +30 with `0008-windows-daemon-proof.patch` and the
+version. +30 is +29 with `0007-linux-no-ffmpeg.patch` and the
 version. +29 is +28 with `0005-windows-driver.patch` and the version
 (the patch was written beside 0006 as +27 and landed after it, so it is the
 later release despite its number). +28 is +26 with `0006-linux-desktop.patch`
 and the version. +26 is +25 with `0004-stable-wayland-seat-pointer.patch` and
 the version.
+
+### 0008: the Windows daemon proves itself
+
+Two Windows-only changes for the embedded daemon's host:
+
+- A `prove` request. A daemon given a key (`CUA_DRIVER_EMBEDDED_HOST_KEY`,
+  at least 32 characters) answers a challenge with HMAC-SHA256 of it under
+  the key, in hex (`embedded_host_proof`, `cua-driver-core/src/lib.rs`; the
+  request in the Windows `run_serve`). Mako's host gives the key to a driver
+  of this release or later, and then asks on every connection before it writes
+  anything else, so a process that took the pipe's name is never spoken to. A
+  daemon given no key answers with an error.
+- `launch_app` refuses a name that matches no installed app. Upstream handed
+  it to ShellExecute, which searches the current folder and `PATH`. A whole
+  path, an AppUserModelID, a `shell:` item or a URL launches as before.
 
 ### 0007: no FFmpeg in the Linux build
 

@@ -1,0 +1,226 @@
+diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
+index b67611a..2e7ea6f 100644
+--- a/libs/cua-driver/rust/Cargo.lock
++++ b/libs/cua-driver/rust/Cargo.lock
+@@ -1151,7 +1151,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -1190,7 +1190,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-bindgen"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "cbindgen",
+  "uniffi",
+@@ -1198,7 +1198,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-contract"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "schemars",
+  "serde",
+@@ -1208,7 +1208,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-core"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -1246,7 +1246,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-sdk"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "async-trait",
+  "core-foundation",
+@@ -1269,7 +1269,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-testkit"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "core-foundation",
+  "image",
+@@ -1284,7 +1284,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cua-driver-uia"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "anyhow",
+  "cua-driver-core",
+@@ -1299,7 +1299,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cursor-overlay"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "anyhow",
+  "cua-driver-contract",
+@@ -1316,7 +1316,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "cursor-theme-cli"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "anyhow",
+  "cursor-overlay",
+@@ -3240,7 +3240,7 @@ checksum = "a89322df9ebe1c1578d689c92318e070967d1042b512afbe49518723f4e6d5cd"
+ 
+ [[package]]
+ name = "pip-preview"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "serde_json",
+ ]
+@@ -3298,7 +3298,7 @@ checksum = "b4596b6d070b27117e987119b4dac604f3c58cfb0b191112e24771b2faeac1a6"
+ 
+ [[package]]
+ name = "platform-linux"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "anyhow",
+  "ashpd",
+@@ -3352,7 +3352,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "platform-macos"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+@@ -3392,7 +3392,7 @@ dependencies = [
+ 
+ [[package]]
+ name = "platform-windows"
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ dependencies = [
+  "anyhow",
+  "async-trait",
+diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
+index 178c9eb..d9ee30a 100644
+--- a/libs/cua-driver/rust/Cargo.toml
++++ b/libs/cua-driver/rust/Cargo.toml
+@@ -17,7 +17,7 @@ members = [
+ ]
+ 
+ [workspace.package]
+-version = "0.28.2+mako.30"
++version = "0.28.2+mako.31"
+ edition = "2021"
+ authors = ["trycua"]
+ license = "MIT"
+diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
+index e3d9f1c..d81e6d7 100644
+--- a/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
++++ b/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
+@@ -37,6 +37,19 @@ pub fn embedded_mode() -> bool {
+ /// Parent-EOF shutdown is valid only for a directly embedded daemon. Requiring
+ /// both sentinels prevents an ambient variable from changing ordinary
+ /// standalone or MCP stdin behavior.
++/// The key an embedding host shares with its daemon to tell it from another process holding the daemon's endpoint.
++pub const EMBEDDED_HOST_KEY_ENV: &str = "CUA_DRIVER_EMBEDDED_HOST_KEY";
++
++/// HMAC-SHA256 of `challenge` under the host's key, in hex: what an embedded daemon answers a `prove` request with.
++/// None without a key of at least 32 characters, so a daemon that was given none proves nothing.
++pub fn embedded_host_proof(challenge: &str) -> Option<String> {
++    use hmac::{Hmac, Mac};
++    let key = std::env::var(EMBEDDED_HOST_KEY_ENV).ok().filter(|key| key.len() >= 32)?;
++    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes()).ok()?;
++    mac.update(challenge.as_bytes());
++    Some(mac.finalize().into_bytes().iter().map(|byte| format!("{byte:02x}")).collect())
++}
++
+ pub fn parent_liveness_stdin_enabled() -> bool {
+     embedded_mode() && std::env::var_os(PARENT_LIVENESS_STDIN_ENV).is_some_and(|value| value == "1")
+ }
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index bb45812..8279730 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -1883,6 +1883,18 @@ pub async fn run_serve(
+                                 let _ = crate::mcp_envelope::accept(reg.clone(), lines.into_inner(), writer).await;
+                                 return;
+                             }
++                            // The host proves it reached the daemon it started, not another process holding the
++                            // pipe's name: the answer is keyed with what only the two of them were given.
++                            "prove" => {
++                                let challenge = req.args.as_ref().and_then(|args| args.get("challenge")).and_then(|value| value.as_str()).filter(|value| value.len() <= 256);
++                                let resp = match challenge.and_then(cua_driver_core::embedded_host_proof) {
++                                    Some(proof) => DaemonResponse::ok(serde_json::json!({ "proof": proof })),
++                                    None => DaemonResponse::err("this daemon was given no host key to prove itself with", 77),
++                                };
++                                let _ = writer.write_all(
++                                    (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
++                                ).await;
++                            }
+                             "metadata" => {
+                                 let resp = daemon_metadata_response();
+                                 let _ = writer.write_all(
+diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
+index 90aeb39..00b65fa 100644
+--- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
++++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
+@@ -2035,7 +2035,7 @@ impl Tool for LaunchAppTool {
+                 where the legacy .exe in System32 is a ~7 KB stub that exits immediately. A \
+                 plain `name` first attempts a `shell:AppsFolder` lookup; packaged matches use \
+                 the activation manager while desktop registrations are launched through their \
+-                shell parsing path. A miss falls back to ShellExecuteEx's PATH search.\n\n\
++                shell parsing path. A miss is refused: a bare name is never searched for on PATH.\n\n\
+                 Returns the launched app's pid, name, active flag, AND a `windows` array — \
+                 same per-window shape `list_windows` returns. When the launch settles but no \
+                 window has materialized yet (transient; rare), `windows` comes back empty — \
+@@ -2052,7 +2052,7 @@ impl Tool for LaunchAppTool {
+             input_schema: json!({"type":"object","properties":{
+                 "bundle_id":{"type":"string","description":"App User Model ID (AUMID) for a packaged app — pattern `{PackageFamilyName}!{ApplicationId}`, e.g. `Microsoft.WindowsNotepad_8wekyb3d8bbwe!App`. Falls back to a `name` alias if no `!` is present. Either bundle_id, name, aumid, path, or launch_path must be provided."},
+                 "aumid":{"type":"string","description":"Explicit AUMID for a packaged app. Cleaner alternative to overloading `bundle_id`. Takes precedence over `bundle_id` / `name` when present."},
+-                "name":{"type":"string","description":"App display name. Tried against the `shell:AppsFolder` index first for packaged-app lookup; on a miss, passed to ShellExecuteEx's PATH search."},
++                "name":{"type":"string","description":"App display name. Tried against the `shell:AppsFolder` index first for packaged-app lookup; a name that matches no installed app is refused, never searched for on PATH."},
+                 "path":{"type":"string","description":"Full path to executable. Windows-only; takes precedence over name/bundle_id/aumid (but not over `launch_path`)."},
+                 "launch_path":{"type":"string","description":"Round-trip the `launch_path` returned by `list_apps`. Highest precedence — when set, this exact string is handed to ShellExecuteEx unchanged. For Windows desktop apps it's the full `.exe` commandline (path + arguments preserved from the source shortcut); for UWP apps it's `shell:appsFolder\\{PackageFamilyName}!{AppId}`. For precise UWP pid capture, prefer `aumid` over `launch_path`."},
+                 "urls":{"type":"array","items":{"type":"string"},"description":"URLs to open in the default browser via ShellExecuteEx (no activation)."},
+@@ -2357,6 +2357,22 @@ impl Tool for LaunchAppTool {
+             }));
+         }
+ 
++        // A name that matched no installed app is not handed to ShellExecuteEx to search for: it would look in the
++        // current folder and on PATH, where any program of that name would run as this user. Only a whole path, an
++        // AppUserModelID, a `shell:` item or a URL is launched.
++        if aumid_for_uwp.is_none() {
++            if let Some(target) = target_file_opt.as_deref() {
++                if !target.is_empty() && !target.contains([':', '\\', '/']) {
++                    return ToolResult::error(format!(
++                        "launch_app: no installed app is named {target:?}, and a bare program name is not searched \
++                         for on PATH or in the current folder. Give its whole path (`path`), its AppUserModelID \
++                         (`aumid`), or a `launch_path` from list_apps. No process was started."
++                    ))
++                    .with_structured(json!({ "code": "app_not_found", "name": target }));
++                }
++            }
++        }
++
+         // Branch: AUMID activation if we resolved one; else legacy
+         // ShellExecuteExW. Both branches still need to handle `urls`
+         // (additional URLs always go through ShellExecuteExW since the

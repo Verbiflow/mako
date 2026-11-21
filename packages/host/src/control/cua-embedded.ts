@@ -1,4 +1,4 @@
-import { hostSpawn } from "../base/host-command.js"
+import { hostCommand, hostSpawn } from "../base/host-command.js"
 import { endChildInput } from "@mako/sessions/child-input"
 import type { ChildProcess } from "node:child_process"
 import { randomBytes } from "node:crypto"
@@ -9,7 +9,9 @@ import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { hostLog } from "../base/host-log.js"
 import { trackProviderChild, untrackProviderPid } from "../base/provider-children.js"
 import { createPrivateControlSocket, linuxDesktop, videoHelperExecutable } from "@mako/control-runtime/desktop"
+import { daemonAnswers } from "@mako/control-runtime/host"
 import { findExecutable } from "../base/executable.js"
+import { parseCuaDriverVersion } from "./cua-driver-version.js"
 import { onMac, onWindows } from "../base/platform.js"
 
 /**
@@ -39,6 +41,8 @@ interface Daemon {
   endpoint: Endpoint
   args: string[]
   env: NodeJS.ProcessEnv
+  /** The key the daemon proves itself with on every connection (Windows); none where its socket is a private file. */
+  key: string | undefined
   /** Settles when the daemon's process has exited. */
   exited: Promise<void>
 }
@@ -91,6 +95,24 @@ function stopDaemon(child: ChildProcess): void {
   child.once("exit", () => clearTimeout(timer))
 }
 
+/** The first of Mako's driver releases that answers `prove` (`0008-windows-daemon-proof.patch`). */
+const PROVING_RELEASE = 31
+
+/** Whether a driver's `--version` output names a release that proves itself to its host. */
+export function driverProves(versionOutput: string): boolean {
+  const release = /\+mako\.(\d+)$/.exec(parseCuaDriverVersion(versionOutput) ?? "")
+  return release !== null && Number(release[1]) >= PROVING_RELEASE
+}
+
+/** Asked of the executable the host itself found and is about to start, never of whatever answers on its endpoint. */
+async function proves(command: string, env: NodeJS.ProcessEnv): Promise<boolean> {
+  try {
+    return driverProves((await hostCommand(command, ["--version"], { env, timeout: 8_000, windowsHide: true })).stdout)
+  } catch {
+    return false
+  }
+}
+
 /** The video helper's whole path for the driver, where there is one (`video_helper.rs` in the driver's patch). */
 function videoHelperEnvironment(): { CUA_DRIVER_VIDEO_HELPER?: string } {
   const helper = videoHelperExecutable()
@@ -131,7 +153,9 @@ async function executable(
   return null
 }
 
-function probe(path: string): Promise<boolean> {
+function probe(path: string, key: string | undefined): Promise<boolean> {
+  // With a key, only the daemon that holds it counts as listening: another process on the name answers no challenge.
+  if (key) return daemonAnswers(path, { key })
   return new Promise((resolve) => {
     const socket = createConnection(path)
     const finish = (available: boolean) => {
@@ -172,13 +196,14 @@ async function sweepStaleSockets(stateDir: string): Promise<void> {
 
 async function waitForSocket(
   path: string,
+  key: string | undefined,
   exited: () => string | null
 ): Promise<void> {
   const deadline = Date.now() + SOCKET_WAIT_MS
   while (Date.now() < deadline) {
     const failure = exited()
     if (failure !== null) throw new Error(failure)
-    if (await probe(path)) return
+    if (await probe(path, key)) return
     await new Promise((resolve) => setTimeout(resolve, SOCKET_POLL_MS))
   }
   throw new Error("Embedded CUA Driver did not open its private socket")
@@ -215,10 +240,10 @@ export class CuaEmbedded {
     return this.#daemon?.socket ?? null
   }
 
-  /** The running daemon for the driver broker: its endpoint and its process's end. */
-  address(): { path: string; exited: Promise<void> } | null {
+  /** The running daemon for the driver broker: its endpoint, the key it proves itself with, and its process's end. */
+  address(): { path: string; key?: string; exited: Promise<void> } | null {
     const daemon = this.#daemon
-    return daemon ? { path: daemon.socket, exited: daemon.exited } : null
+    return daemon ? { path: daemon.socket, ...(daemon.key && { key: daemon.key }), exited: daemon.exited } : null
   }
 
   /** The daemon's pid, for tests that sample what is frontmost while it starts. */
@@ -310,6 +335,10 @@ export class CuaEmbedded {
     await sweepStaleSockets(stateDir)
     const endpoint = await daemonEndpoint(stateDir)
     const socket = endpoint.path
+    // The proof is asked only on Windows, where the endpoint is a pipe whose name anyone can take, and only of a
+    // driver that can give it: an older build is started as before, and the log says so.
+    const key = onWindows() && (await proves(command, env)) ? randomBytes(32).toString("hex") : undefined
+    if (onWindows() && !key) hostLog("computer", "driver predates the proof handshake; started without it", { executable: command })
     const driverEnv = {
       CUA_DRIVER_EMBEDDED: "1",
       CUA_DRIVER_HOST_BUNDLE_ID: hostBundleId,
@@ -327,6 +356,9 @@ export class CuaEmbedded {
       ...(onWindows() && {
         CUA_DRIVER_EMBEDDED_HOST_PID: String(process.pid),
         CUA_DRIVER_PARENT_LIVENESS_STDIN: "1",
+        // What only this host and its daemon hold: every connection has the far end answer a challenge keyed with
+        // it, so a process that took the pipe's name before the daemon could is never spoken to.
+        ...(key && { CUA_DRIVER_EMBEDDED_HOST_KEY: key }),
         // A window's recording is captured and encoded by Mako's video helper, which the driver runs by this whole
         // path and never looks up itself; without it the driver refuses window video. No FFmpeg is involved.
         ...videoHelperEnvironment(),
@@ -379,6 +411,7 @@ export class CuaEmbedded {
       endpoint,
       args,
       env,
+      key: env.CUA_DRIVER_EMBEDDED_HOST_KEY,
       exited: new Promise((resolve) => child.once("exit", () => resolve())),
     }
     child.once("exit", (code, signal) => {
@@ -387,6 +420,7 @@ export class CuaEmbedded {
     try {
       await waitForSocket(
         socket,
+        current.key,
         () =>
           spawnFailure ??
           (child.exitCode === null

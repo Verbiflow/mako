@@ -89,8 +89,9 @@ export interface DriverBrokerOptions {
   log?: (message: string, fields: Record<string, string | number | boolean | undefined>) => void
 }
 
-/** The daemon a host started itself: its process's end. */
+/** The daemon a host started itself: the key every connection has it prove, and its process's end. */
 export interface DaemonOwned {
+  key?: string
   /** Settles when the daemon's process has exited: its calls in flight fail then, whoever holds its endpoint. */
   exited?: Promise<unknown>
 }
@@ -303,9 +304,9 @@ export class DriverBroker {
     for (;;) {
       const socket = await this.options.socket()
       if (!socket) throw new DriverNotDispatchedError("Mako's computer-use driver isn't available on this Mac; nothing was dispatched.")
-      const { exited } = this.options.daemon?.() ?? {}
+      const { key, exited } = this.options.daemon?.() ?? {}
       const gone = new AbortController()
-      const peer: DaemonPeer = { gone: gone.signal }
+      const peer: DaemonPeer = { ...(key && { key }), gone: gone.signal }
       const [description, sentinel] = await Promise.allSettled([describeDaemon(socket, peer), openDaemonLease(socket, leaseIdentity(), peer)])
       if (description.status === "fulfilled" && sentinel.status === "fulfilled") {
         if (this.closed) {
