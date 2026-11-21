@@ -1,12 +1,12 @@
 import assert from "node:assert/strict"
-import { spawn } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { monitorEventLoopDelay, performance } from "node:perf_hooks"
+import { performance } from "node:perf_hooks"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { AgentsWorld } from "./lib/agents-world.ts"
+import { longestHold } from "./lib/loop-hold.ts"
 
 /*
  * What an Apex's row costs as its conversation streams, with a tree as large as the person's on 2026-11-11 (57 Fins
@@ -16,15 +16,20 @@ import { AgentsWorld } from "./lib/agents-world.ts"
  * the account's list makes its row (`ownedSessions`); both ask `Agents.personAsk` what of its Fins waits on the person.
  * The host's own profiles that day named that walk (`personAsk < look < stateOf < childReading`) in holds of 0.3-0.6 s a
  * batch. Here each Apex streams BATCHES batches, each asking once as the publisher does, while some of its Fins work,
- * some wait on a decision of the person's and some have finished; the loop's delay is measured across it. Fails when a
- * batch's ask costs more than `BUDGET.askP99Ms` at the 99th percentile, or the loop holds past `BUDGET.loopMaxMs` more
- * than a yardstick beside it waited in the same window: a process of its own running none of Mako's code
- * (`lib/host-load-yardstick.mjs`, as `bench:host-load` calibrates), so a shared runner's stall, which stops both, isn't
- * read as the bench's. The ask is judged against a fixed piece of work timed beside it in the same process
- * (`reference`), never a fixed number of milliseconds, and a Fin reports every `REPORT_EVERY` batches through the engine,
- * as Fins at work do, so the walk is worked out again after each. A fixed 100 ms failed on main's gate (a hold of 104 ms beside test-watch-backend on its shard,
- * with the ask itself at 0.57 ms at the 99th percentile). `PERSON_ASK_INJECT_HOLD_MS` holds the loop that long mid-run,
- * to see a real hold still fail.
+ * some wait on a decision of the person's and some have finished; the loop's holds are measured across it. Fails when a
+ * batch's ask costs more than `BUDGET.askToReference` at the 99th percentile, or the loop's thread uses more CPU in one
+ * gap between its turns than `BUDGET.holdToReference` allows (`longestHold`'s busiest gap). Both are judged against a
+ * fixed piece of work timed beside them in the same process (`reference`), never a fixed number of milliseconds: a
+ * runner's speed varies by several times between runs and slows both alike. A Fin reports every `REPORT_EVERY`
+ * batches through the engine, as Fins at work do, so the walk is worked out again after each.
+ *
+ * A hold is judged by CPU, not by the clock. This runs beside another part on its shard's two cores, and by the clock
+ * a gap says how long the runner kept the thread off a core: 130 and 162 ms failed main's gate against 100 beside
+ * test-agents-cli (2026-11-21), and beside three busy processes the same run reads 47 to 66 ms by the clock with 4 to
+ * 6 ms of CPU in the gap. The yardstick that stood beside it, a process of its own that mostly sleeps, isn't kept off a
+ * core as a thread at work is: it waited 2.7 and 4.2 ms through those holds, so it excused none of them. The clock
+ * keeps a loose bound (`BUDGET.holdWallMs`). `PERSON_ASK_INJECT_HOLD_MS` holds the loop that long mid-run, to see a
+ * real hold still fail.
  */
 const APEXES = 3
 const EACH = 19
@@ -33,11 +38,12 @@ const BATCHES = 300
 const REPORT_EVERY = 5
 /**
  * An ask's 99th percentile against the same percentile of a fixed piece of work timed beside it in the same process
- * (`reference`): a runner's speed varies by several times between runs and slows both alike. A fixed 5 ms failed main
- * twice, at 5.46 ms, with no regression; the walk per Fin that the person's host held seconds on costs several times
- * this.
+ * (`reference`). A fixed 5 ms failed main twice, at 5.46 ms, with no regression; the walk per Fin that the person's host
+ * held seconds on costs several times this. The busiest gap's CPU is held to 1,500 times that work's median, about
+ * 50 ms on a Mac and 100 on a runner, where the fixed 100 ms stood: over 40 runs on two cores, half of them beside three
+ * busy processes, it was 148 to 425 times (5 to 15 ms), and a hold of 150 ms is over 4,000.
  */
-const BUDGET = { askToReference: 40, loopMaxMs: 100 }
+const BUDGET = { askToReference: 40, holdToReference: 1_500, holdWallMs: 3_000 }
 
 /** A fixed piece of work, long enough to time to a few percent (about a third of a millisecond on a Mac): objects made, read and dropped, as an ask does. */
 function reference(): number {
@@ -99,18 +105,12 @@ try {
   assert.ok(working.length > 0, "some of its Fins work")
   const callerOf = (fin: string) => world.caller(world.store.thread(ThreadIdSchema.parse(fin))!.sessions.flatMap((session) => world.store.conversationsOf(session))[0]!)
 
-  const yardstickOut = join(root, "yardstick.json")
-  const yardstick = spawn(process.execPath, [join(import.meta.dirname, "lib/host-load-yardstick.mjs"), yardstickOut, "50"], { stdio: ["ignore", "inherit", "inherit"] })
-  const yardstickDone = new Promise((done) => yardstick.once("exit", done))
-  // Its heap made and its first ticks timed before the window opens.
-  await new Promise((resolve) => setTimeout(resolve, 500))
   const inject = Number(process.env.PERSON_ASK_INJECT_HOLD_MS ?? 0)
   const asks: number[] = []
   const references: number[] = []
   let reported = 0
-  const delay = monitorEventLoopDelay({ resolution: 5 })
-  delay.enable()
   const began = performance.now()
+  const hold = await longestHold(async () => {
   for (let batch = 0; batch < BATCHES; batch += 1)
     for (const apex of apexes) {
       // A batch of the Apex's conversation, then the publisher's check of its row against it.
@@ -128,25 +128,24 @@ try {
       if (batch % 10 === 0) await new Promise((resolve) => setImmediate(resolve))
       if (inject && batch === BATCHES / 2 && apex === apexes[0]) for (const until = performance.now() + inject; performance.now() < until; );
     }
+  })
   const tookMs = performance.now() - began
-  delay.disable()
-  yardstick.kill("SIGTERM")
-  await yardstickDone
-  const yardstickLate = Number(JSON.parse(readFileSync(yardstickOut, "utf8")).late.max)
+  /** The fixed work's median, which a hold is judged against: steadier than its 99th percentile, and never under a hundredth of a millisecond. */
+  const referenceMs = Math.max(percentile(references, 0.5), 0.01)
   const result = {
     fins,
     batches: asks.length,
-    reference: { p99Ms: round(percentile(references, 0.99)) },
     ask: { meanMs: round(asks.reduce((sum, ms) => sum + ms, 0) / asks.length), p50Ms: round(percentile(asks, 0.5)), p99Ms: round(percentile(asks, 0.99)), maxMs: round(Math.max(...asks)) },
     totalMs: Math.round(tookMs),
-    loop: { p99Ms: Math.round(delay.percentile(99) / 1e5) / 10, maxMs: Math.round(delay.max / 1e5) / 10 },
-    yardstick: { lateMaxMs: yardstickLate },
+    reference: { p50Us: Math.round(percentile(references, 0.5) * 1000), p99Ms: round(percentile(references, 0.99)) },
+    hold: { busiestCpuMs: round(hold.busiest.cpuMs), busiestWallMs: round(hold.busiest.ms), longestWallMs: round(hold.ms), toReference: Math.round(hold.busiest.cpuMs / referenceMs) },
   }
-  const loopLimit = BUDGET.loopMaxMs + yardstickLate
   console.log(JSON.stringify(result))
   const askLimit = BUDGET.askToReference * Math.max(result.reference.p99Ms, 0.01)
   assert.ok(result.ask.p99Ms <= askLimit, `an Apex's batch spent ${result.ask.p99Ms} ms at the 99th percentile on its Fins; the budget is ${BUDGET.askToReference} times a fixed piece of work's ${result.reference.p99Ms} ms beside it, ${round(askLimit)} ms`)
-  assert.ok(result.loop.maxMs <= loopLimit, `the loop held ${result.loop.maxMs} ms; the budget is ${BUDGET.loopMaxMs} ms past the yardstick's worst wait in the same window, ${yardstickLate} ms`)
+  const holdLimit = BUDGET.holdToReference * referenceMs
+  assert.ok(result.hold.busiestCpuMs <= holdLimit, `the loop's thread used ${result.hold.busiestCpuMs} ms of CPU in one gap between its turns; the budget is ${BUDGET.holdToReference} times a fixed piece of work's ${round(referenceMs * 1000)} µs beside it, ${round(holdLimit)} ms`)
+  assert.ok(result.hold.longestWallMs <= BUDGET.holdWallMs, `the loop went ${result.hold.longestWallMs} ms by the clock without a turn; the bound is ${BUDGET.holdWallMs} ms`)
   console.log("bench person-ask: ok")
 } finally {
   release()
