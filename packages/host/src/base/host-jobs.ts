@@ -52,10 +52,20 @@ export class HostJobs {
   private readonly work: HostWork
   private readonly foreground: Foreground | undefined
   private stopped = false
+  private scope: <T>(work: () => T) => T = (work) => work()
 
   constructor(work: HostWork = unwatchedWork, foreground?: Foreground) {
     this.work = work
     this.foreground = foreground
+  }
+
+  /**
+   * The host whose jobs these are (`HostStopping.run`): each run, and each demand's listener, is that host's work
+   * whoever set the demand on. A window subscribing sets one from its connection's turn of the loop, which is no
+   * host's: a job it started read the machine with processes spawned from the host's thread, not in the probes' child.
+   */
+  within(scope: <T>(work: () => T) => T): void {
+    this.scope = scope
   }
 
   /** Schedules `run` every `everyMs`; the returned function cancels it, after which its name is free again. */
@@ -94,7 +104,7 @@ export class HostJobs {
         if (next === on) return
         on = next
         for (const job of this.jobs.values()) if (job.needs.includes(demand)) this.resume(job)
-        for (const listener of listeners) listener(on)
+        for (const listener of listeners) this.scope(() => listener(on))
       },
       onChange: (listener) => {
         listeners.add(listener)
@@ -145,7 +155,7 @@ export class HostJobs {
     job.running = true
     job.state.runs += 1
     try {
-      await this.work.run(job.state.name, () => job.run())
+      await this.scope(() => this.work.run(job.state.name, () => job.run()))
     } catch (error) {
       if (hostStopping()?.signal.aborted) return
       job.state.failures += 1

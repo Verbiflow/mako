@@ -462,6 +462,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     emit,
     jobs: shell.jobs,
     subscribed: shell.subscribed,
+    atWork,
   })
   const { catalog, store } = threads
   // On a cloud Thread's machine its simulators are a Mac of the person's, borrowed under a session lease through the
@@ -529,6 +530,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const shellsIn = async (path: string) => (await (await shell.terminals.load("a folder's open shells")).runningShells().catch(() => []))
     .filter((terminal) => terminal.cwd === path || terminal.cwd.startsWith(`${path}/`))
     .map((terminal) => `the terminal “${terminal.title}”`)
+  const watchedOrAtWork = shell.jobs.demand("a client is subscribed or agents work here")
+  const followNeeded = () => watchedOrAtWork.set(shell.subscribed.on || atWork.on)
+  shell.subscribed.onChange(followNeeded)
+  atWork.onChange(followNeeded)
+  followNeeded()
   const workspaces = openWorkspaces({
     git,
     probes,
@@ -540,6 +546,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     store,
     jobs,
     subscribed: shell.subscribed,
+    turnsNear: watchedOrAtWork,
     emit,
     inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
     finished: (thread) => late.conversations?.finishedThreadAt(thread),
@@ -721,11 +728,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // What each project on the list has checked out, as the rail shows it beside the project: read once a project is
   // listed, then followed (a branch switched anywhere arrives as a `checkout-heads` event, which reports again).
   const headsAsked = new Map<string, number>()
-  const watchedOrAtWork = shell.jobs.demand("a client is subscribed or agents work here")
-  const followNeeded = () => watchedOrAtWork.set(shell.subscribed.on || atWork.on)
-  shell.subscribed.onChange(followNeeded)
-  atWork.onChange(followNeeded)
-  followNeeded()
   const checkoutRepositories = new CheckoutRepositories({ ask: (folder) => folderRepository(git, folder) })
   const repositories = new ListedRepositories({ read: (folder) => checkoutRepositories.read(folder), changed: () => late.sessions?.changed(), againMs: HEAD_ASK_AGAIN_MS, jobs: shell.jobs, needed: watchedOrAtWork })
   const listedHead = (project: string) => {
@@ -2550,13 +2552,35 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     if (!shell.closing()) web()?.conversationEvent(event)
   })
 
-  const plugins = fixtureDesk ? null : watchPluginChanges(environment.dataRoot, emit, (root, changed) =>
-    watchBackend(root, [], { events: changed, dropped: changed, gone: changed, muted: (muted) => { if (!muted) changed() } }, { kind: "directory" }))
-  if (plugins) {
+  // The plugins folder is followed for the windows, which are told when it changes: while one is subscribed, and not
+  // otherwise, as a watch nobody hears kept the watcher's child alive on a host with no window and no project. A
+  // window that subscribes after a while with none is told once, having heard nothing of what changed meanwhile.
+  if (!fixtureDesk) {
+    let plugins: ReturnType<typeof watchPluginChanges> | undefined
+    let unheard = false
+    const follow = (subscribed: boolean) => {
+      if (subscribed && !plugins) {
+        const watching = watchPluginChanges(environment.dataRoot, emit, (root, changed) =>
+          watchBackend(root, [], { events: changed, dropped: changed, gone: changed, muted: (muted) => { if (!muted) changed() } }, { kind: "directory" }))
+        plugins = watching
+        void watching.ready.catch((error) => {
+          if (!shell.closing()) hostWarn("plugins", "plugin changes could not be followed", { error: error instanceof Error ? error.message : String(error) })
+        })
+        if (unheard) emit({ type: "plugins-changed" })
+        unheard = false
+      } else if (!subscribed && plugins) {
+        const ending = plugins
+        plugins = undefined
+        unheard = true
+        void ending.close().catch(() => {})
+      }
+    }
+    const unfollow = shell.subscribed.onChange(follow)
+    follow(shell.subscribed.on)
     // Register before readiness: a stop during subscription still joins the late release.
-    shell.stopping.register("plugin calls", () => plugins.close())
-    void plugins.ready.catch((error) => {
-      if (!shell.closing()) hostWarn("plugins", "plugin changes could not be followed", { error: error instanceof Error ? error.message : String(error) })
+    shell.stopping.register("plugin calls", () => {
+      unfollow()
+      return plugins?.close()
     })
   }
   const builds = config.development ? watchOwnBuild(devHostBuildDirectories(environment.appRoot), emit) : []

@@ -17,7 +17,8 @@ export interface ContinuationDependencies<Snapshot = unknown> {
   live(provider: string): { available: boolean; canResume: boolean } | null
   nativeInstalled(provider: string): boolean
   running(path: string): boolean
-  external(path: string): ExternalThreadActivity["status"] | null
+  /** What another app does with the session now, looked at for this ask when nobody was looking (`ThreadCatalog.activityNow`). */
+  external(path: string): Promise<ExternalThreadActivity["status"] | null> | ExternalThreadActivity["status"] | null
   /** Why this host may not resume a native session (`SessionMemory.resumeRefusal`, which `hold` throws at send); null when it may. */
   resumeRefusal?(): string | null
 }
@@ -78,7 +79,7 @@ export function createContinuationPlanner<Snapshot>(
       live,
       nativeInstalled: dependencies.nativeInstalled(ref.harness),
       running,
-      external: assessment?.kind === "resumable" ? null : dependencies.external(path),
+      external: assessment?.kind === "resumable" ? null : await dependencies.external(path),
     })
     return plan
   }

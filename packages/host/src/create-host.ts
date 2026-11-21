@@ -137,6 +137,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
   let stopped: Promise<void> | undefined
 
   const stopping = new HostStopping()
+  jobs.within((work) => stopping.run(work))
   if (onWindows()) {
     // The programs on the folders Windows' launches search, asked about off the thread now, so a launch finds its
     // verdict kept (`executable-trust.ts`).

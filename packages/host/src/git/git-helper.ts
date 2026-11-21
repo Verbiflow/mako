@@ -22,6 +22,12 @@ type ChildField = Readable | Writable | null | readonly (Readable | Writable | n
 /** After the helper ends, Git spawns directly for this long, doubling to `RETRY_MAX_MS` while it keeps ending. */
 const RETRY_MS = 5_000
 const RETRY_MAX_MS = 5 * 60_000
+/**
+ * How long the helper waits with nothing to run before it goes. A host whose Threads are quiet runs no `git` for
+ * minutes or hours, and a process kept for the next one is some 25 MB held for nothing; the watcher's child and the
+ * process table's reader go after the same wait (`workspaces/watch-backend.ts`).
+ */
+export const HELPER_IDLE_MS = 30_000
 /** A helper that hasn't said a `git` started this long after it was asked is wedged (stopped, blocked, its IPC jammed). */
 const SPAWN_WATCH_MS = 5_000
 /** Nor one that hasn't said a `git` ended this long after a stop was asked: the runner's own stop takes at most 5 s. */
@@ -174,12 +180,17 @@ export class GitHelper {
   #retryAt = 0
   #retryMs = RETRY_MS
   #stopped = false
+  #idle: NodeJS.Timeout | undefined
+  readonly #idleMs: number
+  /** The helper went for having nothing to run: the `git` that finds it gone is run by the host itself while the next one starts. */
+  #retired = false
   /** Why a helper let go of was lost, said when it closes. */
   readonly #lostWhy = new WeakMap<ChildProcess, string>()
 
-  constructor(direct: Runner, entry = defaultEntry()) {
+  constructor(direct: Runner, entry = defaultEntry(), idleMs = HELPER_IDLE_MS) {
     this.#direct = direct
     this.#entry = entry
+    this.#idleMs = idleMs
   }
 
   /** What `Git` spawns and closes its processes with. */
@@ -198,6 +209,7 @@ export class GitHelper {
   /** Ends the helper and everything it runs. */
   async stop(): Promise<void> {
     this.#stopped = true
+    clearTimeout(this.#idle)
     const child = this.#child
     this.#child = undefined
     if (child) {
@@ -216,8 +228,13 @@ export class GitHelper {
     const cwd = FolderSchema.safeParse(options.cwd).data
     const carried = stdio?.length === 3 && (stdin === "ignore" || stdin === "pipe") && stdio[1] === "pipe" && stdio[2] === "pipe" &&
       !options.detached && options.shell === undefined
+    // The `git` that finds the helper gone for idleness doesn't wait for the next one to start: the host runs it
+    // itself, as it runs any while the helper is down, and the helper it started takes those after.
+    const woken = carried && cwd !== undefined && this.#retired && !this.#child
     const helper = carried && cwd !== undefined ? this.#helper() : undefined
-    if (!helper || cwd === undefined) return this.#direct.spawn(file, args, options)
+    if (woken) this.#rest()
+    if (!helper || cwd === undefined || woken) return this.#direct.spawn(file, args, options)
+    clearTimeout(this.#idle)
     const id = (this.#next += 1)
     const send = (ask: HelperAsk) => { sendToChild(helper, ask).catch(() => {}) }
     const command = args.find((arg) => !arg.startsWith("-") && !arg.includes("=")) ?? ""
@@ -269,6 +286,7 @@ export class GitHelper {
       return undefined
     }
     this.#child = child
+    this.#retired = false
     // It never keeps a process alive by itself: only while it runs a `git` someone waits on (`#busy`).
     child.unref()
     child.channel?.unref()
@@ -286,7 +304,10 @@ export class GitHelper {
         this.#running.delete(said.data.id)
         // A git that ran to its end: the helper works, so its next fall is waited out from the start again.
         this.#retryMs = RETRY_MS
-        if (!this.#running.size) child.channel?.unref()
+        if (!this.#running.size) {
+          child.channel?.unref()
+          this.#rest()
+        }
       }
     })
     // What it ran is settled once it's closed: after its exit, what it had said before it went has all been read, so
@@ -309,6 +330,21 @@ export class GitHelper {
     })
     hostLog("git", "helper started", { pid: child.pid ?? 0 })
     return child
+  }
+
+  /** Nothing is running: the helper goes after `HELPER_IDLE_MS` of that, and the next `git` starts another. */
+  #rest(): void {
+    clearTimeout(this.#idle)
+    this.#idle = setTimeout(() => {
+      const helper = this.#child
+      if (!helper || this.#running.size || this.#stopped) return
+      this.#child = undefined
+      this.#retired = true
+      this.#lostWhy.set(helper, "it had nothing to run")
+      hostLog("git", "helper idle; stopped", { pid: helper.pid ?? 0 })
+      void this.#direct.close(helper).catch(() => {})
+    }, this.#idleMs)
+    this.#idle.unref()
   }
 
   #busy(helper: ChildProcess): void {

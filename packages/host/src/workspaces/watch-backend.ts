@@ -1,5 +1,6 @@
 import { hostStopping } from "../base/host-stopping.js"
 import { hostCommand, hostFork } from "../base/host-command.js"
+import type { JobDemand } from "../base/host-jobs.js"
 import type { HostProbes, ProbeOptions, RunningCommand } from "../base/host-stopping.js"
 import type { ChildProcess } from "node:child_process"
 import { z } from "zod"
@@ -249,7 +250,7 @@ export function childBackend(script = defaultChildScript(), readings = new Watch
   }
 
   const start = (why: ChildStart) => {
-    const next = hostFork(script, [], {
+    const next = hostFork(script, ["watch"], {
       execPath: headlessNodeExecutable(),
       // Under tsx (tests, development scripts) the child needs its loader to run TypeScript.
       execArgv: script.endsWith(".ts") ? process.execArgv : [],
@@ -371,9 +372,11 @@ const HISTORY_EXIT_GRACE_MS = 500
  * out of time ends the child and every request in it; the next starts one.
  * A read whose mark is from before fseventsd last started over (`daemon`)
  * reports every root lost, whatever it found. The child goes after `idleMs`
- * without an ask; the next ask starts one again.
+ * without an ask, or after `kept.idleMs` while `kept.while` is on (someone may ask again soon, and a child started for
+ * the ask would answer later); the next ask starts one again. A mark is the system's own position, so a child gone
+ * loses none.
  */
-export function childHistory(script = defaultChildScript(), readings = new WatchReadings(), daemon?: DaemonRestarts, idleMs = IDLE_MS): FileHistory {
+export function childHistory(script = defaultChildScript(), readings = new WatchReadings(), daemon?: DaemonRestarts, idleMs = IDLE_MS, { kept, role = "history" }: { kept?: { idleMs: number; while: Pick<JobDemand, "on" | "onChange"> }; role?: string } = {}): FileHistory {
   let child: ChildProcess | undefined
   let nextId = 1
   let idle: NodeJS.Timeout | undefined
@@ -403,7 +406,7 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
   const running = () => {
     clearTimeout(idle)
     if (child) return child
-    const next = hostFork(script, [], {
+    const next = hostFork(script, [role], {
       execPath: headlessNodeExecutable(),
       execArgv: script.endsWith(".ts") ? process.execArgv : [],
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
@@ -436,9 +439,13 @@ export function childHistory(script = defaultChildScript(), readings = new Watch
     idle = setTimeout(() => {
       if (pending.size || !child) return
       end(child, new Error("The file system's history reader was idle"))
-    }, idleMs)
+    }, kept?.while.on ? kept.idleMs : idleMs)
     idle.unref()
   }
+  // A child resting on the long wait when nobody may ask soon any more goes after the short one, and the other way.
+  kept?.while.onChange(() => {
+    if (child && !pending.size) rest()
+  })
 
   const ask = (request: WatcherRequest, ms: number) =>
     new Promise<WatcherReply>((settle, fail) => {
@@ -528,6 +535,34 @@ async function procCommands(): Promise<RunningCommand[] | undefined> {
 /** As much of a command line as a probe matches against: the program and its first arguments. */
 const ARGS_CHARS = 1_024
 
+/** `ps` for every process's name and command line on a Mac, and how many bytes of a name it prints (the kernel's `p_comm`). */
+const MAC_NAMES_ARGS = ["-Axo", "ucomm=,args="] as const
+const MAC_NAME_BYTES = 16
+
+/**
+ * Every process's name and command line as a Mac's `ps -Axo ucomm=,args=` printed them: the name fills a column of
+ * `MAC_NAME_BYTES`, and one that fills it whole may be the start of a longer name, which `lsof -c` would match in full.
+ */
+export function macCommands(printed: string): RunningCommand[] {
+  return printed.split("\n").flatMap((line): RunningCommand[] => {
+    const comm = line.slice(0, MAC_NAME_BYTES).trimEnd()
+    if (!comm) return []
+    const command: RunningCommand = { comm, args: line.slice(MAC_NAME_BYTES + 1, MAC_NAME_BYTES + 1 + ARGS_CHARS).trimEnd() }
+    if (Buffer.byteLength(comm) >= MAC_NAME_BYTES) command.cut = true
+    return [command]
+  })
+}
+
+/** At most this much of `ps`'s names and command lines. */
+const TABLE_OUTPUT_BYTES = 16 * 1024 * 1024
+
+/**
+ * No ask for this long lets the probes' child go. Longer than the half minute between looks at harnesses with nothing
+ * open (`IDLE_POLL_MS`): on a Mac each look is one `ps` here, and at the same half minute the child went a moment
+ * before every look, which then started another.
+ */
+const PROBES_IDLE_MS = 45_000
+
 /** A table this late means the child is stuck; it's ended and the caller reads its own. */
 const TABLE_ASK_MS = 20_000
 
@@ -543,7 +578,7 @@ export interface ProcessReader extends HostProbes {
  * The process table read in a watcher child of its own, so `ps`'s spawn and its wait leave the host's loop: what
  * reads the apps' marks and traces asks every few seconds while an app runs, and on a busy Mac one spawn from the
  * host's thread held it for seconds. `members` leaves the parsing and matching there too, and sends back only the
- * rows the runs asked about. The child starts at the first ask and goes after `IDLE_MS` without one; one that
+ * rows the runs asked about. The child starts at the first ask and goes after `PROBES_IDLE_MS` without one; one that
  * doesn't answer in time is ended with what it had, and the next ask starts another.
  */
 export function childProcessReader(script = defaultChildScript(), askMs = TABLE_ASK_MS): ProcessReader {
@@ -571,14 +606,14 @@ export function childProcessReader(script = defaultChildScript(), askMs = TABLE_
       if (pending.size || child !== current) return
       child = undefined
       current.kill()
-    }, IDLE_MS)
+    }, PROBES_IDLE_MS)
     idle.unref()
   }
 
   const running = () => {
     clearTimeout(idle)
     if (child) return child
-    const next = hostFork(script, [], {
+    const next = hostFork(script, ["probes"], {
       execPath: headlessNodeExecutable(),
       execArgv: script.endsWith(".ts") ? process.execArgv : [],
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
@@ -683,10 +718,13 @@ export function childProcessReader(script = defaultChildScript(), askMs = TABLE_
   // Each process's command name, read once for every probe asking within `NAMES_FRESH_MS` (`HostProbes.commands`).
   let names: { at: number; read: Promise<RunningCommand[] | undefined> } | undefined
   const commands = (): Promise<RunningCommand[] | undefined> => {
-    if (!onLinux()) return Promise.resolve(undefined)
+    if (!onLinux() && !onMac()) return Promise.resolve(undefined)
     const now = performance.now()
     if (names && now - names.at < NAMES_FRESH_MS) return names.read
-    names = { at: now, read: procCommands() }
+    // A Mac has no /proc: one `ps` in the child says every name, where each harness's `lsof` or `pgrep` was asked.
+    const read = onLinux() ? procCommands() : run("ps", MAC_NAMES_ARGS, { env: { ...process.env, LC_ALL: "C" }, maxBuffer: TABLE_OUTPUT_BYTES, timeout: 5_000 })
+      .then(({ stdout }) => macCommands(stdout), () => undefined)
+    names = { at: now, read }
     return names.read
   }
 
@@ -723,7 +761,7 @@ export function childProcessReader(script = defaultChildScript(), askMs = TABLE_
  */
 export function probeDelivery(script = defaultChildScript(), beats = 5): Promise<number[]> {
   return new Promise((settle) => {
-    const child = hostFork(script, [], {
+    const child = hostFork(script, ["delivery"], {
       execPath: headlessNodeExecutable(),
       execArgv: script.endsWith(".ts") ? process.execArgv : [],
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
@@ -746,6 +784,8 @@ export function probeDelivery(script = defaultChildScript(), beats = 5): Promise
   })
 }
 
+// Each child is started with what it's for as its one argument (`watch`, `probes`, `history`, `checkpoints`,
+// `delivery`), which the child doesn't read: a process listing says which of them still runs.
 function defaultChildScript(): string {
   const compiled = fileURLToPath(new URL("./watcher-child-main.js", import.meta.url))
   return existsSync(compiled) ? compiled : compiled.replace(/\.js$/, ".ts")

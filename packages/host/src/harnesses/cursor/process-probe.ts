@@ -49,7 +49,8 @@ export const cursorProcessProbe: ProviderProcessProbe = {
       processNames: ["node", "cursor-agent", "Cursor"],
       // Only a process of Cursor's can hold its stores: its desktop, or its CLI's Node, whose command line names
       // `cursor-agent` (the wrapper execs it as itself). Every Node process, the host's own included, isn't asked.
-      runningIf: ({ comm, args }) => /cursor/i.test(comm) || /cursor/i.test(args),
+      // macOS's own CursorUIViewService (the text cursor's) runs on every Mac and is none of Cursor's.
+      runningIf: ({ comm, args }) => /cursor/i.test(comm.replace("CursorUIViewServ", "")) || /cursor/i.test(args.replaceAll("CursorUIViewService", "")),
       sourcePath: source,
       signal,
       accept: (path) =>
