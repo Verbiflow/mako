@@ -179,6 +179,13 @@ function localConnection(
       kind: "unavailable",
       detail: driver?.detail ?? "CUA Driver is not installed",
     }
+  // A Linux desktop's own ask: its one action, or the login that finishes it (nothing to press meanwhile).
+  const asked = permissions.desktop?.find((permission) => permission.state !== "granted" && permission.state !== "unavailable")
+  if (asked?.state === "restart") return { kind: "unavailable", detail: "Log out and back in once to finish" }
+  if (asked?.state === "blocked")
+    return { kind: "unavailable", detail: asked.reason === "extension-list" ? "Install GNOME's gnome-extensions tool" : "Reinstall Mako at a plain path" }
+  if (asked?.state === "extensions-off") return { kind: "needs-permission", detail: "Turn on GNOME's user extensions" }
+  if (asked) return { kind: "needs-permission", detail: asked.id === "gnome-shell-helper" ? "Install Mako's Shell helper" : "Allow window capture" }
   if (!permissions.accessibility || permissions.screenRecording !== "granted") {
     return {
       kind: "needs-permission",

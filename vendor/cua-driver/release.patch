@@ -1,5 +1,5 @@
 diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
-index a91f724..2e7ea6f 100644
+index a91f724..7679fc8 100644
 --- a/libs/cua-driver/rust/Cargo.lock
 +++ b/libs/cua-driver/rust/Cargo.lock
 @@ -1151,7 +1151,7 @@ dependencies = [
@@ -7,7 +7,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "cua-driver"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -16,7 +16,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "cua-driver-bindgen"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "cbindgen",
   "uniffi",
@@ -25,7 +25,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "cua-driver-contract"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "schemars",
   "serde",
@@ -34,7 +34,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "cua-driver-core"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -43,7 +43,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "cua-driver-sdk"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "async-trait",
   "core-foundation",
@@ -52,7 +52,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "cua-driver-testkit"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "core-foundation",
   "image",
@@ -61,7 +61,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "cua-driver-uia"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "anyhow",
   "cua-driver-core",
@@ -70,7 +70,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "cursor-overlay"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "anyhow",
   "cua-driver-contract",
@@ -79,7 +79,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "cursor-theme-cli"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "anyhow",
   "cursor-overlay",
@@ -88,7 +88,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "pip-preview"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "serde_json",
  ]
@@ -97,7 +97,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "platform-linux"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "anyhow",
   "ashpd",
@@ -106,7 +106,7 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "platform-macos"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -115,12 +115,12 @@ index a91f724..2e7ea6f 100644
  [[package]]
  name = "platform-windows"
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  dependencies = [
   "anyhow",
   "async-trait",
 diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
-index 351b086..d9ee30a 100644
+index 351b086..0c587d4 100644
 --- a/libs/cua-driver/rust/Cargo.toml
 +++ b/libs/cua-driver/rust/Cargo.toml
 @@ -17,7 +17,7 @@ members = [
@@ -128,7 +128,7 @@ index 351b086..d9ee30a 100644
  
  [workspace.package]
 -version = "0.28.2"
-+version = "0.28.2+mako.31"
++version = "0.28.2+mako.32"
  edition = "2021"
  authors = ["trycua"]
  license = "MIT"
@@ -3995,7 +3995,7 @@ index 2d534d1..e2ea8ed 100644
          // one window by construction — but `trusted: false` still bars it from
          // proving anything a caller acts on.
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs b/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs
-index 1e48de5..f097a76 100644
+index 1e48de5..f02f061 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/atspi/native.rs
 @@ -21,7 +21,7 @@ use atspi::proxy::accessible::AccessibleProxy;
@@ -4482,6 +4482,14 @@ index 1e48de5..f097a76 100644
                  .await?
                  .context("no AT-SPI application")?;
              let scope =
+@@ -3052,6 +3205,7 @@ fn authoritative_wayland_origin(pid: u32, xid: u64, title: Option<&str>) -> Opti
+                 .flatten()
+         })
+         .or_else(|| crate::wayland::shell_helper::window_origin_for_pid(pid))
++        .or_else(|| crate::wayland::kwin_helper::window_origin_for_pid(pid))
+         .or_else(|| title.and_then(crate::wayland::sway_ipc::window_origin_for_title))
+ }
+ 
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/browser_consent_ui.rs b/libs/cua-driver/rust/crates/platform-linux/src/browser_consent_ui.rs
 index 64ec8ab..b7fa27d 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/browser_consent_ui.rs
@@ -4658,6 +4666,23 @@ index bf6cd24..e85c314 100644
 +        let _ = self.conn.flush();
 +    }
 +}
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/health_report.rs b/libs/cua-driver/rust/crates/platform-linux/src/health_report.rs
+index d920139..834dba2 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/health_report.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/health_report.rs
+@@ -368,9 +368,9 @@ fn classify_wayland_backend(
+                      refuses foreground dispatch."
+                 ),
+                 "On GNOME, install and enable the bundled WinRects Shell helper, then \
+-                 log out and back in. KDE foreground input remains unavailable until \
+-                 a target-addressable KWin activation adapter is installed; AX actions \
+-                 and exact background refusals remain usable.",
++                 log out and back in. On KDE, KWin's scripting interface (org.kde.kwin.Scripting) \
++                 must answer on the session bus; AX actions and exact background refusals \
++                 remain usable without it.",
+             );
+         }
+         if portal_libei_enabled {
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
 index 29a4d2d..2d0c76d 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/input/mod.rs
@@ -6550,8 +6575,1099 @@ index 0a525d8..0000000
 -        })
 -    }
 -}
+diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/kwin_helper.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/kwin_helper.rs
+index 2c94e56..f1829a3 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/kwin_helper.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/kwin_helper.rs
+@@ -1,37 +1,90 @@
+-//! Trusted KWin window identity adapter.
++//! KWin window identity, activation and capture adapter.
+ //!
+-//! The optional in-process KWin effect exposes stable window tokens, process
+-//! identity, geometry, active/minimized state, and stacking metadata through a
+-//! deliberately read-only D-Bus surface. It does not expose activation or input
+-//! mutation methods. KWin's portal/libei input path is still focus-bound: libei
+-//! delivers to whichever surface is focused when KWin processes the event.
++//! KWin gives an outside client neither a window list with screen geometry nor a way to activate one window, and its
++//! portal/libei input goes to whichever surface has focus. KWin itself can do all three, and it runs scripts a session
++//! client hands it over D-Bus (`org.kde.kwin.Scripting`, in Plasma 5.27 and 6 alike). This adapter loads one short
++//! script per request. The script optionally activates one window by KWin's own id, then reports every window (id,
++//! pid, geometry, active, minimized, stacking, desktop) to an object this process exports, with `callDBus`. A window's
++//! geometry is its client's own surface (KWin's `clientGeometry`): what the app draws and AT-SPI measures from, inside
++//! a title bar KWin draws and without the shadow a client draws around itself. The reply
++//! is accepted only from the bus name that owns `org.kde.KWin`, whose process is checked to be the system's
++//! `kwin_wayland`, and only with the request's nonce.
+ //!
+-//! A focus check followed by global input therefore has an unavoidable TOCTOU
+-//! race. Until Cua has a KWin input API that binds each mutation to the target
+-//! token/window, this module intentionally refuses raw target-addressed input.
+-//! Window discovery remains available; input authorization does not.
+-
+-use std::collections::HashSet;
+-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+-use std::process::Command;
+-use std::time::Duration;
++//! Foreground input is then the same contract as on GNOME Shell: activate the exact window, read back from the
++//! compositor that it is the active one, send focus-bound input, restore the window that was active.
++//!
++//! A window's pixels come from `org.kde.KWin.ScreenShot2.CaptureWindow`, by the same KWin id, so a covered window is
++//! captured whole and no other window's pixels can be in the picture. The picture is the window's geometry exactly:
++//! Plasma 5.27 hands back the client's whole buffer, shadow included, which is cut to the window inside it. KWin gives that interface only to a program
++//! whose desktop entry asks for it (`X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2`); without the entry
++//! the capture is refused and says so.
++
++use std::collections::{HashMap, HashSet};
++use std::os::fd::{FromRawFd, OwnedFd};
++use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
++use std::sync::atomic::{AtomicU64, Ordering};
++use std::sync::Mutex;
++use std::time::{Duration, Instant};
+ 
+ use crate::x11::WindowInfo;
+ 
+-const DEST: &str = "org.cua.KWinTarget";
+ const KWIN_DEST: &str = "org.kde.KWin";
+-const PATH: &str = "/org/cua/KWinTarget";
+-const IFACE: &str = "org.cua.KWinTarget";
+-const DBUS_DEST: &str = "org.freedesktop.DBus";
+-const DBUS_PATH: &str = "/org/freedesktop/DBus";
+-const DBUS_IFACE: &str = "org.freedesktop.DBus";
+-pub const PROTOCOL_VERSION: u32 = 1;
++const SCRIPTING_PATH: &str = "/Scripting";
++const SCRIPTING_IFACE: &str = "org.kde.kwin.Scripting";
++const SCRIPT_IFACE: &str = "org.kde.kwin.Script";
++const BRIDGE_PATH: &str = "/org/cua/KWinBridge";
++const SCREENSHOT_PATH: &str = "/org/kde/KWin/ScreenShot2";
++const SCREENSHOT_IFACE: &str = "org.kde.KWin.ScreenShot2";
+ const CALL_TIMEOUT: Duration = Duration::from_secs(3);
++const ACTIVATION_TIMEOUT: Duration = Duration::from_millis(1000);
+ const GEOMETRY_DELTA_PX: i32 = 64;
++/// Tokens sit above every X11 window id and every synthetic AT-SPI id, and below 2^53.
++const TOKEN_TAG: u64 = 1 << 48;
++
++/// The script KWin runs. `__ACTIVATE__`, `__SERVICE__` and `__NONCE__` are replaced with JSON strings.
++const SCRIPT: &str = r#"(function () {
++  var list = typeof workspace.windowList === "function" ? workspace.windowList() : workspace.clientList();
++  var want = __ACTIVATE__;
++  var i, d, w;
++  if (want) for (i = 0; i < list.length; i++) if (String(list[i].internalId) === want) {
++    w = list[i];
++    if (w.minimized) w.minimized = false;
++    if ("activeWindow" in workspace) workspace.activeWindow = w; else workspace.activeClient = w;
++  }
++  var active = "activeWindow" in workspace ? workspace.activeWindow : workspace.activeClient;
++  var current = workspace.currentDesktop;
++  var out = [];
++  for (i = 0; i < list.length; i++) {
++    w = list[i];
++    if (!(w.normalWindow || w.dialog || w.utility)) continue;
++    // Plasma 5.27 numbers a window's desktop (and cannot read `desktops` from a script); Plasma 6 lists them.
++    var here = w.onAllDesktops === true;
++    if (!here) {
++      if (typeof w.desktop === "number") here = w.desktop === current;
++      else if (w.desktops !== undefined) {
++        here = w.desktops.length === 0;
++        for (d = 0; d < w.desktops.length; d++) if (w.desktops[d] === current) here = true;
++      } else here = true;
++    }
++    // The client's own surface. Plasma 6 names it; 5.27 gives the frame and the buffer, and the buffer is the client
++    // where KWin draws a title bar above it (it lies inside the frame) and more than the client where the client
++    // draws a shadow around itself (the frame lies inside it).
++    var f = w.frameGeometry, b = w.bufferGeometry || f;
++    var inside = b.x >= f.x && b.y >= f.y && b.x + b.width <= f.x + f.width && b.y + b.height <= f.y + f.height;
++    var g = w.clientGeometry || (inside ? b : f);
++    out.push({ id: String(w.internalId), pid: w.pid, title: String(w.caption), app_id: String(w.resourceClass),
++      x: g.x, y: g.y, w: g.width, h: g.height, bx: b.x, by: b.y, bw: b.width, bh: b.height, active: w === active,
++      minimized: w.minimized === true, stacking: w.stackingOrder, here: here, x11: w.windowId ? Number(w.windowId) : 0 });
++  }
++  callDBus(__SERVICE__, "/org/cua/KWinBridge", "org.cua.KWinBridge", "Result", __NONCE__, JSON.stringify(out));
++})();
++"#;
+ 
+ #[derive(Clone, Debug, Eq, PartialEq)]
+ pub struct KwinWindow {
+     pub token: u64,
++    /// KWin's own id for the window (`internalId`), braces included.
++    pub uuid: String,
+     pub pid: u32,
+     pub title: String,
+     pub app_name: String,
+@@ -39,9 +92,20 @@ pub struct KwinWindow {
+     pub y: i32,
+     pub width: u32,
+     pub height: u32,
++    /// The client's whole buffer on screen, which a client that draws its own shadow makes larger than the window.
++    pub buffer: (i32, i32, u32, u32),
+     pub active: bool,
+     pub minimized: bool,
+     pub stacking: usize,
++    pub on_current_desktop: bool,
++    /// The X11 window id of an XWayland client; none for a native one.
++    pub x11_window: Option<u64>,
++}
++
++impl KwinWindow {
++    fn visible(&self) -> bool {
++        !self.minimized && self.on_current_desktop && self.width > 0 && self.height > 0
++    }
+ }
+ 
+ #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+@@ -63,47 +127,81 @@ impl std::fmt::Display for CorrelationError {
+ 
+ impl std::error::Error for CorrelationError {}
+ 
+-/// Whether KWin currently offers a target-bound raw-input capability that can
+-/// safely authorize portal/libei foreground mutations.
+-///
+-/// This is intentionally distinct from helper presence: the read-only helper
+-/// may be installed and usable for discovery while target-bound raw input is
+-/// unavailable. Keep this false until the input operation itself is bound to
+-/// the KWin target token/window.
++/// Whether this is a KDE session at all: the adapter costs a D-Bus exchange, which no other desktop should pay.
++pub(crate) fn kde_session() -> bool {
++    std::env::var_os("KDE_FULL_SESSION").is_some()
++        || std::env::var("XDG_CURRENT_DESKTOP")
++            .or_else(|_| std::env::var("XDG_SESSION_DESKTOP"))
++            .is_ok_and(|names| names.split(':').any(|name| name.eq_ignore_ascii_case("KDE")))
++}
++
++/// Whether the system's KWin answers the adapter: windows can be listed, activated exactly and read back.
+ pub fn available() -> bool {
+-    false
++    static KNOWN: Mutex<Option<(Instant, bool)>> = Mutex::new(None);
++    if !kde_session() {
++        return false;
++    }
++    if let Some((at, value)) = KNOWN.lock().ok().and_then(|known| *known) {
++        if at.elapsed() < Duration::from_secs(2) {
++            return value;
++        }
++    }
++    let value = list_windows().is_some();
++    if let Ok(mut known) = KNOWN.lock() {
++        *known = Some((Instant::now(), value));
++    }
++    value
+ }
+ 
+ pub fn list_windows() -> Option<Vec<KwinWindow>> {
+-    snapshot_for_owner(&helper_owner()?)
++    if !kde_session() {
++        return None;
++    }
++    exchange(None)
+ }
+ 
+ pub fn list_window_infos() -> Option<Vec<WindowInfo>> {
+-    Some(
+-        list_windows()?
+-            .into_iter()
+-            .map(|window| WindowInfo {
+-                xid: window.token,
+-                pid: Some(window.pid),
+-                app_name: window.app_name,
+-                title: window.title,
+-                is_on_screen: !window.minimized && window.width > 0 && window.height > 0,
+-                z_index: Some(window.stacking),
+-                x: window.x,
+-                y: window.y,
+-                width: window.width,
+-                height: window.height,
+-            })
+-            .collect(),
+-    )
++    Some(list_windows()?.into_iter().map(window_info).collect())
++}
++
++fn window_info(window: KwinWindow) -> WindowInfo {
++    WindowInfo {
++        xid: window.token,
++        pid: Some(window.pid),
++        is_on_screen: window.visible(),
++        z_index: Some(window.stacking),
++        x: window.x,
++        y: window.y,
++        width: window.width,
++        height: window.height,
++        app_name: window.app_name,
++        title: window.title,
++    }
+ }
+ 
+ pub fn trusted_window_for_id(pid: u32, token: u64) -> Option<KwinWindow> {
+-    snapshot_for_owner(&helper_owner()?)?
++    list_windows()?
+         .into_iter()
+         .find(|window| window.pid == pid && window.token == token)
+ }
+ 
++/// Where the one visible window of `pid` has its client surface, for AT-SPI's window-relative coordinates.
++pub fn window_origin_for_pid(pid: u32) -> Option<(i32, i32)> {
++    let mut owned = list_windows()?
++        .into_iter()
++        .filter(|window| window.pid == pid && window.visible());
++    let window = owned.next()?;
++    owned.next().is_none().then_some((window.x, window.y))
++}
++
++/// Read focus without activating anything. Not a KDE session, or no answer: unknown, never an affirmative.
++pub fn focused_target(pid: u32, token: u64) -> Option<bool> {
++    let windows = list_windows()?;
++    Some(windows.iter().any(|window| {
++        window.pid == pid && window.token == token && window.visible() && window.active
++    }))
++}
++
+ pub fn correlate_atspi_window(
+     atspi: &WindowInfo,
+     windows: &[KwinWindow],
+@@ -131,140 +229,102 @@ pub fn require_active_target(windows: &[KwinWindow], token: u64) -> Result<(), C
+         .ok_or(CorrelationError::WrongActiveTarget)
+ }
+ 
+-/// Refuse a focus-bound KWin foreground transaction.
++/// Ask KWin to activate one exact window and wait, for a bounded time, until KWin reports it active.
+ ///
+-/// `body` is deliberately never invoked. The current helper can identify an
+-/// exact KWin window, but its D-Bus API is read-only; even a separate activation
+-/// step would not bind a later libei event to that target. More pre-dispatch
+-/// focus checks therefore cannot make the operation target-safe.
++/// Returns `false` outside KDE, for an unknown token, or when KWin never confirmed it. Callers must not send
++/// focus-bound input unless this returns true.
++pub fn activate_window(token: u64) -> bool {
++    if !kde_session() {
++        return false;
++    }
++    let Some(target) = list_windows().and_then(|windows| windows.into_iter().find(|window| window.token == token))
++    else {
++        return false;
++    };
++    activate(&target)
++}
++
++fn activate(target: &KwinWindow) -> bool {
++    let confirmed = |windows: Option<Vec<KwinWindow>>| {
++        windows.is_some_and(|windows| require_active_target(&windows, target.token).is_ok())
++    };
++    // An X11 client becomes active a moment after KWin is asked: its first report may still name the old one.
++    if confirmed(exchange(Some(&target.uuid))) {
++        return true;
++    }
++    let deadline = Instant::now() + ACTIVATION_TIMEOUT;
++    while Instant::now() < deadline {
++        std::thread::sleep(Duration::from_millis(20));
++        if confirmed(exchange(None)) {
++            return true;
++        }
++    }
++    false
++}
++
++/// Briefly activate an exact KWin window, run one bounded focus-bound operation, and give focus back to the window
++/// that had it. `body` runs only after KWin itself reported the target active.
+ pub fn with_focused_window<T>(
+     pid: u32,
+     token: u64,
+-    _body: impl FnOnce() -> anyhow::Result<T>,
++    body: impl FnOnce() -> anyhow::Result<T>,
+ ) -> anyhow::Result<T> {
+-    anyhow::bail!(
+-        "foreground_unavailable: KWin target pid={pid} token={token} is verified, but only \
+-         focus-bound portal/libei input is available; refusing raw input until a target-bound \
+-         KWin input path is implemented"
+-    )
++    let before = list_windows().ok_or_else(|| anyhow::anyhow!("KWin did not answer the window adapter"))?;
++    let target = before
++        .iter()
++        .find(|window| window.pid == pid && window.token == token)
++        .ok_or_else(|| anyhow::anyhow!("no exact KWin window owns the approved target"))?;
++    if target.active {
++        return body();
++    }
++    let previous = before.iter().find(|window| window.active).cloned();
++    if !activate(target) {
++        anyhow::bail!("foreground_unavailable: KWin did not confirm exact target activation for pid={pid} token={token}");
++    }
++    let body_result = body();
++    let restored = previous.as_ref().is_none_or(activate);
++    match (body_result, restored) {
++        (Ok(value), true) => Ok(value),
++        (Err(error), true) => Err(error),
++        (Ok(_), false) => anyhow::bail!("KWin did not restore the previously active window"),
++        (Err(error), false) => Err(anyhow::anyhow!(
++            "{error}; KWin also failed to restore the previously active window"
++        )),
++    }
+ }
+ 
+ fn geometry_matches(atspi: &WindowInfo, kwin: &KwinWindow) -> bool {
+-    let right = atspi
+-        .x
+-        .saturating_add(atspi.width.min(i32::MAX as u32) as i32);
+-    let bottom = atspi
+-        .y
+-        .saturating_add(atspi.height.min(i32::MAX as u32) as i32);
+-    let kwin_right = kwin
+-        .x
+-        .saturating_add(kwin.width.min(i32::MAX as u32) as i32);
+-    let kwin_bottom = kwin
+-        .y
+-        .saturating_add(kwin.height.min(i32::MAX as u32) as i32);
++    let right = atspi.x.saturating_add(atspi.width.min(i32::MAX as u32) as i32);
++    let bottom = atspi.y.saturating_add(atspi.height.min(i32::MAX as u32) as i32);
++    let kwin_right = kwin.x.saturating_add(kwin.width.min(i32::MAX as u32) as i32);
++    let kwin_bottom = kwin.y.saturating_add(kwin.height.min(i32::MAX as u32) as i32);
+     (atspi.x - kwin.x).abs() <= GEOMETRY_DELTA_PX
+         && (atspi.y - kwin.y).abs() <= GEOMETRY_DELTA_PX
+         && (right - kwin_right).abs() <= GEOMETRY_DELTA_PX
+         && (bottom - kwin_bottom).abs() <= GEOMETRY_DELTA_PX
+ }
+ 
+-fn helper_owner() -> Option<String> {
+-    let owner_raw = dbus_call("GetNameOwner", &[DEST.to_owned()]);
+-    let owner = parse_quoted_string(&owner_raw?)?;
+-    if !owner.starts_with(':') {
+-        return None;
+-    }
+-
+-    let pid_raw = gdbus_call_to(
+-        DBUS_DEST,
+-        DBUS_PATH,
+-        &format!("{DBUS_IFACE}.GetConnectionUnixProcessID"),
+-        &[owner.clone()],
+-    );
+-    let uid_raw = gdbus_call_to(
+-        DBUS_DEST,
+-        DBUS_PATH,
+-        &format!("{DBUS_IFACE}.GetConnectionUnixUser"),
+-        &[owner.clone()],
+-    );
+-    let pid = parse_first_u32(&pid_raw?)?;
+-    let uid = parse_first_u32(&uid_raw?)?;
+-    if uid != current_uid() || !is_trusted_kwin(pid, &owner) {
+-        return None;
+-    }
+-
+-    let version_raw = call_to(&owner, "GetVersion", &[]);
+-    let version = parse_first_u32(&version_raw?)?;
+-    (version == PROTOCOL_VERSION).then_some(owner)
+-}
+-
+-fn snapshot_for_owner(owner: &str) -> Option<Vec<KwinWindow>> {
+-    // Keep this synchronous API safe to call from either sync or async driver
+-    // code by running the zbus/Tokio client on its own OS thread. In
+-    // particular, do not use zbus's blocking wrapper directly from a Tokio
+-    // task: that would create an async-sandwich nested-runtime hazard.
+-    let owner = owner.to_owned();
+-    std::thread::spawn(move || {
+-        let runtime = tokio::runtime::Builder::new_current_thread()
+-            .enable_all()
+-            .build()
+-            .ok()?;
+-
+-        runtime.block_on(async move {
+-            let connection = tokio::time::timeout(CALL_TIMEOUT, zbus::Connection::session())
+-                .await
+-                .ok()?
+-                .ok()?;
+-            let proxy = tokio::time::timeout(
+-                CALL_TIMEOUT,
+-                zbus::Proxy::new(&connection, owner.as_str(), PATH, IFACE),
+-            )
+-            .await
+-            .ok()?
+-            .ok()?;
+-
+-            for attempt in 0..3 {
+-                let raw = tokio::time::timeout(
+-                    CALL_TIMEOUT,
+-                    proxy.call::<_, _, String>("GetWindows", &()),
+-                )
+-                .await
+-                .ok()
+-                .and_then(Result::ok);
+-                if let Some(snapshot) = raw.as_deref().and_then(parse_snapshot) {
+-                    return Some(snapshot);
+-                }
+-                if attempt < 2 {
+-                    tokio::time::sleep(Duration::from_millis(50)).await;
+-                }
+-            }
+-            None
+-        })
+-    })
+-    .join()
+-    .ok()
+-    .flatten()
++/// The token for one KWin window id: the first 48 bits of its UUID under a tag, stable for the window's life.
++pub fn token_for_uuid(uuid: &str) -> Option<u64> {
++    let hex: String = uuid.chars().filter(char::is_ascii_hexdigit).take(12).collect();
++    (hex.len() == 12)
++        .then(|| u64::from_str_radix(&hex, 16).ok())
++        .flatten()
++        .map(|bits| TOKEN_TAG | bits)
+ }
+ 
+ pub fn parse_snapshot(raw: &str) -> Option<Vec<KwinWindow>> {
+-    // `raw` is the actual QString payload decoded by zbus, not gdbus's
+-    // human-readable GVariant rendering. Parsing the display representation is
+-    // unsafe because GLib may change its quoting/escaping for valid titles.
+     let values: Vec<serde_json::Value> = serde_json::from_str(raw).ok()?;
+-
+     let mut tokens = HashSet::new();
+     let mut active_count = 0usize;
+     values
+         .into_iter()
+         .map(|value| {
+-            let token = value
+-                .get("token")
+-                .and_then(serde_json::Value::as_u64)
+-                .filter(|token| *token > 0)?;
++            let uuid = value.get("id")?.as_str()?.to_owned();
++            let token = token_for_uuid(&uuid)?;
+             if !tokens.insert(token) {
+                 return None;
+             }
+-
+             let active = value.get("active")?.as_bool()?;
+             if active {
+                 active_count += 1;
+@@ -272,27 +332,31 @@ pub fn parse_snapshot(raw: &str) -> Option<Vec<KwinWindow>> {
+                     return None;
+                 }
+             }
+-
++            let x = json_i32(&value, "x")?;
++            let y = json_i32(&value, "y")?;
++            let width = json_u32(&value, "w")?;
++            let height = json_u32(&value, "h")?;
+             Some(KwinWindow {
+                 token,
++                uuid,
+                 pid: u32::try_from(value.get("pid")?.as_u64()?).ok()?,
+-                title: value
+-                    .get("title")
+-                    .and_then(serde_json::Value::as_str)
+-                    .unwrap_or_default()
+-                    .to_owned(),
+-                app_name: value
+-                    .get("app_id")
+-                    .and_then(serde_json::Value::as_str)
+-                    .unwrap_or_default()
+-                    .to_owned(),
+-                x: json_i32(&value, "x")?,
+-                y: json_i32(&value, "y")?,
+-                width: json_u32(&value, "w")?,
+-                height: json_u32(&value, "h")?,
++                title: value.get("title").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(),
++                app_name: value.get("app_id").and_then(serde_json::Value::as_str).unwrap_or_default().to_owned(),
++                x,
++                y,
++                width,
++                height,
++                buffer: (
++                    json_i32(&value, "bx").unwrap_or(x),
++                    json_i32(&value, "by").unwrap_or(y),
++                    json_u32(&value, "bw").unwrap_or(width),
++                    json_u32(&value, "bh").unwrap_or(height),
++                ),
+                 active,
+                 minimized: value.get("minimized")?.as_bool()?,
+                 stacking: usize::try_from(value.get("stacking")?.as_u64()?).ok()?,
++                on_current_desktop: value.get("here").and_then(serde_json::Value::as_bool).unwrap_or(true),
++                x11_window: value.get("x11").and_then(serde_json::Value::as_u64).filter(|id| *id > 0),
+             })
+         })
+         .collect()
+@@ -300,125 +364,433 @@ pub fn parse_snapshot(raw: &str) -> Option<Vec<KwinWindow>> {
+ 
+ fn json_i32(value: &serde_json::Value, key: &str) -> Option<i32> {
+     let number = value.get(key)?.as_f64()?;
+-    (number.is_finite() && number >= i32::MIN as f64 && number <= i32::MAX as f64)
+-        .then(|| number.round() as i32)
++    (number.is_finite() && number >= i32::MIN as f64 && number <= i32::MAX as f64).then(|| number.round() as i32)
+ }
+ 
+ fn json_u32(value: &serde_json::Value, key: &str) -> Option<u32> {
+     let number = value.get(key)?.as_f64()?;
+-    (number.is_finite() && number >= 0.0 && number <= u32::MAX as f64)
+-        .then(|| number.round() as u32)
++    (number.is_finite() && number >= 0.0 && number <= u32::MAX as f64).then(|| number.round() as u32)
+ }
+ 
+-fn dbus_call(method: &str, args: &[String]) -> Option<String> {
+-    gdbus_call_to(
+-        DBUS_DEST,
+-        DBUS_PATH,
+-        &format!("{DBUS_IFACE}.{method}"),
+-        args,
+-    )
++/// The object KWin's script calls back. One request, one reply: from KWin's own bus name, with the request's nonce.
++struct Bridge {
++    kwin: String,
++    nonce: String,
++    reply: Mutex<Option<tokio::sync::oneshot::Sender<String>>>,
+ }
+ 
+-fn call_to(owner: &str, method: &str, args: &[String]) -> Option<String> {
+-    gdbus_call_to(owner, PATH, &format!("{IFACE}.{method}"), args)
++#[zbus::interface(name = "org.cua.KWinBridge")]
++impl Bridge {
++    fn result(&self, #[zbus(header)] header: zbus::message::Header<'_>, nonce: &str, json: &str) {
++        if header.sender().map(|sender| sender.as_str()) != Some(self.kwin.as_str()) || nonce != self.nonce {
++            return;
++        }
++        if let Some(reply) = self.reply.lock().ok().and_then(|mut reply| reply.take()) {
++            let _ = reply.send(json.to_owned());
++        }
++    }
+ }
+ 
+-fn gdbus_call_to(
+-    destination: &str,
+-    object_path: &str,
+-    method: &str,
+-    args: &[String],
+-) -> Option<String> {
+-    let mut command = Command::new("gdbus");
+-    command
+-        .arg("call")
+-        .arg("--session")
+-        .arg("--dest")
+-        .arg(destination)
+-        .arg("--object-path")
+-        .arg(object_path)
+-        .arg("--method")
+-        .arg(method)
+-        .args(args)
+-        .stdin(std::process::Stdio::null())
+-        .stdout(std::process::Stdio::piped())
+-        .stderr(std::process::Stdio::null());
+-    let child = command.spawn().ok()?;
+-    wait_timeout(child, CALL_TIMEOUT)
+-}
+-
+-fn wait_timeout(mut child: std::process::Child, timeout: Duration) -> Option<String> {
+-    use std::io::Read;
++/// One script exchange with KWin, on its own thread and runtime so sync and async driver code can both call it.
++fn exchange(activate: Option<&str>) -> Option<Vec<KwinWindow>> {
++    let activate = activate.map(str::to_owned);
++    on_own_runtime(async move { exchange_async(activate.as_deref()).await })
++}
+ 
+-    let mut stdout = child.stdout.take()?;
+-    let reader = std::thread::spawn(move || {
+-        let mut bytes = Vec::new();
+-        stdout.read_to_end(&mut bytes).ok()?;
+-        String::from_utf8(bytes).ok()
+-    });
+-    let deadline = std::time::Instant::now() + timeout;
+-    loop {
+-        match child.try_wait() {
+-            Ok(Some(status)) if status.success() => return reader.join().ok().flatten(),
+-            Ok(Some(_)) | Err(_) => return None,
+-            Ok(None) if std::time::Instant::now() >= deadline => {
+-                let _ = child.kill();
+-                let _ = child.wait();
+-                let _ = reader.join();
+-                return None;
++fn on_own_runtime<T: Send + 'static>(work: impl std::future::Future<Output = Option<T>> + Send + 'static) -> Option<T> {
++    std::thread::spawn(move || {
++        let runtime = tokio::runtime::Builder::new_current_thread().enable_all().build().ok()?;
++        runtime.block_on(work)
++    })
++    .join()
++    .ok()
++    .flatten()
++}
++
++async fn exchange_async(activate: Option<&str>) -> Option<Vec<KwinWindow>> {
++    static SEQUENCE: AtomicU64 = AtomicU64::new(0);
++    let connection = tokio::time::timeout(CALL_TIMEOUT, zbus::Connection::session()).await.ok()?.ok()?;
++    let kwin = trusted_kwin_owner(&connection).await?;
++    let service = connection.unique_name()?.to_string();
++    let nonce = nonce()?;
++    let (reply, answered) = tokio::sync::oneshot::channel();
++    let bridge = Bridge { kwin: kwin.clone(), nonce: nonce.clone(), reply: Mutex::new(Some(reply)) };
++    connection.object_server().at(BRIDGE_PATH, bridge).await.ok()?;
++
++    let name = format!("cua-driver-{}-{}", std::process::id(), SEQUENCE.fetch_add(1, Ordering::Relaxed));
++    let path = script_directory().join(format!("{name}.js"));
++    let script = SCRIPT
++        .replace("__ACTIVATE__", &serde_json::to_string(activate.unwrap_or("")).ok()?)
++        .replace("__SERVICE__", &serde_json::to_string(&service).ok()?)
++        .replace("__NONCE__", &serde_json::to_string(&nonce).ok()?);
++    write_private(&path, script.as_bytes())?;
++    let raw = run_script(&connection, &kwin, &path, &name, answered).await;
++    let _ = std::fs::remove_file(&path);
++    parse_snapshot(&raw?)
++}
++
++async fn run_script(
++    connection: &zbus::Connection,
++    kwin: &str,
++    path: &std::path::Path,
++    name: &str,
++    answered: tokio::sync::oneshot::Receiver<String>,
++) -> Option<String> {
++    let scripting = tokio::time::timeout(
++        CALL_TIMEOUT,
++        zbus::Proxy::new(connection, kwin, SCRIPTING_PATH, SCRIPTING_IFACE),
++    )
++    .await
++    .ok()?
++    .ok()?;
++    let id = tokio::time::timeout(
++        CALL_TIMEOUT,
++        scripting.call::<_, _, i32>("loadScript", &(path.to_str()?, name)),
++    )
++    .await
++    .ok()?
++    .ok()?;
++    let mut raw = None;
++    if id >= 0 {
++        // Plasma 6 names the script's object /Scripting/Script<id>; 5.27 names it /<id>.
++        let mut ran = false;
++        for object in [format!("/Scripting/Script{id}"), format!("/{id}")] {
++            let call = connection.call_method(Some(kwin), object.as_str(), Some(SCRIPT_IFACE), "run", &());
++            if tokio::time::timeout(CALL_TIMEOUT, call).await.is_ok_and(|result| result.is_ok()) {
++                ran = true;
++                break;
+             }
+-            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
++        }
++        if ran {
++            raw = tokio::time::timeout(CALL_TIMEOUT, answered).await.ok().and_then(Result::ok);
+         }
+     }
++    let _ = tokio::time::timeout(CALL_TIMEOUT, scripting.call::<_, _, bool>("unloadScript", &(name,))).await;
++    raw
+ }
+ 
+-fn parse_quoted_string(raw: &str) -> Option<String> {
+-    let start = raw.find('\'')? + 1;
+-    let end = raw[start..].find('\'')? + start;
+-    (end > start).then(|| raw[start..end].to_owned())
+-}
+-
+-fn parse_first_u32(raw: &str) -> Option<u32> {
+-    let payload = raw.split_once("uint32").map_or(raw, |(_, payload)| payload);
+-    payload
+-        .split(|character: char| !character.is_ascii_digit())
+-        .find(|part| !part.is_empty())?
+-        .parse()
+-        .ok()
++/// The unique bus name that owns `org.kde.KWin`, when its process is the system's `kwin_wayland` under this user.
++async fn trusted_kwin_owner(connection: &zbus::Connection) -> Option<String> {
++    let bus = tokio::time::timeout(CALL_TIMEOUT, zbus::fdo::DBusProxy::new(connection)).await.ok()?.ok()?;
++    let name = zbus::names::BusName::try_from(KWIN_DEST).ok()?;
++    let owner = tokio::time::timeout(CALL_TIMEOUT, bus.get_name_owner(name)).await.ok()?.ok()?;
++    let unique = zbus::names::BusName::try_from(owner.as_str()).ok()?;
++    let pid = tokio::time::timeout(CALL_TIMEOUT, bus.get_connection_unix_process_id(unique.clone())).await.ok()?.ok()?;
++    let uid = tokio::time::timeout(CALL_TIMEOUT, bus.get_connection_unix_user(unique)).await.ok()?.ok()?;
++    (uid == current_uid() && is_trusted_kwin(pid)).then(|| owner.to_string())
+ }
+ 
+ fn current_uid() -> u32 {
+-    std::fs::metadata(format!("/proc/{}", std::process::id()))
+-        .map(|meta| meta.uid())
+-        .unwrap_or(u32::MAX)
++    std::fs::metadata(format!("/proc/{}", std::process::id())).map(|meta| meta.uid()).unwrap_or(u32::MAX)
+ }
+ 
+-fn is_trusted_kwin(pid: u32, helper_owner: &str) -> bool {
++fn is_trusted_kwin(pid: u32) -> bool {
+     let comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).ok();
+     if comm.as_deref().map(str::trim) != Some("kwin_wayland") {
+         return false;
+     }
++    match std::fs::read_link(format!("/proc/{pid}/exe")).ok() {
++        Some(path) => {
++            let metadata = std::fs::metadata(&path).ok();
++            path.file_name().and_then(|name| name.to_str()) == Some("kwin_wayland")
++                && metadata.is_some_and(|meta| meta.uid() == 0 && meta.permissions().mode() & 0o022 == 0)
++        }
++        // KWin with file capabilities hides its executable from an ordinary process. It must then be the session's
++        // compositor itself: the process the kernel names as the far end of this session's Wayland socket.
++        None => {
++            let listener = wayland_socket_peer();
++            compositor_is(pid, listener, parent_of(pid), listener.and_then(command_of).as_deref())
++        }
++    }
++}
+ 
+-    let Some(owner_raw) = dbus_call("GetNameOwner", &[KWIN_DEST.to_owned()]) else {
++/// Whether `pid` is the compositor behind the Wayland socket whose listening process is `listener`: that process
++/// itself, or its child where the listener is KWin's own wrapper, which opens the socket and hands it to KWin.
++pub fn compositor_is(pid: u32, listener: Option<u32>, parent: Option<u32>, listener_command: Option<&str>) -> bool {
++    let Some(listener) = listener else {
+         return false;
+     };
+-    let Some(kwin_owner) = parse_quoted_string(&owner_raw) else {
+-        return false;
++    listener == pid || (parent == Some(listener) && listener_command.is_some_and(|command| command.starts_with("kwin_wayland")))
++}
++
++/// The pid the kernel records for the listening end of `$WAYLAND_DISPLAY`'s socket (`SO_PEERCRED`).
++fn wayland_socket_peer() -> Option<u32> {
++    use std::os::fd::AsRawFd;
++    let name = std::env::var_os("WAYLAND_DISPLAY")?;
++    let path = std::path::PathBuf::from(&name);
++    let path = if path.is_absolute() { path } else { std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join(path) };
++    let stream = std::os::unix::net::UnixStream::connect(path).ok()?;
++    let mut peer = libc::ucred { pid: 0, uid: 0, gid: 0 };
++    let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
++    // SAFETY: `peer` and `size` are a ucred and its length, as SO_PEERCRED writes; the descriptor is open.
++    let read = unsafe {
++        libc::getsockopt(stream.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED, std::ptr::addr_of_mut!(peer).cast(), &mut size)
+     };
+-    if kwin_owner != helper_owner {
+-        return false;
++    (read == 0 && peer.pid > 0 && peer.uid == current_uid()).then_some(peer.pid as u32)
++}
++
++fn parent_of(pid: u32) -> Option<u32> {
++    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
++    // The fields after the command's closing parenthesis: state, then the parent's pid.
++    stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
++}
++
++fn command_of(pid: u32) -> Option<String> {
++    std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|command| command.trim().to_owned())
++}
++
++fn script_directory() -> std::path::PathBuf {
++    std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir)
++}
++
++fn write_private(path: &std::path::Path, bytes: &[u8]) -> Option<()> {
++    use std::io::Write;
++    let _ = std::fs::remove_file(path);
++    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(path).ok()?;
++    file.write_all(bytes).ok()
++}
++
++fn nonce() -> Option<String> {
++    use std::io::Read;
++    let mut bytes = [0u8; 16];
++    std::fs::File::open("/dev/urandom").ok()?.read_exact(&mut bytes).ok()?;
++    Some(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
++}
++
++/// Why KWin's own capture gave no picture.
++#[derive(Debug)]
++pub enum CaptureError {
++    /// Not a KDE session, or KWin did not answer.
++    Unavailable,
++    /// The window is unknown, minimized or on another desktop.
++    NotVisible,
++    /// KWin refused: this program's desktop entry does not ask for `org.kde.KWin.ScreenShot2`.
++    NotAuthorized,
++    Failed(String),
++}
++
++impl std::fmt::Display for CaptureError {
++    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            Self::Unavailable => f.write_str("KWin did not answer the window adapter"),
++            Self::NotVisible => f.write_str("KWin reports the window is minimized, on another desktop or gone"),
++            Self::NotAuthorized => f.write_str(
++                "KWin did not authorize window capture: no desktop entry for this program asks for \
++                 org.kde.KWin.ScreenShot2 (X-KDE-DBUS-Restricted-Interfaces)",
++            ),
++            Self::Failed(reason) => write!(f, "KWin window capture failed: {reason}"),
++        }
+     }
++}
+ 
+-    let executable = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
+-    match executable {
+-        Some(path) => {
+-            let metadata = std::fs::metadata(&path).ok();
+-            path.file_name().and_then(|name| name.to_str()) == Some("kwin_wayland")
+-                && metadata
+-                    .is_some_and(|meta| meta.uid() == 0 && meta.permissions().mode() & 0o022 == 0)
++impl std::error::Error for CaptureError {}
++
++/// One exact window's pixels as PNG, at the size its geometry reports.
++pub fn screenshot_window(token: u64, pid: Option<u32>) -> Result<Vec<u8>, CaptureError> {
++    let window = list_windows()
++        .ok_or(CaptureError::Unavailable)?
++        .into_iter()
++        .find(|window| window.token == token && pid.is_none_or(|pid| window.pid == pid))
++        .ok_or(CaptureError::NotVisible)?;
++    if !window.visible() {
++        return Err(CaptureError::NotVisible);
++    }
++    let picture = capture("CaptureWindow", Some(window.uuid.clone()))?;
++    let picture = window_picture(picture, &window)
++        .ok_or_else(|| CaptureError::Failed("KWin's picture is not the window's size".into()))?;
++    encode_png(&picture).ok_or_else(|| CaptureError::Failed("the picture could not be written as PNG".into()))
++}
++
++/// The window itself out of what KWin captured: the picture as it is when it is the window's size, and the window's
++/// place inside its buffer when the picture is the whole buffer (a client-drawn shadow around it).
++pub fn window_picture(picture: image::RgbaImage, window: &KwinWindow) -> Option<image::RgbaImage> {
++    if (picture.width(), picture.height()) == (window.width, window.height) {
++        return Some(picture);
++    }
++    let (buffer_x, buffer_y, buffer_width, buffer_height) = window.buffer;
++    if (picture.width(), picture.height()) != (buffer_width, buffer_height) {
++        // Plasma 5.27 does not say where an X11 client lies inside its frame: the picture is the client alone, smaller
++        // than the window reported. It is still this window's and nothing else's. A larger one is unexplained.
++        return (picture.width() <= window.width && picture.height() <= window.height).then_some(picture);
++    }
++    let left = u32::try_from(window.x - buffer_x).ok()?;
++    let top = u32::try_from(window.y - buffer_y).ok()?;
++    (left + window.width <= buffer_width && top + window.height <= buffer_height)
++        .then(|| image::imageops::crop_imm(&picture, left, top, window.width, window.height).to_image())
++}
++
++/// The active screen's pixels as PNG.
++pub fn screenshot_display() -> Result<Vec<u8>, CaptureError> {
++    if !kde_session() {
++        return Err(CaptureError::Unavailable);
++    }
++    let picture = capture("CaptureActiveScreen", None)?;
++    encode_png(&picture).ok_or_else(|| CaptureError::Failed("the picture could not be written as PNG".into()))
++}
++
++fn encode_png(picture: &image::RgbaImage) -> Option<Vec<u8>> {
++    let mut png = std::io::Cursor::new(Vec::new());
++    picture.write_to(&mut png, image::ImageFormat::Png).ok()?;
++    Some(png.into_inner())
++}
++
++/// What `ScreenShot2` says about the raw picture it writes into the pipe.
++#[derive(Clone, Copy, Debug)]
++pub struct Raster {
++    pub width: u32,
++    pub height: u32,
++    pub stride: usize,
++    /// Qt's `QImage::Format`.
++    pub format: u32,
++}
++
++fn capture(method: &'static str, uuid: Option<String>) -> Result<image::RgbaImage, CaptureError> {
++    // KWin learns of a desktop entry written a moment ago only when its service cache next rebuilds: the first
++    // refusals are retried for a bounded time, and a standing refusal is remembered for five seconds, so the capture
++    // works soon after the person allows it.
++    static REFUSED_AT: Mutex<Option<Instant>> = Mutex::new(None);
++    static AUTHORIZED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
++    if REFUSED_AT.lock().ok().and_then(|at| *at).is_some_and(|at| at.elapsed() < Duration::from_secs(5)) {
++        return Err(CaptureError::NotAuthorized);
++    }
++    let attempts = if AUTHORIZED.load(Ordering::Relaxed) { 1 } else { 5 };
++    for attempt in 0..attempts {
++        if attempt > 0 {
++            std::thread::sleep(Duration::from_millis(700));
++        }
++        match capture_once(method, uuid.clone()) {
++            Ok(picture) => {
++                AUTHORIZED.store(true, Ordering::Relaxed);
++                return Ok(picture);
++            }
++            Err(CaptureError::NotAuthorized) => {}
++            Err(error) => return Err(error),
+         }
+-        None => true,
+     }
++    if let Ok(mut at) = REFUSED_AT.lock() {
++        *at = Some(Instant::now());
++    }
++    Err(CaptureError::NotAuthorized)
++}
++
++fn capture_once(method: &'static str, uuid: Option<String>) -> Result<image::RgbaImage, CaptureError> {
++    let (read, write) = pipe().ok_or_else(|| CaptureError::Failed("no pipe".into()))?;
++    // The pipe is read while KWin writes: a window's picture is larger than a pipe holds.
++    let (sent, received) = std::sync::mpsc::channel();
++    std::thread::spawn(move || {
++        use std::io::Read;
++        let mut bytes = Vec::new();
++        let _ = std::fs::File::from(read).read_to_end(&mut bytes);
++        let _ = sent.send(bytes);
++    });
++    // This side's write end closes when the call returns; KWin closes its own once the picture is written.
++    let raster = on_own_runtime(async move { Some(capture_call(method, uuid, write).await) })
++        .unwrap_or(Err(CaptureError::Unavailable))?;
++    let bytes = received
++        .recv_timeout(CALL_TIMEOUT)
++        .map_err(|_| CaptureError::Failed("KWin did not finish writing the picture".into()))?;
++    raster_to_image(raster, &bytes).ok_or_else(|| CaptureError::Failed(format!("unreadable picture {raster:?}")))
++}
++
++async fn capture_call(method: &str, uuid: Option<String>, write: OwnedFd) -> Result<Raster, CaptureError> {
++    use zbus::zvariant::{Fd, OwnedValue, Value};
++    let connection = tokio::time::timeout(CALL_TIMEOUT, zbus::Connection::session())
++        .await
++        .ok()
++        .and_then(Result::ok)
++        .ok_or(CaptureError::Unavailable)?;
++    // The capture is asked of the verified KWin's own bus name, never of whoever holds the screenshot name.
++    let kwin = trusted_kwin_owner(&connection).await.ok_or(CaptureError::Unavailable)?;
++    let mut options: HashMap<&str, Value<'_>> = HashMap::new();
++    options.insert("include-cursor", Value::from(false));
++    if uuid.is_some() {
++        // The client's own surface: no title bar KWin draws, and (Plasma 6) no shadow.
++        options.insert("include-decoration", Value::from(false));
++        options.insert("include-shadow", Value::from(false));
++    }
++    let fd = Fd::from(&write);
++    let reply = match uuid.as_deref() {
++        Some(uuid) => {
++            let body = (uuid, options, fd);
++            tokio::time::timeout(
++                CALL_TIMEOUT,
++                connection.call_method(Some(kwin.as_str()), SCREENSHOT_PATH, Some(SCREENSHOT_IFACE), method, &body),
++            )
++            .await
++        }
++        None => {
++            let body = (options, fd);
++            tokio::time::timeout(
++                CALL_TIMEOUT,
++                connection.call_method(Some(kwin.as_str()), SCREENSHOT_PATH, Some(SCREENSHOT_IFACE), method, &body),
++            )
++            .await
++        }
++    };
++    let reply = match reply {
++        Err(_) => return Err(CaptureError::Failed("KWin did not answer in time".into())),
++        Ok(Err(zbus::Error::MethodError(name, detail, _))) if name.as_str().ends_with("NoAuthorized") => {
++            tracing::debug!("KWin ScreenShot2 refused: {detail:?}");
++            return Err(CaptureError::NotAuthorized);
++        }
++        Ok(Err(error)) => return Err(CaptureError::Failed(error.to_string())),
++        Ok(Ok(reply)) => reply,
++    };
++    let body = reply.body();
++    let meta: HashMap<String, OwnedValue> = body.deserialize().map_err(|error| CaptureError::Failed(error.to_string()))?;
++    let number = |key: &str| meta.get(key).and_then(|value| u32::try_from(&**value).ok());
++    if let Some(uuid) = uuid.as_deref() {
++        let captured = meta.get("windowId").and_then(|value| <&str>::try_from(&**value).ok());
++        if captured.is_some_and(|captured| captured != uuid) {
++            return Err(CaptureError::Failed("KWin captured a different window".into()));
++        }
++    }
++    match (number("width"), number("height"), number("stride"), number("format")) {
++        (Some(width), Some(height), Some(stride), Some(format)) if width > 0 && height > 0 => {
++            Ok(Raster { width, height, stride: stride as usize, format })
++        }
++        _ => Err(CaptureError::Failed("KWin described no picture".into())),
++    }
++}
++
++/// Qt's raw picture as RGBA. Formats KWin writes: RGB32 (4), ARGB32 (5), ARGB32_Premultiplied (6), and the RGBA
++/// orders (RGBX8888 16, RGBA8888 17, RGBA8888_Premultiplied 18).
++pub fn raster_to_image(raster: Raster, bytes: &[u8]) -> Option<image::RgbaImage> {
++    let (width, height) = (raster.width as usize, raster.height as usize);
++    if raster.stride < width * 4 || bytes.len() < raster.stride * (height - 1) + width * 4 {
++        return None;
++    }
++    let (bgr, alpha, premultiplied) = match raster.format {
++        4 => (true, false, false),
++        5 => (true, true, false),
++        6 => (true, true, true),
++        16 => (false, false, false),
++        17 => (false, true, false),
++        18 => (false, true, true),
++        _ => return None,
++    };
++    let mut rgba = Vec::with_capacity(width * height * 4);
++    for row in 0..height {
++        for pixel in bytes[row * raster.stride..row * raster.stride + width * 4].chunks_exact(4) {
++            let (mut r, mut g, mut b) = if bgr { (pixel[2], pixel[1], pixel[0]) } else { (pixel[0], pixel[1], pixel[2]) };
++            let a = if alpha { pixel[3] } else { 255 };
++            if premultiplied && a > 0 && a < 255 {
++                let straight = |channel: u8| ((u32::from(channel) * 255 + u32::from(a) / 2) / u32::from(a)).min(255) as u8;
++                (r, g, b) = (straight(r), straight(g), straight(b));
++            }
++            rgba.extend_from_slice(&[r, g, b, a]);
++        }
++    }
++    image::RgbaImage::from_raw(raster.width, raster.height, rgba)
++}
++
++fn pipe() -> Option<(OwnedFd, OwnedFd)> {
++    let mut fds = [0i32; 2];
++    // SAFETY: `fds` is two ints, as pipe2 writes; both descriptors are owned from here on.
++    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
++        return None;
++    }
++    Some(unsafe { (OwnedFd::from_raw_fd(fds[0]), OwnedFd::from_raw_fd(fds[1])) })
+ }
+ 
+ #[cfg(test)]
+@@ -426,17 +798,55 @@ mod tests {
+     use super::*;
+ 
+     #[test]
+-    fn raw_input_capability_is_fail_closed() {
+-        assert!(!available());
++    fn a_token_is_the_uuid_under_its_tag() {
++        assert_eq!(token_for_uuid("{a33f7a19-2491-44a3-a711-2e43952382b7}"), Some(TOKEN_TAG | 0xa33f_7a19_2491));
++        assert_eq!(token_for_uuid("{a33f7a19}"), None);
++    }
+ 
+-        let called = std::cell::Cell::new(false);
+-        let error = with_focused_window(42, 7, || {
+-            called.set(true);
+-            Ok(())
+-        })
+-        .expect_err("focus-bound KWin input must refuse");
++    #[test]
++    fn a_raw_picture_is_read_in_rgba_order() {
++        // One ARGB32 pixel (blue, green, red, alpha in memory) and two bytes of row padding.
++        let image = raster_to_image(Raster { width: 1, height: 1, stride: 6, format: 5 }, &[10, 20, 30, 255, 0, 0]).expect("a picture");
++        assert_eq!(image.get_pixel(0, 0).0, [30, 20, 10, 255]);
++        assert!(raster_to_image(Raster { width: 1, height: 1, stride: 4, format: 99 }, &[0; 4]).is_none());
++        assert!(raster_to_image(Raster { width: 2, height: 1, stride: 8, format: 5 }, &[0; 4]).is_none());
++    }
++
++    #[test]
++    fn a_buffer_with_a_shadow_is_cut_to_the_window() {
++        let window = parse_snapshot(
++            r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":7,"x":10,"y":20,"w":2,"h":1,"bx":9,"by":18,"bw":4,"bh":4,"active":false,"minimized":false,"stacking":0}]"#,
++        )
++        .expect("a snapshot")
++        .remove(0);
++        assert_eq!(window.buffer, (9, 18, 4, 4));
++        // The whole buffer: the window is the two pixels at (1, 2) and (2, 2).
++        let mut buffer = image::RgbaImage::new(4, 4);
++        buffer.put_pixel(1, 2, image::Rgba([1, 0, 0, 255]));
++        buffer.put_pixel(2, 2, image::Rgba([2, 0, 0, 255]));
++        let cut = window_picture(buffer, &window).expect("the window inside its buffer");
++        assert_eq!((cut.width(), cut.height()), (2, 1));
++        assert_eq!((cut.get_pixel(0, 0).0[0], cut.get_pixel(1, 0).0[0]), (1, 2));
++        // Already the window's size: as it is. Any other size: no picture.
++        assert!(window_picture(image::RgbaImage::new(2, 1), &window).is_some());
++        assert!(window_picture(image::RgbaImage::new(3, 3), &window).is_none());
++        // Smaller than the window (an X11 client inside a frame Plasma 5.27 does not describe): the client as it is.
++        assert_eq!(window_picture(image::RgbaImage::new(1, 1), &window).map(|picture| picture.width()), Some(1));
++    }
++
++    #[test]
++    fn an_unreadable_kwin_must_be_the_session_compositor() {
++        // The listener of the Wayland socket is that process, or KWin's wrapper whose child it is.
++        assert!(compositor_is(40, Some(40), Some(1), Some("kwin_wayland")));
++        assert!(compositor_is(41, Some(40), Some(40), Some("kwin_wayland_wr")));
++        // Another process claiming KWin's name, a wrapper that is not KWin's, or no socket at all: refused.
++        assert!(!compositor_is(41, Some(40), Some(7), Some("kwin_wayland_wr")));
++        assert!(!compositor_is(41, Some(40), Some(40), Some("sh")));
++        assert!(!compositor_is(41, None, Some(40), None));
++    }
+ 
+-        assert!(!called.get());
+-        assert!(error.to_string().contains("target-bound KWin input path"));
++    #[test]
++    fn the_script_reports_to_this_request_only() {
++        assert!(SCRIPT.contains("callDBus(__SERVICE__") && SCRIPT.contains("__NONCE__") && SCRIPT.contains("__ACTIVATE__"));
+     }
+ }
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/libei.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/libei.rs
-index a2691a0..25d4701 100644
+index a2691a0..21c9878 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/libei.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/libei.rs
 @@ -108,11 +108,13 @@ enum Cmd {
@@ -6568,7 +7684,7 @@ index a2691a0..25d4701 100644
      },
      Scroll {
          dx: f64,
-@@ -140,6 +142,7 @@ enum Cmd {
+@@ -140,12 +142,39 @@ enum Cmd {
          duration_ms: u64,
          button: Button,
          reply: Sender<anyhow::Result<()>>,
@@ -6576,37 +7692,197 @@ index a2691a0..25d4701 100644
      },
      Shutdown,
  }
-@@ -269,6 +272,7 @@ pub fn click(x: f64, y: f64, button: Button) -> anyhow::Result<()> {
+ 
++impl Cmd {
++    fn reply(self) -> Option<Sender<anyhow::Result<()>>> {
++        match self {
++            Cmd::WaitReady { reply, .. }
++            | Cmd::Click { reply, .. }
++            | Cmd::MoveAbsolute { reply, .. }
++            | Cmd::Scroll { reply, .. }
++            | Cmd::TypeText { reply, .. }
++            | Cmd::PressKey { reply, .. }
++            | Cmd::KeySequence { reply, .. }
++            | Cmd::Drag { reply, .. } => Some(reply),
++            Cmd::Shutdown => None,
++        }
++    }
++}
++
+ static TX: OnceLock<Sender<Cmd>> = OnceLock::new();
+ 
++/// Why the worker ended, kept for every later call: its thread's own words would otherwise be only in the log.
++static WORKER_FAILURE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
++
++fn worker_gone() -> anyhow::Error {
++    match WORKER_FAILURE.lock().ok().and_then(|failure| failure.clone()) {
++        Some(reason) => anyhow::anyhow!("libei input is unavailable: {reason}"),
++        None => anyhow::anyhow!("libei input is unavailable: its worker ended"),
++    }
++}
++
+ fn tx() -> anyhow::Result<&'static Sender<Cmd>> {
+     TX.get()
+         .ok_or_else(|| anyhow::anyhow!("libei worker not started; call ensure_started() first"))
+@@ -157,9 +186,7 @@ fn wait_for_reply(rx: Receiver<anyhow::Result<()>>) -> anyhow::Result<()> {
+             crossbeam_channel::RecvTimeoutError::Timeout => anyhow::anyhow!(
+                 "libei input backend did not become ready within 20s; the desktop portal may be waiting for Remote Desktop consent or its EIS session may be wedged"
+             ),
+-            crossbeam_channel::RecvTimeoutError::Disconnected => {
+-                anyhow::anyhow!("libei worker reply channel closed")
+-            }
++            crossbeam_channel::RecvTimeoutError::Disconnected => worker_gone(),
+         })?
+ }
+ 
+@@ -218,8 +245,19 @@ pub fn ensure_started() -> anyhow::Result<()> {
+         thread::Builder::new()
+             .name("cua-libei-worker".into())
+             .spawn(move || {
++                let waiting = rx.clone();
+                 if let Err(e) = worker(rx) {
+                     tracing::warn!("cua-libei-worker exited with error: {e}");
++                    if let Ok(mut failure) = WORKER_FAILURE.lock() {
++                        *failure = Some(e.to_string());
++                    }
++                    // Whoever asked while it was starting, and whoever asks from now on, hears why at once instead
++                    // of waiting out the reply's time limit.
++                    for command in waiting.iter() {
++                        if let Some(reply) = command.reply() {
++                            let _ = reply.send(Err(worker_gone()));
++                        }
++                    }
+                 }
+             })
+             .expect("spawn cua-libei-worker thread");
+@@ -236,7 +274,7 @@ fn wait_until_ready(interface: &'static str) -> anyhow::Result<()> {
+             interface,
+             reply: tx_r,
+         })
+-        .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
++        .map_err(|_| worker_gone())?;
+     wait_for_reply(rx_r)
+ }
+ 
+@@ -269,9 +307,10 @@ pub fn click(x: f64, y: f64, button: Button) -> anyhow::Result<()> {
              x,
              y,
              button,
 +            recording: super::recording::PointerCapture::current(),
              reply: tx_r,
          })
-         .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
-@@ -281,7 +285,12 @@ pub fn move_absolute(x: f64, y: f64) -> anyhow::Result<()> {
+-        .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
++        .map_err(|_| worker_gone())?;
+     wait_for_reply(rx_r)
+ }
+ 
+@@ -281,8 +320,13 @@ pub fn move_absolute(x: f64, y: f64) -> anyhow::Result<()> {
      ensure_started()?;
      let (tx_r, rx_r) = bounded(1);
      tx()?
 -        .send(Cmd::MoveAbsolute { x, y, reply: tx_r })
+-        .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
 +        .send(Cmd::MoveAbsolute {
 +            x,
 +            y,
 +            recording: super::recording::PointerCapture::current(),
 +            reply: tx_r,
 +        })
-         .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
++        .map_err(|_| worker_gone())?;
      wait_for_reply(rx_r)
  }
-@@ -391,6 +400,7 @@ pub fn drag(
+ 
+@@ -296,7 +340,7 @@ pub fn scroll(dx: f64, dy: f64) -> anyhow::Result<()> {
+             dy,
+             reply: tx_r,
+         })
+-        .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
++        .map_err(|_| worker_gone())?;
+     wait_for_reply(rx_r)
+ }
+ 
+@@ -310,7 +354,7 @@ pub fn type_text(text: &str) -> anyhow::Result<()> {
+             text: text.to_string(),
+             reply: tx_r,
+         })
+-        .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
++        .map_err(|_| worker_gone())?;
+     wait_for_reply(rx_r)
+ }
+ 
+@@ -324,7 +368,7 @@ pub fn press_key(keycode: u32) -> anyhow::Result<()> {
+             keycode,
+             reply: tx_r,
+         })
+-        .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
++        .map_err(|_| worker_gone())?;
+     wait_for_reply(rx_r)
+ }
+ 
+@@ -346,7 +390,7 @@ pub fn key_sequence(transitions: &[KeyTransition]) -> anyhow::Result<()> {
+             transitions: transitions.to_vec(),
+             reply: tx_r,
+         })
+-        .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
++        .map_err(|_| worker_gone())?;
+     wait_for_reply(rx_r)
+ }
+ 
+@@ -391,9 +435,10 @@ pub fn drag(
              steps,
              duration_ms,
              button,
 +            recording: super::recording::PointerCapture::current(),
              reply: tx_r,
          })
-         .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
-@@ -982,7 +992,13 @@ impl EisState {
+-        .map_err(|e| anyhow::anyhow!("libei worker channel closed: {e}"))?;
++        .map_err(|_| worker_gone())?;
+     wait_for_reply(rx_r)
+ }
+ 
+@@ -450,6 +495,26 @@ fn worker(rx: Receiver<Cmd>) -> anyhow::Result<()> {
+     run_calloop(context, rx)
+ }
+ 
++/// The RemoteDesktop version the desktop really implements: the portal's own, and its KDE backend's where that is
++/// the one answering (xdg-desktop-portal reports its own version 2 over a Plasma 5 backend that is version 1).
++async fn remote_desktop_version(connection: &zbus::Connection) -> Option<u32> {
++    let version = |destination: &'static str, interface: &'static str| async move {
++        let proxy = zbus::Proxy::new(connection, destination, "/org/freedesktop/portal/desktop", interface);
++        let proxy = tokio::time::timeout(super::portal::PROBE_TIMEOUT, proxy).await.ok()?.ok()?;
++        tokio::time::timeout(super::portal::PROBE_TIMEOUT, proxy.get_property::<u32>("version")).await.ok()?.ok()
++    };
++    let portal = version("org.freedesktop.portal.Desktop", "org.freedesktop.portal.RemoteDesktop").await;
++    let backend = if super::kwin_helper::kde_session() {
++        version("org.freedesktop.impl.portal.desktop.kde", "org.freedesktop.impl.portal.RemoteDesktop").await
++    } else {
++        None
++    };
++    match (portal, backend) {
++        (Some(portal), Some(backend)) => Some(portal.min(backend)),
++        (portal, backend) => portal.or(backend),
++    }
++}
++
+ /// Open the EIS context. Fast path: `$LIBEI_SOCKET` supplied by the environment.
+ /// Fallback: ashpd portal RemoteDesktop handshake.
+ fn open_eis_context() -> anyhow::Result<(reis::ei::Context, PortalKeepAlive)> {
+@@ -483,6 +548,14 @@ fn open_eis_context() -> anyhow::Result<(reis::ei::Context, PortalKeepAlive)> {
+ 
+     let (fd, proxy, session) = rt.block_on(async {
+         let connection = super::portal::fresh_session_connection().await?;
++        // A portal before version 2 (KDE Plasma 5, GNOME before 45) has no ConnectToEIS: asking it for a session
++        // would only put a dialog in front of the person for input that can never come.
++        if let Some(version) = remote_desktop_version(&connection).await.filter(|version| *version < 2) {
++            anyhow::bail!(
++                "this desktop's RemoteDesktop portal (version {version}) hands out no libei connection; pointer and \
++                 keyboard input needs KDE Plasma 6.1 or GNOME 45 or later"
++            );
++        }
+         let proxy = RemoteDesktop::with_connection(connection)
+             .await
+             .map_err(|e| anyhow::anyhow!("portal RemoteDesktop proxy unreachable: {e}. Install xdg-desktop-portal-gnome / xdg-desktop-portal-kde."))?;
+@@ -982,7 +1055,13 @@ impl EisState {
                      anyhow::anyhow!("no resumed EIS {interface} device negotiated within 20s")
                  })?;
              }
@@ -6621,7 +7897,7 @@ index a2691a0..25d4701 100644
                  let (device, rel_x, rel_y) = self.pointer_device_for(*x, *y)?;
                  let serial = self.last_serial;
                  let ptr_abs =
-@@ -992,8 +1008,16 @@ impl EisState {
+@@ -992,8 +1071,16 @@ impl EisState {
                  ptr_abs.motion_absolute(rel_x, rel_y);
                  btn.button(button.to_evdev(), reis::ei::button::ButtonState::Press);
                  device.frame(serial, event_time_us());
@@ -6638,7 +7914,7 @@ index a2691a0..25d4701 100644
              }
              Cmd::Drag {
                  from_x,
-@@ -1003,6 +1027,7 @@ impl EisState {
+@@ -1003,6 +1090,7 @@ impl EisState {
                  steps,
                  duration_ms,
                  button,
@@ -6646,7 +7922,7 @@ index a2691a0..25d4701 100644
                  ..
              } => {
                  let (device, from_rx, from_ry) = self.pointer_device_for(*from_x, *from_y)?;
-@@ -1028,8 +1053,9 @@ impl EisState {
+@@ -1028,8 +1116,9 @@ impl EisState {
                  device.frame(serial, event_time_us());
                  btn.button(button.to_evdev(), reis::ei::button::ButtonState::Press);
                  device.frame(serial, event_time_us());
@@ -6658,7 +7934,7 @@ index a2691a0..25d4701 100644
                  }
                  // Bound the interpolation: run_command executes synchronously in
                  // the worker loop, so a huge step count would block EIS event
-@@ -1042,8 +1068,13 @@ impl EisState {
+@@ -1042,8 +1131,13 @@ impl EisState {
                      let iy = from_ry + (to_ry - from_ry) * t;
                      ptr_abs.motion_absolute(ix, iy);
                      device.frame(serial, event_time_us());
@@ -6674,7 +7950,7 @@ index a2691a0..25d4701 100644
                      }
                      if !delay.is_zero() {
                          std::thread::sleep(delay);
-@@ -1051,8 +1082,14 @@ impl EisState {
+@@ -1051,8 +1145,14 @@ impl EisState {
                  }
                  btn.button(button.to_evdev(), reis::ei::button::ButtonState::Released);
                  device.frame(serial, event_time_us());
@@ -6690,7 +7966,7 @@ index a2691a0..25d4701 100644
                  let (device, rel_x, rel_y) = self.pointer_device_for(*x, *y)?;
                  let serial = self.last_serial;
                  let ptr_abs =
-@@ -1060,6 +1097,10 @@ impl EisState {
+@@ -1060,6 +1160,10 @@ impl EisState {
  
                  ptr_abs.motion_absolute(rel_x, rel_y);
                  device.frame(serial, event_time_us());
@@ -6701,7 +7977,7 @@ index a2691a0..25d4701 100644
              }
              Cmd::Scroll { dx, dy, .. } => {
                  let device = self.device_with_interface("ei_scroll").ok_or_else(|| {
-@@ -1167,10 +1208,15 @@ impl EisState {
+@@ -1167,10 +1271,15 @@ impl EisState {
              }
              Cmd::Shutdown => {}
          }
@@ -6722,7 +7998,7 @@ index a2691a0..25d4701 100644
  
      /// Pick a pointer device whose announced Region contains `(x, y)`,
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
-index ca0b769..4141f40 100644
+index ca0b769..9d3f3de 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/mod.rs
 @@ -21,6 +21,8 @@ pub mod persistent_vptr;
@@ -6979,7 +8255,7 @@ index ca0b769..4141f40 100644
  fn screenshot_dispatch_for_pid(xid: u64, pid: Option<u32>) -> anyhow::Result<Vec<u8>> {
      if is_wayland() && hyprland::is_session() {
          return hyprland::capture(xid, pid).map_err(|error| {
-@@ -1090,6 +1270,17 @@ fn screenshot_dispatch_for_pid(xid: u64, pid: Option<u32>) -> anyhow::Result<Vec
+@@ -1090,6 +1270,35 @@ fn screenshot_dispatch_for_pid(xid: u64, pid: Option<u32>) -> anyhow::Result<Vec
              )
          });
      }
@@ -6994,10 +8270,42 @@ index ca0b769..4141f40 100644
 +    if is_wayland() && std::env::var_os("SWAYSOCK").is_some() {
 +        return capture_sway_window(xid, pid);
 +    }
++    if is_wayland() && kwin_helper::available() {
++        // KWin captures the exact window by its own id, covered or not; nothing else is a proof of its pixels.
++        return kwin_helper::screenshot_window(xid, pid).map_err(|error| {
++            tracing::debug!("KWin target capture refused: {error}");
++            surface_identity_unproven(
++                xid,
++                match error {
++                    kwin_helper::CaptureError::NotAuthorized => {
++                        "KWin did not authorize window capture: no desktop entry for this program asks for org.kde.KWin.ScreenShot2"
++                    }
++                    kwin_helper::CaptureError::NotVisible => {
++                        "KWin reports the window is minimized, on another desktop or gone"
++                    }
++                    _ => "KWin exact-window capture failed",
++                },
++            )
++        });
++    }
      screenshot_window_bytes_with_dispatch(
          is_wayland(),
          xid,
-@@ -1258,6 +1449,90 @@ pub struct VptrSession {
+@@ -1150,6 +1359,13 @@ pub fn screenshot_display_dispatch() -> anyhow::Result<Vec<u8>> {
+         ) {
+             return result;
+         }
++        // KWin's own capture, where its desktop entry lets this program ask.
++        if kwin_helper::available() {
++            match kwin_helper::screenshot_display() {
++                Ok(bytes) => return Ok(bytes),
++                Err(error) => tracing::debug!("KWin display capture unavailable ({error}); trying the next tier"),
++            }
++        }
+         // Tier 2: native wlroots screencopy (fast, zero consent).
+         match screenshot_bytes() {
+             Ok(bytes) => return Ok(bytes),
+@@ -1258,6 +1474,90 @@ pub struct VptrSession {
      pub output_h: u32,
  }
  
@@ -7088,7 +8396,7 @@ index ca0b769..4141f40 100644
  /// Bind manager + seat + virtual-pointer + first output, optionally activate a
  /// foreign-toplevel by `window_id` so the synthesised events land on it, and
  /// return the live session that scroll / drag / click reuse. Wayland forbids a
-@@ -1272,6 +1547,13 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
+@@ -1272,6 +1572,13 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
  
      let mut state = State::default();
      queue.roundtrip(&mut state)?;
@@ -7102,7 +8410,7 @@ index ca0b769..4141f40 100644
      for _ in 0..4 {
          queue.roundtrip(&mut state)?;
      }
-@@ -1323,8 +1605,8 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
+@@ -1323,8 +1630,8 @@ pub fn open_vptr_session(activate_window_id: Option<u64>) -> anyhow::Result<Vptr
          queue.roundtrip(&mut state)?;
      }
  
@@ -7112,10 +8420,15 @@ index ca0b769..4141f40 100644
      Ok(VptrSession {
          conn,
          queue,
-@@ -1416,6 +1698,12 @@ pub fn activate_window_for_input_target(
+@@ -1416,6 +1723,17 @@ pub fn activate_window_for_input_target(
          return Ok(());
      }
  
++    // KWin activates the exact window by its own id and reports it active before this returns.
++    if kwin_helper::activate_window(window_id) {
++        return Ok(());
++    }
++
 +    // An XWayland app under Sway is named by its X11 window id, which no foreign-toplevel handle carries; Sway's
 +    // tree does, so its exact container is focused and the focus confirmed there.
 +    if std::env::var_os("SWAYSOCK").is_some() && sway_ipc::focus_x11_window(window_id) {
@@ -7125,7 +8438,7 @@ index ca0b769..4141f40 100644
      anyhow::bail!(
          "foreground_unavailable: this Wayland compositor does not expose a verified, \
           target-addressable activation adapter for window {window_id}; refusing global \
-@@ -1423,6 +1711,22 @@ pub fn activate_window_for_input_target(
+@@ -1423,6 +1741,22 @@ pub fn activate_window_for_input_target(
      )
  }
  
@@ -7142,13 +8455,13 @@ index ca0b769..4141f40 100644
 +                && window.focused
 +        }));
 +    }
-+    shell_helper::focused_target(pid, window_id)
++    kwin_helper::focused_target(pid, window_id).or_else(|| shell_helper::focused_target(pid, window_id))
 +}
 +
  /// Run a focus-bound keyboard transaction only after a compositor adapter has
  /// confirmed the exact PID/window pair, and restore the previously focused
  /// toplevel afterward. Global virtual-keyboard/libei input is refused when the
-@@ -1851,7 +2155,18 @@ pub fn drag(
+@@ -1851,7 +2185,18 @@ pub fn drag(
      button: u8,
  ) -> anyhow::Result<()> {
      with_libei_fallback(
@@ -7168,7 +8481,7 @@ index ca0b769..4141f40 100644
          || {
              libei_wait_pointer_ready()?;
              activate_window_for_input(window_id)?;
-@@ -1871,7 +2186,7 @@ pub fn drag_desktop(
+@@ -1871,7 +2216,7 @@ pub fn drag_desktop(
      button: u8,
  ) -> anyhow::Result<()> {
      with_libei_fallback(
@@ -7177,7 +8490,7 @@ index ca0b769..4141f40 100644
          || {
              libei_wait_pointer_ready()?;
              libei_drag(from_x, from_y, to_x, to_y, steps, duration_ms, button)
-@@ -1881,6 +2196,7 @@ pub fn drag_desktop(
+@@ -1881,6 +2226,7 @@ pub fn drag_desktop(
  
  /// wlroots virtual-pointer implementation of [`drag`].
  #[allow(clippy::too_many_arguments)]
@@ -7185,7 +8498,7 @@ index ca0b769..4141f40 100644
  fn drag_vptr(
      window_id: Option<u64>,
      from_x: i32,
-@@ -1888,9 +2204,11 @@ fn drag_vptr(
+@@ -1888,9 +2234,11 @@ fn drag_vptr(
      to_x: i32,
      to_y: i32,
      steps: u32,
@@ -7197,7 +8510,7 @@ index ca0b769..4141f40 100644
      std::thread::sleep(std::time::Duration::from_millis(40));
      let (w, h) = (sess.output_w, sess.output_h);
      let btn = evdev_pointer_button(button);
-@@ -1907,17 +2225,28 @@ fn drag_vptr(
+@@ -1907,17 +2255,28 @@ fn drag_vptr(
      std::thread::sleep(std::time::Duration::from_millis(15));
      sess.vptr.button(event_time_ms(), btn, ButtonState::Pressed);
      sess.vptr.frame();
@@ -7227,7 +8540,7 @@ index ca0b769..4141f40 100644
      }
      let (tx, ty) = clamp_xy(to_x, to_y);
      sess.vptr.motion_absolute(event_time_ms(), tx, ty, w, h);
-@@ -1926,6 +2255,9 @@ fn drag_vptr(
+@@ -1926,6 +2285,9 @@ fn drag_vptr(
      sess.vptr
          .button(event_time_ms(), btn, ButtonState::Released);
      sess.vptr.frame();
@@ -7478,7 +8791,7 @@ index 0000000..fd21a55
 +    }
 +}
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
-index 1a791db..f4ec49c 100644
+index 1a791db..e8deee3 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
 @@ -41,6 +41,7 @@ const SEMANTIC_CURSOR_API_VERSION: u32 = 8;
@@ -7559,7 +8872,109 @@ index 1a791db..f4ec49c 100644
  /// Enumerate exact browser-window ids for one process through the verified
  /// GNOME Shell helper. `None` means no trusted helper is available; an empty
  /// vector means the trusted helper found no owned windows.
-@@ -530,6 +587,9 @@ fn parse_shell_windows(raw: &str, filter_pid: Option<u32>) -> Option<Vec<ShellWi
+@@ -402,6 +459,10 @@ fn trusted_shell_windows(filter_pid: Option<u32>) -> Option<Vec<ShellWindow>> {
+     parse_shell_windows(&raw, filter_pid)
+ }
+ 
++/// How long an activation may take in all. Shell is one thread: while it starts a screen cast or maps a window it
++/// answers nothing for a moment, and a call that got no answer is asked again inside this time.
++const ACTIVATION_BUDGET: Duration = Duration::from_secs(3);
++
+ /// Ask GNOME Shell to focus and raise one stable-sequence window.
+ ///
+ /// Returns `false` when the helper is absent, the id is unknown, or Shell did
+@@ -412,39 +473,66 @@ pub fn activate_window(window_id: u64) -> bool {
+     let Ok(window_id) = u32::try_from(window_id) else {
+         return false;
+     };
+-    let accepted = gdbus_call("Activate", &[window_id.to_string()])
+-        .is_some_and(|output| output.trim_start().starts_with("(true,"));
+-    if !accepted {
+-        return false;
+-    }
+-    let deadline = std::time::Instant::now() + Duration::from_millis(500);
+-    loop {
+-        if window_is_focused(window_id) {
+-            return true;
+-        }
+-        if std::time::Instant::now() >= deadline {
+-            return false;
+-        }
+-        std::thread::sleep(Duration::from_millis(10));
+-    }
++    activate_within(
++        ACTIVATION_BUDGET,
++        helper_registered,
++        || gdbus_call("Activate", &[window_id.to_string()]),
++        || window_is_focused(window_id),
++    )
+ }
+ 
+ fn trusted_activate_window(window_id: u64) -> bool {
+     let Ok(window_id) = u32::try_from(window_id) else {
+         return false;
+     };
+-    let accepted = trusted_gdbus_call("Activate", &[window_id.to_string()])
+-        .is_some_and(|output| output.trim_start().starts_with("(true,"));
+-    if !accepted {
++    activate_within(
++        ACTIVATION_BUDGET,
++        helper_registered,
++        || trusted_gdbus_call("Activate", &[window_id.to_string()]),
++        || {
++            trusted_shell_windows(None).is_some_and(|windows| {
++                windows
++                    .into_iter()
++                    .any(|window| window.info.xid == u64::from(window_id) && window.focused)
++            })
++        },
++    )
++}
++
++/// Whether the helper's name has an owner at all, which the bus itself answers: no Shell helper means no waiting.
++fn helper_registered() -> bool {
++    gdbus_call_to(
++        DBUS_DEST,
++        DBUS_PATH,
++        &format!("{DBUS_IFACE}.NameHasOwner"),
++        &[DEST.to_owned()],
++        Duration::from_millis(800),
++    )
++    .is_some_and(|answer| answer.trim_start().starts_with("(true,"))
++}
++
++/// One activation inside `budget`: an unanswered request is asked again, an answered refusal is final, and the
++/// focus is read back until Shell reports it.
++fn activate_within(
++    budget: Duration,
++    registered: impl Fn() -> bool,
++    request: impl Fn() -> Option<String>,
++    focused: impl Fn() -> bool,
++) -> bool {
++    if !registered() {
+         return false;
+     }
+-    let deadline = std::time::Instant::now() + Duration::from_millis(500);
++    let deadline = std::time::Instant::now() + budget;
++    loop {
++        match request() {
++            Some(answer) if answer.trim_start().starts_with("(true,") => break,
++            Some(_) => return false,
++            None if std::time::Instant::now() >= deadline => return false,
++            None => std::thread::sleep(Duration::from_millis(50)),
++        }
++    }
+     loop {
+-        if trusted_shell_windows(None).is_some_and(|windows| {
+-            windows
+-                .into_iter()
+-                .any(|window| window.info.xid == u64::from(window_id) && window.focused)
+-        }) {
++        if focused() {
+             return true;
+         }
+         if std::time::Instant::now() >= deadline {
+@@ -530,6 +618,9 @@ fn parse_shell_windows(raw: &str, filter_pid: Option<u32>) -> Option<Vec<ShellWi
                          width,
                          height,
                      },
@@ -7569,7 +8984,46 @@ index 1a791db..f4ec49c 100644
                      focused: window
                          .get("focused")
                          .and_then(serde_json::Value::as_bool)
-@@ -590,6 +650,16 @@ mod tests {
+@@ -585,11 +676,55 @@ pub fn hide_cursor() {
+ mod tests {
+     use super::*;
+ 
++    #[test]
++    fn an_unanswered_activation_is_asked_again_and_a_refusal_is_final() {
++        let asked = std::cell::Cell::new(0);
++        // Shell answers nothing twice (busy), then accepts; the focus shows on the second read.
++        let reads = std::cell::Cell::new(0);
++        assert!(activate_within(
++            Duration::from_secs(2),
++            || true,
++            || {
++                asked.set(asked.get() + 1);
++                (asked.get() > 2).then(|| "(true,)".to_owned())
++            },
++            || {
++                reads.set(reads.get() + 1);
++                reads.get() > 1
++            },
++        ));
++        assert_eq!(asked.get(), 3);
++
++        asked.set(0);
++        assert!(!activate_within(Duration::from_secs(2), || true, || { asked.set(asked.get() + 1); Some("(false,)".to_owned()) }, || true));
++        assert_eq!(asked.get(), 1, "a refusal Shell gave is not asked again");
++
++        // No helper on the bus: nothing is asked and nothing waits.
++        let started = std::time::Instant::now();
++        assert!(!activate_within(Duration::from_secs(2), || false, || None, || true));
++        assert!(started.elapsed() < Duration::from_millis(200));
++
++        // A Shell that never answers is given up on when the time is spent.
++        let started = std::time::Instant::now();
++        assert!(!activate_within(Duration::from_millis(200), || true, || None, || true));
++        assert!(started.elapsed() >= Duration::from_millis(200) && started.elapsed() < Duration::from_secs(1));
++    }
++
+     const EXTENSION_SOURCE: &str =
+         include_str!("../../../../../wayland-helper/winrects@cua/extension.js");
      const EXTENSION_METADATA: &str =
          include_str!("../../../../../wayland-helper/winrects@cua/metadata.json");
  
@@ -7586,7 +9040,7 @@ index 1a791db..f4ec49c 100644
      #[test]
      fn parses_and_filters_shell_windows() {
          let raw = r#"('[{"id":46,"pid":6079,"title":"Sentinel's window","x":66,"y":32,"w":958,"h":736,"focused":true,"minimized":false,"visible":true,"stacking":2},{"id":47,"pid":6080,"title":"Hidden","x":0,"y":0,"w":100,"h":100,"minimized":true,"visible":false,"stacking":1}]',)"#;
-@@ -643,9 +713,9 @@ mod tests {
+@@ -643,9 +778,9 @@ mod tests {
      }
  
      #[test]
@@ -7594,16 +9048,20 @@ index 1a791db..f4ec49c 100644
 +    fn bundled_helper_v9_retains_host_owned_modifier_badge_chips() {
          assert!(EXTENSION_SOURCE.contains("GetVersion()"));
 -        assert!(EXTENSION_SOURCE.contains("return 8;"));
-+        assert!(EXTENSION_SOURCE.contains("return 11;"));
++        assert!(EXTENSION_SOURCE.contains("return 12;"));
          assert!(EXTENSION_SOURCE.contains("SetCursorState"));
          assert!(EXTENSION_SOURCE.contains("SetCursorColor"));
          assert!(EXTENSION_SOURCE.contains("SetSessionLabel"));
-@@ -670,7 +740,7 @@ mod tests {
+@@ -670,7 +805,11 @@ mod tests {
          assert!(!EXTENSION_SOURCE.contains("function drawModifiers"));
          let metadata: serde_json::Value =
              serde_json::from_str(EXTENSION_METADATA).expect("valid bundled helper metadata");
 -        assert_eq!(metadata["version"], 8);
-+        assert_eq!(metadata["version"], 11);
++        assert_eq!(metadata["version"], 12);
++        // The helper answers only the driver it was installed for; its version alone answers anyone.
++        assert!(EXTENSION_SOURCE.contains("wrapJSObject(IFACE, this._gated())"));
++        assert!(EXTENSION_SOURCE.contains("method.name !== 'GetVersion'"));
++        assert!(EXTENSION_SOURCE.contains("org.cua.WinRects.NotAllowed"));
  
          for action in [
              "idle", "observe", "click", "drag", "scroll", "text", "key", "navigate", "app",
@@ -7783,6 +9241,194 @@ index 11f3b83..06d3cc0 100644
 +    }
 +    None
 +}
+diff --git a/libs/cua-driver/rust/crates/platform-linux/tests/kwin_helper_contract.rs b/libs/cua-driver/rust/crates/platform-linux/tests/kwin_helper_contract.rs
+index bc9192c..39b54e7 100644
+--- a/libs/cua-driver/rust/crates/platform-linux/tests/kwin_helper_contract.rs
++++ b/libs/cua-driver/rust/crates/platform-linux/tests/kwin_helper_contract.rs
+@@ -1,9 +1,13 @@
+ use platform_linux::wayland::kwin_helper::{
+-    available, correlate_atspi_window, parse_snapshot, require_active_target, with_focused_window,
+-    CorrelationError,
++    available, correlate_atspi_window, parse_snapshot, require_active_target, token_for_uuid,
++    with_focused_window, CorrelationError,
+ };
+ use platform_linux::x11::WindowInfo;
+ 
++fn token(n: u64) -> u64 {
++    token_for_uuid(&format!("{{{:08x}-{:04x}-4000-8000-000000000000}}", n >> 16, n & 0xffff)).expect("a uuid")
++}
++
+ fn atspi_window(pid: u32, x: i32, y: i32, width: u32, height: u32) -> WindowInfo {
+     WindowInfo {
+         xid: 99,
+@@ -20,14 +24,16 @@ fn atspi_window(pid: u32, x: i32, y: i32, width: u32, height: u32) -> WindowInfo
+ }
+ 
+ #[test]
+-fn parses_versioned_kwin_snapshot() {
++fn parses_a_kwin_script_snapshot() {
+     let snapshot = parse_snapshot(
+-        r#"[{"token":41,"pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3}]"#,
++        r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3}]"#,
+     )
+     .expect("valid KWin helper snapshot");
+ 
+     assert_eq!(snapshot.len(), 1);
+-    assert_eq!(snapshot[0].token, 41);
++    assert_eq!(snapshot[0].token, token(41));
++    assert_eq!(snapshot[0].uuid, "{00000000-0029-4000-8000-000000000000}");
++    assert!(snapshot[0].on_current_desktop && snapshot[0].x11_window.is_none());
+     assert_eq!(snapshot[0].pid, 1200);
+     assert_eq!((snapshot[0].x, snapshot[0].y), (100, 80));
+ }
+@@ -35,7 +41,7 @@ fn parses_versioned_kwin_snapshot() {
+ #[test]
+ fn preserves_title_with_apostrophe_from_dbus_string() {
+     let snapshot = parse_snapshot(
+-        r#"[{"token":41,"pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3,"title":"owner's editor","app_id":"org.example.Editor"}]"#,
++        r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3,"title":"owner's editor","app_id":"org.example.Editor"}]"#,
+     )
+     .expect("apostrophe in the decoded D-Bus string must remain valid JSON");
+ 
+@@ -45,7 +51,7 @@ fn preserves_title_with_apostrophe_from_dbus_string() {
+ #[test]
+ fn parses_snapshot_when_title_contains_closing_bracket() {
+     let snapshot = parse_snapshot(
+-        r#"[{"token":41,"pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3,"title":"A ] title","app_id":"org.example.Editor"}]"#,
++        r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3,"title":"A ] title","app_id":"org.example.Editor"}]"#,
+     )
+     .expect("title brackets must not break snapshot parsing");
+ 
+@@ -55,7 +61,7 @@ fn parses_snapshot_when_title_contains_closing_bracket() {
+ #[test]
+ fn parses_fractional_plasma_geometry() {
+     let snapshot = parse_snapshot(
+-        r#"[{"token":41,"pid":1200,"x":100,"y":80,"w":332,"h":99.33333333333336,"active":false,"minimized":false,"stacking":3}]"#,
++        r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":1200,"x":100,"y":80,"w":332,"h":99.33333333333336,"active":false,"minimized":false,"stacking":3}]"#,
+     )
+     .expect("finite fractional geometry is valid metadata");
+ 
+@@ -65,19 +71,19 @@ fn parses_fractional_plasma_geometry() {
+ #[test]
+ fn correlates_one_same_pid_window_with_bounded_frame_delta() {
+     let snapshot = parse_snapshot(
+-        r#"[{"token":41,"pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3}]"#,
++        r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3}]"#,
+     )
+     .unwrap();
+ 
+     let target = correlate_atspi_window(&atspi_window(1200, 104, 112, 792, 560), &snapshot)
+         .expect("one bounded geometry match");
+-    assert_eq!(target.token, 41);
++    assert_eq!(target.token, token(41));
+ }
+ 
+ #[test]
+ fn rejects_duplicate_same_pid_geometry_candidates() {
+     let snapshot = parse_snapshot(
+-        r#"[{"token":41,"pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3},{"token":42,"pid":1200,"x":102,"y":82,"w":798,"h":598,"active":false,"minimized":false,"stacking":4}]"#,
++        r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3},{"id":"{00000000-002a-4000-8000-000000000000}","pid":1200,"x":102,"y":82,"w":798,"h":598,"active":false,"minimized":false,"stacking":4}]"#,
+     )
+     .unwrap();
+ 
+@@ -90,7 +96,7 @@ fn rejects_duplicate_same_pid_geometry_candidates() {
+ #[test]
+ fn refuses_minimized_same_pid_window() {
+     let snapshot = parse_snapshot(
+-        r#"[{"token":41,"pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":true,"stacking":3}]"#,
++        r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":true,"stacking":3}]"#,
+     )
+     .unwrap();
+ 
+@@ -101,9 +107,9 @@ fn refuses_minimized_same_pid_window() {
+ }
+ 
+ #[test]
+-fn rejects_zero_token() {
++fn rejects_an_id_that_is_no_uuid() {
+     assert!(parse_snapshot(
+-        r#"[{"token":0,"pid":1200,"x":0,"y":0,"w":10,"h":10,"active":false,"minimized":false,"stacking":0}]"#,
++        r#"[{"id":"{0}","pid":1200,"x":0,"y":0,"w":10,"h":10,"active":false,"minimized":false,"stacking":0}]"#,
+     )
+     .is_none());
+ }
+@@ -111,7 +117,7 @@ fn rejects_zero_token() {
+ #[test]
+ fn rejects_duplicate_tokens() {
+     assert!(parse_snapshot(
+-        r#"[{"token":41,"pid":1200,"x":0,"y":0,"w":10,"h":10,"active":false,"minimized":false,"stacking":0},{"token":41,"pid":1300,"x":20,"y":20,"w":10,"h":10,"active":false,"minimized":false,"stacking":1}]"#,
++        r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":1200,"x":0,"y":0,"w":10,"h":10,"active":false,"minimized":false,"stacking":0},{"id":"{00000000-0029-4000-8000-000000000000}","pid":1300,"x":20,"y":20,"w":10,"h":10,"active":false,"minimized":false,"stacking":1}]"#,
+     )
+     .is_none());
+ }
+@@ -119,7 +125,7 @@ fn rejects_duplicate_tokens() {
+ #[test]
+ fn rejects_multiple_active_records() {
+     assert!(parse_snapshot(
+-        r#"[{"token":41,"pid":1200,"x":0,"y":0,"w":10,"h":10,"active":true,"minimized":false,"stacking":0},{"token":42,"pid":1300,"x":20,"y":20,"w":10,"h":10,"active":true,"minimized":false,"stacking":1}]"#,
++        r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":1200,"x":0,"y":0,"w":10,"h":10,"active":true,"minimized":false,"stacking":0},{"id":"{00000000-002a-4000-8000-000000000000}","pid":1300,"x":20,"y":20,"w":10,"h":10,"active":true,"minimized":false,"stacking":1}]"#,
+     )
+     .is_none());
+ }
+@@ -127,33 +133,42 @@ fn rejects_multiple_active_records() {
+ #[test]
+ fn refuses_when_a_different_token_is_active() {
+     let snapshot = parse_snapshot(
+-        r#"[{"token":41,"pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3},{"token":42,"pid":1300,"x":0,"y":0,"w":800,"h":600,"active":true,"minimized":false,"stacking":4}]"#,
++        r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":1200,"x":100,"y":80,"w":800,"h":600,"active":false,"minimized":false,"stacking":3},{"id":"{00000000-002a-4000-8000-000000000000}","pid":1300,"x":0,"y":0,"w":800,"h":600,"active":true,"minimized":false,"stacking":4}]"#,
+     )
+     .unwrap();
+ 
+     assert_eq!(
+-        require_active_target(&snapshot, 41),
++        require_active_target(&snapshot, token(41)),
+         Err(CorrelationError::WrongActiveTarget)
+     );
+ }
+ 
+ #[test]
+-fn raw_kwin_input_is_refused_before_dispatch() {
+-    assert!(
+-        !available(),
+-        "focus-bound KWin input must not be advertised as safe"
+-    );
++fn reads_desktop_buffer_and_x11_identity() {
++    let snapshot = parse_snapshot(
++        r#"[{"id":"{00000000-0029-4000-8000-000000000000}","pid":1200,"x":100,"y":80,"w":800,"h":600,"bx":70,"by":60,"bw":860,"bh":660,"active":true,"minimized":false,"stacking":3,"here":false,"x11":4194316}]"#,
++    )
++    .unwrap();
+ 
++    assert_eq!(snapshot[0].buffer, (70, 60, 860, 660));
++    assert!(!snapshot[0].on_current_desktop);
++    assert_eq!(snapshot[0].x11_window, Some(4_194_316));
++    assert_eq!(require_active_target(&snapshot, token(41)), Ok(()));
++}
++
++#[test]
++fn nothing_is_sent_outside_a_kde_session() {
++    // No KWin answers here: the adapter must say so and never run the focus-bound body.
++    if std::env::var_os("KDE_FULL_SESSION").is_some() {
++        return;
++    }
++    assert!(!available() || std::env::var("XDG_CURRENT_DESKTOP").is_ok());
+     let called = std::cell::Cell::new(false);
+-    let error = with_focused_window(1200, 41, || {
++    let result = with_focused_window(1200, token(41), || {
+         called.set(true);
+         Ok(())
+-    })
+-    .expect_err("focus-bound KWin input must refuse");
+-
+-    assert!(
+-        !called.get(),
+-        "input body must not run on the focus-only KWin path"
+-    );
+-    assert!(error.to_string().contains("target-bound KWin input path"));
++    });
++    if std::env::var("XDG_CURRENT_DESKTOP").is_err() {
++        assert!(result.is_err() && !called.get(), "input body must not run without KWin's confirmation");
++    }
+ }
 diff --git a/libs/cua-driver/rust/crates/platform-macos/src/ax/activity.rs b/libs/cua-driver/rust/crates/platform-macos/src/ax/activity.rs
 new file mode 100644
 index 0000000..26d8841
@@ -12906,7 +14552,7 @@ index 8e9c373..e7d6735 100644
 +passed. The Mako Linux release includes this helper and its installer alongside
 +the driver; installation into the user's running Shell remains explicit.
 diff --git a/libs/cua-driver/wayland-helper/winrects@cua/extension.js b/libs/cua-driver/wayland-helper/winrects@cua/extension.js
-index 743acc2..c5a1ebc 100644
+index 743acc2..0e0f955 100644
 --- a/libs/cua-driver/wayland-helper/winrects@cua/extension.js
 +++ b/libs/cua-driver/wayland-helper/winrects@cua/extension.js
 @@ -8,10 +8,12 @@ import * as Main from 'resource:///org/gnome/shell/ui/main.js';
@@ -12922,7 +14568,99 @@ index 743acc2..c5a1ebc 100644
  <method name="Capture"><arg type="s" direction="out" name="png_base64"/></method>
  <method name="Activate"><arg type="u" direction="in" name="id"/><arg type="b" direction="out" name="activated"/></method>
  <method name="MoveCursor"><arg type="i" direction="in" name="x"/><arg type="i" direction="in" name="y"/></method>
-@@ -708,7 +710,9 @@ export default class WinRectsExtension extends Extension {
+@@ -678,9 +680,90 @@ function drawBadgeChip(cr, glyph, filled, fillColor) {
+   }
+ }
+ 
++// Everything here acts inside the compositor (window pixels, activation), so it answers one caller only: the driver
++// this helper was installed for, whose whole path its installer wrote into the `driver` file beside this one. The
++// caller is found from the bus (its pid) and from the kernel (that pid's executable). The driver asks through `gdbus`,
++// a child it starts, so a `gdbus` whose parent is that driver is the driver asking. `GetVersion` alone answers
++// anyone: it says only that the helper is running, which the installer's own state check reads.
++function executableOf(pid) {
++  try {
++    return GLib.file_read_link(`/proc/${pid}/exe`);
++  } catch (_error) {
++    return null;
++  }
++}
++
++function parentOf(pid) {
++  try {
++    const [ok, bytes] = GLib.file_get_contents(`/proc/${pid}/stat`);
++    if (!ok) return 0;
++    // The fields after the command's closing parenthesis: state, then the parent's pid.
++    const text = new TextDecoder().decode(bytes);
++    return Number(text.slice(text.lastIndexOf(')') + 2).split(' ')[1]) || 0;
++  } catch (_error) {
++    return 0;
++  }
++}
++
++export function callerIsDriver(pid, driver, executable = executableOf, parent = parentOf) {
++  if (!driver || !pid) return false;
++  const program = executable(pid);
++  if (program === driver) return true;
++  return Boolean(program) && program.split('/').pop() === 'gdbus' && executable(parent(pid)) === driver;
++}
++
+ export default class WinRectsExtension extends Extension {
++  _installedDriver() {
++    try {
++      const [ok, bytes] = GLib.file_get_contents(`${this.path}/driver`);
++      return ok ? new TextDecoder().decode(bytes).trim() : '';
++    } catch (_error) {
++      return '';
++    }
++  }
++  _callerPid(sender) {
++    return new Promise((resolve) => {
++      Gio.DBus.session.call(
++        'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'GetConnectionUnixProcessID',
++        new GLib.Variant('(s)', [sender]), new GLib.VariantType('(u)'), Gio.DBusCallFlags.NONE, 1000, null,
++        (connection, result) => {
++          try {
++            resolve(connection.call_finish(result).deepUnpack()[0]);
++          } catch (_error) {
++            resolve(0);
++          }
++        });
++    });
++  }
++  // Each method of the interface behind the caller check. A method written to answer its own invocation (`…Async`)
++  // is handed it; a plain one has its return value sent, in the interface's own signature.
++  _gated() {
++    const gate = {};
++    for (const method of Gio.DBusNodeInfo.new_for_xml(IFACE).interfaces[0].methods) {
++      const signature = `(${method.out_args.map((arg) => arg.signature).join('')})`;
++      gate[`${method.name}Async`] = async (params, invocation) => {
++        try {
++          if (method.name !== 'GetVersion' &&
++              !callerIsDriver(await this._callerPid(invocation.get_sender()), this._installedDriver())) {
++            invocation.return_dbus_error('org.cua.WinRects.NotAllowed',
++              "This helper answers only the computer control driver it was installed for");
++            return;
++          }
++          if (this[`${method.name}Async`]) {
++            await this[`${method.name}Async`](params, invocation);
++            return;
++          }
++          const value = this[method.name](...params);
++          invocation.return_value(method.out_args.length ? new GLib.Variant(signature, [value]) : null);
++        } catch (error) {
++          invocation.return_dbus_error('org.cua.WinRects.Failed', String(error));
++        }
++      };
++    }
++    return gate;
++  }
+   enable() {
+-    this._impl = Gio.DBusExportedObject.wrapJSObject(IFACE, this);
++    this._impl = Gio.DBusExportedObject.wrapJSObject(IFACE, this._gated());
+     this._impl.export(Gio.DBus.session, '/org/cua/WinRects');
+     this._nameId = Gio.bus_own_name(
+       Gio.BusType.SESSION,
+@@ -708,7 +791,9 @@ export default class WinRectsExtension extends Extension {
      this._cursor.connect('repaint', (area) => {
        const cr = area.get_context();
        const duration = ACTION_DURATIONS[this._action] ?? 1.6;
@@ -12933,7 +14671,7 @@ index 743acc2..c5a1ebc 100644
        const progress = (elapsed % duration) / duration;
        const floatProgress = (elapsed % FLOAT_DURATION) / FLOAT_DURATION;
        cr.save();
-@@ -764,8 +768,17 @@ export default class WinRectsExtension extends Extension {
+@@ -764,8 +849,17 @@ export default class WinRectsExtension extends Extension {
      this._cursorY = null;
      this._badgeRevealedAt = null;
      this._modifierFadeAt = null;
@@ -12952,7 +14690,7 @@ index 743acc2..c5a1ebc 100644
        const now = nowSeconds();
        if (this._endingAt !== null && now >= this._endingAt) this._setCursorState('idle', '', '');
        if (
-@@ -773,7 +786,7 @@ export default class WinRectsExtension extends Extension {
+@@ -773,7 +867,7 @@ export default class WinRectsExtension extends Extension {
          now - this._actionStarted >= ACTION_DURATIONS[this._action]
        )
          this._setCursorState('idle', '', '');
@@ -12961,7 +14699,7 @@ index 743acc2..c5a1ebc 100644
        let labelAlpha = this._badgeRevealedAt === null ? 0 : 1;
        if (this._badgeRevealedAt !== null) {
          const badgeElapsed = now - this._badgeRevealedAt;
-@@ -818,6 +831,15 @@ export default class WinRectsExtension extends Extension {
+@@ -818,6 +912,15 @@ export default class WinRectsExtension extends Extension {
            this._badge.hide();
          }
        }
@@ -12977,16 +14715,16 @@ index 743acc2..c5a1ebc 100644
        return GLib.SOURCE_CONTINUE;
      });
    }
-@@ -851,7 +873,7 @@ export default class WinRectsExtension extends Extension {
+@@ -851,7 +954,7 @@ export default class WinRectsExtension extends Extension {
      }
    }
    GetVersion() {
 -    return 8;
-+    return 11;
++    return 12;
    }
    GetRects() {
      const actors = global.get_window_actors();
-@@ -884,6 +906,7 @@ export default class WinRectsExtension extends Extension {
+@@ -884,6 +987,7 @@ export default class WinRectsExtension extends Extension {
          buffer_x: buffer.x,
          buffer_y: buffer.y,
          focused: focusedWindow === w,
@@ -12994,7 +14732,7 @@ index 743acc2..c5a1ebc 100644
          minimized,
          visible: Boolean(actor?.visible) && !minimized,
          stacking,
-@@ -891,6 +914,52 @@ export default class WinRectsExtension extends Extension {
+@@ -891,6 +995,52 @@ export default class WinRectsExtension extends Extension {
      }
      return JSON.stringify(out);
    }
@@ -13047,7 +14785,7 @@ index 743acc2..c5a1ebc 100644
    async CaptureAsync(_params, invocation) {
      try {
        const shooter = new Shell.Screenshot();
-@@ -910,6 +979,10 @@ export default class WinRectsExtension extends Extension {
+@@ -910,6 +1060,10 @@ export default class WinRectsExtension extends Extension {
        invocation.return_dbus_error('org.cua.WinRects.CaptureFailed', String(error));
      }
    }
@@ -13058,7 +14796,7 @@ index 743acc2..c5a1ebc 100644
    ActivateAsync([id], invocation) {
      const target = global
        .get_window_actors()
-@@ -919,9 +992,15 @@ export default class WinRectsExtension extends Extension {
+@@ -919,9 +1073,15 @@ export default class WinRectsExtension extends Extension {
        invocation.return_value(new GLib.Variant('(b)', [false]));
        return;
      }
@@ -13076,7 +14814,7 @@ index 743acc2..c5a1ebc 100644
        return GLib.SOURCE_REMOVE;
      });
    }
-@@ -972,6 +1051,7 @@ export default class WinRectsExtension extends Extension {
+@@ -972,6 +1132,7 @@ export default class WinRectsExtension extends Extension {
        this._setCursorState(action, delivery, target);
      } else if (this._action === action && !ONE_SHOT_ACTIONS.has(action)) {
        this._endingAt = nowSeconds() + 0.4;
@@ -13084,7 +14822,7 @@ index 743acc2..c5a1ebc 100644
      }
    }
    SetSessionLabel(label) {
-@@ -1012,6 +1092,7 @@ export default class WinRectsExtension extends Extension {
+@@ -1012,6 +1173,7 @@ export default class WinRectsExtension extends Extension {
      this._badgeRevealedAt = nowSeconds();
      this._badge.opacity = 255;
      this._badge.show();
@@ -13092,7 +14830,7 @@ index 743acc2..c5a1ebc 100644
    }
    _setCursorState(action, delivery, target) {
      this._action = ACTIONS.has(action) ? action : 'idle';
-@@ -1028,6 +1109,7 @@ export default class WinRectsExtension extends Extension {
+@@ -1028,6 +1190,7 @@ export default class WinRectsExtension extends Extension {
      this._actionStarted = nowSeconds();
      this._endingAt = null;
      if (this._cursor) this._cursor.queue_repaint();
@@ -13101,7 +14839,7 @@ index 743acc2..c5a1ebc 100644
        this._positionBadge(this._cursorX, this._cursorY, 0);
    }
 diff --git a/libs/cua-driver/wayland-helper/winrects@cua/metadata.json b/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
-index 3faf86b..280788c 100644
+index 3faf86b..897dead 100644
 --- a/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
 +++ b/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
 @@ -3,5 +3,5 @@
@@ -13109,5 +14847,5 @@ index 3faf86b..280788c 100644
    "description": "Expose window geometry, capture, cursor, and verified activation for cua-driver on Wayland.",
    "shell-version": ["45", "46", "47", "48", "49", "50"],
 -  "version": 8
-+  "version": 11
++  "version": 12
  }

@@ -53,37 +53,148 @@ sh scripts/linux-control/run-desktop.sh x11|sway|gnome|kde|kde6 <root> <driver p
 ```
 
 `<root>` needs Linux `node_modules`; on a Mac, use a payload laid out like the
-checkout. The GNOME and KDE desktops answer the portal's consent dialogs with
+checkout. The GNOME and KDE 6 desktops answer the portal's consent dialogs with
 `portal-consent.py` through AT-SPI and log each answer, so a restored session
-shows none. `linux-desktop-control.yml` runs all five on x64.
+shows none. The session's own logs (compositor, portal, consent answerer) are
+kept beside the report in `logs-<kind>/`. `linux-desktop-control.yml` runs all
+five on x64. `MAKO_RECORD_LOOPS=N` repeats the recording N times, and
+`MAKO_DESKTOP_CPUS=N` with `MAKO_DESKTOP_LOAD=N` hold the container to N
+processors beside N busy loops, for an intermittent failure's count.
 
-Coverage on 2026-11-20 (driver 0.28.2+mako.29; Ubuntu 24.04 images, KDE 6.3 on
-Debian 13):
+Coverage on 2026-11-21 (driver 0.28.2+mako.32; Ubuntu 24.04 images, KDE Plasma
+6.7 on Debian testing):
 
-| | X11 (Openbox) | GNOME 46 Wayland | KDE KWin 5.27 and 6.3 Wayland | wlroots (Sway 1.9) |
-| --- | --- | --- | --- | --- |
-| Window list | EWMH | Shell helper | KWin; native apps without AT-SPI (foot) missing | Sway IPC |
-| Window screenshot | yes | yes | refused (surface identity unproven) | yes, XWayland too |
-| AT-SPI read, set value, press | yes | yes | yes | yes |
-| Focus and foreground keys and clicks | yes | libei, after one RemoteDesktop consent | refused: no verified activation | yes (keys through `wtype`), XWayland too |
-| XWayland app | n/a | yes | AT-SPI only | yes |
-| Clipboard | X selections | yes | yes | wl data-control |
-| Launch by desktop entry | yes | yes | yes | yes |
-| Live video (helper) | XDamage + XComposite | portal, consent once, restored | portal declines in headless KWin | portal (xdpw), still screen from the Screenshot portal |
-| Recording to MP4 | window | shared monitor | refused (portal declines) | shared monitor |
+| | X11 (Openbox) | GNOME 46 Wayland | KDE Plasma 6.7 Wayland | KDE Plasma 5.27 Wayland | wlroots (Sway 1.9) |
+| --- | --- | --- | --- | --- | --- |
+| Window list | EWMH | Shell helper | KWin script | KWin script | Sway IPC |
+| Window screenshot | yes | yes | KWin's own capture, XWayland too | KWin's own capture, XWayland too | yes, XWayland too |
+| AT-SPI read, set value, press | yes | yes | yes | yes | yes |
+| Focus and foreground keys and clicks | yes | libei, after one RemoteDesktop consent | KWin activation and libei, after one RemoteDesktop consent | activation only: its portal has no libei, input is refused and says so | yes (keys through `wtype`), XWayland too |
+| XWayland app | n/a | yes | yes | AT-SPI and screenshot | yes |
+| Clipboard | X selections | yes | yes | yes | wl data-control |
+| Launch by desktop entry | yes | yes | yes | yes | yes |
+| Live video (helper) | XDamage + XComposite | portal, consent once, restored | portal, consent once, restored | portal; the person's consent is not automated here | portal (xdpw), still screen from the Screenshot portal |
+| Recording to MP4 | window | shared monitor | shared monitor | shared monitor, as live video | shared monitor |
+| Pointer in the recording | drawn in from the driver's journal | the screen's own, pixel-checked | the screen's own, pixel-checked | not run | the screen's own, pixel-checked |
 
 Idle cost of live video, 5 s with nothing changing: 0 frames and 0 CPU on X11,
-Sway and GNOME, with the driver's GNOME agent cursor at rest (helper v11). The
-Sway image builds xdg-desktop-portal-wlr 0.7.1 with shared-memory screencopy
-allowed, since Ubuntu's refuses a GPU-less compositor, and installs `wtype`,
-`grim` and the GTK portal backend, as a Sway desktop has them. Headless KWin
-offers no target-addressable activation and no screen cast, in 5.27 and 6.3
-alike: the KDE portal backend reports that KWin's `zkde_screencast_unstable_v1`
-is not there, with KWin's screencast plugin installed (`kwin-common`), its
-service cache built and its permission checks off, on the virtual backend with
-QPainter compositing. OpenGL compositing did not come up in a GPU-less
-container, so whether a Plasma session on a real or virtual GPU grants the
-portal is still unproven.
+Sway, GNOME and KDE 6, with the driver's GNOME agent cursor at rest (helper
+v11). The Sway image builds xdg-desktop-portal-wlr 0.7.1 with shared-memory
+screencopy allowed, since Ubuntu's refuses a GPU-less compositor, and installs
+`wtype`, `grim` and the GTK portal backend, as a Sway desktop has them.
+
+### KDE
+
+Nothing is installed into KWin. The driver hands KWin one short script per
+request over D-Bus (`org.kde.kwin.Scripting`), which lists the windows with
+their geometry, activates one by KWin's own id when asked, and reports back to
+the driver alone (0009 in `vendor/cua-driver/README.md`). A window's pixels are
+KWin's own capture of that window (`org.kde.KWin.ScreenShot2.CaptureWindow`),
+which KWin gives only to a program whose desktop entry asks for it. The host
+never writes that entry on its own: Settings shows "Window capture" under
+Computer use with one action, "Allow window capture", which writes
+`~/.local/share/applications/app.mako.computer-control.desktop` for the driver
+(hidden from the app menu), and "Remove", which deletes it
+(`desktop-grants.ts`). Until it is allowed, a screenshot is refused and the
+refusal tells the agent to ask the person for that action by name. The probe
+takes that refused screenshot first, then allows capture through the same host
+method Settings calls.
+
+KWin composites with OpenGL on any real session, and its screen cast and window
+capture exist only then. Headless, that is the whole difference between a KDE
+that shares its screen and one that does not, which the earlier coverage could
+not show:
+
+- The KDE portal backend binds KWin's screen cast only when KWin finds the
+  backend's desktop entry in its service cache, which needs an applications
+  menu (`XDG_MENU_PREFIX=plasma-`, from `plasma-workspace`), and its share
+  dialog needs `plasma-workspace`'s QML modules.
+- With those in place the backend answers "OpenGL compositing is required for
+  screencasting" under QPainter compositing.
+- KWin 5.27's virtual backend gets OpenGL from Mesa's surfaceless EGL
+  (llvmpipe), with no device: `KWIN_COMPOSE=O2ES`. XWayland then needs
+  `XWAYLAND_NO_GLAMOR=1`.
+- KWin 6's virtual backend takes OpenGL only from a DRM device, which a machine
+  with no GPU has in the kernel's `vgem` (`modprobe vgem`; `run-desktop.sh`
+  hands it to the container). From kernel 6.16 `vgem` sits on the faux bus,
+  which libdrm knows from 2.4.126 and KWin from 6.7: Debian 13's KWin 6.3 finds
+  no device there, so the `kde6` image is Debian testing's Plasma 6.7. A
+  machine without `vgem` (Docker on a Mac) runs `kde6` under QPainter, where
+  screenshots, live video and recording fail and everything else passes.
+
+What a person on KDE gets:
+
+- **Plasma 6.1 or later:** everything in the table. The first pointer or
+  keyboard action shows KDE's "Remote Control" dialog and the first live video
+  or recording its "Share screen" dialog, each once (both keep a restore
+  token).
+- **Plasma 5.27:** windows, screenshots, accessibility actions, clipboard,
+  launch and activation, and live video and recording after the same share
+  dialog. Its RemoteDesktop portal backend (version 1) has no libei
+  connection, so pointer and keyboard input is refused at once (40 ms, no
+  dialog) with "libei input is unavailable: ... this desktop's RemoteDesktop
+  portal (version 1) hands out no libei connection; pointer and keyboard input
+  needs KDE Plasma 6.1 or GNOME 45 or later". A window's bounds and screenshot
+  are its client surface; for an X11 app under a KWin title bar, 5.27 does not
+  say where the client lies in its frame, so its bounds are the frame and its
+  screenshot the client alone. Settings says the same under Computer use:
+  "Clicks and typing: Upgrade to KDE Plasma 6.1 or later for these." Its share dialog
+  (Qt 5 on Wayland) does not appear on the accessibility bus in this desktop,
+  so the consent answerer cannot press it: live video and recording are listed
+  as known gaps for `kde`, and are the same portal path `kde6` passes. KWin
+  5.27 does create the stream: the dialog's own preview of the screen is drawn
+  from it.
+- **When the screen is never shared** (the dialog unanswered for a minute, or
+  declined): the recording's start fails with "The desktop's screen sharing
+  request wasn't answered within a minute. Ask the person to answer its share
+  dialog, then start the recording again; no recording was made." or "The
+  person didn't share their screen; no recording was made."
+
+### GNOME
+
+GNOME's window list, screenshots, activation and agent cursor come from the
+driver's Shell helper (`wayland-helper/winrects@cua`), an extension that lets
+Mako list and activate windows. Nothing installs it on its own. Settings shows
+"Shell helper" under Computer use with "Install helper", which copies it into
+`~/.local/share/gnome-shell/extensions/` with the driver's whole path beside it,
+and enables it through GNOME's own `gnome-extensions` tool, which touches that
+one entry. Without the tool the host adds the entry to the printed list itself,
+and only when the list holds nothing but plain quoted ids: one printed with a
+double quote or a backslash is never rewritten, and the row says so. The helper
+answers only that driver (it checks its caller's executable; version 12), and
+its version to anyone. Where GNOME has user extensions turned off the row says
+so, with "Turn on user extensions". The Shell loads a new extension only at
+login, so the row then reads "Log out and back in once to finish", and
+"Installed" once the helper of that version answers on the session bus.
+"Uninstall" removes both. Without it GNOME lists windows through AT-SPI alone
+and refuses screenshots and foreground input, and the refusal names "Install
+helper" for the agent to ask for. A driver at a path that is not plain letters,
+digits and `/._+-` gets neither grant, on KDE or GNOME, and the row says why.
+This desktop installs it the same way:
+`desktop-grant.mjs` runs the host's grant before the Shell starts, and the
+probe then finds it granted.
+
+A recording's start now waits for the portal's answer, not three seconds: on a
+loaded machine a restored answer can come later than that, and a short
+recording stopped before it had no picture ("The capture sent no picture"). The
+Shell is one thread, and while it starts a screen cast an activation asked of
+its helper went unanswered and was refused after 800 ms; it is now asked again
+inside three seconds (0009). 300 recordings in a row on 2 processors beside 2
+busy loops: 300 of 300 on arm64 before either change and 300 of 300 on an x64
+runner with both, so neither failure was reproduced; both changes close a
+window that the code plainly left open.
+
+### What is not measured
+
+- **DMA-BUF.** Every desktop here composites in software, so the portal hands
+  the helper shared memory. The helper also maps a linear DMA-BUF (no modifier
+  offered), which a compositor on a GPU may send instead: that path is
+  untested, and a GPU's own formats (tiled, NV12) are not negotiated.
+- **A pointer moving over a still screen.** A compositor sends a picture when
+  the content changes; on wlroots a pointer that only moves is in the next
+  picture that something else causes.
+- **Fractional scaling and more than one monitor.** One 1280 by 800 screen at
+  scale 1 throughout.
 
 ## Recording worker without a desktop
 

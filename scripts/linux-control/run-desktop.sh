@@ -20,10 +20,26 @@ image="mako-linux-desktop:$target"
 docker build -q -t "$image" --target "$target" - <"$root/scripts/linux-control/Dockerfile.desktop" >/dev/null
 name="mako-linux-desktop-$kind-$$"
 trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
-docker run --name "$name" --network none --user root -e HOME=/home/person \
+# KWin 6 composites with OpenGL only on a DRM device, and its screen cast and window capture need OpenGL: vgem is
+# that device on a machine with no GPU (`modprobe vgem`), given alone so KWin picks no other. KWin 5.27 needs none.
+devices=""
+for card in /sys/class/drm/card[0-9]*; do
+  case "$(readlink -f "$card/device" 2>/dev/null)" in */vgem)
+    devices="--device /dev/dri/${card##*/}"
+    for node in "$card"/device/drm/renderD*; do [ ! -e "/dev/dri/${node##*/}" ] || devices="$devices --device /dev/dri/${node##*/}"; done
+    ;;
+  esac
+done
+# MAKO_DESKTOP_CPUS=N holds the container to N processors and MAKO_DESKTOP_LOAD=N runs N busy loops beside the
+# desktop: a small, loaded machine, for the loops that hold an intermittent failure to a count.
+cpus=""
+[ -z "${MAKO_DESKTOP_CPUS:-}" ] || cpus="--cpus $MAKO_DESKTOP_CPUS"
+# shellcheck disable=SC2086
+docker run --name "$name" --network none --user root -e HOME=/home/person $devices $cpus -e MAKO_KWIN_COMPOSE="${MAKO_KWIN_COMPOSE:-}" \
+  -e MAKO_DESKTOP_LOAD="${MAKO_DESKTOP_LOAD:-0}" \
   -v "$root:/repo:ro" -v "$driver:/driver:ro" -v "$evidence:/evidence" \
   -e MAKO_EVIDENCE=/evidence -e MAKO_DRIVER_DIR=/driver -e MAKO_VIDEO_HELPER=/tmp/mako-video \
-  -e MAKO_CUA_EMBEDDED=/repo/build/cua-embedded.mjs -e MAKO_RECORD_LOOPS="${MAKO_RECORD_LOOPS:-0}" -e MAKO_FIRST_FRAME_LOOPS="${MAKO_FIRST_FRAME_LOOPS:-0}" -e MAKO_STILL_LOOPS="${MAKO_STILL_LOOPS:-0}" \
+  -e MAKO_CUA_EMBEDDED=/repo/build/cua-embedded.mjs -e MAKO_DESKTOP_GRANTS=/repo/build/desktop-grants.mjs -e MAKO_RECORD_LOOPS="${MAKO_RECORD_LOOPS:-0}" -e MAKO_FIRST_FRAME_LOOPS="${MAKO_FIRST_FRAME_LOOPS:-0}" -e MAKO_STILL_LOOPS="${MAKO_STILL_LOOPS:-0}" \
   "$image" sh -c '
     set -eu
     node /repo/scripts/build-video-helper.mjs --require --portal --output /tmp/mako-video
@@ -31,6 +47,12 @@ docker run --name "$name" --network none --user root -e HOME=/home/person \
     # GNOME without systemd-logind: with no seats, Mutter takes its dummy login manager.
     rmdir /run/systemd/seats 2>/dev/null || true
     mkdir -p /run/dbus && dbus-daemon --system --fork
-    exec runuser -u person -w HOME,MAKO_EVIDENCE,MAKO_DRIVER_DIR,MAKO_VIDEO_HELPER,MAKO_CUA_EMBEDDED,MAKO_RECORD_LOOPS,MAKO_FIRST_FRAME_LOOPS,MAKO_STILL_LOOPS -- \
-      sh /repo/scripts/linux-control/desktop-session.sh "$0"
+    for _ in $(seq 1 "$MAKO_DESKTOP_LOAD"); do (while :; do :; done) & done
+    code=0
+    runuser -u person -w HOME,MAKO_EVIDENCE,MAKO_DRIVER_DIR,MAKO_VIDEO_HELPER,MAKO_CUA_EMBEDDED,MAKO_DESKTOP_GRANTS,MAKO_RECORD_LOOPS,MAKO_FIRST_FRAME_LOOPS,MAKO_STILL_LOOPS,MAKO_KWIN_COMPOSE -- \
+      sh /repo/scripts/linux-control/desktop-session.sh "$0" || code=$?
+    # What the compositor, the portal and the consent answerer said, beside the report.
+    mkdir -p "/evidence/logs-$0" && cp /tmp/*.log "/evidence/logs-$0/" 2>/dev/null || true
+    chmod -R a+rX "/evidence/logs-$0" 2>/dev/null || true
+    exit "$code"
   ' "$kind"

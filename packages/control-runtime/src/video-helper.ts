@@ -109,10 +109,19 @@ export class VideoHelper {
   /** Settles once the helper exited and every unit it wrote was heard. */
   readonly exited: Promise<void>
   #exit!: () => void
+  /**
+   * Settles once the capture itself has begun: at once for a window or a display, and for the screen sharing portal
+   * when it answered (a restored answer in a moment, the person's own when they give it). It settles too when the
+   * helper ends without one, so nothing waits on a capture that will never begin.
+   */
+  readonly started: Promise<void>
+  #start!: () => void
 
   constructor(executable: string, source: VideoHelperSource, options: VideoHelperOptions, events: VideoHelperEvents) {
     this.#events = events
     this.exited = new Promise((resolve) => (this.#exit = resolve))
+    this.started = new Promise((resolve) => (this.#start = resolve))
+    if (source.kind !== "portal") this.#start()
     // The helper writes the portal's restore token there, as the person's alone.
     if (source.kind === "portal") mkdirSync(dirname(source.restore), { recursive: true, mode: 0o700 })
     const args = [
@@ -137,6 +146,7 @@ export class VideoHelper {
     this.#child.stdout.on("data", (chunk: Buffer) => this.#read(chunk))
     this.#child.stderr.on("data", (chunk: Buffer) => {
       this.#tail = (this.#tail + chunk.toString()).slice(-4096)
+      if (this.#tail.includes("mako-video: portal started")) this.#start()
     })
     this.#child.stdin.on("error", () => {})
     this.#child.on("error", (error) => this.#end(`The video helper couldn't start: ${error.message}`))
@@ -144,6 +154,7 @@ export class VideoHelper {
       const ended = /^ended: (.+)$/m.exec(this.#tail)?.[1]
       const last = this.#tail.trim().split("\n").filter((line) => !line.startsWith("{") && !line.startsWith("ended: ")).at(-1)
       this.#end(ended ?? (last ? `The video helper stopped: ${last}` : `The video helper exited (${code ?? signal})`))
+      this.#start()
       this.#exit()
     })
   }

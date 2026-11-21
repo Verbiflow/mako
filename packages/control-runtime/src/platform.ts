@@ -42,3 +42,16 @@ export function linuxDesktop(env: NodeJS.ProcessEnv = process.env, platform: Nod
         : "other"
   return { session: wayland ? "wayland" : "x11", compositor, xwayland: wayland && x11 }
 }
+
+/**
+ * What to add to a driver's refusal when the cause is something only the person can allow on their Linux desktop
+ * (`desktop-grants.ts` in the host): the one action, by the name Settings gives it. Empty for any other refusal.
+ */
+export function desktopAskHint(refusal: string, desktop: LinuxDesktop | undefined): string {
+  if (desktop?.session !== "wayland") return ""
+  if (desktop.compositor === "kde" && refusal.includes("org.kde.KWin.ScreenShot2"))
+    return ' Window capture isn\'t allowed on this KDE desktop yet: ask the person to press "Allow window capture" in Mako\'s Settings, under Computer use.'
+  if (desktop.compositor === "gnome" && /surface_identity_unproven|foreground_unavailable|no trusted Wayland compositor adapter/.test(refusal))
+    return ' GNOME needs Mako\'s Shell helper: ask the person to press "Install helper" in Mako\'s Settings, under Computer use, then log out and back in once.'
+  return ""
+}

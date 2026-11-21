@@ -3198,9 +3198,16 @@ MP4. A window by its X id gets its pointer from the driver's action journal,
 drawn in by the helper's `composite` mode (OpenH264 decodes the recording); a
 shared monitor is recorded with the screen's own pointer in the picture. No
 Linux video goes through FFmpeg, in Mako or in the driver's Linux build. The machine browser is never saved as a
-desktop person's browser. `scripts/linux-control/run-desktop.sh` proves X11,
-Sway, GNOME and KWin 5 and 6 with no FFmpeg installed; its README holds the
-coverage per compositor.
+desktop person's browser. On KDE the driver asks KWin itself, with nothing
+installed: a script per request for windows and exact activation, and KWin's
+own window capture. What KDE and GNOME ask of the person is never taken
+silently (`desktop-grants.ts`): Settings › Computer use offers "Allow window
+capture" (KWin's desktop entry for the driver) and "Install helper" (GNOME's
+Shell extension, running from the next login), each with its removal, through
+`mako:computer-permissions-request` and `-revoke`; a refusal for want of one
+names that action to the agent. `scripts/linux-control/run-desktop.sh`
+proves X11, Sway, GNOME and KDE Plasma 5.27 and 6.7 with no FFmpeg installed;
+its README holds the coverage per compositor and what each needs.
 
 Browser actions publish input-mode JSON Schemas (defaults optional, every
 field described, `$defs` kept) through `help`. Input is real:

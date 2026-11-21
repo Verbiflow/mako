@@ -3,6 +3,8 @@ set -eu
 mkdir -p "$XDG_RUNTIME_DIR" "$HOME/.local/share/gnome-shell/extensions/winrects@cua"
 chmod 700 "$XDG_RUNTIME_DIR"
 cp /helper/* "$HOME/.local/share/gnome-shell/extensions/winrects@cua/"
+# The helper answers only the driver named beside it, by its whole path.
+readlink -f /driver/cua-driver >"$HOME/.local/share/gnome-shell/extensions/winrects@cua/driver"
 export CUA_DRIVER_REQUIRE_FOCUSED_TARGET=1 CUA_DRIVER_PERMISSION_MODE=unrestricted
 export MAKO_RECORDING_DRIVER=/driver/cua-driver
 exec dbus-run-session -- sh -c '

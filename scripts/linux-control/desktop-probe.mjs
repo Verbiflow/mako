@@ -25,7 +25,10 @@ await mkdir(work, { recursive: true })
 await mkdir(evidence, { recursive: true })
 // The host's own module, bundled (README.md): the gate and environment a person's desktop gets.
 assert.ok(process.env.MAKO_CUA_EMBEDDED, "MAKO_CUA_EMBEDDED names the bundled cua-embedded module")
-const { CuaEmbedded } = await import(process.env.MAKO_CUA_EMBEDDED)
+const { CuaEmbedded, cuaDriverExecutable } = await import(process.env.MAKO_CUA_EMBEDDED)
+// What KDE and GNOME ask of the person is granted here by the host's own method, the one Settings calls.
+assert.ok(process.env.MAKO_DESKTOP_GRANTS, "MAKO_DESKTOP_GRANTS names the bundled desktop-grants module")
+const { desktopGrantContext, desktopPermissions, grantDesktopPermissions } = await import(process.env.MAKO_DESKTOP_GRANTS)
 const { readMp4 } = await import(new URL("../../packages/control-runtime/dist/mp4.js", import.meta.url).href)
 // Video never goes through FFmpeg: the run proves it with none to find.
 assert.equal(await run("sh", ["-c", "command -v ffmpeg ffprobe"]).then(() => "found", () => "none"), "none", "no FFmpeg on PATH")
@@ -49,7 +52,7 @@ async function step(name, fn, { optional = false, observe } = {}) {
     log({ name, ok: false, ms: Math.round(performance.now() - started), error: error instanceof Error ? error.message : String(error) })
     if (!optional) throw error
     // An action whose outcome is unknown holds the task until it observes again, as an agent must.
-    await (observe ?? afterFailure)?.().catch(() => undefined)
+    await (observe ?? afterFailure)?.().catch((failed) => log({ name: `${name}: observing after it`, ok: false, ms: 0, error: failed instanceof Error ? failed.message : String(failed) }))
     return undefined
   }
 }
@@ -140,6 +143,38 @@ try {
   afterFailure = () => cli(["observe", "--target-file", targetFile])
   report.launch = { pid: launched?.pid ?? null, fixturePid: fixture.pid }
 
+  const grants = desktopGrantContext(() => cuaDriverExecutable())
+  if (kind === "gnome")
+    await step("permissions: the Shell helper the host installed before this login is running", async () => {
+      const asked = await desktopPermissions(report.session, grants)
+      assert.deepEqual(asked, [{ id: "gnome-shell-helper", state: "granted" }])
+      return asked
+    })
+  if (kind === "gnome")
+    await step("permissions: the Shell helper refuses a caller that is not its driver", async () => {
+      const ask = (method) => run("gdbus", ["call", "--session", "--dest", "org.cua.WinRects", "--object-path", "/org/cua/WinRects", "--method", `org.cua.WinRects.${method}`]).then(({ stdout }) => stdout.trim(), (error) => String(error.stderr ?? error.message))
+      assert.match(await ask("GetVersion"), /uint32 \d+/, "its version answers anyone")
+      const refused = await ask("GetRects")
+      assert.match(refused, /NotAllowed/, refused.slice(0, 300))
+      return { refused: refused.trim().split("\n").at(-1).slice(0, 160) }
+    })
+  if (kind === "kde" || kind === "kde6") {
+    // Nothing allowed KWin's window capture yet: the screenshot is refused, and the refusal names the person's action.
+    await step("permissions: a screenshot before window capture is allowed names the action", async () => {
+      assert.equal((await desktopPermissions(report.session, grants))[0].state, "needed")
+      const refusal = await cli(["shot", "--target-file", targetFile, "--overwrite", "--output", join(evidence, `${kind}-refused.png`)]).then(() => "", (error) => String(error.message))
+      assert.match(refusal, /Allow window capture\\?" in Mako's Settings/, refusal.slice(0, 600))
+      return { refusal: refusal.slice(refusal.indexOf("Window capture"), refusal.indexOf("Window capture") + 160) }
+    }, { optional: true })
+    await step("permissions: allow window capture as Settings does", async () => {
+      await grantDesktopPermissions(report.session, grants)
+      const asked = await desktopPermissions(report.session, grants)
+      assert.equal(asked[0].state, "granted")
+      // KWin learns of the entry when its service cache next rebuilds, and the driver asks again after five seconds.
+      await delay(6000)
+      return asked
+    })
+  }
   await step("screenshot: the GTK window", async () => {
     const shot = await cli(["shot", "--target-file", targetFile, "--overwrite", "--output", join(evidence, `${kind}-window.png`)])
     assert.ok(shot.width > 100 && shot.height > 100, JSON.stringify(shot))
@@ -413,6 +448,75 @@ try {
     if (kind === "x11" && clicked === true) assert.ok(pointers > 0, "the click is drawn into the video")
     return { codec: video.codec, width: video.width, height: video.height, frames: video.packets.length, seconds: video.duration, bytes: (await stat(done.video)).size, pointerClick: clicked, journalTurns: turns, pointersDrawn: pointers, id: recording.id }
   })
+  // A shared screen's recording carries the screen's own pointer (the portal's embedded cursor). Two recordings, the
+  // real pointer moved to a different place during each and nothing clicked (one character of text changes, so a
+  // picture follows the move): the last picture of each, decoded by the helper, differs from the other around both
+  // places (a pointer was drawn there in one and not the other) and nearly nowhere else.
+  if (source?.kind === "portal")
+    await step("record: the pointer is in the shared screen's pictures", async () => {
+      const { mp4Units } = await import(new URL("../../packages/control-runtime/dist/mp4.js", import.meta.url).href)
+      const { default: sharp } = await import("sharp")
+      // Both places are in the fixture's own window as it lies now (more windows opened since it was first found),
+      // in its blank middle, so moving between them changes no focus and no hover.
+      const now = (await cli(["windows", "--pid", String(fixture.pid)])).windows.find((w) => w.window_id === window.window_id).bounds
+      const middle = { x: now.x + Math.round(now.width / 2), y: now.y + Math.round(now.height / 2) }
+      const places = [{ x: middle.x - 70, y: middle.y }, { x: middle.x + 70, y: middle.y }]
+      const pictures = []
+      for (const [index, place] of places.entries()) {
+        const receipt = await cli(["record", "start", "--target-file", targetFile, "--directory", join(work, "recordings"), "--fps", "15"])
+        await writeFile(join(work, "pointer.json"), JSON.stringify(receipt))
+        await delay(300)
+        await program(`return await control.native('move_cursor',{x:${place.x},y:${place.y},scope:'desktop'})`)
+        await delay(200)
+        // A compositor sends a picture when the screen's content changes, and a pointer moving over a still window
+        // may not count (wlroots): the text changes, through accessibility, and the picture after it has the pointer.
+        await program(`const w=control.window(${JSON.stringify(target)});await w.locator({role:'TextArea',name:'Exact text'}).setValue('pointer ${index}');return 1`)
+        await delay(600)
+        const done = await cli(["record", "stop", "--input", join(work, "pointer.json"), "--wait"])
+        assert.equal(done.status, "finished", JSON.stringify(done))
+        const video = await readMp4(done.video)
+        const jpeg = join(evidence, `${kind}-pointer-${index}.jpg`)
+        const child = spawn(executable, ["poster", jpeg, "--picture", "last", "--box", `${video.width}x${video.height}`], { stdio: ["pipe", "ignore", "pipe"] })
+        let said = ""
+        child.stderr.on("data", (bytes) => (said += bytes))
+        child.stdin.on("error", () => {})
+        for await (const unit of mp4Units(done.video)) {
+          const description = unit.description ?? new Uint8Array(0)
+          const body = Buffer.concat([Buffer.from([description.byteLength >> 8, description.byteLength & 0xff]), description, unit.data])
+          const header = Buffer.alloc(5)
+          header.write("V", 0, "latin1")
+          header.writeUInt32BE(body.byteLength, 1)
+          if (!child.stdin.write(Buffer.concat([header, body]))) await new Promise((drained) => child.stdin.once("drain", drained))
+        }
+        child.stdin.end()
+        const code = await new Promise((closed) => child.once("close", closed))
+        assert.equal(code, 0, `the helper decoded no last picture: ${said.trim().split("\n").at(-1)}`)
+        const { data, info } = await sharp(jpeg).raw().toBuffer({ resolveWithObject: true })
+        pictures.push({ data, info, frames: video.packets.length })
+      }
+      const [first, second] = pictures
+      assert.deepEqual([first.info.width, first.info.height], [second.info.width, second.info.height])
+      const { width, height, channels } = first.info
+      // Every desktop here is one 1280 by 800 screen; a recording of another size has its places scaled.
+      const scale = width / 1280
+      const differs = (x, y) => {
+        const at = (y * width + x) * channels
+        return Math.abs(first.data[at] - second.data[at]) + Math.abs(first.data[at + 1] - second.data[at + 1]) + Math.abs(first.data[at + 2] - second.data[at + 2]) > 96
+      }
+      const near = places.map(() => 0)
+      let elsewhere = 0
+      for (let y = 0; y < height; y++)
+        for (let x = 0; x < width; x++) {
+          if (!differs(x, y)) continue
+          const by = places.findIndex((place) => Math.abs(x - place.x * scale) <= 40 && Math.abs(y - place.y * scale) <= 40)
+          if (by < 0) elsewhere++
+          else near[by]++
+        }
+      assert.ok(near[0] >= 12 && near[1] >= 12, `a pointer is drawn at each place: ${JSON.stringify({ near, elsewhere, places, scale })}`)
+      assert.ok(elsewhere <= 600, `the pictures differ only by the pointer: ${JSON.stringify({ near, elsewhere, places })}`)
+      return { places, pointerPixels: near, otherPixels: elsewhere, size: [width, height], frames: pictures.map((picture) => picture.frames) }
+    }, { optional: true })
+
   // MAKO_FIRST_FRAME_LOOPS=N: on a still screen, N captures as they were (no fallback) and N with the Screenshot
   // portal's first frame, counting those that got no picture. It measures the lost first frame the fallback is for.
   const starts = Number(process.env.MAKO_FIRST_FRAME_LOOPS ?? 0)
@@ -488,23 +592,21 @@ const failed = report.operations.filter((operation) => !operation.ok).map((opera
 const unsupported = {
   x11: [],
   gnome: [],
-  sway: [
-    "xwayland: screenshot of the X11 GTK app's window",
-    "windows: find the foot window",
-  ],
+  sway: [],
+  // Plasma 5.27: its RemoteDesktop portal hands out no libei connection (that came with Plasma 6.1), so pointer and
+  // keyboard input is refused, and its Qt 5 share dialog is not on the accessibility bus for this desktop's consent
+  // answerer to press, so the screen is never shared here. Windows, activation and window capture are KWin's own.
   kde: [
-    "screenshot: the GTK window",
-    "focus: bring the GTK window to the front",
     "click: a pointer click on the GTK Save button (foreground, window pixels)",
-    "xwayland: screenshot of the X11 GTK app's window",
     "type: keys into xterm once it's focused (foreground)",
-    "windows: find the foot window",
+    "type: keys into foot once it's focused (foreground)",
     "live video: first frame, idle cost, frames under activity, its units as MP4",
     "live video: a second portal session restores the person's answer; its idle buffers",
     "record: start a recording of the GTK window",
+    "record: the pointer is in the shared screen's pictures",
   ],
+  kde6: [],
 }
-unsupported.kde6 = unsupported.kde
 const known = unsupported[kind]
 const regressions = failed.filter((name) => !known.includes(name))
 const nowPassing = known.filter((name) => report.operations.some((operation) => operation.name === name && operation.ok))

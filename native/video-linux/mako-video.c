@@ -15,8 +15,10 @@
 //   mako-video window <xid> [options]   one window, by its X id
 //   mako-video portal [options]         what the person shares through the ScreenCast portal (Wayland)
 //   mako-video frames [options]         the pictures on its input
-//   mako-video poster <out.jpg> [--box WxH]   the first picture of the H.264 on its input ('V' units), as a JPEG that
-//                                       fits the box: a video's poster, with no FFmpeg; exits 0 once it is written
+//   mako-video poster <out.jpg> [--box WxH] [--picture first|last]
+//                                       the first picture of the H.264 on its input ('V' units), as a JPEG that
+//                                       fits the box: a video's poster, with no FFmpeg; exits 0 once it is written.
+//                                       With `--picture last`, the last one, once its input ends.
 //   mako-video composite [options]      a recording's own H.264 under the transparent pictures on its input (its pointer):
 //                                       each 'F' RGBA picture is drawn over the newest 'V' unit decoded before it
 //   options: --fps N (30)  --bitrate BPS (from the size)  --box WxH (none)  --keyint N (0: only when asked)
@@ -103,6 +105,7 @@ static int compare(const void *a, const void *b) {
 static struct {
   enum { DISPLAY_SOURCE, WINDOW_SOURCE, FRAMES_SOURCE, PORTAL_SOURCE, COMPOSITE_SOURCE, POSTER_SOURCE } source;
   const char *poster;
+  int poster_last;
   Window window;
   int fps, bitrate, keyint, quality, threads, screen;
   int box_width, box_height;
@@ -1169,7 +1172,7 @@ static int commands(void) {
       result = video_unit(body, length);
     } else if (type == 'V' && options.source == POSTER_SOURCE) {
       result = video_unit(body, length);
-      if (!result && !poster_written) result = write_poster();
+      if (!result && !poster_written && !options.poster_last) result = write_poster();
     } else {
       return -1;
     }
@@ -1213,7 +1216,7 @@ static void summary(void) {
 }
 
 static int usage(void) {
-  fprintf(stderr, "usage: mako-video display|window <xid>|portal|frames|composite|poster <out.jpg>|features [--fps N] [--bitrate BPS] [--box WxH] [--keyint N] [--quality Q] [--threads N] [--content screen|camera] [--types monitor|window|any] [--restore FILE] [--consent-ms N]\n");
+  fprintf(stderr, "usage: mako-video display|window <xid>|portal|frames|composite|poster <out.jpg>|features [--fps N] [--bitrate BPS] [--box WxH] [--keyint N] [--quality Q] [--threads N] [--content screen|camera] [--types monitor|window|any] [--restore FILE] [--consent-ms N] [--picture first|last]\n");
   return 64;
 }
 
@@ -1256,6 +1259,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "--consent-ms")) options.consent_ms = atoi(value);
     else if (!strcmp(name, "--still")) options.still_screenshot = !strcmp(value, "screenshot") ? 1 : !strcmp(value, "screenshot-always") ? 2 : 0;
     else if (!strcmp(name, "--cursor")) options.embed_cursor = !strcmp(value, "embedded");
+    else if (!strcmp(name, "--picture")) options.poster_last = !strcmp(value, "last");
     else return usage();
   }
   if (arg != argc || options.fps < 1 || options.fps > 120 || !options.types || options.consent_ms < 1) return usage();
@@ -1364,7 +1368,10 @@ int main(int argc, char **argv) {
     if (pw && fds[1].revents) pw_loop_iterate(pw, 0);
 #endif
   }
-  if (options.source == POSTER_SOURCE) return poster_written ? 0 : 1;
+  if (options.source == POSTER_SOURCE) {
+    if (options.poster_last && !stopping) write_poster();
+    return poster_written ? 0 : 1;
+  }
   summary();
   close_encoder();
 #ifdef MAKO_PORTAL

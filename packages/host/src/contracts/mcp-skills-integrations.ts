@@ -188,6 +188,28 @@ export interface MakoComputerPermissions {
   accessibility: boolean
   screenRecording:
     "not-determined" | "denied" | "restricted" | "granted" | "unknown"
+  /**
+   * What a Linux desktop asks of the person, each with where it stands (`desktop-grants.ts`); absent elsewhere and
+   * where the desktop asks for nothing. While one is `needed` or `restart`, `screenRecording` is not granted.
+   */
+  desktop?: MakoDesktopPermission[]
+}
+
+/**
+ * - `kwin-window-capture` (KDE): KWin's own capture of a window, allowed by a desktop entry for Mako's driver.
+ * - `gnome-shell-helper` (GNOME): the Shell extension that lists and activates windows. `extensions-off` is
+ *   installed with GNOME's user extensions turned off, which the same action turns on; `restart` is installed and not
+ *   yet running: the Shell loads it at the person's next login.
+ * - `pointer-input` (KDE Plasma 5): `unavailable`, since its portal has no input connection; Plasma 6.1 has.
+ *
+ * `blocked` is a grant Mako won't make as things are, with why: the driver sits at a path that isn't plain letters,
+ * digits and `/._+-` (`driver-path`), or GNOME's extension list holds an entry Mako won't rewrite and GNOME's own
+ * `gnome-extensions` tool isn't installed (`extension-list`).
+ */
+export interface MakoDesktopPermission {
+  id: "kwin-window-capture" | "gnome-shell-helper" | "pointer-input"
+  state: "needed" | "extensions-off" | "restart" | "granted" | "unavailable" | "blocked"
+  reason?: "driver-path" | "extension-list"
 }
 
 /** Installed native computer-control driver against the release Mako verified. */

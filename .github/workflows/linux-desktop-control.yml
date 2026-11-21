@@ -1,7 +1,7 @@
 name: Linux desktop control
 
 # Mako's computer control on a person's Linux desktop: the host's embedded driver, a task's CLI and the video helper
-# on X11, Sway (wlroots), GNOME Shell and KWin 5 and 6 (Wayland), each a private desktop in a container on an x64 runner
+# on X11, Sway (wlroots), GNOME Shell and KWin 5.27 and 6.7 (Wayland), each a private desktop in a container on an x64 runner
 # (scripts/linux-control/run-desktop.sh). One JSON report per desktop, with each operation's time, is the evidence.
 on:
   workflow_dispatch:
@@ -16,6 +16,7 @@ on:
       - packages/host/src/control/cua-embedded.ts
       - packages/host/src/control/computer-permissions.ts
       - packages/host/src/control/index.ts
+      - packages/host/src/control/desktop-grants.ts
       - scripts/build-video-helper.mjs
       - scripts/linux-control/Dockerfile.desktop
       - scripts/linux-control/desktop-*
@@ -95,10 +96,19 @@ jobs:
           npm run build:control-runtime
           npx esbuild packages/host/src/control/cua-embedded.ts --bundle --platform=node --format=esm --tsconfig=tsconfig.json \
             --external:@mako/control-runtime/* --external:zod --outfile=build/cua-embedded.mjs
+          npx esbuild packages/host/src/control/desktop-grants.ts --bundle --platform=node --format=esm --tsconfig=tsconfig.json \
+            --external:@mako/control-runtime/* --external:zod --outfile=build/desktop-grants.mjs
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: linux-desktop-driver
           path: ${{ runner.temp }}/driver
+      # KWin 6 composites with OpenGL, which its screen cast and window capture need, only on a DRM device: vgem is
+      # the kernel's own, with no GPU behind it (run-desktop.sh hands it to the container).
+      - name: A DRM device for KWin
+        if: matrix.desktop == 'kde6'
+        run: |
+          sudo modprobe vgem
+          sudo chmod 666 /dev/dri/card* /dev/dri/renderD*
       - name: Run the ${{ matrix.desktop }} desktop
         run: |
           chmod 755 "$RUNNER_TEMP/driver/cua-driver"

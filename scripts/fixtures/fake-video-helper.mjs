@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Speaks mako-video's protocol for scripts/test-video-helper-protocol.ts: logs each command it reads to
 // $FAKE_VIDEO_LOG, answers a 'K' or an 'F' with a key unit, and for window 0 ends at once the way the real helper
-// does when it can't capture.
+// does when it can't capture. A portal source says when its portal answered, as the real helper does.
 import { appendFileSync } from "node:fs"
 import { encodeControlVideo } from "../../packages/control-runtime/dist/contracts/control-video.js"
 
@@ -20,7 +20,13 @@ const unit = (key, width = 64, height = 32, tag = ++sequence, capturedAt = Date.
   length.writeUInt32BE(packet.byteLength)
   process.stdout.write(Buffer.concat([length, packet]))
 }
-if (source !== "frames") unit(true)
+// A portal answers when it does: $FAKE_PORTAL_ANSWER_MS later, as a loaded desktop's or a person's own answer comes.
+const answer = source === "portal" ? Number(process.env.FAKE_PORTAL_ANSWER_MS ?? 0) : 0
+if (source !== "frames")
+  setTimeout(() => {
+    if (source === "portal") process.stderr.write("mako-video: portal started in 1 ms (node 1, no token, cursor embedded)\n")
+    unit(true)
+  }, answer)
 let buffer = Buffer.alloc(0)
 process.stdin.on("data", (chunk) => {
   buffer = Buffer.concat([buffer, chunk])

@@ -3,13 +3,71 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.31`. +31 is +30 with `0008-windows-daemon-proof.patch` and the
-version. +30 is +29 with `0007-linux-no-ffmpeg.patch` and the
+`0.28.2+mako.32`. +32 is +31 with `0009-kde-desktop.patch` and the version.
++31 is +30 with `0008-windows-daemon-proof.patch` and the version. +30 is +29 with `0007-linux-no-ffmpeg.patch` and the
 version. +29 is +28 with `0005-windows-driver.patch` and the version
 (the patch was written beside 0006 as +27 and landed after it, so it is the
 later release despite its number). +28 is +26 with `0006-linux-desktop.patch`
 and the version. +26 is +25 with `0004-stable-wayland-seat-pointer.patch` and
 the version.
+
+### 0009: KDE, and a busy GNOME Shell
+
+Upstream lists KWin windows only through an in-process KWin effect it does not
+ship (`org.cua.KWinTarget`), and refuses every foreground action there. KWin
+runs scripts a session client hands it (`org.kde.kwin.Scripting`, Plasma 5.27
+and 6), so `wayland/kwin_helper.rs` is now that adapter with nothing installed:
+
+- **Windows and activation.** One short script per request reports every
+  window (KWin's id, pid, the client surface's geometry and its buffer's,
+  active, minimized, stacking, desktop, the X11 id of an XWayland client) to
+  an object the driver
+  exports, with `callDBus`; asked to, it first activates one window by KWin's
+  id. The reply is taken only from the bus name that owns `org.kde.KWin`, whose
+  process must be the system's `kwin_wayland` under this user, and only with
+  the request's nonce. A window's id in the driver is the first 48 bits of
+  KWin's UUID under a tag, above every X11 and AT-SPI id.
+- **Foreground input** is GNOME's contract: activate the exact window, read
+  back from KWin that it is the active one (an X11 client's activation lands a
+  moment later, so the read-back waits up to a second), send the focus-bound
+  libei input, give focus back to the window that had it.
+- **A window's pixels** come from `org.kde.KWin.ScreenShot2.CaptureWindow` by
+  KWin's id, asked of the verified KWin's own bus name: a covered window is
+  captured whole, and nothing else's pixels are in it. Plasma 5.27 hands back
+  the client's whole buffer, with the shadow a GTK app draws around itself,
+  which is cut to the window inside it. KWin gives that only to
+  a program whose desktop entry asks for it
+  (`X-KDE-DBUS-Restricted-Interfaces=org.kde.KWin.ScreenShot2`), which Mako's
+  host writes for the driver only when the person allows it
+  (`desktop-grants.ts`). KWin learns of a new entry when its service cache next
+  rebuilds, so the first refusals are retried for a bounded time (2.8 s) and a
+  standing refusal is remembered for 5 s and named in the error.
+- **libei** says why it is unavailable: its worker's own error is kept and
+  answered at once to every call, waiting or later (it was only logged; the
+  first caller waited 20 s and the rest got "channel closed"). A RemoteDesktop
+  portal before version 2 is refused before any session is asked for, so no
+  dialog is put in front of the person for input that cannot come; on KDE the
+  backend's own version is read, since xdg-desktop-portal reports its own 2
+  over Plasma 5's 1.
+- **GNOME Shell is one thread.** While it starts a screen cast or maps a
+  window, the Shell helper answers nothing for a moment, and an activation
+  asked then was refused after one 800 ms call ("no verified activation
+  adapter"). An unanswered activation is now asked again inside 3 s; a refusal
+  Shell did answer is final, and with no helper on the bus nothing waits.
+
+- **KWin is the session's compositor.** Where KWin's executable can't be read
+  (file capabilities hide it), the process answering as `org.kde.KWin` must be
+  the one the kernel names behind `$WAYLAND_DISPLAY`'s socket (`SO_PEERCRED`),
+  or the child of KWin's own wrapper that opened it; otherwise it is refused.
+- **The Shell helper answers its driver only** (helper version 12). It took
+  every session-bus caller. It now reads the caller's pid from the bus and that
+  pid's executable from `/proc`, and answers only the driver whose path its
+  installer wrote beside it (`driver`), or a `gdbus` that driver started, which
+  is how the driver asks. `GetVersion` alone answers anyone.
+
+`cargo test -p platform-linux` covers the snapshot parser, the token, the raw
+picture's conversion and the activation retry (the contract tests in
+`tests/kwin_helper_contract.rs` were rewritten for the script's snapshot).
 
 ### 0008: the Windows daemon proves itself
 

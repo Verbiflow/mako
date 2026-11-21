@@ -108,7 +108,7 @@ import { randomUUID } from "node:crypto"
 import { readFile, stat, writeFile } from "node:fs/promises"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
-import { nodePlatform, type LinuxDesktop } from "./platform.js"
+import { desktopAskHint, linuxDesktop, nodePlatform, type LinuxDesktop } from "./platform.js"
 
 export { BACKGROUND_INPUT_LADDER }
 
@@ -1623,13 +1623,13 @@ export function createControlSession(
     if (refusal)
       throw new ControlFault(
         `native-${refusal.code.replaceAll("_", "-")}`,
-        `${refusal.message || refused}${refusal.reason ? ` (${refusal.reason})` : ""}. The driver refused before sending any input; nothing was dispatched.`,
+        `${refusal.message || refused}${refusal.reason ? ` (${refusal.reason})` : ""}. The driver refused before sending any input; nothing was dispatched.${desktopAskHint(`${refusal.message} ${refusal.reason ?? ""} ${refused ?? ""}`, linuxDesktop())}`,
         "not-dispatched"
       )
     if (refused !== undefined) {
       const message = refused.includes("AXUIElementPerformAction") && refused.includes("-25204")
         ? `${refused}. The app may have acted without acknowledging the request. Observe the window and any new dialog before deciding whether to repeat the action.`
-        : refused
+        : `${refused}${desktopAskHint(refused, linuxDesktop())}`
       throw new ControlFault("native-driver-error", message, "unknown")
     }
     return toolResultData(result)
