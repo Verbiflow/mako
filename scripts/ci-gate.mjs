@@ -25,6 +25,10 @@ export const STEPS = [
   [8, "node scripts/generate-host-inputs.mjs --check"],
   [21, "npm run test:protocol"],
   [1, "npx tsx scripts/test-host-liveness.ts"],
+  // A host without the desktop app holds none of browser and computer use until its first use (create-host's control domain).
+  [20, "node scripts/test-control-on-demand.mjs"],
+  // An agent's `computer` server answers its handshake and tools/list from a manifest, byte for byte as Local Control's server does.
+  [2, "npm run -s test:computer-manifest"],
   [19, "npx tsx scripts/test-host-lifecycle.ts"],
   [4, "npx tsx scripts/test-host-lock.ts holder-readiness"],
   [0, "npm run test:loop-profile"],

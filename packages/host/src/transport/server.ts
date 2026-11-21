@@ -25,7 +25,7 @@ import { filePolicyHeaders } from "../base/file-policy.js"
 import type { SecretKeyHandover } from "../base/host-secrets.js"
 import { HostJobs, type JobDemand } from "../base/host-jobs.js"
 import { DESKTOP_PATH } from "../contracts/desktop-channel.js"
-import { CONTROL_VIDEO_BATCH_TYPE, PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/contracts"
+import { CONTROL_VIDEO_BATCH_TYPE, PREVIEW_MEDIA_TYPE, encodePreviewMedia, type ControlPreview } from "@mako/control-runtime/preview-contracts"
 
 /** Each call as it arrives, its arguments decoded and before its method runs: when the host heard a send. */
 export const hostCalls = topic<{ channel: string; args: readonly unknown[] }>("mako:host-call")

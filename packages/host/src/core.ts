@@ -15,7 +15,7 @@ import { listedFins } from "./contracts/children.js"
 import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } from "./contracts/cloud-threads.js"
 import { watch, type FSWatcher } from "node:fs"
 import { stat, writeFile } from "node:fs/promises"
-import { controlArtifactsRoot, controlRecordingsRoot } from "@mako/control/program"
+import { controlArtifactsRoot, controlRecordingsRoot } from "@mako/control/program/artifacts"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { hostLabel, type HostConfig } from "./host-config.js"
@@ -66,7 +66,9 @@ import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { KeepAwakeSettings } from "./contracts/keep-awake.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
-import { accountBorrowing, BorrowedSimulators, ControlResidency, controlLine, openControl, declareControlMethods, controlVideoMedia, type ControlService } from "./control/index.js"
+import type { Control, ControlService } from "./control/index.js"
+import type { SimulatorAgent } from "./contracts/simulators.js"
+import { accountBorrowing, BorrowedSimulators, ControlResidency, ControlSessions, SimulatorTools, controlLine, controlLoad, controlVideoMedia } from "./control/load.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
 import { SyncRecorder } from "./contracts/sync-readings.js"
@@ -131,6 +133,12 @@ export interface CoreShell {
   subscribed: JobDemand
   secrets: HostSecretStore
   terminals: Domain<TerminalClients>
+  /**
+   * Browser and computer use, the host's control domain: built by `Core.openControl` at its first use, which is an
+   * agent's launch, a call to one of its methods, or the desktop app attaching. A host none of those reach never
+   * imports it.
+   */
+  control: Domain<Control>
   web(): WebHost | undefined
   /** Set once stopping begins; events stop going out from then on. */
   closing(): boolean
@@ -150,6 +158,8 @@ export interface Core {
   signedFile(request: Request): Promise<Response>
   disconnected(client: string): void
   desktop: NonNullable<Parameters<typeof startWebHost>[7]>
+  /** Builds browser and computer use and declares its methods: the control domain's load, once (`CoreShell.control`). */
+  openControl(): Promise<Control>
   /** On a cloud machine: the sign-ins its agent was given, written where each harness reads them. */
   installCloudSignIns(signIns: readonly CloudSignIn[], place: CloudSignInPlace): Promise<CloudSignInInstall[]>
   /** On a cloud machine: loads what every start loads, before its image's snapshot; answers what it loaded. */
@@ -457,7 +467,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const borrowedSimulators = config.machineAgentFd === undefined
     ? undefined
     : new BorrowedSimulators({ port: accountBorrowing(() => machineLink, undefined, shell.stopping.signal), shots: join(environment.dataRoot, "simulators", "borrowed") })
-  const control = openControl(config, machine, shell.jobs, emit, () => late.updates?.desktopChanged(), (session) => {
+  // Browser and computer use loads at its first use (`openControlNow`, below): what follows reaches it through its
+  // domain, loading it where the call is a use of it and reading it only if loaded where it isn't.
+  const control = shell.control
+  /** A Session's Thread, conversation, title and project folder, which simulators' claims and consent read. */
+  const simulatorAgent = (session: string): SimulatorAgent | undefined => {
     const parsed = SessionIdSchema.safeParse(session)
     const placed = parsed.success && store ? store.sessionPlacement(parsed.data) : undefined
     if (!store || !placed) return undefined
@@ -467,14 +481,18 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const title = store.thread(placed.thread)?.title ?? live.title
     const project = projectFolder(store.worktrees(), live.cwd)
     return { thread: placed.thread, session: placed.session, folder: live.cwd, ...(project && { project }), ...(conversation && { conversation }), ...(title && { title }) }
-  }, {
-    leaseOf: (via, thread) => late.lending?.leaseOf(via, thread, "ios-simulator")?.id,
-    used: (lease, verb) => late.lending?.used(lease, verb),
-    artifact: async (lease, file, name) => {
-      if (!late.lending) throw new Error("This Mac lends nothing")
-      return late.lending.artifact(lease, file, name)
-    },
-  }, borrowedSimulators)
+  }
+  // What an agent's launch takes of control, held here so a launch loads none of it: each agent's Local Control
+  // session, which listens from its launch and starts a worker at its first computer or browser call, reaching the
+  // driver through control then; and the simulator tools its `mako` server may offer. Control takes both as its own
+  // when it loads.
+  const controlSessions = new ControlSessions(
+    async (bindingId) => (await control.load("an agent's first computer or browser call")).grantDriver(bindingId),
+    undefined,
+    undefined,
+    (bindingId) => control.current()?.revokeDriver(bindingId)
+  )
+  const simulatorTools = new SimulatorTools(simulatorAgent, borrowedSimulators !== undefined)
   const appUpdates = new Updates({
     environment,
     git,
@@ -491,9 +509,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         writer.kind === "thread" ? [threadTitle(writer.thread)] : writer.kind === "person" ? ["you"] : [])]))
     },
     desktop: {
-      state: () => control.desktop.update(),
-      check: () => control.desktop.ask("update-check", {}),
-      install: () => control.desktop.ask("update-install", {}).then(() => {}),
+      // The desktop app's own updater: there is one only while a desktop is attached, which loads control.
+      state: () => control.current()?.desktop.update(),
+      check: async () => (await control.load("the desktop's update check")).desktop.ask("update-check", {}),
+      install: async () => (await control.load("the desktop's update")).desktop.ask("update-install", {}).then(() => {}),
     },
   })
   late.updates = appUpdates
@@ -1044,7 +1063,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         leases: async () => (await late.cloud?.borrow?.leases()) ?? null,
         serve: async (ask) => {
           if (ask.resource.kind !== "operation" || ask.ref !== "ios-simulator") return { answer: "unavailable", reason: "not-found" }
-          const listed = await control.simulators.list({ kind: "person" })
+          // Only a Mac runs iOS simulators: elsewhere the answer is no without control to read it from.
+          if (!onMac()) return { answer: "unavailable", reason: "not-found" }
+          const listed = await (await control.load("a simulator asked of this Mac")).simulators.list({ kind: "person" })
           const here = "refused" in listed ? undefined : listed.hosts.find((host) => host.kind === "local")
           return here?.platforms.ios.ready ? { answer: "yes", version: "ready" } : { answer: "unavailable", reason: "not-found" }
         },
@@ -1056,7 +1077,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
           return late.cloud.borrow.artifact(lease, name, file, (await stat(file)).size)
         },
         words: (lease) => ({ what: operationWords(lease.resource.ref), for: lease.borrower.place.kind === "machine" ? "a cloud Thread" : "a Thread on another device" }),
-        ended: (lease) => control.simulators.releaseLease(lease.id),
+        // A claim is made under a lease by control, loaded: without it there is none to let go.
+        ended: (lease) => control.current()?.simulators.releaseLease(lease.id),
         log: (message, fields) => hostLog("borrowing", message, fields),
       })
     : undefined
@@ -1077,7 +1099,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   late.cloud = declareCloudAccountMethods(methods, {
     watched: shell.subscribed,
     // A phone or another Mac watching a preview here gets live video of it, as a cloud machine's clients do.
-    media: controlVideoMedia(control.previews),
+    media: controlVideoMedia(() => control.current()?.previews),
     waitingForAccount: () => cloudConversations?.waitingForAccount() === true || late.awayNotes?.any() === true,
     finLimitsChanged: () => {
       const reading = finCapacity.reading()
@@ -1265,8 +1287,14 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   }
   void cloudConversations?.start().catch((error: Error) => hostWarn("cloud-conversations", "couldn't follow the cloud conversations", { error: error.message }))
   const residency = new ControlResidency({
-    sessions: control.sessions,
+    sessions: controlSessions,
     grants: () => late.agentServers,
+    // Minted when a session is first used, by control's service, which loads then.
+    browserAtFirstUse: async () => {
+      await control.load("an agent's first computer or browser call")
+      if (!late.controlService) throw new Error("Local Control's service isn't listening")
+      return late.controlService
+    },
     browser: () => late.controlService,
     journal: (conversationId) => join(logsRoot(environment.dataRoot), "local-control", `${conversationId}.jsonl`),
     notice: (message) => hostWarn("control", "a control session's notice", { message }),
@@ -1310,7 +1338,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     work: shell.work,
     jobs: shell.jobs,
     mcpSnapshot: (cwd, starting) => tools.mcp.discover(cwd, starting),
-    tools: (bindingId, conversationId) => residency.tools(bindingId, conversationId),
+    // A launch takes its session and its servers without control. On a Mac the simulator tools its `mako` server
+    // offers follow the setup line, which control reads: it loads first there, as it has by then anyway.
+    tools: async (bindingId, conversationId) => {
+      if (onMac()) await control.load("an agent's launch")
+      return residency.tools(bindingId, conversationId)
+    },
     controlInstructions: makoNote({
       cloudMachine: config.machineAgentFd !== undefined,
       launchedWith: (conversationId) => {
@@ -1319,7 +1352,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         return launched
       },
       controlLine: (bindingId) => {
-        const session = control.sessions.get(bindingId)
+        const session = controlSessions.get(bindingId)
         return session && controlLine(session)
       },
       ownSlot: (conversationId) => {
@@ -1404,7 +1437,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // person lends is said, by the grants that stand here and at the account. A cloud machine and a fixture desk lend nothing.
   if (config.machineAgentFd === undefined && !fixtureDesk) {
     const simulatorFacts = async (): Promise<SimulatorFacts | undefined> => {
-      const [listed, setup] = await Promise.all([control.simulators.list({ kind: "person" }), control.simulatorSetup.read()])
+      // Only a Mac has Xcode and iOS simulators to say: elsewhere there are none, as control's own reading would find.
+      if (!onMac()) return undefined
+      const { simulators, simulatorSetup } = await control.load("what this Mac can serve")
+      const [listed, setup] = await Promise.all([simulators.list({ kind: "person" }), simulatorSetup.read()])
       if ("refused" in listed) return undefined
       const here = listed.hosts.find((host) => host.kind === "local")
       if (!here) return undefined
@@ -2097,7 +2133,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     homes: workspaces.environments,
     emit,
     archivedThread: ({ conversationId, sessionId }) => {
-      control.simulators.releaseThread({ ...(conversationId && { conversation: conversationId }), ...(sessionId && { session: sessionId }) })
+      control.current()?.simulators.releaseThread({ ...(conversationId && { conversation: conversationId }), ...(sessionId && { session: sessionId }) })
       if (conversationId) void late.conversations?.agents?.archived(conversationId)
       workspaces.retention?.changed()
       workspaces.scratch?.changed()
@@ -2166,7 +2202,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   machineArtifacts?.schedule(shell.jobs)
   // Each routing note once per conversation, for the harnesses whose hooks post to the conversation server.
   const callNotes = new CallNotes()
-  late.agentServers = await startConversationMcp(live, (bindingId, operation, signal, steps) => control.sessions.request(bindingId, operation, signal, steps), [
+  late.agentServers = await startConversationMcp(live, (bindingId, operation, signal, steps) => controlSessions.request(bindingId, operation, signal, steps), [
     ...workspaceMovers.agentTools,
     (server, conversationId) => registerThreadHistoryTools(server, history, conversationId),
     (server, conversationId) => registerShowTool(server, { media: turnMedia, cwd: (id) => live.session(id)?.cwd }, conversationId),
@@ -2184,7 +2220,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       invoke: async (channel, args) => ThreadMoveAnswerSchema.parse(decodeRuntimeValue(await methods.invoke(channel, args))),
       caller: () => ({ kind: "agent", session: threads.store?.journalPlacement(conversationId())?.session ?? "" }),
     }),
-    (server, conversationId) => control.simulatorTools.register(server, {
+    (server, conversationId) => simulatorTools.register(server, {
       invoke: async (channel, args) => decodeRuntimeValue(await methods.invoke(channel, args)),
       caller: () => {
         const session = threads.store?.journalPlacement(conversationId())?.session
@@ -2200,7 +2236,31 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     return heldAnswer(writeHolds, event, call, callGateAnswer(event, call, thread, conversationId, callNotes), binding)
   }, (conversationId, steps) => emit({ type: "tool-steps", conversationId, steps }))
   trace("conversation tools ready")
-  late.controlService = await control.startService((conversationId, bindingId) => live.authorizeAgent(conversationId, bindingId))
+  /**
+   * The control domain's load: the modules a turn at a time, as the core's own load (`CORE_IMPORTS`), then control
+   * built, its service listening for agents' browser access, and its methods declared. The simulators' setup is read
+   * before it answers, as it had been long before a first launch when control loaded with the core: an agent's `mako`
+   * server offers the simulator tools by it.
+   */
+  const openControlNow = async (): Promise<Control> => {
+    for (const load of controlLoad) {
+      await new Promise<void>((resolve) => setImmediate(resolve))
+      await load()
+    }
+    const { openControl, declareControlMethods } = await import("./control/index.js")
+    const opened = openControl({ ...config, sessions: controlSessions, simulatorTools }, machine, shell.jobs, emit, () => late.updates?.desktopChanged(), simulatorAgent, {
+      leaseOf: (via, thread) => late.lending?.leaseOf(via, thread, "ios-simulator")?.id,
+      used: (lease, verb) => late.lending?.used(lease, verb),
+      artifact: async (lease, file, name) => {
+        if (!late.lending) throw new Error("This Mac lends nothing")
+        return late.lending.artifact(lease, file, name)
+      },
+    }, borrowedSimulators)
+    late.controlService = await opened.startService((conversationId, bindingId) => live.authorizeAgent(conversationId, bindingId))
+    declareControlMethods(methods, opened, environment.appRoot, config.executable)
+    await opened.simulatorSetup.read().catch(() => undefined)
+    return opened
+  }
 
   const files = declareWorkspaceMethods(methods, {
     workspaces,
@@ -2301,7 +2361,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       },
     })
   )
-  declareControlMethods(methods, control, environment.appRoot, config.executable)
   declareCloudControlPreviewMethods(methods, () => cloudConversations?.controlPreviews)
   // What a first launch loads into the host, loaded once nobody waits on a start: for the harnesses used on this
   // device, and never a harness's own process (`host-warmup.ts`).
@@ -2312,7 +2371,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     shared: [{ name: "Mako's MCP servers", load: async () => late.agentServers?.warm() }],
   }), { busy: () => shell.foreground.busy, idle: () => shell.foreground.idle(), stopped: () => shell.stopping.signal.aborted })
   const warmLaunch = (why: string) => void warmer.warm(why).catch((error: Error) => hostWarn("warmup", "a first launch's loads weren't made ahead", { error: error.message }))
-  declareToolMethods(methods, { tools, control, workspace, dataRoot: environment.dataRoot, machine, warmLaunch: () => warmLaunch("a new conversation's first message is being written") })
+  declareToolMethods(methods, { tools, control: (reason) => control.load(reason), workspace, dataRoot: environment.dataRoot, machine, warmLaunch: () => warmLaunch("a new conversation's first message is being written") })
   const usage = declareUsageMethods(methods, {
     dataRoot: environment.dataRoot,
     userRoot: environment.userRoot,
@@ -2525,7 +2584,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     "cloud calls": () => late.cloud?.stop(),
     "terminal calls": () => shell.terminals.current()?.dispose(),
     "builds": () => { for (const build of builds) build.close() },
-    "browser and computer calls": () => control.stop(),
+    // Control closes the sessions with the rest of what it runs; never loaded, they are closed here.
+    "browser and computer calls": async () => {
+      const opened = await control.started()?.catch(() => undefined)
+      if (opened) return opened.stop()
+      await controlSessions.close()
+    },
     "file calls": () => files.stop(),
     "workspace automations": () => {
       workspaceAutomations.stop()
@@ -2639,7 +2703,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       shell.terminals.current()?.release(client)
       void workspaceClients.release(client)
     },
-    desktop: (request, response) => control.desktop.attach(request, response),
+    // The desktop app attaching is a use of control, whose channel answers it: the request waits for the load.
+    desktop: (request, response) => {
+      void control.load("the desktop app attached").then((opened) => opened.desktop.attach(request, response), () => {
+        response.writeHead(503, { connection: "close" }).end()
+      })
+    },
+    openControl: openControlNow,
     /**
      * On a cloud machine, before it says it's ready: every heavy package a start loads, and each harness's version,
      * which runs its binary. A snapshot taken after, as the machine image's is, wakes with all of it loaded: modules
@@ -2697,9 +2767,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       await workspaceAutomations.opened(path)
       machineWorkspace.opened(path)
     },
-    media: controlVideoMedia(control.previews),
+    media: controlVideoMedia(() => control.current()?.previews),
     activeWork: () => application.lifecycle.snapshot().work.length > 0,
-    deskBrowsing: () => control.deskBrowsing(),
+    deskBrowsing: () => control.current()?.deskBrowsing() ?? false,
     work: () => application.lifecycle.snapshot().work,
     sessions,
     lifecycleBlocked: () => application.lifecycle.blocked,

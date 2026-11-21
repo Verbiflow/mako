@@ -1,4 +1,4 @@
-import { ControlFault } from "@mako/control/control"
+import { ControlFault } from "@mako/control/control/fault"
 import type { ControlAgentOperation } from "@mako/control-runtime/mcp"
 import type { ToolSteps } from "../contracts/tool-steps.js"
 import { hostWarn } from "../base/host-log.js"
@@ -6,7 +6,7 @@ import {
   ControlWorkers,
   startDesktopControlSession,
   type ControlLaunch,
-} from "@mako/control-runtime/session"
+} from "@mako/control-runtime/session-launch"
 import { trackProviderChild } from "../base/provider-children.js"
 import type { ControlCredentials } from "./service.js"
 
@@ -47,7 +47,8 @@ export class ControlSessions {
 
   async start(
     bindingId: string,
-    browser?: ControlCredentials,
+    /** The binding's browser access, or what mints it when the session first starts: a launch that never uses the browser mints none. */
+    browser?: ControlCredentials | (() => Promise<ControlCredentials | undefined>),
     onEnded: (reason: "stopped" | "failed") => Promise<void> = async () => {},
     /** The JSONL file that gets a line for each of the session's requests. */
     journal?: string
@@ -57,8 +58,8 @@ export class ControlSessions {
     if (this.sessions.has(bindingId) || this.finishing.has(bindingId))
       throw new Error("Local Control binding is already running")
     const pending = this.launchSession(
-      { taskId: bindingId, browser, journal },
-      { workers: this.workers, native: () => this.native(bindingId) }
+      { taskId: bindingId, ...(!(browser instanceof Function) && { browser }), journal },
+      { workers: this.workers, native: () => this.native(bindingId), ...(browser instanceof Function && { browser }) }
     )
     this.sessions.set(bindingId, pending)
     try {

@@ -89,6 +89,9 @@ export interface Control {
   devServerUrl(): string | null
   /** An agent is using the desk browser: connected, with a page open or waiting for one. It holds a profile host up. */
   deskBrowsing(): boolean
+  /** A binding's grant on the driver broker, where Mako runs a driver, and its end: what a session's worker starts with. */
+  grantDriver(bindingId: string): Promise<{ broker: string; token: string } | undefined>
+  revokeDriver(bindingId: string): void
   /** Mako's own computer-use driver, started once and shared. */
   ensureLocalControl(): Promise<string | null>
   /** The installed driver's version against the one Mako verified. */
@@ -122,6 +125,10 @@ export interface ControlConfig {
   desktopExecutable: string | undefined
   fixtureDesk: boolean
   development: { devServerUrl: string | null } | undefined
+  /** The sessions the host already starts for its agents, where control loads at its first use: control takes them as its own. */
+  sessions?: ControlSessions
+  /** The simulator tools the host already offers its agents' servers, likewise. */
+  simulatorTools?: SimulatorTools
 }
 
 /** `updated`: the desktop's updater moved, or the desktop that had one left. */
@@ -315,21 +322,19 @@ export function openControl(
     },
   })
   const elementPicks = new ElementPicks(browser, previews, onMac() ? "mac" : "other")
-  const sessions = new ControlSessions(
-    // A task's computer use goes through the embedded driver where Mako runs one: a Mac's, a Windows desktop's or a
-    // Linux desktop's.
-    async (bindingId) => (resolveExecutable("cua-driver") && (onMac() || onWindows() || linuxDesktop()) ? driver.grant(`agent ${bindingId}`) : undefined),
-    undefined,
-    undefined,
-    (bindingId) => driver.revoke(`agent ${bindingId}`)
-  )
+  // A task's computer use goes through the embedded driver where Mako runs one: a Mac's, a Windows desktop's or a
+  // Linux desktop's.
+  const grantDriver = async (bindingId: string) => (resolveExecutable("cua-driver") && (onMac() || onWindows() || linuxDesktop()) ? driver.grant(`agent ${bindingId}`) : undefined)
+  const revokeDriver = (bindingId: string) => driver.revoke(`agent ${bindingId}`)
+  // The host's own, where it starts sessions before control loads (`ControlConfig.sessions`); they reach the driver here.
+  const sessions = config.sessions ?? new ControlSessions(grantDriver, undefined, undefined, revokeDriver)
   const unsubscribe = browser.subscribe((browsers) => emit({ type: "browser-control", browsers }))
   const localSimulators: LocalSimulatorHost = new LocalSimulatorHost({
     setup: (refresh) => simulatorSetup.read(refresh),
     folder: join(environment.dataRoot, "simulators"),
     driving: localDriving({ dataRoot: environment.dataRoot, hub: { entry: join(environment.appRoot, "dist-electron", "simulator-hub-entry.js") } }),
   })
-  const simulatorTools = new SimulatorTools(simulatorAgent, borrowedSimulators !== undefined)
+  const simulatorTools = config.simulatorTools ?? new SimulatorTools(simulatorAgent, borrowedSimulators !== undefined)
   const simulatorSetup = new SimulatorSetupFollower({
     dataRoot: environment.dataRoot,
     jobs,
@@ -366,6 +371,8 @@ export function openControl(
     devServerUrl: () => activeDevServerUrl,
     /** An agent is using the desk browser, which holds a profile host up (`DeskBrowser.busy`). */
     deskBrowsing: () => deskBrowser.busy(),
+    grantDriver,
+    revokeDriver,
     ensureLocalControl,
     driverStatus: () => driverVersions.status(resolveExecutable("cua-driver")),
     driverConnections: async () => ({ ...driver.status(), host: process.pid, workers: await sessions.processes() }),

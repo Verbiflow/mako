@@ -115,7 +115,7 @@ else if(a[0]==='api'&&a[1]==='repos/{owner}/{repo}'){
       browser: { status: () => [{ id: "fixture", name: "Fixture", connection: { status: "connected" as const, generation: "fixture" } }] },
     } as Control
     // SAFETY: the machine capability belongs only to the uninvoked reveal-plugins handler; integrations never uses it.
-    declareToolMethods(methods, { tools: integrationTools, control, workspace: async () => snapshot.cwd, dataRoot: root, machine: {} as MachineCapability })
+    declareToolMethods(methods, { tools: integrationTools, control: async () => control, workspace: async () => snapshot.cwd, dataRoot: root, machine: {} as MachineCapability })
     assert.ok(integrations)
     const readIntegrations = integrations
     const apiRoot = place.repositories[0]!.root
