@@ -2153,7 +2153,9 @@ export class LaptopTracker implements AttributionTracker {
         }
         this.store.updateAuthor(pending.seq, pending.author, true)
         this.pending.delete(pending.seq)
-        if (!force && slice.spent) {
+        // A slice spent on the last open change leaves no backlog. Called one, the pass left where changes are settled
+        // through unsaid until a pass of its own a turn later, which a hold taken meanwhile put off to the settle timer.
+        if (!force && slice.spent && this.pending.size) {
           more = true
           break
         }
