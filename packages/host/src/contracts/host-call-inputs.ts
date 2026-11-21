@@ -1034,6 +1034,7 @@ const inputs = {
   "mako:computer-driver-update": () => z.tuple([]),
   "mako:computer-permissions": () => z.tuple([]),
   "mako:computer-permissions-request": () => z.tuple([]),
+  "mako:computer-permissions-revoke": () => z.tuple([]),
   "mako:continue-readings": () => z.tuple([]),
   "mako:control-preview": () =>
     z.tuple([
@@ -3749,6 +3750,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:computer-driver-update", "control"],
   ["mako:computer-permissions", "control"],
   ["mako:computer-permissions-request", "control"],
+  ["mako:computer-permissions-revoke", "control"],
   ["mako:continue-readings", "conversations"],
   ["mako:control-preview", "control"],
   ["mako:control-preview-source", "control"],

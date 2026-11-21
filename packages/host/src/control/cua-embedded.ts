@@ -164,6 +164,11 @@ export function driverExecutable(env: NodeJS.ProcessEnv = process.env): string |
   return shippedDriver(env) ?? resolveExecutable("cua-driver", env)
 }
 
+/** The driver the host starts, by its whole path: what a desktop's grants are made out for (`desktop-grants.ts`). */
+export function cuaDriverExecutable(env: NodeJS.ProcessEnv = process.env): Promise<string | null> {
+  return executable("cua-driver", env)
+}
+
 async function executable(
   command: string,
   env: NodeJS.ProcessEnv
@@ -364,6 +369,7 @@ export class CuaEmbedded {
   ): Promise<string | null> {
     const command = await executable("cua-driver", env)
     if (!command) return null
+    const desktop = linuxDesktop(env)
     await mkdir(stateDir, { recursive: true, mode: 0o700 })
     await chmod(stateDir, 0o700)
     await sweepStaleSockets(stateDir)
@@ -383,7 +389,7 @@ export class CuaEmbedded {
       // third party; the user's own CLI keeps its own preference.
       CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
       CUA_DRIVER_REQUIRE_FOCUSED_TARGET: "1",
-      ...(linuxDesktop(env)?.session === "wayland" && { CUA_DRIVER_RS_ENABLE_WAYLAND: "1" }),
+      ...(desktop?.session === "wayland" && { CUA_DRIVER_RS_ENABLE_WAYLAND: "1" }),
       // A Windows pipe has no peer credentials to read the parent from: the daemon trusts this host's connections by
       // the pid it is given. And the daemon ends when this host's end of its stdin closes, so a host that is killed
       // leaves no driver behind; there is no process group to take it with the host.

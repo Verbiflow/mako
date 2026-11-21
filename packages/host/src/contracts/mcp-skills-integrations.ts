@@ -188,6 +188,22 @@ export interface MakoComputerPermissions {
   accessibility: boolean
   screenRecording:
     "not-determined" | "denied" | "restricted" | "granted" | "unknown"
+  /**
+   * What a Linux desktop asks of the person, each with where it stands (`desktop-grants.ts`); absent elsewhere and
+   * where the desktop asks for nothing. While one is `needed` or `restart`, `screenRecording` is not granted.
+   */
+  desktop?: MakoDesktopPermission[]
+}
+
+/**
+ * - `kwin-window-capture` (KDE): KWin's own capture of a window, allowed by a desktop entry for Mako's driver.
+ * - `gnome-shell-helper` (GNOME): the Shell extension that lists and activates windows. `restart` is installed and
+ *   not yet running: the Shell loads it at the person's next login.
+ * - `pointer-input` (KDE Plasma 5): `unavailable`, since its portal has no input connection; Plasma 6.1 has.
+ */
+export interface MakoDesktopPermission {
+  id: "kwin-window-capture" | "gnome-shell-helper" | "pointer-input"
+  state: "needed" | "restart" | "granted" | "unavailable"
 }
 
 /** Installed native computer-control driver against the release Mako verified. */

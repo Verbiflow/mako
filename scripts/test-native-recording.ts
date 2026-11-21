@@ -235,6 +235,16 @@ if (process.platform === "linux") {
   await manager.get(target, receipt.id).stop()
   assert.equal((await manager.get(target, receipt.id).settled()).status, "finished")
   assert.deepEqual(names, [], "no journal, no driver video")
+  // A portal that answers late (a loaded desktop restoring the person's answer, or the person themself): the
+  // recording has not started until it did, so one stopped straight after its start still has its picture.
+  process.env.FAKE_PORTAL_ANSWER_MS = "3600"
+  const asked = performance.now()
+  const late = await manager.start(target, { directory, fps: 30, idle: "keep" }, inSession(driver, "portal"), tools, new AbortController().signal)
+  assert.ok(performance.now() - asked >= 3500, "the start waits for the portal's answer")
+  await manager.get(target, late.id).stop()
+  const settled = await manager.get(target, late.id).settled()
+  assert.equal(settled.status, "finished", JSON.stringify(settled))
+  delete process.env.FAKE_PORTAL_ANSWER_MS
   await manager.close()
 }
 console.log("Helper recording: a Linux desktop's and a job display's windows through mako-video, the driver journaling only on X11, the shared monitor with its pointer on Wayland")

@@ -59,15 +59,15 @@ sway)
   ' "$here"
   ;;
 gnome)
-  # GNOME Shell headless with XWayland, its portal backend and the driver's Shell helper. A person answers GNOME's
-  # consent dialogs; here portal-consent.py answers them through AT-SPI and logs each, so a restored session shows none.
+  # GNOME Shell headless with XWayland and its portal backend. The driver's Shell helper is installed the way a person
+  # installs it: the host's own grant (desktop-grant.mjs, Settings' "Install helper"), then a login, which here is the
+  # Shell's start. A person answers GNOME's consent dialogs; here portal-consent.py answers them through AT-SPI and
+  # logs each, so a restored session shows none.
   export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=GNOME LIBGL_ALWAYS_SOFTWARE=1
-  extension="$HOME/.local/share/gnome-shell/extensions/winrects@cua"
-  mkdir -p "$extension" && cp "$MAKO_DRIVER_DIR"/wayland-helper/winrects@cua/* "$extension/"
   exec dbus-run-session -- sh -c '
     set -eu
-    gsettings set org.gnome.shell enabled-extensions "[\"winrects@cua\"]"
     gsettings set org.gnome.shell disable-user-extensions false
+    node "$0/desktop-grant.mjs"
     gsettings set org.gnome.shell welcome-dialog-last-shown-version "46"
     gsettings set org.gnome.desktop.interface enable-animations false
     gsettings set org.gnome.desktop.interface toolkit-accessibility true
@@ -90,7 +90,7 @@ gnome)
 kde | kde6)
   # KWin headless (5.27; Plasma 6.3 for kde6) on its virtual backend, with XWayland and the KDE portal backend; portal-consent.py answers its dialogs.
   export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE KDE_FULL_SESSION=true KDE_SESSION_VERSION=$([ "$kind" = kde6 ] && echo 6 || echo 5) \
-    QT_QUICK_BACKEND=software KWIN_COMPOSE=Q LIBGL_ALWAYS_SOFTWARE=1 QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 QT_ACCESSIBILITY=1
+    QT_QUICK_BACKEND=software KWIN_COMPOSE=${MAKO_KWIN_COMPOSE:-O2ES} LIBGL_ALWAYS_SOFTWARE=1 XWAYLAND_NO_GLAMOR=1 XDG_MENU_PREFIX=plasma- QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 QT_ACCESSIBILITY=1
   exec dbus-run-session -- sh -c '
     set -eu
     pipewire >/tmp/pipewire.log 2>&1 &
@@ -98,6 +98,7 @@ kde | kde6)
     wireplumber >/tmp/wireplumber.log 2>&1 &
     # KWin 6, told this is a full Plasma session, waits for a session manager this headless desktop does not run; the
     # apps and the portal still see it.
+    kbuildsycoca${KDE_SESSION_VERSION} >/tmp/sycoca.log 2>&1 || true
     env -u KDE_FULL_SESSION -u KDE_SESSION_VERSION kwin_wayland --virtual --xwayland --width 1280 --height 800 --socket wayland-mako --no-lockscreen --no-global-shortcuts \
       >/tmp/kwin.log 2>&1 &
     for _ in $(seq 1 150); do [ -S "$XDG_RUNTIME_DIR/wayland-mako" ] && break; sleep .1; done
@@ -108,7 +109,7 @@ kde | kde6)
       sleep .1
     done
     dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY XDG_SESSION_TYPE KDE_FULL_SESSION \
-      KDE_SESSION_VERSION QT_LINUX_ACCESSIBILITY_ALWAYS_ON QT_ACCESSIBILITY QT_QUICK_BACKEND
+      KDE_SESSION_VERSION QT_LINUX_ACCESSIBILITY_ALWAYS_ON QT_ACCESSIBILITY QT_QUICK_BACKEND XDG_MENU_PREFIX
     python3 "$0/portal-consent.py" "$MAKO_EVIDENCE/$MAKO_DESKTOP-consent.jsonl" >/tmp/consent.log 2>&1 &
     exec node "$0/desktop-probe.mjs"
   ' "$here"

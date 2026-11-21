@@ -1685,6 +1685,12 @@ export function installMockBridge() {
       accessibility: true,
       screenRecording: "granted" as const,
     }),
+    revokeComputerPermissions: async () => ({
+      supported: true,
+      persistentAcrossUpdates: true,
+      accessibility: true,
+      screenRecording: "granted" as const,
+    }),
     nativeWindowVideo: false,
     controlPreviewSource: async () => null,
     ...mockAppshots,

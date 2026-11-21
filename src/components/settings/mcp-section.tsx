@@ -5,6 +5,7 @@ import type { McpSyncTarget } from "@/lib/types"
 import { mcp, useMcp } from "@/state/mcp"
 import { AlertTriangleIcon, RefreshCwIcon } from "lucide-react"
 import { BrowserConnections } from "./browser-connections"
+import { DesktopPermissions } from "./desktop-permissions"
 import { Shimmer } from "@/components/ui/shimmer"
 import { authoring, useAuthoring } from "@/state/native-authoring"
 import { McpPlaces } from "./mcp-places"
@@ -61,10 +62,12 @@ export function McpSection() {
               {state.permissions.accessibility &&
               state.permissions.screenRecording === "granted"
                 ? "Mako can read the screen and interact with apps."
-                : "Allow Mako to read the screen and interact with apps."}
+                : state.permissions.desktop
+                  ? "This desktop needs one step from you."
+                  : "Allow Mako to read the screen and interact with apps."}
             </p>
           </div>
-          {!state.permissions.accessibility ||
+          {state.permissions.desktop ? null : !state.permissions.accessibility ||
           state.permissions.screenRecording !== "granted" ? (
             <Action
               tone="outline"
@@ -78,6 +81,13 @@ export function McpSection() {
             </span>
           )}
         </section>
+      ) : null}
+      {state.permissions?.desktop ? (
+        <DesktopPermissions
+          permissions={state.permissions.desktop}
+          onAllow={() => void mcp.requestComputerPermissions()}
+          onRemove={() => void mcp.revokeComputerPermissions()}
+        />
       ) : null}
       {state.driver?.executable ? (
         <div className="mb-3 flex items-center gap-3 bg-raised px-2.5 py-2">

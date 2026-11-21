@@ -37,10 +37,11 @@ import { ControlSessions } from "./sessions.js"
 import { startControlService } from "./service.js"
 import { findExecutable, resolveExecutable } from "../base/executable.js"
 import { trackProviderPid, untrackProviderPid } from "../base/provider-children.js"
-import { CuaEmbedded, driverExecutable } from "./cua-embedded.js"
+import { CuaEmbedded, cuaDriverExecutable, driverExecutable } from "./cua-embedded.js"
 import { CuaDriverVersions } from "./cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "../application/index.js"
 import { computerPermissions } from "./computer-permissions.js"
+import { desktopGrantContext, desktopPermissions, desktopPermissionsPending, grantDesktopPermissions, revokeDesktopPermissions, type DesktopGrantContext } from "./desktop-grants.js"
 import type { MachineCapability } from "../base/machine.js"
 import { onLinux, onMac, onWindows } from "../base/platform.js"
 import type { CuaDriverStatus, MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
@@ -102,6 +103,8 @@ export interface Control {
   updateDriver(): Promise<CuaDriverStatus>
   /** Mako.app's grants as the desktop reads them; without a desktop, macOS can't say which app holds them. */
   computerPermissions(): Promise<MakoComputerPermissions>
+  /** What a Linux desktop's grants are read and made with. */
+  desktopGrants: DesktopGrantContext
   /** Agents' browser access, once the conversations exist to authorize them. */
   startService(authorize: (conversationId: string, bindingId: string) => void): Promise<ControlService>
   /** Stops what control runs; settles once the simulators closed, their borrowed leases released (`Simulators.close`). */
@@ -200,8 +203,14 @@ export function openControl(
     },
   })
   const unknownPermissions = () => computerPermissions(environment, undefined, linuxDesktop())
-  const readComputerPermissions = async (): Promise<MakoComputerPermissions> =>
-    desktop.answers("computer-permissions") ? desktop.ask("computer-permissions", {}).catch(unknownPermissions) : unknownPermissions()
+  const desktopGrants = desktopGrantContext(() => cuaDriverExecutable())
+  const readComputerPermissions = async (): Promise<MakoComputerPermissions> => {
+    const permissions = desktop.answers("computer-permissions") ? await desktop.ask("computer-permissions", {}).catch(unknownPermissions) : unknownPermissions()
+    // A Linux desktop's own asks are read here, in the person's session: nothing is granted until they act.
+    const asked = await desktopPermissions(linuxDesktop(), desktopGrants)
+    if (!asked.length) return permissions
+    return { ...permissions, desktop: asked, ...(desktopPermissionsPending(asked) && { screenRecording: "not-determined" as const }) }
+  }
   let defaultBrowserApplication: Promise<string | undefined> | undefined
   const preferredBrowserApplication = () => {
     return (defaultBrowserApplication ??= machine.kind === "present" ? machine.defaultBrowser() : Promise.resolve(undefined))
@@ -392,6 +401,7 @@ export function openControl(
       return driverVersions.status(driverExecutable())
     },
     computerPermissions: readComputerPermissions,
+    desktopGrants,
     async startService(authorize) {
       service = await startControlService(browser, authorize, previews)
       return service
@@ -455,9 +465,19 @@ export function declareControlMethods(methods: MethodTable, control: Control, ap
     browser.disconnect(name)
     return browser.status()
   })
-  methods.handle("mako:computer-permissions-request", () => {
+  methods.handle("mako:computer-permissions-request", async () => {
+    // A Linux desktop's grant is the host's to make, in the person's own session, and only here: on their action.
+    const linux = linuxDesktop()
+    if (linux) {
+      await grantDesktopPermissions(linux, control.desktopGrants)
+      return control.computerPermissions()
+    }
     if (!desktop.answers("computer-permissions-request")) throw new Error("Open Mako's desktop app on this Mac to grant computer permissions.")
     return desktop.ask("computer-permissions-request", {})
+  })
+  methods.handle("mako:computer-permissions-revoke", async () => {
+    await revokeDesktopPermissions(linuxDesktop(), control.desktopGrants)
+    return control.computerPermissions()
   })
   methods.handle("mako:computer-driver", () => control.driverStatus())
   methods.handle("mako:computer-driver-connections", () => control.driverConnections())

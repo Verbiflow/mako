@@ -52,6 +52,7 @@ export const HOST_SCREEN_CALLS = [
   "mako:pick-folder",
   "mako:open-in-editor",
   "mako:computer-permissions-request",
+  "mako:computer-permissions-revoke",
 ] as const satisfies readonly HostChannel[]
 
 const hostScreenCalls: ReadonlySet<string> = new Set(HOST_SCREEN_CALLS)

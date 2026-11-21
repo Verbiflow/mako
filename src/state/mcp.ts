@@ -166,6 +166,16 @@ export const mcp = {
     }
   },
 
+  /** Take away what Mako put on a Linux desktop for computer use. */
+  async revokeComputerPermissions() {
+    if (!hasBridge()) return
+    try {
+      mcpStore.set({ permissions: await getMako().revokeComputerPermissions() })
+    } catch (error) {
+      mcpStore.set({ error: error instanceof Error ? `Computer-use permission wasn't removed: ${error.message}` : "Computer-use permission wasn't removed" })
+    }
+  },
+
   async updateComputerDriver() {
     if (!hasBridge() || mcpStore.get().updatingDriver) return
     mcpStore.set({ updatingDriver: true, error: undefined })

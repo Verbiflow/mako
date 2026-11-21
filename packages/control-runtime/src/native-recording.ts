@@ -16,6 +16,8 @@ import { VideoHelper, helperWindowSource, videoHelperExecutable } from "./video-
 
 /** A helper recording's top rate: what the helper encodes live. */
 export const HELPER_RECORDING_MAX_FPS = 30
+/** How long the person has to answer the desktop's screen sharing dialog before a recording says it never began. */
+const HELPER_CONSENT_MS = 60_000
 
 /**
  * A path as the driver reports it, spelled as Node spells it: on Windows the driver's canonical form is a verbatim
@@ -279,9 +281,19 @@ export class NativeRecordings {
         const started = await call("start_recording", { recording_id: active.id, output_dir: active.directory, record_video: false, capture_actions: false, window_target: { pid: target.pid, window_id: target.window_id } }, 20_000).catch(() => undefined)
         journaling = started !== undefined && !started.isError
       }
-      // The first picture, or the portal's answer while it asks the person; a still screen's comes from a screenshot.
-      await Promise.race([firstUnit, new Promise((resolve) => setTimeout(resolve, 3000).unref())])
+      // The recording has started once its capture has: a window's at once, a shared screen's when the portal
+      // answered. A restored answer comes in a moment on a quiet machine and seconds late on a loaded one, and the
+      // person's own takes as long as they need, up to a minute: returning before it would lose whatever the agent
+      // did meanwhile, and a recording stopped before it had no picture at all. Then the first picture, for a moment:
+      // a still screen may send none until something changes.
+      let began = false
+      const capturing = helper.started.then(() => void (began = true))
+      const unanswered = new Promise<void>((resolve) => setTimeout(resolve, HELPER_CONSENT_MS).unref())
+      await Promise.race([firstUnit, unanswered, capturing.then(() => new Promise((resolve) => setTimeout(resolve, 3000).unref()))])
       if (this.closed || signal.aborted) throw new Error("Recording task ended during capture startup")
+      // Nobody answered the desktop's dialog: say so now, rather than record nothing until the recording's limit.
+      if (!began && !failure && !writer.frames)
+        throw new ControlFault("unsupported", "The desktop's screen sharing request wasn't answered within a minute. Ask the person to answer its share dialog, then start the recording again; no recording was made.", "not-dispatched")
       // The capture refused (the person declined, or the window is gone): no recording was made.
       if (failure && !writer?.frames)
         throw new ControlFault("unsupported", `${failure}; no recording was made.`, "not-dispatched")

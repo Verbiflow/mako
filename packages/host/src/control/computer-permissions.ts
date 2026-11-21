@@ -36,9 +36,10 @@ export function computerPermissions(app: GrantedApp, readings: PrivacyReadings |
   // lower one (UIPI), which the driver reports per window rather than as a grant.
   if (onWindows())
     return { supported: false, persistentAcrossUpdates: true, accessibility: true, screenRecording: "granted" }
-  // A Linux desktop has no settings to grant ahead: X11 lets any client read the screen and send input, and on
+  // A Linux desktop has no system settings to grant ahead: X11 lets any client read the screen and send input, and on
   // Wayland the portal asks the person at the first capture or input and keeps their answer (its restore token).
-  // Accessibility is the AT-SPI bus every GNOME and KDE session runs, which the driver reads apps through.
+  // Accessibility is the AT-SPI bus every GNOME and KDE session runs, which the driver reads apps through. What KDE
+  // and GNOME ask beyond that (KWin's window capture, GNOME's Shell helper) the host adds (`desktop-grants.ts`).
   if (desktop) {
     return { supported: true, persistentAcrossUpdates: true, accessibility: true, screenRecording: "granted" }
   }

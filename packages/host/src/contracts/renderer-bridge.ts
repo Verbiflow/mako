@@ -788,6 +788,11 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<MakoComputerPermissions>(
         "mako:computer-permissions-request"
       ),
+    /** Take away what Mako put on a Linux desktop for computer use (KWin's capture entry, GNOME's Shell helper). */
+    revokeComputerPermissions: () =>
+      invokeTrustedHost<MakoComputerPermissions>(
+        "mako:computer-permissions-revoke"
+      ),
     computerDriver: () =>
       invokeTrustedHost<import("./mcp-skills-integrations.js").CuaDriverStatus>(
         "mako:computer-driver"
