@@ -1,13 +1,16 @@
 import { hostSpawn } from "../base/host-command.js"
+import { endChildInput } from "@mako/sessions/child-input"
 import type { ChildProcess } from "node:child_process"
+import { randomBytes } from "node:crypto"
 import { access, chmod, mkdir, readdir, unlink } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { homedir } from "node:os"
-import { delimiter, isAbsolute, join } from "node:path"
+import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { hostLog } from "../base/host-log.js"
 import { trackProviderChild, untrackProviderPid } from "../base/provider-children.js"
-import { createPrivateControlSocket, linuxDesktop } from "@mako/control-runtime/desktop"
-import { onMac } from "../base/platform.js"
+import { createPrivateControlSocket, linuxDesktop, videoHelperExecutable } from "@mako/control-runtime/desktop"
+import { findExecutable } from "../base/executable.js"
+import { onMac, onWindows } from "../base/platform.js"
 
 /**
  * The embedded native driver, one per host (`CuaEmbedded`).
@@ -33,9 +36,51 @@ interface Daemon {
   socket: string
   executable: string
   child: ChildProcess
-  endpoint: Awaited<ReturnType<typeof createPrivateControlSocket>>
+  endpoint: Endpoint
   args: string[]
   env: NodeJS.ProcessEnv
+}
+
+/** Where the daemon listens: a private Unix socket, or on Windows a named pipe the daemon creates with a current-user ACL. */
+interface Endpoint {
+  path: string
+  close(): Promise<void>
+}
+
+async function daemonEndpoint(stateDir: string): Promise<Endpoint> {
+  // A pipe is no file: it goes when the daemon does, so there is nothing to sweep or unlink. The 128 random bits keep
+  // another process from guessing the name; one that takes it first makes the daemon fail to create it (it asks for
+  // the first instance) and exit, which the host sees. The daemon's ACL admits this user only, and told this host's
+  // pid it serves no other process (`docs/local-control-windows.md`, "The driver's own pipe").
+  if (onWindows())
+    return { path: `\\\\.\\pipe\\mako-cua-${process.pid}-${randomBytes(16).toString("hex")}`, close: () => Promise.resolve() }
+  const endpoint = await createPrivateControlSocket(stateDir, `embedded-${process.pid}.sock`)
+  await unlink(endpoint.path).catch(() => undefined)
+  return endpoint
+}
+
+/**
+ * SIGTERM lets a Unix daemon release held input and clean up. Windows has no signal to send, only termination, so
+ * there the daemon is asked by closing its stdin (its parent-liveness pipe), and terminated if it is still running
+ * two seconds later.
+ */
+function stopDaemon(child: ChildProcess): void {
+  if (!onWindows()) {
+    child.kill("SIGTERM")
+    return
+  }
+  endChildInput(child)
+  const timer = setTimeout(() => {
+    if (child.exitCode === null && child.signalCode === null) child.kill()
+  }, 2_000)
+  timer.unref()
+  child.once("exit", () => clearTimeout(timer))
+}
+
+/** The video helper's whole path for the driver, where there is one (`video_helper.rs` in the driver's patch). */
+function videoHelperEnvironment(): { CUA_DRIVER_VIDEO_HELPER?: string } {
+  const helper = videoHelperExecutable()
+  return helper && isAbsolute(helper) ? { CUA_DRIVER_VIDEO_HELPER: helper } : {}
 }
 
 const SOCKET_WAIT_MS = 10_000
@@ -47,6 +92,9 @@ async function executable(
   command: string,
   env: NodeJS.ProcessEnv
 ): Promise<string | null> {
+  // On Windows the host's own resolver finds it: by PATHEXT's extensions, in PATH's whole-path folders and the user's
+  // own, and only where no other account could have put it (`executable-trust.ts`). Never a bare name.
+  if (onWindows()) return findExecutable(command, env)
   const candidates = isAbsolute(command)
     ? [command]
     : [
@@ -138,7 +186,7 @@ export class CuaEmbedded {
     hostBundleId: string,
     env: NodeJS.ProcessEnv = process.env
   ): Promise<string | null> {
-    if (!onMac() && !linuxDesktop(env)) return Promise.resolve(null)
+    if (!onMac() && !onWindows() && !linuxDesktop(env)) return Promise.resolve(null)
     const daemon = this.#daemon
     if (daemon && daemon.child.exitCode === null) return Promise.resolve(daemon.socket)
     if (daemon) this.#forget(daemon)
@@ -163,7 +211,7 @@ export class CuaEmbedded {
     if (!running) return
     this.#daemon = null
     untrackProviderPid(running.pid)
-    running.child.kill("SIGTERM")
+    stopDaemon(running.child)
     void running.endpoint.close().catch(() => undefined)
   }
 
@@ -209,7 +257,7 @@ export class CuaEmbedded {
         current.env
       )
       if (generation !== this.#stops) {
-        next.child.kill("SIGTERM")
+        stopDaemon(next.child)
         void next.endpoint.close().catch(() => undefined)
         return null
       }
@@ -239,12 +287,8 @@ export class CuaEmbedded {
     await mkdir(stateDir, { recursive: true, mode: 0o700 })
     await chmod(stateDir, 0o700)
     await sweepStaleSockets(stateDir)
-    const endpoint = await createPrivateControlSocket(
-      stateDir,
-      `embedded-${process.pid}.sock`
-    )
+    const endpoint = await daemonEndpoint(stateDir)
     const socket = endpoint.path
-    await unlink(socket).catch(() => undefined)
     const driverEnv = {
       CUA_DRIVER_EMBEDDED: "1",
       CUA_DRIVER_HOST_BUNDLE_ID: hostBundleId,
@@ -256,6 +300,16 @@ export class CuaEmbedded {
       CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
       CUA_DRIVER_REQUIRE_FOCUSED_TARGET: "1",
       ...(linuxDesktop(env)?.session === "wayland" && { CUA_DRIVER_RS_ENABLE_WAYLAND: "1" }),
+      // A Windows pipe has no peer credentials to read the parent from: the daemon trusts this host's connections by
+      // the pid it is given. And the daemon ends when this host's end of its stdin closes, so a host that is killed
+      // leaves no driver behind; there is no process group to take it with the host.
+      ...(onWindows() && {
+        CUA_DRIVER_EMBEDDED_HOST_PID: String(process.pid),
+        CUA_DRIVER_PARENT_LIVENESS_STDIN: "1",
+        // A window's recording is captured and encoded by Mako's video helper, which the driver runs by this whole
+        // path and never looks up itself; without it the driver refuses window video. No FFmpeg is involved.
+        ...videoHelperEnvironment(),
+      }),
     }
     // Cua's documented daemon API disables the overlay at construction. Hiding
     // a session cursor after startup still left the installed 0.28.0 build
@@ -277,7 +331,7 @@ export class CuaEmbedded {
 
   async #spawn(
     command: string,
-    endpoint: Awaited<ReturnType<typeof createPrivateControlSocket>>,
+    endpoint: Endpoint,
     args: string[],
     env: NodeJS.ProcessEnv
   ): Promise<Daemon> {
@@ -285,7 +339,10 @@ export class CuaEmbedded {
     this.#stderr = ""
     const child = hostSpawn(command, args, {
       env,
-      stdio: ["ignore", "ignore", "pipe"],
+      // Windows looks a program or file named without its folder up in the current folder too (ShellExecute, which
+      // launch_app uses): the driver runs in its own folder, never in whatever folder the host was started from.
+      ...(onWindows() && { cwd: dirname(command) }),
+      stdio: [onWindows() ? "pipe" : "ignore", "ignore", "pipe"],
       windowsHide: true,
     })
     trackProviderChild(child, { kind: "cua-driver", owner: "embedded" })
@@ -319,7 +376,7 @@ export class CuaEmbedded {
               `Embedded CUA Driver exited with ${child.exitCode}`)
       )
     } catch (error) {
-      child.kill("SIGTERM")
+      stopDaemon(child)
       await endpoint.close()
       throw error
     }

@@ -3,10 +3,74 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.28`. +28 is +26 with `0006-linux-desktop.patch` and the version
-(+27 is the Windows driver's, `0005-windows-driver.patch`, which is not on main
-yet; whichever lands second regenerates `release.patch` on top of the other).
-+26 is +25 with `0004-stable-wayland-seat-pointer.patch` and the version.
+`0.28.2+mako.29`. +29 is +28 with `0005-windows-driver.patch` and the version
+(the patch was written beside 0006 as +27 and landed after it, so it is the
+later release despite its number). +28 is +26 with `0006-linux-desktop.patch`
+and the version. +26 is +25 with `0004-stable-wayland-seat-pointer.patch` and
+the version.
+
+### 0005: the Windows driver
+
+Upstream's `platform-windows` is the same driver on Windows: the same tools,
+daemon protocol, element tokens, transport-scoped snapshots and embedded
+mode, with UI Automation for the tree and actions, Windows Graphics Capture
+and PrintWindow for pictures, PostMessage for background input and SendInput
+for foreground input. Mako had never built it. These changes make it build and
+meet Mako's contract. On a Mac or Linux they add only the MP4 writer (unused
+there), `diagnose` skipping its macOS sections on Linux, and wording.
+
+- Window video without FFmpeg. The patch's switch of the X11 recorder to
+  `X11VideoBackendFactory` had also replaced the Windows recorder, which does
+  not compile on Windows. Windows now records a window through Mako's video
+  helper (`mako-video.exe`: Windows Graphics Capture into Media Foundation's
+  H.264), run by the whole path the host gives in `CUA_DRIVER_VIDEO_HELPER`
+  and refused without one (`platform-windows/src/video_helper.rs`). Its units
+  go into fragmented MP4 through `cua-driver-core/src/video_fmp4.rs`, which
+  writes the same bytes as Mako's `packages/control-runtime/src/mp4.ts` (one
+  fragment a unit, so a crash keeps every unit but the newest). A window that
+  closes or changes size ends the recording and keeps what was recorded.
+  Whole-display video is refused on Windows.
+- No FFmpeg in the Windows build at all: `video_ffmpeg` and `ffmpeg_install`
+  are compiled out, `install_ffmpeg` refuses, and what would probe or render
+  with FFmpeg finds none. Nothing can resolve an `ffmpeg` from `PATH`. The
+  skill pages the driver carries (`Skills/cua-driver/README.md`, `WINDOWS.md`,
+  `RECORDING.md`) say how Windows records now; the packaging script refuses a
+  Windows executable with FFmpeg's capture, encoder or package names in it.
+- The embedded daemon's pipe is the host's alone: its security descriptor
+  drops upstream's low mandatory label, so a low-integrity process of the same
+  user cannot open it, and a daemon told its host's pid
+  (`CUA_DRIVER_EMBEDDED_HOST_PID`) closes a connection from any other process
+  before reading a request. Upstream used the pid only for trusted sessions.
+  [Local Control on Windows](../../docs/local-control-windows.md#the-drivers-own-pipe)
+  has the references.
+- Programs by whole path: `cmd.exe`, `powershell.exe`, `schtasks.exe` and
+  `taskkill.exe` run from the system directory (`GetSystemDirectoryW`, through
+  `cua-driver-core/src/system_program.rs`), never by a bare name that Windows
+  looks up beside the driver and on `PATH`. `cua-driver diagnose` runs its
+  macOS sections (`codesign`, `sqlite3`) on a Mac only.
+- Exact values, as `0001-lossless-values.patch` gives the Mac and the Linux
+  build gives AT-SPI: a ValuePattern control's value is sent as UI Automation
+  holds it, empty and whitespace included, with `value_exact: true`, and Mako's
+  runtime compares it with what it wrote. Without it every `expect({value})`
+  was refused as display-normalized text. A Win32 edit or rich edit without a
+  ValuePattern (Windows 11 Notepad's editor) is read whole through TextPattern,
+  up to 100,000 UTF-16 units, the AT-SPI limit; a longer text is cut and not
+  exact. A browser's Document is never read this way. Password fields are never
+  read.
+- A foreground `hotkey` to a XAML host (Notepad, Terminal, Calculator) is sent
+  through SendInput as the caller asked. It used to take the background
+  accelerator scan, which refuses any chord the window has no named button for.
+- Background typing posts a character past U+FFFF (an emoji, a CJK
+  extension) as its UTF-16 surrogate pair, as a keyboard does. Its whole code
+  point in one `WM_CHAR` was dropped by every Unicode window.
+
+`node scripts/package-control-driver-windows.mjs <checkout>` builds
+`release/control-driver/<version>/windows-x64/` on Windows: one
+`cua-driver.exe` with the C runtime linked in (`+crt-static`, so it imports no
+`vcruntime`/`ucrtbase`), its x64 machine type and imports checked, every linked
+crate's license checked for GPL, and the hashes in `provenance.json`. The
+`Windows computer control` workflow builds it on `windows-latest` and drives
+it; see [Local Control on Windows](../../docs/local-control-windows.md).
 
 ### 0006: a person's Linux desktop
 

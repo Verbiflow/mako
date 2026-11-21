@@ -134,6 +134,15 @@ assert.deepEqual(withoutMenuBar({ elements: [
 assert.equal(nativeRole("button"), "Button", "Current AT-SPI button role")
 assert.equal(nativeRole("push button"), "Button", "Earlier AT-SPI role remains supported")
 assert.equal(nativeRole("AXButton"), "Button")
+// UI Automation's control types, as the Windows driver names them; case tells its Text (a label) from AT-SPI's text.
+assert.equal(nativeRole("Edit"), "TextField")
+assert.equal(nativeRole("Document"), "TextArea")
+assert.equal(nativeRole("Text"), "StaticText")
+assert.equal(nativeRole("text"), "TextArea", "AT-SPI's editable text keeps its meaning")
+assert.equal(nativeRole("Pane"), "Group")
+assert.equal(nativeRole("TabItem"), "Tab")
+assert.equal(nativeRole("Button"), "Button")
+assert.equal(nativeRole("CheckBox"), "CheckBox")
 
 // Window kinds: Finder's untitled 30px strips are helpers, titled windows documents,
 // an untitled window of real size is unknown.

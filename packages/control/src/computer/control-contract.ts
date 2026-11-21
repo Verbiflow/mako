@@ -196,14 +196,22 @@ export function windowCapabilities(
         "Raw input is global and requires the exact target to be frontmost plus an explicit foreground declaration.",
     },
   ]
-  if (facts.platform !== "darwin") {
-    for (const route of ["window-pointer", "pid-keyboard", "menu"] as const) {
-      const index = routes.findIndex((capability) => capability.route === route)
-      routes[index] = {
-        route,
-        status: "unavailable",
-        reason: `Background ${route} delivery has not been verified for this ${facts.platform ?? "unknown"} target. Use an observed accessibility action or an exact browser page.`,
-      }
+  // Windows' driver posts pointer messages to the exact window and refuses the window classes known to drop them;
+  // background clicks, double clicks, right clicks and drags were verified there without the window coming forward.
+  // Its element-addressed keys focus through UI Automation, which can bring the window forward, and its menus are
+  // unverified, so those stay unavailable as on Linux.
+  const unverified =
+    facts.platform === "darwin"
+      ? []
+      : facts.platform === "win32"
+        ? (["pid-keyboard", "menu"] as const)
+        : (["window-pointer", "pid-keyboard", "menu"] as const)
+  for (const route of unverified) {
+    const index = routes.findIndex((capability) => capability.route === route)
+    routes[index] = {
+      route,
+      status: "unavailable",
+      reason: `Background ${route} delivery has not been verified for this ${facts.platform ?? "unknown"} target. Use an observed accessibility action or an exact browser page.`,
     }
   }
   return ControlCapabilitiesSchema.parse({ target: facts.target, routes })

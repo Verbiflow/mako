@@ -8,7 +8,7 @@ import { Appshots, type WindowCapturer } from "@mako/host/control/appshots"
 import { computerPermissions } from "@mako/host/control/computer-permissions"
 import { linuxDesktop } from "@mako/control-runtime/desktop"
 import { fileResponse, localFile } from "@mako/host/workspaces/file-response"
-import { onMac } from "@mako/host/base/platform"
+import { onMac, onWindows } from "@mako/host/base/platform"
 import { hostCommand } from "@mako/host/transport/service"
 import { HOST_HEAP_GROWTH, HOST_NODE_OPTIONS } from "@mako/host/base/process-warnings"
 import { AgentViewsApp, NO_DESKTOP_WINDOWS } from "@mako/host/control/agent-views"
@@ -62,9 +62,13 @@ try {
 
   // Without a desktop to read macOS's privacy settings, nothing is granted and nothing is claimed.
   const unknown = computerPermissions({ packaged: false, appRoot: process.cwd() }, undefined, undefined)
-  assert.equal(unknown.supported, onMac())
-  assert.equal(unknown.accessibility, false)
-  assert.equal(unknown.screenRecording, "unknown")
+  // Windows has no grant to read: the driver works from the start.
+  if (onWindows()) assert.deepEqual(unknown, { supported: false, persistentAcrossUpdates: true, accessibility: true, screenRecording: "granted" })
+  else {
+    assert.equal(unknown.supported, onMac())
+    assert.equal(unknown.accessibility, false)
+    assert.equal(unknown.screenRecording, "unknown")
+  }
   const read = computerPermissions({ packaged: false, appRoot: process.cwd() }, { accessibility: () => true, screen: () => "granted" }, undefined)
   if (onMac()) assert.deepEqual([read.accessibility, read.screenRecording], [true, "granted"])
   // A display alone (a CI job's xvfb-run, a container's Xvfb) is no person's desktop: computer use there stays

@@ -11,11 +11,21 @@ import type { ComputerDriverResult } from "./computer-driver-client.js"
 import type { JsonObject } from "./json.js"
 import { ControlRecording } from "./control-recording.js"
 import { Mp4Writer } from "./mp4.js"
-import type { LinuxDesktop } from "./platform.js"
+import { onWindows, type LinuxDesktop } from "./platform.js"
 import { VideoHelper, helperWindowSource, videoHelperExecutable } from "./video-helper.js"
 
 /** A helper recording's top rate: what the helper encodes live. */
 export const HELPER_RECORDING_MAX_FPS = 30
+
+/**
+ * A path as the driver reports it, spelled as Node spells it: on Windows the driver's canonical form is a verbatim
+ * path (`\\?\C:\…`, `\\?\UNC\server\…`) for the same file that `realpath` names `C:\…`.
+ */
+function plainPath(path: string): string {
+  if (!onWindows() || !path.startsWith("\\\\?\\")) return path
+  return path.startsWith("\\\\?\\UNC\\") ? `\\\\${path.slice(8)}` : path.slice(4)
+}
+const driverPath = z.string().transform(plainPath)
 
 const stateSchema = z.object({
   generation: z.number().int().positive(),
@@ -26,8 +36,8 @@ const stateSchema = z.object({
   }),
   video_active: z.boolean(),
   fps: z.number().int().min(1).max(60).optional(),
-  output_dir: z.string().nullable(),
-  last_video_path: z.string().nullable(),
+  output_dir: driverPath.nullable(),
+  last_video_path: driverPath.nullable(),
   last_error: z.string().nullable(),
 })
 const resultSchema = z.looseObject({

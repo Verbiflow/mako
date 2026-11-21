@@ -6,7 +6,7 @@ import { packagedDistribution } from "../application/index.js"
 import { MAKO_BUNDLE_ID, type MAKO_GRANT_SERVICES } from "../application/index.js"
 import type { MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
 import type { HostEnvironment } from "../base/host-environment.js"
-import { onMac } from "../base/platform.js"
+import { onMac, onWindows } from "../base/platform.js"
 import { linuxDesktop, type LinuxDesktop } from "@mako/control-runtime/desktop"
 
 const execute = hostCommand
@@ -31,6 +31,11 @@ export type GrantedApp = Pick<HostEnvironment, "packaged" | "appRoot">
  * desktop the person is logged into (`linuxDesktop()`), none elsewhere and on a machine with only a display.
  */
 export function computerPermissions(app: GrantedApp, readings: PrivacyReadings | undefined, desktop: LinuxDesktop | undefined): MakoComputerPermissions {
+  // Windows asks no app's leave to capture windows or drive UI Automation: there is nothing to grant, and the driver
+  // works from the start. Its limit is integrity, not consent: a window of an elevated process ignores a process of a
+  // lower one (UIPI), which the driver reports per window rather than as a grant.
+  if (onWindows())
+    return { supported: false, persistentAcrossUpdates: true, accessibility: true, screenRecording: "granted" }
   // A Linux desktop has no settings to grant ahead: X11 lets any client read the screen and send input, and on
   // Wayland the portal asks the person at the first capture or input and keeps their answer (its restore token).
   // Accessibility is the AT-SPI bus every GNOME and KDE session runs, which the driver reads apps through.

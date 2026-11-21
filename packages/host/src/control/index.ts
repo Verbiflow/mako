@@ -316,7 +316,9 @@ export function openControl(
   })
   const elementPicks = new ElementPicks(browser, previews, onMac() ? "mac" : "other")
   const sessions = new ControlSessions(
-    async (bindingId) => (resolveExecutable("cua-driver") && (onMac() || linuxDesktop()) ? driver.grant(`agent ${bindingId}`) : undefined),
+    // A task's computer use goes through the embedded driver where Mako runs one: a Mac's, a Windows desktop's or a
+    // Linux desktop's.
+    async (bindingId) => (resolveExecutable("cua-driver") && (onMac() || onWindows() || linuxDesktop()) ? driver.grant(`agent ${bindingId}`) : undefined),
     undefined,
     undefined,
     (bindingId) => driver.revoke(`agent ${bindingId}`)
