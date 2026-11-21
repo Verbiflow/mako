@@ -24,7 +24,7 @@ export type PlanBuildClaim =
   | { claimed: true; build: PlanBuild }
   | { claimed: false; current: PlanBuild | undefined }
 
-export const PlanBuildsSchema = z.record(z.string(), PlanBuildSchema)
+export const PlanBuildsSchema = z.lazy(() => z.record(z.string(), PlanBuildSchema))
 export type PlanBuilds = z.infer<typeof PlanBuildsSchema>
 
 /** The newest builds the host keeps. */

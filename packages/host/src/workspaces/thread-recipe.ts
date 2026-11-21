@@ -178,7 +178,7 @@ const placeSchema = z.object({
   processes: z.record(z.string(), processPatchSchema).optional(),
 }).strict()
 
-export const RecipeSchema = z.object({
+export const RecipeSchema = z.lazy(() => z.object({
   $schema: z.string().optional(),
   /** Mako's values under the names the app reads, in the agent's shell and in every process below. */
   values: named(template, (name) => variableProblem(name) ?? (SHELL_OWNED.has(name) ? "the agent's own shell needs this one; set it on a process instead" : undefined)).default({}),
@@ -248,7 +248,7 @@ export const RecipeSchema = z.object({
     if (seen.has(path)) context.addIssue({ code: "custom", path: ["carry", index], message: `${path} is listed twice; list it once, with link or without` })
     seen.add(path)
   }
-}).transform(({ secrets, ...recipe }) => (secrets?.length ? { ...recipe, carry: [...(recipe.carry ?? []), ...secrets] } : recipe))
+}).transform(({ secrets, ...recipe }) => (secrets?.length ? { ...recipe, carry: [...(recipe.carry ?? []), ...secrets] } : recipe)))
 
 export type Recipe = z.infer<typeof RecipeSchema>
 

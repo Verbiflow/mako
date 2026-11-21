@@ -113,7 +113,7 @@ const GROK_TOOL_TITLES: readonly (readonly [RegExp, string])[] = [
 ]
 
 /** The part of a Grok tool call's `_meta` that names the tool. */
-export const GrokToolMeta = z.object({ "x.ai/tool": z.object({ name: z.string().trim().min(1).optional() }).optional() })
+export const GrokToolMeta = z.lazy(() => z.object({ "x.ai/tool": z.object({ name: z.string().trim().min(1).optional() }).optional() }))
 export type GrokToolMeta = z.infer<typeof GrokToolMeta>
 
 /** Undefined for any other call's output, rather than a failed `safeParse`, which builds an `Error`. */
@@ -201,7 +201,7 @@ const GrokInstant = z.object({ secs_since_epoch: z.number(), nanos_since_epoch: 
  * `updates.jsonl` when a background task settles (grok 1.0.41 to 1.0.46):
  * what ran, how it ended, when it started and ended, and what it printed.
  */
-export const GrokTaskSnapshot = z.object({
+export const GrokTaskSnapshot = z.lazy(() => z.object({
   task_id: z.string().nullish(),
   description: z.string().nullish(),
   command: z.string().nullish(),
@@ -215,7 +215,7 @@ export const GrokTaskSnapshot = z.object({
   output: z.string().nullish(),
   start_time: GrokInstant.nullish(),
   end_time: GrokInstant.nullish(),
-})
+}))
 export type GrokTaskSnapshot = z.infer<typeof GrokTaskSnapshot>
 
 function instant(at: z.infer<typeof GrokInstant> | null | undefined): number | undefined {
@@ -340,8 +340,8 @@ function subagentReminderTurn(body: string, count: number): ProviderTurnCause {
  * `subagent_finished` says how it ended, how long it ran and what it
  * reported. Only a finish that will wake Grok (`will_wake`) starts a turn.
  */
-export const GrokSubagentSpawned = z.object({ sessionUpdate: z.literal("subagent_spawned"), subagent_id: z.string(), description: z.string().nullish() })
-export const GrokSubagentFinished = z.object({
+export const GrokSubagentSpawned = z.lazy(() => z.object({ sessionUpdate: z.literal("subagent_spawned"), subagent_id: z.string(), description: z.string().nullish() }))
+export const GrokSubagentFinished = z.lazy(() => z.object({
   sessionUpdate: z.literal("subagent_finished"),
   subagent_id: z.string(),
   status: z.string().nullish(),
@@ -349,7 +349,7 @@ export const GrokSubagentFinished = z.object({
   output: z.string().nullish(),
   error: z.string().nullish(),
   will_wake: z.boolean().nullish(),
-})
+}))
 
 /** A finished subagent as the cause of the turn Grok wakes for, named by what spawned it. */
 export function grokSubagentTurn(finished: z.infer<typeof GrokSubagentFinished>, description: string | undefined): ProviderTurnCause {
@@ -736,13 +736,13 @@ const GrokTurnLine = JsonLine.pipe(z.object({
 }))
 
 /** One model call, from `response_completed`'s `usage`, Anthropic-style: `input_tokens` leaves out what the cache supplied. */
-export const GrokCallUsage = z.object({
+export const GrokCallUsage = z.lazy(() => z.object({
   input_tokens: tokenCount,
   output_tokens: tokenCount,
   cache_read_input_tokens: tokenCount,
   cache_creation_input_tokens: tokenCount,
   reasoning_tokens: tokenCount,
-})
+}))
 export type GrokCallUsage = z.infer<typeof GrokCallUsage>
 
 export function grokCallTokens(usage: GrokCallUsage): HarnessTokens {

@@ -27,7 +27,7 @@ const ApiKeySchema = z
   .max(4_096)
   .regex(/^[\x21-\x7e]+$/, "An API key is one line of printable characters")
 
-export const StoredCursorCredentialSchema = z.object({
+export const StoredCursorCredentialSchema = z.lazy(() => z.object({
   version: z.literal(1),
   apiKey: ApiKeySchema,
   method: z.enum(CURSOR_CREDENTIAL_METHODS),
@@ -39,7 +39,7 @@ export const StoredCursorCredentialSchema = z.object({
   savedAt: z.string(),
   /** Opaque identity of this saved credential, never a digest of its secret. */
   revision: z.string().uuid().optional(),
-})
+}))
 export type StoredCursorCredential = z.infer<typeof StoredCursorCredentialSchema>
 
 /** A pasted key, checked for shape before anything is spawned with it. */

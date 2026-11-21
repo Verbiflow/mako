@@ -11,7 +11,7 @@ const Repository = z.string().max(256).regex(/^https:\/\/github\.com\/[A-Za-z0-9
   .refine((value) => !value.endsWith(".git") && !value.endsWith(".") && !value.includes(".."))
   .transform((value) => value.toLowerCase())
 const SlotId = z.string().regex(/^[a-z0-9][a-z0-9-]{0,63}$/)
-export const SourceSessionFenceSchema = z.object({ session: z.uuid(), ownershipGeneration: OwnershipGeneration }).strict()
+export const SourceSessionFenceSchema = z.lazy(() => z.object({ session: z.uuid(), ownershipGeneration: OwnershipGeneration }).strict())
 export type SourceSessionFence = z.infer<typeof SourceSessionFenceSchema>
 export const ProjectSlotSchema = z.object({
   slot: SlotId, kind: z.enum(["primary", "secondary"]), url: Repository,
@@ -20,7 +20,7 @@ export const ProjectSlotSchema = z.object({
 }).strict()
 export type ProjectSlot = z.infer<typeof ProjectSlotSchema>
 const order = (left: string, right: string) => left < right ? -1 : left > right ? 1 : 0
-export const ProjectManifestSchema = z.object({
+export const ProjectManifestSchema = z.lazy(() => z.object({
   version: z.literal(2), move: z.uuid(), sourceThread: z.uuid(), destination: ThreadIdSchema, project: ProjectPathSchema,
   sessions: z.array(SourceSessionFenceSchema).min(1).max(32), slots: z.array(ProjectSlotSchema).min(1).max(32),
 }).strict().superRefine((manifest, context) => {
@@ -41,18 +41,18 @@ export const ProjectManifestSchema = z.object({
   version: manifest.version, move: manifest.move, sourceThread: manifest.sourceThread, destination: manifest.destination, project: manifest.project,
   sessions: [...manifest.sessions].sort((a, b) => order(a.session, b.session)),
   slots: [...manifest.slots].sort((a, b) => order(a.slot, b.slot)),
-}))
+})))
 export type ProjectManifest = z.infer<typeof ProjectManifestSchema>
-export const RegisterProjectSchema = z.object({ manifest: ProjectManifestSchema, expiresAt: z.number().int().positive() }).strict()
+export const RegisterProjectSchema = z.lazy(() => z.object({ manifest: ProjectManifestSchema, expiresAt: z.number().int().positive() }).strict())
 export const ProjectRequestSchema = z.object({ grant: z.uuid(), digest: Digest, revision: z.number().int().positive() }).strict()
 export const SlotRequestSchema = ProjectRequestSchema.extend({ slot: SlotId, operation: z.uuid() }).strict()
 export const FinalizeSlotSchema = ProjectRequestSchema.extend({ reservation: z.uuid() }).strict()
 export type ProjectRequest = z.infer<typeof ProjectRequestSchema>
-export const RuntimeCapabilitySchema = z.object({
+export const RuntimeCapabilitySchema = z.lazy(() => z.object({
   machine: Label, machineGeneration: z.number().int().positive().brand<"MachineGeneration">(), boot: Label, destination: ThreadIdSchema,
   agent: z.object({ preparationVersion: z.literal(2), build: Label, sourceDigest: Digest }).strict(),
   host: z.object({ preparationVersion: z.literal(2), build: Label, sourceDigest: Digest }).strict(),
-}).strict()
+}).strict())
 export type RuntimeCapability = z.infer<typeof RuntimeCapabilitySchema>
 export const PreparationBindingSchema = ProjectRequestSchema.extend({ runtime: RuntimeCapabilitySchema }).strict()
 const CompletedSlot = z.object({ slot: SlotId, repositoryId: Label, path: ProjectPathSchema }).strict()
@@ -60,14 +60,14 @@ const ReadySlot = z.discriminatedUnion("state", [
   CompletedSlot.extend({ state: z.literal("clone-ready") }).strict(),
   CompletedSlot.extend({ state: z.literal("preview-checkpoint-applied"), checkpoint: Digest }).strict(),
 ])
-export const ReadyReceiptSchema = z.object({
+export const ReadyReceiptSchema = z.lazy(() => z.object({
   phase: z.literal("ready-for-arrival"), binding: PreparationBindingSchema, operation: z.uuid(), slots: z.array(ReadySlot).min(1).max(32),
-}).strict()
-export const ArrivalReceiptSchema = z.object({
+}).strict())
+export const ArrivalReceiptSchema = z.lazy(() => z.object({
   phase: z.literal("arrival-applied"), binding: PreparationBindingSchema, operation: z.uuid(), handoffDigest: Digest,
   slots: z.array(CompletedSlot.extend({ state: z.literal("checkpoint-applied"), checkpoint: Digest }).strict()).min(1).max(32),
-}).strict()
-export const PreparationReceiptSchema = z.discriminatedUnion("phase", [ReadyReceiptSchema, ArrivalReceiptSchema])
+}).strict())
+export const PreparationReceiptSchema = z.lazy(() => z.discriminatedUnion("phase", [ReadyReceiptSchema, ArrivalReceiptSchema]))
 export type PreparationReceipt = z.infer<typeof PreparationReceiptSchema>
 export const ReleaseRequestSchema = ProjectRequestSchema.extend({ readyHandle: Digest, operation: z.uuid() }).strict()
 export const BindHandoverSchema = ProjectRequestSchema.extend({ release: z.uuid(), handover: z.uuid() }).strict()

@@ -2,7 +2,7 @@ import { z } from "zod"
 import { ProviderFailureEvidenceSchema } from "./provider-failure-evidence.js"
 import { PromptAttachmentSchema } from "./prompt-attachments.js"
 
-export const LiveActionInputSchema = z.discriminatedUnion("kind", [
+export const LiveActionInputSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("steer"),
     id: z.string().uuid(),
@@ -21,15 +21,15 @@ export const LiveActionInputSchema = z.discriminatedUnion("kind", [
     attachments: z.array(PromptAttachmentSchema).max(100),
   }),
   z.object({ kind: z.literal("compact"), id: z.string().uuid(), requestId: z.string().uuid().optional() }),
-])
+]))
 export type LiveActionInput = z.infer<typeof LiveActionInputSchema>
-export const LiveActionResultSchema = z.discriminatedUnion("kind", [
+export const LiveActionResultSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("completed") }),
   z.object({ kind: z.literal("failed"), reason: z.string(), failureEvidence: ProviderFailureEvidenceSchema.optional(), cancelled: z.literal(true).optional() }),
   z.object({ kind: z.literal("uncertain"), reason: z.string() }),
-])
+]))
 export type LiveActionResult = z.infer<typeof LiveActionResultSchema>
-export const LiveActionSchema = z.object({
+export const LiveActionSchema = z.lazy(() => z.object({
   input: LiveActionInputSchema,
   digest: z.string(),
   bindingId: z.string().uuid(),
@@ -56,5 +56,5 @@ export const LiveActionSchema = z.object({
       }).optional(),
     }),
   ]),
-})
+}))
 export type LiveAction = z.infer<typeof LiveActionSchema>

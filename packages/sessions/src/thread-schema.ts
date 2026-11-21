@@ -18,7 +18,7 @@ import { NativeAgentOriginSchema } from "./native-agent-origin.js"
  * flattens it into entries (`entries.ts`); `entriesFromMessages` reads
  * what an earlier build kept.
  */
-export const DecodedBlockSchema = z.discriminatedUnion("type", [
+export const DecodedBlockSchema = z.lazy(() => z.discriminatedUnion("type", [
   z.object({ type: z.literal("text"), text: z.string(), id: z.string().optional() }),
   z.object({ type: z.literal("thinking"), text: z.string(), id: z.string().optional() }),
   AttachmentContentSchema,
@@ -54,9 +54,9 @@ export const DecodedBlockSchema = z.discriminatedUnion("type", [
     /** What the call did to the machine as its harness reported it (`tool-effects.ts`), for attribution. */
     effects: z.array(ToolEffectSchema).max(1024).optional(),
   }),
-])
+]))
 const identity = { id: z.string().optional(), at: z.string().optional() }
-export const DecodedEntrySchema = z.discriminatedUnion("kind", [
+export const DecodedEntrySchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({
     ...identity,
     kind: z.literal("user"),
@@ -99,7 +99,7 @@ export const DecodedEntrySchema = z.discriminatedUnion("kind", [
      */
     opensTurn: z.literal(true).optional(),
   }),
-])
+]))
 export const ThreadRefSchema = z.object({
   harness: z.string(),
   nativeId: z.string(),
@@ -144,34 +144,34 @@ export const ThreadRefSchema = z.object({
   sessionId: z.string().optional(),
   parent: z.object({ thread: z.string(), session: z.string() }).optional(),
 })
-export const UnreadRecordSchema = z.object({
+export const UnreadRecordSchema = z.lazy(() => z.object({
   kind: z.string(),
   reason: z.enum(["unknown", "unreadable", "undrawn"]),
   count: z.number().int().positive(),
   sample: z.json().optional(),
-})
+}))
 /** History as any build kept it: entries, or an earlier build's messages read as entries. */
-export const StoredEntriesSchema = z.union([
+export const StoredEntriesSchema = z.lazy(() => z.union([
   z.array(EntrySchema),
   z.array(DecodedEntrySchema).transform((messages) => entriesFromMessages(messages)),
-])
-export const RecordSealSchema = z.object({
+]))
+export const RecordSealSchema = z.lazy(() => z.object({
   identity: z.string(),
   from: z.number().int().nonnegative(),
   to: z.number().int().nonnegative(),
   sha256: z.string(),
-})
-export const ResumePointSchema = z.object({
+}))
+export const ResumePointSchema = z.lazy(() => z.object({
   byte: z.number().int().nonnegative(),
   entry: z.number().int().nonnegative(),
   unread: z.array(UnreadRecordSchema).optional(),
   state: z.json().optional(),
   seal: RecordSealSchema,
-})
-export const ThreadSchema = z.object({
+}))
+export const ThreadSchema = z.lazy(() => z.object({
   ref: ThreadRefSchema,
   entries: StoredEntriesSchema,
   checkpoint: z.number().nonnegative().optional(),
   unread: z.array(UnreadRecordSchema).optional(),
   resume: ResumePointSchema.optional(),
-})
+}))

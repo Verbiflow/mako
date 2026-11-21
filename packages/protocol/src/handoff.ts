@@ -45,12 +45,12 @@ export const PARKED_PER_THREAD_MAX = 16
  * naming the tool calls the pause cut (`stopped`). The device names `continuation` and uses the same one if it joins
  * that continue later and sends its parked turns there itself, so a turn goes on once whoever sends it first.
  */
-export const ParkedTurnSchema = z.object({
+export const ParkedTurnSchema = z.lazy(() => z.object({
   conversation: z.uuid(),
   request: z.uuid(),
   continuation: z.uuid(),
   stopped: z.array(z.string().min(1).max(200)).max(64).optional(),
-}).strict()
+}).strict())
 export type ParkedTurn = z.infer<typeof ParkedTurnSchema>
 
 /** At most this many other repositories of a project folder in one Thread of a note: a project's limit, less its first. */
@@ -64,12 +64,12 @@ export const QUIET_OTHERS_MAX = 31
  * The arrival clones it when it isn't there and applies its checkpoint, all or nothing with the first, as a move's
  * carry does (`MoveCarryRepositorySchema`).
  */
-export const QuietRepositorySchema = z.object({
+export const QuietRepositorySchema = z.lazy(() => z.object({
   path: CarriedPathSchema,
   url: z.string().regex(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
   branch: z.string().min(1).max(250).optional(),
   checkpoint: MoveCheckpointSchema,
-}).strict()
+}).strict())
 export type QuietRepository = z.infer<typeof QuietRepositorySchema>
 
 /**
@@ -80,7 +80,7 @@ export type QuietRepository = z.infer<typeof QuietRepositorySchema>
 export const QUIET_PROJECT_MAX = 4_096
 export const QuietProjectSchema = z.string().min(1).max(QUIET_PROJECT_MAX).regex(/^\//)
 
-export const QuietThreadSchema = z.object({
+export const QuietThreadSchema = z.lazy(() => z.object({
   thread: ThreadIdSchema,
   project: QuietProjectSchema.optional(),
   /**
@@ -96,16 +96,16 @@ export const QuietThreadSchema = z.object({
   parked: z.array(ParkedTurnSchema).max(PARKED_PER_THREAD_MAX).optional(),
   /** The project folder's other repositories, each with its own checkpoint (`QuietRepository`); absent from devices before it. */
   others: z.array(QuietRepositorySchema).max(QUIET_OTHERS_MAX).optional(),
-}).strict()
+}).strict())
 export type QuietThread = z.infer<typeof QuietThreadSchema>
 
 /** `POST /v1/devices/:deviceId/quiet`: going away. `at` is the device's clock, only ever shown. */
-export const QuietNoteSchema = z.object({
+export const QuietNoteSchema = z.lazy(() => z.object({
   note: z.uuid(),
   reason: z.enum(["sleep", "shutdown", "quit"]),
   at: z.number().int().nonnegative(),
   threads: z.array(QuietThreadSchema).max(QUIET_THREADS_MAX),
-}).strict()
+}).strict())
 export type QuietNote = z.infer<typeof QuietNoteSchema>
 
 /**
@@ -116,17 +116,17 @@ export type QuietNote = z.infer<typeof QuietNoteSchema>
 export const QuietRefusalSchema = z.enum(["not-yours", "stale", "no-checkpoint", "auto-off"])
 export type QuietRefusal = z.infer<typeof QuietRefusalSchema>
 
-export const QuietAnswerSchema = z.object({
+export const QuietAnswerSchema = z.lazy(() => z.object({
   note: z.uuid(),
   threads: z.array(z.discriminatedUnion("accepted", [
     z.object({ thread: ThreadIdSchema, accepted: z.literal(true) }).strict(),
     z.object({ thread: ThreadIdSchema, accepted: z.literal(false), why: QuietRefusalSchema }).strict(),
   ])).max(QUIET_THREADS_MAX),
-}).strict()
+}).strict())
 export type QuietAnswer = z.infer<typeof QuietAnswerSchema>
 
 /** `POST /v1/devices/:deviceId/owner`: every Session the device holds, at the generation it holds it. */
-export const OwnerAskSchema = z.object({ sessions: z.array(SessionAt).max(OWNER_SESSIONS_MAX) }).strict()
+export const OwnerAskSchema = z.lazy(() => z.object({ sessions: z.array(SessionAt).max(OWNER_SESSIONS_MAX) }).strict())
 export type OwnerAsk = z.infer<typeof OwnerAskSchema>
 
 /**
@@ -136,17 +136,17 @@ export type OwnerAsk = z.infer<typeof OwnerAskSchema>
  * `op` and `cloudThread` name the continue that took it, which the device joins and never runs it here. `unknown`:
  * the account never listed it.
  */
-export const OwnerWordSchema = z.discriminatedUnion("answer", [
+export const OwnerWordSchema = z.lazy(() => z.discriminatedUnion("answer", [
   z.object({ session: z.uuid(), answer: z.literal("yours"), generation: z.number().int().nonnegative() }).strict(),
   z.object({
     session: z.uuid(), answer: z.literal("departed"), generation: z.number().int().nonnegative(),
     cloudThread: ThreadIdSchema, op: z.uuid(), phase: z.enum(["arriving", "continued"]),
   }).strict(),
   z.object({ session: z.uuid(), answer: z.literal("unknown") }).strict(),
-])
+]))
 export type OwnerWord = z.infer<typeof OwnerWordSchema>
 
-export const OwnerAnswerSchema = z.object({ sessions: z.array(OwnerWordSchema).max(OWNER_SESSIONS_MAX) }).strict()
+export const OwnerAnswerSchema = z.lazy(() => z.object({ sessions: z.array(OwnerWordSchema).max(OWNER_SESSIONS_MAX) }).strict())
 export type OwnerAnswer = z.infer<typeof OwnerAnswerSchema>
 
 /**

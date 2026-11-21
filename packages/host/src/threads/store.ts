@@ -736,7 +736,7 @@ const ReportRowSchema = z.object({ record: z.string(), wake_request: z.string().
  * answers, the operation whose repeat it is, who gave it and its words, and the message that carries it to the Fin
  * under the request it's sent as, so a host that stopped before it was delivered sends that same request once.
  */
-export const KeptAnswerSchema = z.object({
+export const KeptAnswerSchema = z.lazy(() => z.object({
   ask: z.string().min(1).max(600),
   child: ThreadIdSchema,
   op: z.string().min(1).max(600),
@@ -748,7 +748,7 @@ export const KeptAnswerSchema = z.object({
   at: z.number(),
   /** When it reached the Fin's conversation, and how. */
   delivered: z.object({ at: z.number(), delivery: z.enum(["turn", "steer", "queued", "interrupt"]) }).optional(),
-})
+}))
 export type KeptAnswer = z.infer<typeof KeptAnswerSchema>
 const AnswerRowSchema = z.object({ record: z.string(), delivered_at: z.number().nullable() })
 function keptAnswer(row: Record<string, SQLOutputValue>): KeptAnswer {
@@ -761,7 +761,7 @@ function keptAnswer(row: Record<string, SQLOutputValue>): KeptAnswer {
  * request it's sent as, so a host that stopped before it was delivered sends that same request once, and none sends
  * a wait's outcome twice.
  */
-export const KeptPullWakeSchema = z.object({
+export const KeptPullWakeSchema = z.lazy(() => z.object({
   wait: z.string().min(1).max(1200),
   child: ThreadIdSchema,
   /** A report in the retained dependency registration, and its pull request by `pullKey`: what must still stand for it to go. */
@@ -774,7 +774,7 @@ export const KeptPullWakeSchema = z.object({
   delivered: z.object({ at: z.number(), delivery: z.enum(["turn", "steer", "queued", "interrupt"]) }).optional(),
   /** When its wait stopped holding before its note was sent (withdrawal, changed condition, stop): retired, never sent. */
   obsolete: z.number().optional(),
-})
+}))
 export type KeptPullWake = z.infer<typeof KeptPullWakeSchema>
 function keptPullWake(row: Record<string, SQLOutputValue>): KeptPullWake {
   return KeptPullWakeSchema.parse(JSON.parse(RecordRowSchema.parse(row).record))

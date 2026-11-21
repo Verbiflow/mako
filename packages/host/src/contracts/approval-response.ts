@@ -8,23 +8,23 @@ import { z } from "zod"
 export const ANSWERED_DIFFERENTLY = "already has a different saved answer"
 
 /** Provider-owned occurrence, scoped to the native observer's lifetime. */
-export const NativeApprovalIdentitySchema = z.object({
+export const NativeApprovalIdentitySchema = z.lazy(() => z.object({
   scope: z.string().uuid(),
   sessionId: z.string().min(1).max(512),
   requestId: z.string().min(1).max(512),
-})
+}))
 export type NativeApprovalIdentity = z.infer<typeof NativeApprovalIdentitySchema>
 
 /** The native runtime recorded this decision. It does not prove tool execution. */
-export const NativeApprovalDecisionSchema = z.object({
+export const NativeApprovalDecisionSchema = z.lazy(() => z.object({
   identity: NativeApprovalIdentitySchema,
   answerDigest: z.string().regex(/^[a-f0-9]{64}$/),
   observedAt: z.number().finite(),
-})
+}))
 export type NativeApprovalDecision = z.infer<typeof NativeApprovalDecisionSchema>
 
 /** Host-owned identity; native request IDs can be reused by later connections. */
-export const ApprovalOriginSchema = z.object({
+export const ApprovalOriginSchema = z.lazy(() => z.object({
   native: NativeApprovalIdentitySchema.optional(),
   nativeRequestId: z.string(),
   observationId: z.string().optional(),
@@ -33,22 +33,22 @@ export const ApprovalOriginSchema = z.object({
   generation: z.number().int(),
   connectionGeneration: z.number().int(),
   runId: z.string().optional(),
-})
+}))
 export type ApprovalOrigin = z.infer<typeof ApprovalOriginSchema>
 
 /** Evidence at the adapter boundary; none of these proves native acceptance. */
-export const ApprovalSubmissionSchema = z.discriminatedUnion("kind", [
+export const ApprovalSubmissionSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("submitted"), source: z.enum(["callback", "transport-write"]) }),
   z.object({ kind: z.literal("not-submitted"), pending: z.boolean(), reason: z.enum(["request-ended", "invalid-answer"]) }),
   z.object({ kind: z.literal("uncertain"), reason: z.string() }),
-])
+]))
 export type ApprovalSubmission = z.infer<typeof ApprovalSubmissionSchema>
 
 /** A request ended; this does not prove which answer, if any, was consumed. */
 export const ApprovalEndSourceSchema = z.enum(["native-resolution", "request-aborted", "connection-close"])
 export type ApprovalEndSource = z.infer<typeof ApprovalEndSourceSchema>
 
-export const ApprovalResponseSchema = z.object({
+export const ApprovalResponseSchema = z.lazy(() => z.object({
   id: z.string().uuid(),
   origin: ApprovalOriginSchema,
   digest: z.string(),
@@ -67,7 +67,7 @@ export const ApprovalResponseSchema = z.object({
 }).superRefine((receipt, context) => {
   if (receipt.nativeDecision && !sameNativeApproval(receipt.origin.native, receipt.nativeDecision.identity))
     context.addIssue({ code: "custom", path: ["nativeDecision"], message: "Native decision belongs to another approval occurrence" })
-})
+}))
 export type ApprovalResponse = z.infer<typeof ApprovalResponseSchema>
 
 export function nativeApprovalMatchesAnswer(receipt: ApprovalResponse): boolean {

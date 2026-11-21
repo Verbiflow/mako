@@ -19,34 +19,34 @@ import { readdir } from "node:fs/promises"
 import { dirname, join } from "node:path"
 
 /** A column's value, worded for reading: a blob as UTF-8 when it is valid UTF-8, else base64. */
-export const OriginalValueSchema = z.discriminatedUnion("type", [
+export const OriginalValueSchema = z.lazy(() => z.discriminatedUnion("type", [
   z.object({ type: z.literal("null") }),
   z.object({ type: z.literal("integer"), text: z.string() }),
   z.object({ type: z.literal("real"), text: z.string() }),
   z.object({ type: z.literal("text"), text: z.string() }),
   z.object({ type: z.literal("blob"), bytes: z.number(), encoding: z.enum(["utf8", "base64"]), text: z.string() }),
-])
+]))
 export type OriginalValue = z.infer<typeof OriginalValueSchema>
 
 const Key = z.record(z.string(), z.union([z.string(), z.number()]))
 
-export const OriginalPartSchema = z.discriminatedUnion("kind", [
+export const OriginalPartSchema = z.lazy(() => z.discriminatedUnion("kind", [
   /** A run of a file's plain bytes, `[from, to)`. */
   z.object({ kind: z.literal("range"), file: z.string(), from: z.number(), to: z.number(), text: z.string() }),
   /** A row, by its key; `columns` is null when the database no longer has it. */
   z.object({ kind: z.literal("row"), file: z.string(), table: z.string(), key: Key, columns: z.record(z.string(), OriginalValueSchema).nullable() }),
   /** A part whose file is gone or couldn't be read, and why. */
   z.object({ kind: z.literal("missing"), file: z.string(), reason: z.string() }),
-])
+]))
 export type OriginalPart = z.infer<typeof OriginalPartSchema>
 
-export const EntryOriginalSchema = z.object({
+export const EntryOriginalSchema = z.lazy(() => z.object({
   /** Read from Mako's copy in the record store, because the harness no longer has the session. */
   kept: z.boolean(),
   parts: z.array(OriginalPartSchema),
   /** The lines of Mako's stream of the live transport the entry was built from (`Entry.stream`), whole; absent for an entry that names none. */
   stream: z.array(OriginalPartSchema).optional(),
-})
+}))
 export type EntryOriginal = z.infer<typeof EntryOriginalSchema>
 
 const utf8 = new TextDecoder("utf-8", { fatal: true })

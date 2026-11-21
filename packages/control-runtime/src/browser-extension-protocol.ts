@@ -6,15 +6,15 @@ export const BROWSER_EXTENSION_PROTOCOL = 1
 /** The extension's answer for a session it no longer holds, as after Chrome detached its debugger; the host ends that binding. */
 export const EXTENSION_SESSION_GONE = "The exact tab session is no longer owned by this client"
 
-export const ExtensionFieldsSchema = z.record(z.string(), z.json())
+export const ExtensionFieldsSchema = z.lazy(() => z.record(z.string(), z.json()))
 const fields = ExtensionFieldsSchema
-export const ExtensionCommandSchema = z.object({
+export const ExtensionCommandSchema = z.lazy(() => z.object({
   id: z.number().int().positive(),
   method: z.string().max(200),
   params: fields.default({}),
   sessionId: z.string().max(200).optional(),
-})
-export const ExtensionHostMessageSchema = z.discriminatedUnion("kind", [
+}))
+export const ExtensionHostMessageSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("incompatible"), message: z.string().max(400) }),
   z.object({
     kind: z.literal("ready"),
@@ -27,8 +27,8 @@ export const ExtensionHostMessageSchema = z.discriminatedUnion("kind", [
     command: ExtensionCommandSchema,
   }),
   z.object({ kind: z.literal("disconnect"), client: z.string() }),
-])
-export const ExtensionMessageSchema = z.discriminatedUnion("kind", [
+]))
+export const ExtensionMessageSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("profile-name"),
     profileName: z.string().trim().min(1).max(100),
@@ -62,8 +62,8 @@ export const ExtensionMessageSchema = z.discriminatedUnion("kind", [
     method: z.string().max(200),
     params: fields,
   }),
-])
-export const ExtensionRegistrationSchema = z.object({
+]))
+export const ExtensionRegistrationSchema = z.lazy(() => z.object({
   version: z.literal(1),
   extensionVersion: z.string().max(40).optional(),
   applicationPath: z.string().max(4096).optional(),
@@ -74,7 +74,7 @@ export const ExtensionRegistrationSchema = z.object({
   name: z.string().max(100),
   endpoint: z.string().url(),
   pid: z.number().int().positive(),
-})
+}))
 export type ExtensionCommand = z.infer<typeof ExtensionCommandSchema>
 export type ExtensionMessage = z.infer<typeof ExtensionMessageSchema>
 export type ExtensionHostMessage = z.infer<typeof ExtensionHostMessageSchema>

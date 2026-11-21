@@ -19,7 +19,7 @@ export type ProviderConnectionSource = z.infer<
   typeof ProviderConnectionSourceSchema
 >
 
-export const ProviderConnectionStateSchema = z.discriminatedUnion("status", [
+export const ProviderConnectionStateSchema = z.lazy(() => z.discriminatedUnion("status", [
   z.object({ status: z.literal("unavailable"), message: z.string() }),
   z.object({
     status: z.literal("signed-out"),
@@ -41,12 +41,12 @@ export const ProviderConnectionStateSchema = z.discriminatedUnion("status", [
     /** When the credential lapses, so Settings can say "expires in 3 months". */
     expiresAt: z.string().optional(),
   }),
-])
+]))
 export type ProviderConnectionState = z.infer<
   typeof ProviderConnectionStateSchema
 >
 
-export const ProviderConnectionSchema = z.object({
+export const ProviderConnectionSchema = z.lazy(() => z.object({
   provider: z.string(),
   /** What the connection is for, in the provider's own words: "Cursor". */
   label: z.string(),
@@ -63,10 +63,10 @@ export const ProviderConnectionSchema = z.object({
   keyUrl: z.string().optional(),
   /** When the host last asked the provider. */
   checkedAt: z.string().optional(),
-})
+}))
 export type ProviderConnection = z.infer<typeof ProviderConnectionSchema>
 
-export const ProviderConnectionActionSchema = z.discriminatedUnion("kind", [
+export const ProviderConnectionActionSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("refresh") }),
   /** The provider's browser sign-in; the host opens the page and waits. */
   z.object({ kind: z.literal("sign-in-browser") }),
@@ -76,7 +76,7 @@ export const ProviderConnectionActionSchema = z.discriminatedUnion("kind", [
     apiKey: z.string().min(1).max(4_096),
   }),
   z.object({ kind: z.literal("sign-out") }),
-])
+]))
 export type ProviderConnectionAction = z.infer<
   typeof ProviderConnectionActionSchema
 >

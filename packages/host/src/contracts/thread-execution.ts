@@ -17,10 +17,10 @@ export type RuntimeId = z.infer<typeof RuntimeIdSchema>
 export const MoveIdSchema = z.string().uuid().brand<"MoveId">()
 export type MoveId = z.infer<typeof MoveIdSchema>
 
-export const ExecutionOwnerSchema = z.discriminatedUnion("kind", [
+export const ExecutionOwnerSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("device"), device: DeviceIdSchema }),
   z.object({ kind: z.literal("cloud"), runtime: RuntimeIdSchema }),
-])
+]))
 export type ExecutionOwner = z.infer<typeof ExecutionOwnerSchema>
 
 /** What a store knows about one Session's execution, from its own point of view. */
@@ -39,7 +39,7 @@ export const SessionOriginSchema = z.enum(["imported", "started", "captured", "f
  * never new ones. Journal contents, native records and workspace bytes travel
  * through their own contracts; the handoff names the journals only.
  */
-export const HandoffSchema = z.object({
+export const HandoffSchema = z.lazy(() => z.object({
   move: MoveIdSchema,
   source: ExecutionOwnerSchema,
   target: ExecutionOwnerSchema,
@@ -60,23 +60,23 @@ export const HandoffSchema = z.object({
     generation: z.number().int().positive(),
     journals: z.array(z.string().uuid()),
   })).min(1),
-})
+}))
 export type Handoff = z.infer<typeof HandoffSchema>
 
 /** The destination's answer that it owns the Thread's Sessions now. */
-export const ClaimReceiptSchema = z.object({
+export const ClaimReceiptSchema = z.lazy(() => z.object({
   move: MoveIdSchema,
   owner: ExecutionOwnerSchema,
   sessions: z.array(z.object({ id: SessionIdSchema, generation: z.number().int().positive() })).min(1),
-})
+}))
 export type ClaimReceipt = z.infer<typeof ClaimReceiptSchema>
 
 /** The destination's durable promise that it never claimed and never will. */
-export const RefusalSchema = z.object({
+export const RefusalSchema = z.lazy(() => z.object({
   move: MoveIdSchema,
   by: ExecutionOwnerSchema,
   reason: z.string().min(1),
-})
+}))
 export type Refusal = z.infer<typeof RefusalSchema>
 
 export function sameOwner(left: ExecutionOwner, right: ExecutionOwner): boolean {

@@ -9,9 +9,9 @@ import type { ThreadScratchEntry, ThreadScratchReport, ThreadScratchSettings } f
 import type { ReclaimItem } from "../contracts/storage.js"
 
 export const SCRATCH_PASS_MS = 60 * 60_000
-export const ThreadScratchSettingsSchema = z.object({
+export const ThreadScratchSettingsSchema = z.lazy(() => z.object({
   mode: z.enum(["preview", "remove"]), dataMode: z.enum(["preview", "remove"]).default("preview"), idleDays: z.number().int().min(1).max(3650), kept: z.array(ThreadIdSchema).max(10_000),
-}).strict()
+}).strict())
 const RecordSchema = z.object({
   thread: ThreadIdSchema, generation: z.string().uuid(), usedAt: z.number().finite(),
   retiring: z.boolean().optional(),

@@ -160,7 +160,7 @@ export async function replaceFile(path: string, text: string): Promise<void> {
 export const WITHHELD = ""
 
 /** A JSON object as a harness wrote it, every field kept. */
-export const JsonObjectSchema = z.record(z.string(), z.json())
+export const JsonObjectSchema = z.lazy(() => z.record(z.string(), z.json()))
 
 const JwtExpirySchema = z.object({ exp: z.number() })
 const InstantSchema = z.union([z.number(), z.string().transform((text) => Date.parse(text))])
