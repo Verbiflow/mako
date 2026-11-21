@@ -858,3 +858,13 @@ compared, where WGC's window capture sends far fewer frames. Hardware encoding
 (an `MFT_ENUM_FLAG_HARDWARE` transform, driven by its events) is chosen first
 wherever one enumerates and falls back to the software encoder if it fails, but
 no hosted runner has a GPU, so that path is unmeasured.
+
+The choice itself is checked (`encodedWith` in the same script, run
+44932411452): with `MAKO_VIDEO_ENCODER` at `auto` the helper's summary names
+"Media Foundation (software)" and 20 units come out, the fallback at work;
+`software` gives the same; `hardware`, asked for outright on a machine with
+none, sends no unit and says "No hardware H.264 encoder could start". A
+hardware encoder has still never run in CI. The installer's smoke records a
+window from a Thread on the installed app to a finished MP4 with no FFmpeg on
+`PATH` (`scripts/smoke-windows-install.mjs`). A video's poster isn't made on
+Windows (`video-poster.ts`); a player draws the video's first frame.

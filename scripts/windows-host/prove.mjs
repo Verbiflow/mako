@@ -148,6 +148,10 @@ try {
   assert.match(text(first), /the host reads each update/, "the stand-in's words, as they streamed")
   assert.deepEqual(first.at(-1), { kind: "settled", requestId: started.requestId, status: "completed" })
   passed("a conversation on grok.cmd streams a turn to its end")
+  // Its Thread got a data folder and a scratch folder of its own (this data root sits under a short name, RUNNER~1).
+  const launchLog = await readFile(join(dataRoot, "logs", "host.log"), "utf8")
+  assert.doesNotMatch(launchLog, /Thread data registration failed|Scratch preparation failed/, "the Thread's data and scratch folders are made")
+  passed("the Thread gets its own data and scratch folders")
 
   // Local Control, end to end: the agent's own `mako-control status`, run by the stand-in from its shell, reached the
   // task's session over its pipe (the handshake, the host's relay to the worker) and was answered.
@@ -239,6 +243,37 @@ try {
   if (killed.exitCode === null) await Promise.race([once(killed, "exit"), delay(10_000)])
   await until(async () => alive(orphan), (running) => !running, `the grandchild (pid ${orphan}) to end with its killed host`, 20_000)
   passed("a host killed outright leaves none of its harness's tree behind", `host ${killed.pid} ended by TerminateProcess; grandchild ${orphan} gone`)
+
+  // What a console sends a host started in one: Ctrl-Break (SIGBREAK) and its window closing (SIGHUP). Each host here
+  // has a console of its own, so the event reaches it and not this proof; its own stop must run.
+  const signalled = async (event, signal) => {
+    const root = join(scratch, `console-${event}`)
+    await mkdir(root, { recursive: true })
+    runtimeFolders.push(runtimeLocation(root).directory)
+    const { stdout } = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-Command", `(Start-Process -FilePath '${process.execPath}' -ArgumentList '"${hostCli}"' -WindowStyle Hidden -PassThru).Id`], { env: { ...env, MAKO_DATA_ROOT: root }, timeout: 60_000 })
+    const pid = Number(stdout.trim())
+    assert.ok(pid > 0, `a host with a console of its own: ${stdout}`)
+    try {
+      await until(() => probeRuntime(runtimeLocation(root).socket, { timeoutMs: 2_000 }).catch(() => undefined), (probe) => probe?.state === "ready", `the ${event} host's /health`, 90_000)
+      const sent = await run("powershell.exe", ["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", join(repo, "scripts", "windows-host", "console-signal.ps1"), "-ProcessId", String(pid), "-Signal", event], { timeout: 60_000 }).then((done) => done.stdout.trim(), (error) => `failed: ${error.stdout ?? ""}${error.stderr ?? ""}`.trim().slice(0, 600))
+      const gone = await until(async () => !alive(pid), Boolean, `the host to end after ${event}`, 30_000).then(() => true, () => false)
+      const log = await readFile(join(root, "logs", "host.log"), "utf8").catch(() => "")
+      return { sent, gone, heard: new RegExp(`lifecycle stopping signal=${signal}`).test(log), stopped: /lifecycle stopped/.test(log) }
+    } finally {
+      if (alive(pid)) await run("taskkill", ["/PID", String(pid), "/T", "/F"]).catch(() => undefined)
+    }
+  }
+  const broke = await signalled("break", "SIGBREAK")
+  assert.deepEqual(broke, { sent: "sent break", gone: true, heard: true, stopped: true }, "Ctrl-Break runs the host's own stop")
+  passed("Ctrl-Break (SIGBREAK) runs the host's own stop", JSON.stringify(broke))
+  // A console's close gives its programs a few seconds before Windows ends them; whether the stop finished in that
+  // time is recorded, and required only where the event could be delivered at all.
+  const closed = await signalled("close", "SIGHUP")
+  report.consoleClose = closed
+  if (closed.sent === "sent close" && closed.heard) {
+    assert.ok(closed.gone, "a host whose console closed is gone")
+    passed("a console's close (SIGHUP) reaches the host's stop", JSON.stringify(closed))
+  } else console.log(`note a console's close wasn't delivered to the host on this runner: ${JSON.stringify(closed)}`)
 } catch (error) {
   report.failures.push(error instanceof Error ? (error.stack ?? error.message) : String(error))
   console.error(`FAIL ${report.failures.at(-1)}`)

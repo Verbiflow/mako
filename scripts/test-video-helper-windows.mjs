@@ -384,6 +384,46 @@ try {
   assert.equal(changed.keys, 1, "a new rate needs no key frame")
   assert.ok(changed.last < changed.first * 0.6, "the bitrate command takes effect")
 
+  // Which encoder: `auto` takes a hardware H.264 encoder where the machine has one and Windows' software encoder
+  // otherwise; `software` and `hardware` ask for one outright (MAKO_VIDEO_ENCODER, which the helper reads). Every
+  // branch is run here. On a machine with no hardware encoder (a hosted runner has no GPU), `auto` must fall back
+  // and encode, and `hardware` must refuse and say why rather than encode nothing in silence.
+  async function encodedWith(choice) {
+    const before = process.env.MAKO_VIDEO_ENCODER
+    process.env.MAKO_VIDEO_ENCODER = choice
+    const units = []
+    let ended
+    try {
+      const encoder = new VideoHelper(helper, { kind: "frames" }, { fps: 30, bitrate: 1_000_000 }, { unit: (packet) => units.push(packet), ended: (reason) => (ended = reason) })
+      const start = Date.now()
+      for (let index = 0; index < 20 && ended === undefined; index++) {
+        // A helper that has refused may never take the picture: it is waited for two seconds at most.
+        await Promise.race([new Promise((done) => encoder.picture("rgb", index, start + index * 33, pictures[index], { width: 640, height: 360 }, () => done())), wait(2_000)])
+        await wait(33)
+      }
+      await until(() => units, (sent) => sent.length >= 20 || ended !== undefined, `units from the ${choice} encoder`).catch(() => undefined)
+      encoder.close()
+      await encoder.exited
+      const summary = encoder.said.split("\n").filter((line) => line.startsWith("{")).at(-1)
+      return { units: units.length, keys: units.filter((packet) => packet.kind === "key").length, ended, encoder: summary ? JSON.parse(summary).encoder : undefined, said: encoder.said.split("\n").filter((line) => !line.startsWith("{")).join(" | ").slice(0, 300) }
+    } finally {
+      if (before === undefined) delete process.env.MAKO_VIDEO_ENCODER
+      else process.env.MAKO_VIDEO_ENCODER = before
+    }
+  }
+  const auto = await encodedWith("auto")
+  const software = await encodedWith("software")
+  const hardware = await encodedWith("hardware")
+  results.encoders = { auto, software, hardware }
+  console.log(`  encoders: auto → ${auto.encoder} (${auto.units} units); software → ${software.encoder} (${software.units} units); hardware → ${hardware.encoder ?? hardware.ended ?? hardware.said} (${hardware.units} units)`)
+  assert.ok(auto.units >= 20 && auto.keys >= 1 && /^Media Foundation \((software|hardware: .+)\)$/.test(auto.encoder ?? ""), `auto encodes with one of the two: ${JSON.stringify(auto)}`)
+  assert.ok(software.units >= 20 && software.encoder === "Media Foundation (software)", `software is Windows' own encoder: ${JSON.stringify(software)}`)
+  if (auto.encoder === "Media Foundation (software)") {
+    // No hardware encoder here: asked for outright, it is refused in words, and `auto` above is the fallback at work.
+    assert.equal(hardware.units, 0, "no unit comes from a hardware encoder this machine doesn't have")
+    assert.match(`${hardware.ended ?? ""} ${hardware.said}`, /No hardware H\.264 encoder could start/, `the refusal says why: ${JSON.stringify(hardware)}`)
+  } else assert.ok(hardware.units >= 20 && /hardware/.test(hardware.encoder ?? ""), `this machine's hardware encoder encodes: ${JSON.stringify(hardware)}`)
+
   console.log(JSON.stringify(results, null, 2))
   if (jsonOut) writeFileSync(jsonOut, JSON.stringify(results, null, 2))
   console.log("Windows video helper passed")
