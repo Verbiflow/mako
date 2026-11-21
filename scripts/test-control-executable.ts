@@ -45,6 +45,8 @@ try {
     // The runner's own Node is on PATH, and still isn't searched for.
     assert.equal(resolveExecutable("node"), undefined, "Windows searches no PATH")
     assert.ok(resolveExecutable(process.execPath), "an absolute program is taken")
+    assert.equal(resolveExecutable(process.execPath.slice(2)), undefined, "a path with no drive is no program")
+    assert.equal(resolveExecutable(process.execPath.slice(2).replaceAll("\\", "/")), undefined)
   } else {
     await file(join(second, "plain"), 0o644)
     await file(join(first, "plain"))

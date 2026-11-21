@@ -31,6 +31,7 @@ import { drawFamilyPipe, familyFile, isPipeFamily, publishedFamilyPipe, publishF
 import { probeLock, takeLock } from "../packages/sessions/src/record-locks.ts"
 import { resolveExecutable } from "@mako/host/base/executable"
 import { windowsHelperLines } from "@mako/host/base/windows-helper"
+import { identityOf, parseVerdict } from "@mako/host/base/executable-trust"
 import { terminalShell } from "@mako/host/terminals/shell"
 
 const run = promisify(execFile)
@@ -221,9 +222,9 @@ try {
     await run(join(system32, "icacls.exe"), [planted, "/grant", `${other}:(OI)(CI)F`])
     for (const name of ["pwsh.exe", "git.exe"]) await copyFile(join(system32, "cmd.exe"), join(planted, name))
     await copyFile(join(system32, "cmd.exe"), join(open, "pwsh.exe"))
-    assert.match((await windowsHelperLines(["trusted", planted]))?.[0] ?? "", /^untrusted (owned by another|writable by)/, "the planted folder isn't trusted")
-    assert.match((await windowsHelperLines(["trusted", open]))?.[0] ?? "", /^untrusted writable by S-1-5-11/, "a folder under C:\\ is writable by every authenticated user")
-    assert.equal((await windowsHelperLines(["trusted", system32]))?.[0], "trusted")
+    assert.match((await windowsHelperLines(["trusted", join(planted, "pwsh.exe")]))?.[0] ?? "", /^untrusted (owned by another|writable by)/, "the planted program isn't trusted")
+    assert.match((await windowsHelperLines(["trusted", join(open, "pwsh.exe")]))?.[0] ?? "", /^untrusted writable by S-1-5-11/, "a folder under C:\\ is writable by every authenticated user")
+    assert.match((await windowsHelperLines(["trusted", join(system32, "cmd.exe")]))?.[0] ?? "", /^trusted .*cmd\.exe [0-9a-f]{8}:[0-9a-f]{16}$/i)
     const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "Path"
     const env = { ...process.env, [pathKey]: [planted, open, process.env[pathKey]].join(";") }
     for (const name of ["pwsh", "git"]) {
@@ -251,9 +252,11 @@ try {
   const handsDown = "C:\\mako-handsDown-" + randomUUID().slice(0, 8)
   const target = "C:\\mako-open-target-" + randomUUID().slice(0, 8)
   const junction = "C:\\mako-junction-" + randomUUID().slice(0, 8)
+  const tools = "C:\\mako-tools-" + randomUUID().slice(0, 8)
+  const besideDll = "C:\\mako-dll-" + randomUUID().slice(0, 8)
   const icacls = join(system32, "icacls.exe")
   try {
-    for (const folder of [guarded, handsDown, target]) await mkdir(folder, { recursive: true })
+    for (const folder of [guarded, handsDown, target, besideDll]) await mkdir(folder, { recursive: true })
     for (const folder of [guarded, handsDown])
       await run(icacls, [folder, "/inheritance:r", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", `*${sid}:(OI)(CI)F`])
     // Every user may write what's made in `handsDown` from now on, though not `handsDown` itself.
@@ -265,22 +268,41 @@ try {
     await copyFile(join(system32, "cmd.exe"), join(target, "kept.exe"))
     await run(join(system32, "cmd.exe"), ["/d", "/c", "mklink", "/J", junction, target])
     const verdict = async (path: string) => (await windowsHelperLines(["trusted", path]))?.[0] ?? ""
-    assert.equal(await verdict(join(guarded, "kept.exe")), "trusted", "a program no one else may write, in a guarded folder")
+    assert.match(await verdict(join(guarded, "kept.exe")), /^trusted .*kept\.exe [0-9a-f]{8}:[0-9a-f]{16}$/i, "a program no one else may write, in a guarded folder, where it really is")
     assert.match(await verdict(join(guarded, "pwsh.exe")), /^untrusted writable by S-1-5-32-545 /, "a program every user may write")
     assert.match(await verdict(join(handsDown, "git.exe")), /^untrusted writable by S-1-5-32-545 /, "a folder that hands every user write on its files")
-    assert.match(await verdict(join(junction, "kept.exe")), /^untrusted writable by S-1-5-11 .*mako-open-target/i, "a junction is checked where it leads")
+    assert.match(await verdict(join(junction, "kept.exe")), /^untrusted writable by S-1-5-11 /i, "a junction every user may repoint, to a folder every user may write")
+    // A junction any user may repoint, in a folder any user may write, to the guarded folder: refused though its
+    // target is clean, since it could lead elsewhere once asked about.
+    await mkdir(tools, { recursive: true })
+    await run(join(system32, "cmd.exe"), ["/d", "/c", "mklink", "/J", join(tools, "link"), guarded])
+    assert.match(await verdict(join(tools, "link", "kept.exe")), /^untrusted writable by S-1-5-11 /i, "a junction on a path any user may change is refused, its target clean or not")
+    // A DLL beside a clean program, which Windows loads from its folder first, that any user may write.
+    await run(icacls, [besideDll, "/inheritance:r", "/grant:r", "*S-1-5-32-544:(OI)(CI)F", "*S-1-5-18:(OI)(CI)F", `*${sid}:(OI)(CI)F`])
+    await copyFile(join(system32, "cmd.exe"), join(besideDll, "kept.exe"))
+    await copyFile(join(system32, "version.dll"), join(besideDll, "loose.dll"))
+    await run(icacls, [join(besideDll, "loose.dll"), "/grant", "*S-1-5-32-545:M"])
+    assert.match(await verdict(join(besideDll, "kept.exe")), /^untrusted writable by S-1-5-32-545 .*loose\.dll/i, "a program beside a DLL any user may write")
+    // The file's identity as the helper reads it is Node's dev and ino, so a kept verdict knows its file.
+    const realGit = resolveExecutable("git")
+    assert.ok(realGit, "Git is found")
+    const said = parseVerdict(await verdict(realGit))
+    assert.ok(said?.trusted, `Git is trusted: ${JSON.stringify(said)}`)
+    assert.equal(said.identity, identityOf(said.real), "the helper's file identity is Node's dev:ino")
     const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "Path"
+    assert.equal(resolveExecutable("kept", { ...process.env, [pathKey]: join(tools, "link") }), null, "nothing is found through a junction any user may repoint")
     const env = { ...process.env, [pathKey]: [guarded, handsDown, junction, process.env[pathKey]].join(";") }
     const pwsh = resolveExecutable("pwsh", env)
     assert.ok(pwsh && !pwsh.toLowerCase().startsWith(guarded.toLowerCase()), `the writable pwsh.exe is passed by: ${pwsh}`)
     const git = resolveExecutable("git", env)
     assert.ok(git && !git.toLowerCase().startsWith(handsDown.toLowerCase()), `the git.exe its folder hands write on is passed by: ${git}`)
-    assert.equal(resolveExecutable("kept", env), join(guarded, "kept.exe"), "the guarded program is found")
+    assert.equal(resolveExecutable("kept", env)?.toLowerCase(), join(guarded, "kept.exe").toLowerCase(), "the guarded program is found, by where it really is")
   } finally {
     await rm(junction, { force: true, recursive: false }).catch(() => undefined)
-    for (const folder of [guarded, handsDown, target]) await rm(folder, { recursive: true, force: true }).catch(() => undefined)
+    await rm(join(tools, "link"), { force: true, recursive: false }).catch(() => undefined)
+    for (const folder of [guarded, handsDown, target, tools, besideDll]) await rm(folder, { recursive: true, force: true }).catch(() => undefined)
   }
-  console.log("ok   a program file anyone may write, one a folder hands write on, and a junction's target are each refused")
+  console.log("ok   refused: a program file anyone may write, one a folder hands write on, a junction anyone may repoint (even to a clean folder), a DLL anyone may write beside a program; the helper's file identity is Node's")
 
   console.log("PASS: Windows pipes prove their servers, and no planted program runs")
 } finally {

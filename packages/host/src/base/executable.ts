@@ -4,7 +4,7 @@ import { homedir } from "node:os"
 import { delimiter, dirname, extname, isAbsolute, join } from "node:path"
 import { onWindows } from "./platform.js"
 import { windowsHelperLines, windowsHelperSync } from "./windows-helper.js"
-import { trustedWithoutAsking, trustedWithoutHelper } from "./executable-trust.js"
+import { parseVerdict, trustedWithoutAsking, trustedWithoutHelper } from "./executable-trust.js"
 import { hostStopping } from "./host-stopping.js"
 
 /** nvm's Node versions under `nvmRoot`, newest first, each one's folder of executables. */
@@ -111,31 +111,32 @@ export function windowsFolders(env: NodeJS.ProcessEnv, home: string): string[] {
 }
 
 /**
- * Whether a program Windows' launches found by searching is this user's choice (`executable-trust.ts`). On a host's
- * thread a verdict it keeps answers; one it hasn't seen is asked once, waiting, and kept.
+ * Where a program Windows' launches found by searching really is, when it is this user's choice
+ * (`executable-trust.ts`): that path is what's started, never the one it was found by. On a host's thread a verdict it
+ * keeps answers; one it hasn't seen is asked once, waiting, and kept. Elsewhere the program as found.
  */
-export function trustedProgram(file: string, env: NodeJS.ProcessEnv = process.env, home = homedir()): boolean {
-  if (!onWindows() || trustedWithoutAsking(file, { env, home })) return true
+export function trustedProgram(file: string, env: NodeJS.ProcessEnv = process.env, home = homedir()): string | undefined {
+  if (!onWindows()) return file
+  const plain = trustedWithoutAsking(file, { env, home })
+  if (plain) return plain
   const trust = hostStopping()?.trust
-  const kept = trust?.known(file)
-  if (kept !== undefined) return kept
-  if (trust) return trust.checkNow(file, env)
-  const said = windowsHelperSync(["trusted", file])?.[0]
-  return said === undefined ? trustedWithoutHelper(file, env) : said === "trusted"
+  const verdict = trust?.known(file) ?? trust?.checkNow(file, env) ?? parseVerdict(windowsHelperSync(["trusted", "-"], `${file}\n`)?.[0]) ?? trustedWithoutHelper(file, env)
+  return verdict.trusted ? verdict.real : undefined
 }
 
 /** `trustedProgram`, off the thread. */
-async function trustedProgramAsync(file: string, env: NodeJS.ProcessEnv, home: string): Promise<boolean> {
-  if (!onWindows() || trustedWithoutAsking(file, { env, home })) return true
+async function trustedProgramAsync(file: string, env: NodeJS.ProcessEnv, home: string): Promise<string | undefined> {
+  if (!onWindows()) return file
+  const plain = trustedWithoutAsking(file, { env, home })
+  if (plain) return plain
   const trust = hostStopping()?.trust
-  const kept = trust?.known(file)
-  if (kept !== undefined) return kept
-  if (trust) {
+  let verdict = trust?.known(file)
+  if (!verdict && trust) {
     await trust.check([file], env)
-    return trust.known(file) ?? false
+    verdict = trust.known(file)
   }
-  const said = (await windowsHelperLines(["trusted", file]))?.[0]
-  return said === undefined ? trustedWithoutHelper(file, env) : said === "trusted"
+  verdict ??= parseVerdict((await windowsHelperLines(["trusted", "-"], `${file}\n`))?.[0]) ?? trustedWithoutHelper(file, env)
+  return verdict.trusted ? verdict.real : undefined
 }
 
 export function environmentForExecutable(
@@ -162,7 +163,13 @@ export function resolveExecutable(
       // Windows has no execute bit (`X_OK` asks only that it exists): there a file is what runs, from a folder only this
       // user or the system can put it in, when it was looked for rather than named.
       if (!onWindows()) accessSync(candidate, constants.X_OK)
-      else if (!statSync(candidate).isFile() || (!isAbsolute(command) && !trustedProgram(candidate, env, home))) continue
+      else if (!statSync(candidate).isFile()) continue
+      else if (!isAbsolute(command)) {
+        // Windows: the program where it really is, when it's this user's choice; that is what's started.
+        const real = trustedProgram(candidate, env, home)
+        if (!real) continue
+        return real
+      }
       return candidate
     } catch {
       continue
@@ -184,7 +191,10 @@ export class Executables {
   async find(command: string, env: NodeJS.ProcessEnv = process.env, home = homedir()): Promise<string | null> {
     const key = [command, environmentVariable(env, "PATH") ?? "", env.NVM_BIN ?? "", home].join("\0")
     const kept = this.found.get(key)
-    if (kept && await runs(kept) && (isAbsolute(command) || await trustedProgramAsync(kept, env, home))) return kept
+    if (kept && await runs(kept)) {
+      const real = isAbsolute(command) ? kept : await trustedProgramAsync(kept, env, home)
+      if (real) return real
+    }
     this.found.delete(key)
     const found = await findExecutable(command, env, home)
     if (found) this.found.set(key, found)
@@ -198,8 +208,11 @@ export async function findExecutable(command: string, env: NodeJS.ProcessEnv = p
   const candidates = isAbsolute(command)
     ? commandNames(command, env)
     : candidatesIn(command, env, home, await readdir(nvmRoot, { withFileTypes: true }).then((entries) => nvmBinsOf(nvmRoot, entries), () => []))
-  for (const candidate of candidates)
-    if (await runs(candidate) && (isAbsolute(command) || await trustedProgramAsync(candidate, env, home))) return candidate
+  for (const candidate of candidates) {
+    if (!(await runs(candidate))) continue
+    const real = isAbsolute(command) ? candidate : await trustedProgramAsync(candidate, env, home)
+    if (real) return real
+  }
   return null
 }
 

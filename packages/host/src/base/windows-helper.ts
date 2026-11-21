@@ -2,6 +2,7 @@ import { execFile, execFileSync } from "node:child_process"
 import { existsSync } from "node:fs"
 import { dirname, join, win32 } from "node:path"
 import { fileURLToPath } from "node:url"
+import { endChildInput } from "@mako/sessions/child-input"
 
 /**
  * `mako-windows.exe` (`native/windows-helper/mako-windows.c`): the Win32 Mako's host needs and Node doesn't expose,
@@ -15,23 +16,27 @@ export function windowsHelper(env: NodeJS.ProcessEnv = process.env): string | un
   return [installed, checkout].find((path): path is string => path !== undefined && win32.isAbsolute(path) && existsSync(path))
 }
 
-/** The helper's lines for `args`, waiting for it (a few milliseconds); undefined where it's missing or failed. */
-export function windowsHelperSync(args: readonly string[]): string[] | undefined {
+/**
+ * The helper's lines for `args`, waiting for it (a few milliseconds); undefined where it's missing or failed. `input`
+ * goes to its stdin, as `trusted -` reads its paths: no command line's length bounds them.
+ */
+export function windowsHelperSync(args: readonly string[], input?: string): string[] | undefined {
   const helper = windowsHelper()
   if (!helper) return undefined
   try {
-    return execFileSync(helper, args, { encoding: "utf8", timeout: 5_000, windowsHide: true }).trim().split(/\r?\n/)
+    return execFileSync(helper, args, { encoding: "utf8", timeout: 5_000, windowsHide: true, ...(input !== undefined && { input }) }).trim().split(/\r?\n/)
   } catch {
     return undefined
   }
 }
 
 /** `windowsHelperSync`, off the thread. */
-export function windowsHelperLines(args: readonly string[]): Promise<string[] | undefined> {
+export function windowsHelperLines(args: readonly string[], input?: string): Promise<string[] | undefined> {
   const helper = windowsHelper()
   if (!helper) return Promise.resolve(undefined)
   return new Promise((resolve) => {
-    execFile(helper, args, { encoding: "utf8", timeout: 15_000, windowsHide: true }, (error, stdout) => resolve(error ? undefined : stdout.trim().split(/\r?\n/)))
+    const child = execFile(helper, args, { encoding: "utf8", timeout: 60_000, windowsHide: true, maxBuffer: 64 * 1024 * 1024 }, (error, stdout) => resolve(error ? undefined : stdout.trim().split(/\r?\n/)))
+    endChildInput(child, input ?? "")
   })
 }
 

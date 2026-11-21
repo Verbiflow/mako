@@ -1,6 +1,6 @@
 import { accessSync, constants, statSync } from "node:fs"
 import { delimiter, extname, isAbsolute, join } from "node:path"
-import { nodePlatform } from "./platform.js"
+import { nodePlatform, onWindows } from "./platform.js"
 
 /**
  * Runtime tools use explicit PATH; never inspect a developer's agent installs.
@@ -16,7 +16,9 @@ export function resolveExecutable(
   platform: NodeJS.Platform = nodePlatform()
 ): string | undefined {
   const windows = platform === "win32"
-  if (windows && !isAbsolute(command)) return undefined
+  // Nor a path with no drive (`\x\y.exe`), which Windows reads from the current drive's root, where any account may
+  // make it.
+  if (windows && (!isAbsolute(command) || (onWindows() && /^[\\/](?![\\/])/.test(command)))) return undefined
   const names = windows ? windowsNames(command, variable(env, "PATHEXT")) : [command]
   const folders = isAbsolute(command) ? [""] : (env.PATH ?? "").split(delimiter).filter(Boolean)
   for (const folder of folders)

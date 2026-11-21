@@ -8,6 +8,7 @@
  */
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
+import { realpathSync } from "node:fs"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { delimiter, join } from "node:path"
@@ -74,8 +75,10 @@ try {
     await writeFile(join(bin, "echo-batch"), "#!/bin/sh\necho the extensionless script npm writes beside a shim\n")
     const env: NodeJS.ProcessEnv = { ...process.env, Path: [bin, process.env.Path ?? process.env.PATH].join(delimiter), PATHEXT: ".COM;.EXE;.BAT;.CMD" }
     delete env.PATH
-    assert.equal(resolveExecutable("echo-batch", env), join(bin, "echo-batch.cmd"), "PATHEXT finds the .cmd, never the extensionless script")
-    assert.equal(resolveExecutable("echo-shim", env), join(bin, "echo-shim.cmd"))
+    // A program is found by where it really is: the temp folder's long name, not the `RUNNER~1` it may be named by.
+    const real = (path: string) => realpathSync.native(path).toLowerCase()
+    assert.equal(resolveExecutable("echo-batch", env)?.toLowerCase(), real(join(bin, "echo-batch.cmd")), "PATHEXT finds the .cmd, never the extensionless script")
+    assert.equal(resolveExecutable("echo-shim", env)?.toLowerCase(), real(join(bin, "echo-shim.cmd")))
 
     const words = ["plain", "two words", 'a "quoted" word', "trailing\\", "a&b|c<d>e^f", "%PATH%", "!bang!", "(paren)", ""]
     const heard = (file: string) => new Promise<{ spawnfile: string; argv: string[] }>((done, fail) => {
