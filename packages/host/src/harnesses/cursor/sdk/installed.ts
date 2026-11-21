@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs"
 import { createRequire } from "node:module"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
@@ -7,6 +7,7 @@ import { z } from "zod"
 import { hostCommand } from "../../../base/host-command.js"
 import { resolveExecutable } from "../../../base/executable.js"
 import { nodePlatform } from "../../../base/platform.js"
+import { publishFile } from "../../../base/published-files.js"
 import { CURSOR_SDK_PINS } from "./pins.js"
 
 /**
@@ -136,7 +137,7 @@ export async function installCursorSdkAt(install: CursorSdkInstall): Promise<voi
       const found = createHash("sha256").update(readFileSync(join(folder, file))).digest("hex")
       if (found !== pin) throw new CursorSdkMismatch(`Cursor's SDK as patched here isn't the build this Mako pins: ${file} hashes to ${found.slice(0, 16)}…, not ${pin.slice(0, 16)}…. Mako didn't install it.`)
     }
-    writeFileSync(join(install.root, PATCHED_MARK), `${pinsMark()}\n`)
+    await publishFile(join(install.root, PATCHED_MARK), `${pinsMark()}\n`)
   } catch (error) {
     rmSync(join(install.root, "node_modules"), { recursive: true, force: true })
     throw error
