@@ -15,11 +15,16 @@
 //   mako-video window <xid> [options]   one window, by its X id
 //   mako-video portal [options]         what the person shares through the ScreenCast portal (Wayland)
 //   mako-video frames [options]         the pictures on its input
+//   mako-video composite [options]      a recording's own H.264 under the transparent pictures on its input (its pointer):
+//                                       each 'F' RGBA picture is drawn over the newest 'V' unit decoded before it
 //   options: --fps N (30)  --bitrate BPS (from the size)  --box WxH (none)  --keyint N (0: only when asked)
 //            --quality Q (0–100: a constant quantizer for recordings, instead of a bitrate)  --threads N (from the size)
 //            --content screen (OpenH264's screen-content tools: fewer bits, more CPU; default camera)
 //   portal:  --types monitor|window|any (monitor)  --restore <file> (the restore token, read and rewritten, 0600)
 //            --consent-ms N (120000: how long the person has to answer the portal's dialog)
+//            --still screenshot (a compositor that sends a frame only on damage, wlroots': when no buffer comes within
+//            400 ms of connecting, the Screenshot portal's picture of the screen is the first frame, so a view or a
+//            recording opened on a still screen isn't blank)
 //   `mako-video features` prints what this build captures, as JSON.
 //
 // stdout: each unit as a 4-byte big-endian length, then a ControlVideoPacket (packages/control-runtime/src/contracts/
@@ -31,6 +36,8 @@
 //   'R' (4)    the bitrate, u32 bits a second
 //   'F' (13+)  a picture (frames only): u8 format (0 JPEG, 1 RGB, 2 RGBA), u32 sequence, f64 capture time in ms since
 //              1970, then for RGB and RGBA u16 width and u16 height, then the bytes
+//   'V' (3+)   composite only: one unit of the video underneath, u16 avcC length, the avcC (a key unit's), then the
+//              unit as length-prefixed NAL units, as a ControlVideoPacket carries them
 // The end of stdin ends it. A source that went away ends it with "ended: <why>" on stderr; the last line on stderr is
 // always a JSON summary.
 #define _GNU_SOURCE
@@ -59,6 +66,7 @@
 #ifdef MAKO_PORTAL
 #include <fcntl.h>
 #include <gio/gio.h>
+#include <gdk-pixbuf/gdk-pixbuf.h>
 #include <gio/gunixfdlist.h>
 #include <linux/dma-buf.h>
 #include <pipewire/pipewire.h>
@@ -90,14 +98,14 @@ static int compare(const void *a, const void *b) {
 // ---- options and state ----------------------------------------------------------------------------------------
 
 static struct {
-  enum { DISPLAY_SOURCE, WINDOW_SOURCE, FRAMES_SOURCE, PORTAL_SOURCE } source;
+  enum { DISPLAY_SOURCE, WINDOW_SOURCE, FRAMES_SOURCE, PORTAL_SOURCE, COMPOSITE_SOURCE } source;
   Window window;
   int fps, bitrate, keyint, quality, threads, screen;
   int box_width, box_height;
   // The portal's source types (1 monitor, 2 window), its token file and how long the person has to answer.
   unsigned types;
   const char *restore;
-  int consent_ms;
+  int consent_ms, still_screenshot;
 } options = { .fps = 30, .types = 1, .consent_ms = 120000 };
 
 static struct {
@@ -521,7 +529,8 @@ static gboolean tick(gpointer data) {
  * Calls a portal method that answers through a Request object, and waits for its Response: 0 granted, 1 the person
  * declined, 2 anything else. The Request's path is known before the call (its handle token), so no answer is missed.
  */
-static int portal_call(const char *method, GVariant *parameters, const char *token, int timeout_ms, GVariant **results) {
+static int portal_call_on(const char *interface, const char *method, GVariant *parameters, const char *token, int timeout_ms,
+                          GVariant **results) {
   char *sender = g_strdup(g_dbus_connection_get_unique_name(bus) + 1);
   for (char *p = sender; *p; p++)
     if (*p == '.') *p = '_';
@@ -530,11 +539,11 @@ static int portal_call(const char *method, GVariant *parameters, const char *tok
   guint subscription = g_dbus_connection_signal_subscribe(bus, PORTAL_NAME, "org.freedesktop.portal.Request", "Response", path, NULL,
                                                           G_DBUS_SIGNAL_FLAGS_NONE, on_response, &response, NULL);
   GError *error = NULL;
-  GVariant *reply = g_dbus_connection_call_sync(bus, PORTAL_NAME, PORTAL_PATH, SCREENCAST, method, parameters, G_VARIANT_TYPE("(o)"),
+  GVariant *reply = g_dbus_connection_call_sync(bus, PORTAL_NAME, PORTAL_PATH, interface, method, parameters, G_VARIANT_TYPE("(o)"),
                                                 G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
   int code = 2;
   if (!reply) {
-    fprintf(stderr, "mako-video: the ScreenCast portal refused %s: %s\n", method, error->message);
+    fprintf(stderr, "mako-video: the portal refused %s: %s\n", method, error->message);
     g_error_free(error);
   } else {
     g_variant_unref(reply);
@@ -551,6 +560,10 @@ static int portal_call(const char *method, GVariant *parameters, const char *tok
   if (code == 0 && results) *results = response.results;
   else if (response.results) g_variant_unref(response.results);
   return code;
+}
+
+static int portal_call(const char *method, GVariant *parameters, const char *token, int timeout_ms, GVariant **results) {
+  return portal_call_on(SCREENCAST, method, parameters, token, timeout_ms, results);
 }
 
 static guint32 portal_property(const char *name) {
@@ -590,6 +603,9 @@ static void write_token(const char *token) {
   }
   g_free(temporary);
 }
+
+/** When a still screen's picture is due, if no buffer came first (`--still screenshot`); 0 when none is. */
+static double still_due;
 
 static void on_stream_state(void *data, enum pw_stream_state old, enum pw_stream_state state, const char *error) {
   (void)data, (void)old;
@@ -869,6 +885,8 @@ static int open_portal(void) {
     return -1;
   }
   pw_loop_enter(pw);
+  // A compositor that sends nothing until the screen changes may not even start the stream on a still screen.
+  if (options.still_screenshot) still_due = now_ms() + 400;
   return pw_loop_get_fd(pw);
 }
 
@@ -883,6 +901,57 @@ static void close_portal(void) {
   }
   // Closing the bus connection closes the portal's session with it.
   if (bus) g_object_unref(bus);
+}
+
+/**
+ * The screen as it is, from the Screenshot portal (non-interactive: wlroots' backend answers without asking), as the
+ * first frame of a stream whose compositor sends nothing until something changes. A file it leaves in a temporary
+ * folder is removed once read.
+ */
+static void still_screenshot(void) {
+  still_due = 0;
+  if (have_frame) return;
+  char token[32];
+  snprintf(token, sizeof token, "mako_still_%d", (int)getpid());
+  GVariantBuilder builder;
+  g_variant_builder_init(&builder, G_VARIANT_TYPE_VARDICT);
+  g_variant_builder_add(&builder, "{sv}", "handle_token", g_variant_new_string(token));
+  g_variant_builder_add(&builder, "{sv}", "interactive", g_variant_new_boolean(FALSE));
+  GVariant *results = NULL;
+  double started = now_ms();
+  int code = portal_call_on("org.freedesktop.portal.Screenshot", "Screenshot", g_variant_new("(sa{sv})", "", &builder), token, 5000, &results);
+  if (code) {
+    if (ended && !strcmp(ended, "Nobody answered the request to share the screen")) ended = NULL;
+    fprintf(stderr, "mako-video: no still screen from the Screenshot portal (%d); the first frame waits for a change\n", code);
+    return;
+  }
+  const char *uri = NULL;
+  g_variant_lookup(results, "uri", "&s", &uri);
+  char *path = uri ? g_filename_from_uri(uri, NULL, NULL) : NULL;
+  g_variant_unref(results);
+  if (!path) return;
+  GdkPixbuf *pixbuf = gdk_pixbuf_new_from_file(path, NULL);
+  const char *runtime = g_get_user_runtime_dir();
+  if (g_str_has_prefix(path, "/tmp/") || (runtime && g_str_has_prefix(path, runtime))) unlink(path);
+  g_free(path);
+  if (!pixbuf) return;
+  int width = gdk_pixbuf_get_width(pixbuf), height = gdk_pixbuf_get_height(pixbuf), stride = gdk_pixbuf_get_rowstride(pixbuf);
+  int channels = gdk_pixbuf_get_n_channels(pixbuf);
+  const uint8_t *pixels = gdk_pixbuf_read_pixels(pixbuf);
+  // A buffer that came while the portal answered is newer than the screenshot.
+  if (!have_frame && width > 0 && height > 0 && width <= LIMIT * 2 && height <= LIMIT * 2 && (channels == 3 || channels == 4)) {
+    size_t size = (size_t)width * height * 4;
+    if (frame_capacity < size) frame = realloc(frame, frame_capacity = size);
+    // gdk-pixbuf's rows are R,G,B(,A) bytes: libyuv's "RAW" and "ABGR".
+    if (channels == 3) RAWToARGB(pixels, stride, frame, width * 4, width, height);
+    else ABGRToARGB(pixels, stride, frame, width * 4, width, height);
+    frame_width = width;
+    frame_height = height;
+    frame_fresh = have_frame = 1;
+    frame_captured_at = wall_ms();
+    fprintf(stderr, "mako-video: still screen's first frame from the Screenshot portal in %.0f ms\n", now_ms() - started);
+  }
+  g_object_unref(pixbuf);
 }
 
 static int encode_portal_frame(void) {
@@ -940,6 +1009,94 @@ static int picture(const uint8_t *body, uint32_t length) {
   return encode_argb(decoded, width * 4, width, height, frame_sequence, captured_at);
 }
 
+// ---- composite: decode the video underneath, draw the pictures over it --------------------------------------------
+
+static ISVCDecoder *decoder;
+static uint8_t *annexb, *base, *base_scaled, *overlay;
+static size_t annexb_capacity, base_capacity, base_scaled_capacity, overlay_capacity;
+static int base_width, base_height;
+
+static void append_nal(size_t *at, const uint8_t *nal, size_t length) {
+  if (annexb_capacity < *at + length + 4) annexb = realloc(annexb, annexb_capacity = *at + length + 65536);
+  annexb[*at] = annexb[*at + 1] = annexb[*at + 2] = 0;
+  annexb[*at + 3] = 1;
+  memcpy(annexb + *at + 4, nal, length);
+  *at += length + 4;
+}
+
+/** One unit of the video underneath: its parameter sets (on a key unit) and NAL units as Annex B, decoded to ARGB. */
+static int video_unit(const uint8_t *body, uint32_t length) {
+  if (length < 2) return -1;
+  uint32_t description = (uint32_t)body[0] << 8 | body[1];
+  if (length < 2 + description) return -1;
+  const uint8_t *avcc = body + 2, *data = avcc + description, *end = body + length;
+  if (!decoder) {
+    if (WelsCreateDecoder(&decoder) || !decoder) return -1;
+    SDecodingParam parameters;
+    memset(&parameters, 0, sizeof parameters);
+    parameters.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_AVC;
+    if ((*decoder)->Initialize(decoder, &parameters)) return -1;
+  }
+  size_t at = 0;
+  if (description >= 7) {
+    // avcC: 5 bytes, then SPS count (low 5 bits) and each SPS with its u16 length, then the PPS count and each PPS.
+    const uint8_t *p = avcc + 5, *limit = avcc + description;
+    for (int pass = 0; pass < 2 && p < limit; pass++) {
+      int count = pass ? *p : *p & 0x1f;
+      p++;
+      for (int i = 0; i < count && p + 2 <= limit; i++) {
+        size_t size = (size_t)p[0] << 8 | p[1];
+        if (p + 2 + size > limit) return -1;
+        append_nal(&at, p + 2, size);
+        p += 2 + size;
+      }
+    }
+  }
+  while (data + 4 <= end) {
+    size_t size = get32(data);
+    if (data + 4 + size > end) return -1;
+    append_nal(&at, data + 4, size);
+    data += 4 + size;
+  }
+  uint8_t *planes[3] = { NULL, NULL, NULL };
+  SBufferInfo info;
+  memset(&info, 0, sizeof info);
+  if ((*decoder)->DecodeFrameNoDelay(decoder, annexb, (int)at, planes, &info) != dsErrorFree || info.iBufferStatus != 1) return 0;
+  int width = info.UsrData.sSystemBuffer.iWidth, height = info.UsrData.sSystemBuffer.iHeight;
+  if (width < 2 || height < 2 || width > LIMIT * 2 || height > LIMIT * 2) return -1;
+  size_t size = (size_t)width * height * 4;
+  if (base_capacity < size) base = realloc(base, base_capacity = size);
+  I420ToARGB(planes[0], info.UsrData.sSystemBuffer.iStride[0], planes[1], info.UsrData.sSystemBuffer.iStride[1], planes[2],
+             info.UsrData.sSystemBuffer.iStride[1], base, width * 4, width, height);
+  base_width = width;
+  base_height = height;
+  return 0;
+}
+
+/** An RGBA picture drawn over the newest decoded unit, scaled to the picture's size, and encoded at its time. */
+static int composite(const uint8_t *body, uint32_t length) {
+  if (length < 17 || body[0] != 2) return -1;
+  uint32_t frame_sequence = get32(body + 1);
+  uint64_t bits = 0;
+  for (int i = 0; i < 8; i++) bits = bits << 8 | body[5 + i];
+  double captured_at;
+  memcpy(&captured_at, &bits, 8);
+  int width = body[13] << 8 | body[14], height = body[15] << 8 | body[16];
+  body += 17;
+  length -= 17;
+  if (!width || !height || (size_t)width * height * 4 != length) return -1;
+  if (!base) return 0;
+  size_t size = (size_t)width * height * 4;
+  if (base_scaled_capacity < size) base_scaled = realloc(base_scaled, base_scaled_capacity = size);
+  if (overlay_capacity < size) overlay = realloc(overlay, overlay_capacity = size);
+  ARGBScale(base, base_width * 4, base_width, base_height, base_scaled, width * 4, width, height, kFilterBox);
+  // libyuv blends a premultiplied foreground over the background: R,G,B,A bytes to B,G,R,A, then premultiplied.
+  ABGRToARGB(body, width * 4, overlay, width * 4, width, height);
+  ARGBAttenuate(overlay, width * 4, overlay, width * 4, width, height);
+  ARGBBlend(overlay, width * 4, base_scaled, width * 4, base_scaled, width * 4, width, height);
+  return encode_argb(base_scaled, width * 4, width, height, frame_sequence, captured_at);
+}
+
 /** Runs every complete command read so far; returns -1 to stop. */
 static int commands(void) {
   size_t at = 0;
@@ -970,6 +1127,10 @@ static int commands(void) {
       set_bitrate(get32(body));
     } else if (type == 'F' && options.source == FRAMES_SOURCE) {
       result = picture(body, length);
+    } else if (type == 'F' && options.source == COMPOSITE_SOURCE) {
+      result = composite(body, length);
+    } else if (type == 'V' && options.source == COMPOSITE_SOURCE) {
+      result = video_unit(body, length);
     } else {
       return -1;
     }
@@ -1013,7 +1174,7 @@ static void summary(void) {
 }
 
 static int usage(void) {
-  fprintf(stderr, "usage: mako-video display|window <xid>|portal|frames|features [--fps N] [--bitrate BPS] [--box WxH] [--keyint N] [--quality Q] [--threads N] [--content screen|camera] [--types monitor|window|any] [--restore FILE] [--consent-ms N]\n");
+  fprintf(stderr, "usage: mako-video display|window <xid>|portal|frames|composite|features [--fps N] [--bitrate BPS] [--box WxH] [--keyint N] [--quality Q] [--threads N] [--content screen|camera] [--types monitor|window|any] [--restore FILE] [--consent-ms N]\n");
   return 64;
 }
 
@@ -1031,6 +1192,7 @@ int main(int argc, char **argv) {
   if (!strcmp(argv[1], "display")) options.source = DISPLAY_SOURCE;
   else if (!strcmp(argv[1], "portal")) options.source = PORTAL_SOURCE;
   else if (!strcmp(argv[1], "frames")) options.source = FRAMES_SOURCE;
+  else if (!strcmp(argv[1], "composite")) options.source = COMPOSITE_SOURCE;
   else if (!strcmp(argv[1], "window") && argc > 2) {
     options.source = WINDOW_SOURCE;
     options.window = strtoul(argv[2], NULL, 0);
@@ -1048,6 +1210,7 @@ int main(int argc, char **argv) {
     else if (!strcmp(name, "--types")) options.types = !strcmp(value, "window") ? 2 : !strcmp(value, "any") ? 3 : !strcmp(value, "monitor") ? 1 : 0;
     else if (!strcmp(name, "--restore")) options.restore = value;
     else if (!strcmp(name, "--consent-ms")) options.consent_ms = atoi(value);
+    else if (!strcmp(name, "--still")) options.still_screenshot = !strcmp(value, "screenshot");
     else return usage();
   }
   if (arg != argc || options.fps < 1 || options.fps > 120 || !options.types || options.consent_ms < 1) return usage();
@@ -1070,7 +1233,7 @@ int main(int argc, char **argv) {
     fprintf(stderr, "mako-video: this build has no ScreenCast portal capture (built without GIO and PipeWire)\n");
     return 69;
 #endif
-  } else if (options.source != FRAMES_SOURCE) {
+  } else if (options.source != FRAMES_SOURCE && options.source != COMPOSITE_SOURCE) {
     display = XOpenDisplay(NULL);
     if (!display) {
       fprintf(stderr, "mako-video: no X display to capture ($DISPLAY)\n");
@@ -1101,13 +1264,14 @@ int main(int argc, char **argv) {
   }
 
   double interval = 1000.0 / options.fps, next = 0;
-  int dirty = options.source != FRAMES_SOURCE && options.source != PORTAL_SOURCE, open = 1;
+  int dirty = options.source != FRAMES_SOURCE && options.source != PORTAL_SOURCE && options.source != COMPOSITE_SOURCE, open = 1;
   while (!stopping && !ended && open) {
 #ifdef MAKO_PORTAL
     if (pw) {
       // The session bus: the portal may close the session (the person stopped sharing).
       while (g_main_context_iteration(NULL, FALSE)) {
       }
+      if (still_due && now_ms() >= still_due) still_screenshot();
       dirty = frame_fresh;
       double t = now_ms();
       if (dirty && t >= next) {
@@ -1146,6 +1310,9 @@ int main(int argc, char **argv) {
     }
     struct pollfd fds[2] = { { 0, POLLIN, 0 }, { x, POLLIN, 0 } };
     int wait = dirty ? (int)ceil(next - now_ms()) : -1;
+#ifdef MAKO_PORTAL
+    if (still_due && !dirty) wait = still_due > now_ms() ? (int)ceil(still_due - now_ms()) : 0;
+#endif
     if (poll(fds, x < 0 ? 1 : 2, wait < 0 && dirty ? 0 : wait) < 0 && errno != EINTR) break;
     if (fds[0].revents & (POLLIN | POLLHUP | POLLERR)) open = read_input() == 0;
 #ifdef MAKO_PORTAL

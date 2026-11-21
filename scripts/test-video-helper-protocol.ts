@@ -1,11 +1,11 @@
 import assert from "node:assert/strict"
 import { existsSync, readFileSync } from "node:fs"
 import { mkdtemp, rm } from "node:fs/promises"
-import { tmpdir } from "node:os"
+import { homedir, tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { BrowserVideo, type BrowserVideoViewer } from "@mako/control-runtime/browser"
-import { VideoHelper, helperCapture, helperWindowSource, linuxDesktop } from "@mako/control-runtime/desktop"
+import { VideoHelper, helperCapture, helperWindowSource, linuxDesktop, portalMonitor } from "@mako/control-runtime/desktop"
 import { decodeControlVideo, type ControlVideoPacket } from "@mako/control-runtime/contracts"
 
 /**
@@ -83,13 +83,14 @@ await leave()
 await assert.rejects(new BrowserVideo({ encoded: helperCapture(fake, { kind: "window", windowId: 0 }) }).join(viewer), /That window is gone/)
 
 // A portal capture: its source types and restore token file go to the helper as arguments.
-const portal = new BrowserVideo({ encoded: helperCapture(fake, { kind: "portal", types: "monitor", restore: join(root, "portal.token") }) }, { fps: 30 })
+const portal = new BrowserVideo({ encoded: helperCapture(fake, { kind: "portal", types: "monitor", restore: join(root, "portal", "token"), still: true }) }, { fps: 30 })
 const leavePortal = await portal.join(viewer)
 // The newest start line, not the newest line: joining tells the open capture its box again (`BrowserVideo.join`).
 const portalStarted = read().findLastIndex((entry) => entry.args)
-assert.deepEqual(read()[portalStarted], { args: ["portal", "--types", "monitor", "--restore", join(root, "portal.token"), "--fps", "30", "--box", "320x200"] })
+assert.deepEqual(read()[portalStarted], { args: ["portal", "--types", "monitor", "--restore", join(root, "portal", "token"), "--still", "screenshot", "--fps", "30", "--box", "320x200"] })
 await until(() => read().length > portalStarted + 1, "the viewers' box told to the open portal capture")
 assert.deepEqual(read()[portalStarted + 1], { type: "B", length: 4, width: 320, height: 200 })
+assert.ok(existsSync(join(root, "portal")), "the token's folder is made for the helper")
 await leavePortal()
 
 // Which desktop a Linux session is, from its environment, and how the helper shows a window on each.
@@ -109,12 +110,15 @@ assert.equal(session({ WAYLAND_DISPLAY: "wayland-1", XDG_CURRENT_DESKTOP: "Hyprl
 if (process.platform === "linux") {
   const x11 = session({ DISPLAY: ":0" })
   const wayland = session({ WAYLAND_DISPLAY: "wayland-0", DISPLAY: ":0", XDG_CURRENT_DESKTOP: "GNOME" })
-  assert.deepEqual(helperWindowSource(77, root, x11), { kind: "window", windowId: 77 })
-  // On Wayland a driver's window id isn't an X window, even where XWayland runs: the person's shared monitor.
-  assert.deepEqual(helperWindowSource(77, root, wayland), { kind: "portal", types: "monitor", restore: join(root, "portal-monitor.token") })
-  assert.equal(helperWindowSource(77, root, undefined), undefined, "no desktop, no helper capture")
+  assert.deepEqual(helperWindowSource(77, x11), { kind: "window", windowId: 77 })
+  // On Wayland a driver's window id isn't an X window, even where XWayland runs: the person's shared monitor, its
+  // token one per user, and a still screen's first frame from the Screenshot portal only on wlroots.
+  assert.deepEqual(helperWindowSource(77, wayland), { kind: "portal", types: "monitor", restore: join(homedir(), ".local/state/mako/portal-monitor.token"), still: false })
+  assert.equal(helperWindowSource(77, undefined), undefined, "no desktop, no helper capture")
 } else {
-  assert.deepEqual(helperWindowSource(77, root, undefined), { kind: "window", windowId: 77 })
+  assert.deepEqual(helperWindowSource(77, undefined), { kind: "window", windowId: 77 })
 }
+const sway = session({ WAYLAND_DISPLAY: "wayland-1", SWAYSOCK: "/run/sway.sock" })!
+assert.deepEqual(portalMonitor(sway, { XDG_STATE_HOME: "/state" }), { kind: "portal", types: "monitor", restore: join("/state", "mako", "portal-monitor.token"), still: true })
 await rm(root, { recursive: true, force: true })
 console.log("Video helper protocol: arguments, framed pictures and commands, units back, opening on the first unit, key asks, the helper's own reason for ending, portal arguments and the Linux desktop's capture route passed")

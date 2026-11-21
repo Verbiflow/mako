@@ -1,10 +1,10 @@
 #!/bin/sh
-# A private Linux desktop for desktop-probe.mjs: X11 (Xvfb and Openbox) or Wayland (headless Sway with XWayland, its
-# ScreenCast portal through xdg-desktop-portal-wlr, PipeWire and WirePlumber; GNOME Shell; KWin), each on its own
-# session bus. The portal's
-# chooser is set to the one output, so no dialog waits; a person's desktop shows its dialog once.
+# A private Linux desktop for desktop-probe.mjs: X11 (Xvfb and Openbox), or Wayland: headless Sway with XWayland and its
+# ScreenCast portal through xdg-desktop-portal-wlr, PipeWire and WirePlumber; GNOME Shell; KWin 5 or 6. Each runs on
+# its own session bus. Sway's portal chooser is set to the one output, so no dialog waits; GNOME's and KDE's dialogs
+# are answered by portal-consent.py, as a person answers them once on their own desktop.
 #
-#   sh desktop-session.sh x11|sway|gnome|kde   (as an ordinary user; MAKO_DRIVER_DIR holds cua-driver, MAKO_EVIDENCE the results)
+#   sh desktop-session.sh x11|sway|gnome|kde|kde6   (as an ordinary user; MAKO_DRIVER_DIR holds cua-driver, MAKO_EVIDENCE the results)
 set -eu
 kind=$1
 export MAKO_DESKTOP="$kind"
@@ -31,7 +31,7 @@ sway)
   export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=sway WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
   mkdir -p "$HOME/.config/xdg-desktop-portal-wlr" "$HOME/.config/xdg-desktop-portal"
   printf '[screencast]\nchooser_type=none\noutput_name=HEADLESS-1\n' >"$HOME/.config/xdg-desktop-portal-wlr/config"
-  printf '[preferred]\ndefault=wlr\n' >"$HOME/.config/xdg-desktop-portal/sway-portals.conf"
+  printf '[preferred]\ndefault=wlr;gtk\n' >"$HOME/.config/xdg-desktop-portal/sway-portals.conf"
   exec dbus-run-session -- sh -c '
     set -eu
     printf "%s\n" "output HEADLESS-1 resolution 1280x800" "seat seat0 fallback true" "xwayland enable" >/tmp/sway.conf
@@ -87,16 +87,18 @@ gnome)
     exec node "$0/desktop-probe.mjs"
   ' "$here"
   ;;
-kde)
-  # KWin headless (its virtual backend) with XWayland and the KDE portal backend; portal-consent.py answers its dialogs.
-  export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE KDE_FULL_SESSION=true KDE_SESSION_VERSION=5 \
+kde | kde6)
+  # KWin headless (5.27; Plasma 6.3 for kde6) on its virtual backend, with XWayland and the KDE portal backend; portal-consent.py answers its dialogs.
+  export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE KDE_FULL_SESSION=true KDE_SESSION_VERSION=$([ "$kind" = kde6 ] && echo 6 || echo 5) \
     QT_QUICK_BACKEND=software KWIN_COMPOSE=Q LIBGL_ALWAYS_SOFTWARE=1 QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 QT_ACCESSIBILITY=1
   exec dbus-run-session -- sh -c '
     set -eu
     pipewire >/tmp/pipewire.log 2>&1 &
     sleep .5
     wireplumber >/tmp/wireplumber.log 2>&1 &
-    kwin_wayland --virtual --xwayland --width 1280 --height 800 --socket wayland-mako --no-lockscreen --no-global-shortcuts \
+    # KWin 6, told this is a full Plasma session, waits for a session manager this headless desktop does not run; the
+    # apps and the portal still see it.
+    env -u KDE_FULL_SESSION -u KDE_SESSION_VERSION kwin_wayland --virtual --xwayland --width 1280 --height 800 --socket wayland-mako --no-lockscreen --no-global-shortcuts \
       >/tmp/kwin.log 2>&1 &
     for _ in $(seq 1 150); do [ -S "$XDG_RUNTIME_DIR/wayland-mako" ] && break; sleep .1; done
     export WAYLAND_DISPLAY=wayland-mako
@@ -107,12 +109,12 @@ kde)
     done
     dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY XDG_SESSION_TYPE KDE_FULL_SESSION \
       KDE_SESSION_VERSION QT_LINUX_ACCESSIBILITY_ALWAYS_ON QT_ACCESSIBILITY QT_QUICK_BACKEND
-    python3 "$0/portal-consent.py" "$MAKO_EVIDENCE/kde-consent.jsonl" >/tmp/consent.log 2>&1 &
+    python3 "$0/portal-consent.py" "$MAKO_EVIDENCE/$MAKO_DESKTOP-consent.jsonl" >/tmp/consent.log 2>&1 &
     exec node "$0/desktop-probe.mjs"
   ' "$here"
   ;;
 *)
-  echo "usage: desktop-session.sh x11|sway|gnome|kde" >&2
+  echo "usage: desktop-session.sh x11|sway|gnome|kde|kde6" >&2
   exit 64
   ;;
 esac

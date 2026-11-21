@@ -9,6 +9,7 @@ import {
   DesktopSessionMessageSchema,
   type DesktopSessionConfig,
 } from "./desktop-session-config.js"
+import { linuxDesktop } from "./platform.js"
 
 let ownedDirectory: string | undefined
 let transport: ReturnType<typeof serveHandedControlSession> | undefined
@@ -34,6 +35,8 @@ function bind(config: DesktopSessionConfig, descriptor: SessionDescriptor, direc
         ? browserControlClient(environment)
         : undefined,
       previewEnvironment: environment,
+      // On a person's Linux desktop the video helper records the task's windows.
+      recordingDesktop: linuxDesktop(),
     }
   )
   transport = serveHandedControlSession(session, {

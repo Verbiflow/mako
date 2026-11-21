@@ -1,7 +1,7 @@
 name: Linux desktop control
 
 # Mako's computer control on a person's Linux desktop: the host's embedded driver, a task's CLI and the video helper
-# on X11, Sway (wlroots), GNOME Shell and KWin (Wayland), each a private desktop in a container on an x64 runner
+# on X11, Sway (wlroots), GNOME Shell and KWin 5 and 6 (Wayland), each a private desktop in a container on an x64 runner
 # (scripts/linux-control/run-desktop.sh). One JSON report per desktop, with each operation's time, is the evidence.
 on:
   workflow_dispatch:
@@ -9,6 +9,8 @@ on:
     paths:
       - .github/workflows/linux-desktop-control.yml
       - native/video-linux/**
+      - packages/control-runtime/src/control-workers.ts
+      - packages/control-runtime/src/native-recording.ts
       - packages/control-runtime/src/platform.ts
       - packages/control-runtime/src/video-helper.ts
       - packages/host/src/control/cua-embedded.ts
@@ -73,7 +75,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        desktop: [x11, sway, gnome, kde]
+        desktop: [x11, sway, gnome, kde, kde6]
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:

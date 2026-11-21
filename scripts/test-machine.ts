@@ -26,8 +26,6 @@ assert.equal(await mac.open("/tmp/doc.pdf", "Preview"), true)
 assert.deepEqual(calls.pop(), ["open", ["-a", "Preview", "/tmp/doc.pdf"], undefined], "Open with an app names it")
 await mac.openUrl("https://example.com/?q=1")
 assert.deepEqual(calls.pop(), ["open", ["https://example.com/?q=1"], undefined])
-await mac.copy("copied text")
-assert.deepEqual(calls.pop(), ["pbcopy", [], "copied text"], "Copy writes the text to pbcopy's input, never to its arguments")
 
 stdout = "/Users/someone/Projects/app/\n"
 const prompt = 'Choose "a" folder\\'
@@ -47,7 +45,6 @@ assert.equal(await mac.open("/tmp/nothing-opens-this"), false, "Open says when n
 assert.equal(await mac.chooseFolder("Choose a folder"), null, "Cancelling the chooser is no folder, not an error")
 await assert.rejects(mac.reveal("/tmp/a"), /open -R failed with exit code 1/)
 await assert.rejects(mac.openUrl("https://example.com"), /open https:\/\/example.com failed/)
-await assert.rejects(mac.copy("x"), /pbcopy/)
 calls.length = 0
 
 const absent = absentMachine("This machine has no screen a person is watching, so Mako can't open or show anything on it.")
@@ -81,15 +78,13 @@ function linuxWith(commands: string[], answers: Record<string, CommandResult> = 
   return { machine, ran }
 }
 
-const full = linuxWith(["xdg-open", "xdg-mime", "zenity", "gdbus", "xclip"], { "xdg-mime": { code: 0, stdout: "org.gnome.Nautilus.desktop\n" } })
+const full = linuxWith(["xdg-open", "xdg-mime", "zenity", "gdbus"], { "xdg-mime": { code: 0, stdout: "org.gnome.Nautilus.desktop\n" } })
 assert.deepEqual(await full.machine.offer(), { fileManager: "file-manager", chooseFolder: true }, "A full Linux desktop offers its file manager and a chooser")
 await full.machine.reveal("/tmp/it's here.txt")
 const shown = full.ran.at(-1)
 assert.equal(shown?.[0], "gdbus", "Reveal asks the file manager over D-Bus to select the item")
 assert.ok(shown?.[1].includes("org.freedesktop.FileManager1.ShowItems"))
 assert.equal(shown?.[1].at(-2), "['file:///tmp/it\\'s%20here.txt']", "The path goes as a file URI, its quote escaped for GVariant")
-await full.machine.copy("copied text")
-assert.deepEqual(full.ran.at(-1), ["xclip", ["-selection", "clipboard"], "copied text"], "Copy writes to xclip's input, never its arguments")
 await full.machine.openUrl("https://example.com")
 assert.deepEqual(full.ran.at(-1), ["xdg-open", ["https://example.com"], undefined])
 
@@ -108,7 +103,6 @@ assert.equal(bareOffer.chooseFolder, false)
 assert.equal(bareOffer.missing, "On this machine, no file manager is set to open folders (xdg-mime query default inode/directory), and no folder chooser is installed (zenity or kdialog).")
 await assert.rejects(bare.machine.reveal("/tmp/a"), (error: Error) => error instanceof MachineAbsentError && error.message === bareOffer.missing, "Reveal is refused with the offer's reason")
 await assert.rejects(bare.machine.chooseFolder("Choose"), MachineAbsentError)
-await assert.rejects(bare.machine.copy("x"), /no clipboard command/)
 
 const noHandler = linuxWith(["xdg-open", "xdg-mime", "kdialog"], { "xdg-mime": { code: 0, stdout: "\n" } })
 assert.deepEqual(await noHandler.machine.offer(), {
@@ -116,9 +110,6 @@ assert.deepEqual(await noHandler.machine.offer(), {
   chooseFolder: true,
   missing: "On this machine, no file manager is set to open folders (xdg-mime query default inode/directory).",
 }, "An empty handler is no file manager; kdialog is a chooser")
-const wayland = linuxWith(["wl-copy", "xclip"], {}, { WAYLAND_DISPLAY: "wayland-0" })
-await wayland.machine.copy("x")
-assert.equal(wayland.ran.at(-1)?.[0], "wl-copy", "Wayland copies with wl-copy")
 
 const path = await mkdtemp(join(tmpdir(), "mako-machine-path-"))
 try {
@@ -151,6 +142,6 @@ if (process.platform === "darwin") {
   }
 }
 
-console.log("Machine: the Mac's reveal, open, open with, links, copy and folder chooser commands, cancellation and failures, the absent machine's refusal, " +
+console.log("Machine: the Mac's reveal, open, open with, links and folder chooser commands, cancellation and failures, the absent machine's refusal, " +
   "what each machine offers clients, probing by graphical session rather than platform, and a Linux desktop's D-Bus reveal, folder fallback, choosers and clipboards, each offered only when present" +
   (process.platform === "darwin" ? ", and the real default browser and Quick Look thumbnails" : "") + " passed")
