@@ -239,6 +239,8 @@ export const STEPS = [
   [3, "npm run -s test:web-delivery"],
   [2, "npm run -s test:window-boot"],
   [1, "npm run -s test:zod-patch"],
+  // The ACP and MCP packages' schemas, built on first use, are each the schema the package shipped (patch-sdk-schemas).
+  [3, "npm run -s test:sdk-schemas"],
   // The host's tests under Node and Electron's Helper (`test-host.ts`), a runtime a step, but the Keychain's on the Mac.
   [86, "MAKO_TEST_HOST_EXCEPT=scripts/test-keychain-safe-storage.ts tsx scripts/test-host.ts --runtime node"],
   [86, "MAKO_TEST_HOST_EXCEPT=scripts/test-keychain-safe-storage.ts tsx scripts/test-host.ts --runtime electron"],
