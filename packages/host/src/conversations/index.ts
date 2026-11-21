@@ -538,7 +538,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       coveredBlocks: 0, includesBase: false,
     }),
     resolveOwner: async (ref) => shared
-      ? shared.resolve(ref.harness, ref.nativeId, Boolean(ref.heldBy || ref.locked || catalog.activity()[ref.path]))
+      ? shared.resolve(ref.harness, ref.nativeId, Boolean(ref.heldBy || ref.locked || (await catalog.activityNow())[ref.path]))
       : { kind: "unavailable", reason: "Session ownership is unavailable. Retry when the host reconnects." },
     ref: async (path) => catalog.list().find((ref) => ref.path === path) ?? (await catalog.readRef(path)) ?? undefined,
     live: (provider) => {
@@ -547,7 +547,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     },
     nativeInstalled: (provider) => host.nativeRunners.get(provider)?.available() ?? false,
     running: (path) => runs.state(path)?.status === "running",
-    external: (path) => catalog.activity()[path]?.status ?? null,
+    external: async (path) => (await catalog.activityNow())[path]?.status ?? null,
     resumeRefusal: () => memory?.resumeRefusal()?.message ?? null,
   })
   const retirementThreads = store ? new WorktreeThreadState({

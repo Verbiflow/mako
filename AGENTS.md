@@ -2240,6 +2240,37 @@ A harness with nothing open is looked at every 30 s (`idlePollMs`), not at its
 (`onProviderChildChange`, `nudge`), and one started in a terminal shows within
 the half minute.
 
+The engine looks only while someone reads its answer (`NeededActivity`,
+`ThreadCatalogDeps.activityNeeds`): a client is subscribed, agents work here, an
+agent's run is followed, a session some other app runs or holds open is listed
+(other devices show it so), or a store was written within `WRITE_ACTIVE_MS`,
+which is how a harness started in a terminal is first heard of with no window
+open. Otherwise it rests with what it last read, and a host nobody uses asks
+about no harness: on a Mac those asks alone kept the probes' child running.
+What decides whose a session is to answer asks `ThreadCatalog.activityNow`,
+which looks once for the ask when the engine rests (a reply's plan,
+`mako:threads` for a caller that hears no events); `activity()` is what was
+last read. A harness with no process is answered without `lsof` or `pgrep`
+from the processes' names (`HostProbes.commands`): read from /proc on Linux,
+and on a Mac by one `ps -Axo ucomm=,args=` for every harness asking within two
+seconds. `ps` prints a name's first 16 bytes where `lsof -c` matches the whole,
+so a name that fills them counts as any longer one it could begin
+(`RunningCommand.cut`). The probes' child waits 45 s without an ask before it
+goes (`PROBES_IDLE_MS`), longer than the half minute between those looks: at
+the same half minute it went a moment before each look, which started another.
+A demand set on from a turn of the loop that is no host's (a window's
+connection sets `subscribed`) still starts the host's own work: `HostJobs`
+runs each job and each demand's listener as its host (`within`,
+`HostStopping.run`), so what they read of the machine goes through the probes'
+child. Without it the engine a window woke, and fseventsd's health read every
+minute a window was open, spawned `lsof`, `pgrep` and `ps` from the host's
+thread (`test-host-jobs.ts`).
+`test-providers.ts` holds the resting and
+`test-probe-names.ts` the names; `test-idle-helpers.mjs` holds a real host
+with no window to no helper process at all, on a Mac, Linux and Windows, and
+`measure-idle-processes.mjs` prints every process a host keeps and what each
+holds, idle, with a window, after a turn and with the window closed again.
+
 A probe sees a process, not a turn: Cursor's `cursor-agent` and another Mako
 host hold their stores open whether or not anything is running, so a reopened
 client once showed a streaming session as merely "open" and lost its working
@@ -5884,7 +5915,14 @@ bypassed. Checkpoints read it in a child of their own
 (`Workspaces.checkpointHistory`) that stays up between turns: in the child the
 journal's footprints and the apps' probes share, a read holds parcel's FSEvents
 lock for seconds when its mark is hours back, and a turn's mark waited behind
-it, and a child started for the turn's mark took longer than the wait. Turns
+it, and a child started for the turn's mark took longer than the wait (60 to
+90 ms on an idle Mac, seconds on a loaded one, against 1 ms from a child that's
+up). It stays 15 minutes after its last ask while a turn may come soon, a
+client subscribed or agents at work (`WorkspacesDeps.turnsNear`), and goes
+after 30 s as the other children do once neither holds: it is 25 MB, a mark is
+FSEvents' own position, and a child gone loses none. Each watcher child is
+started with what it's for as its argument (`watch`, `probes`, `history`,
+`checkpoints`, `delivery`), so a process listing says which still runs. Turns
 asking while a read is under way go as one read after it, from the oldest of
 their marks (`changedSince`), so a wave of turns across worktrees doesn't queue
 read by read. A capture's Git reads go ahead of the host's other reads until its

@@ -27,8 +27,10 @@ export const STEPS = [
   [1, "npx tsx scripts/test-host-liveness.ts"],
   // A host without the desktop app holds none of browser and computer use until its first use (create-host's control domain).
   [20, "node scripts/test-control-on-demand.mjs"],
-  // A host with no window and no project keeps neither the watcher's child nor the Git helper.
-  [45, "node scripts/test-idle-helpers.mjs"],
+  // A host with no window and no project keeps no helper process: no watcher child (watching, probing or reading history) and no Git helper.
+  [90, "node scripts/test-idle-helpers.mjs"],
+  // A harness none of whose processes runs is answered from the processes' names, read from /proc or by one `ps` on a Mac.
+  [1, "tsx scripts/test-probe-names.ts"],
   // An agent's `computer` server answers its handshake and tools/list from a manifest, byte for byte as Local Control's server does.
   [2, "npm run -s test:computer-manifest"],
   // A window opening and `/` typed in its composer ask the host nothing that is a use of browser and computer use.
@@ -448,6 +450,8 @@ export const MAC_STEPS = [
   [9, "tsx scripts/test-control-page-verbs.ts"],
   [23, "npm run -s build:electron && node scripts/test-fixture-desk.mjs"],
   [2, "tsx scripts/test-host-probes.ts"],
+  // On a Mac the probes' child is what stayed: nobody reading what the harnesses' processes do, none is looked at.
+  [95, "npm run -s build:control-runtime && node scripts/test-idle-helpers.mjs"],
   [3, "tsx scripts/test-local-update-install.ts"],
   [25, "tsx scripts/test-native-driver-death.ts"],
   [1, "npm run -s build:electron && node scripts/test-preload.mjs"],
@@ -622,7 +626,7 @@ function workspaceParts(seconds, command, name) {
  * spreads over shards: test-watch-backend's four native cases took 6, 14, 58 and 29 s, one part of 108 to 138 s.
  */
 const SPLITS = {
-  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=historyReaderTermination,sharedChildAndCrash,lateCanary", "CASES=deadRootBeside"],
+  "tsx scripts/test-watch-backend.ts": ["CASES=silentCanary", "CASES=degradedFseventsd", "CASES=historyReaderTermination,historyKeptBetweenTurns,sharedChildAndCrash,lateCanary", "CASES=deadRootBeside"],
 }
 
 /** `unit` as the parts `SPLITS` makes of it; a test that doesn't read the variable runs once, as it is. */

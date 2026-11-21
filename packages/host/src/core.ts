@@ -462,6 +462,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     emit,
     jobs: shell.jobs,
     subscribed: shell.subscribed,
+    atWork,
   })
   const { catalog, store } = threads
   // On a cloud Thread's machine its simulators are a Mac of the person's, borrowed under a session lease through the
@@ -529,6 +530,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   const shellsIn = async (path: string) => (await (await shell.terminals.load("a folder's open shells")).runningShells().catch(() => []))
     .filter((terminal) => terminal.cwd === path || terminal.cwd.startsWith(`${path}/`))
     .map((terminal) => `the terminal “${terminal.title}”`)
+  const watchedOrAtWork = shell.jobs.demand("a client is subscribed or agents work here")
+  const followNeeded = () => watchedOrAtWork.set(shell.subscribed.on || atWork.on)
+  shell.subscribed.onChange(followNeeded)
+  atWork.onChange(followNeeded)
+  followNeeded()
   const workspaces = openWorkspaces({
     git,
     probes,
@@ -540,6 +546,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     store,
     jobs,
     subscribed: shell.subscribed,
+    turnsNear: watchedOrAtWork,
     emit,
     inUse: async (path) => [...conversationsIn(path, (status) => status !== "closed"), ...await shellsIn(path)],
     finished: (thread) => late.conversations?.finishedThreadAt(thread),
@@ -721,11 +728,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // What each project on the list has checked out, as the rail shows it beside the project: read once a project is
   // listed, then followed (a branch switched anywhere arrives as a `checkout-heads` event, which reports again).
   const headsAsked = new Map<string, number>()
-  const watchedOrAtWork = shell.jobs.demand("a client is subscribed or agents work here")
-  const followNeeded = () => watchedOrAtWork.set(shell.subscribed.on || atWork.on)
-  shell.subscribed.onChange(followNeeded)
-  atWork.onChange(followNeeded)
-  followNeeded()
   const checkoutRepositories = new CheckoutRepositories({ ask: (folder) => folderRepository(git, folder) })
   const repositories = new ListedRepositories({ read: (folder) => checkoutRepositories.read(folder), changed: () => late.sessions?.changed(), againMs: HEAD_ASK_AGAIN_MS, jobs: shell.jobs, needed: watchedOrAtWork })
   const listedHead = (project: string) => {
