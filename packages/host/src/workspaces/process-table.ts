@@ -96,7 +96,10 @@ export class TableIndex {
     const queue = [...found.values()]
     for (let at = 0; at < queue.length; at += 1)
       for (const child of this.byParent.get(queue[at]!.pid) ?? [])
-        if (later(child) && !found.has(child.pid)) {
+        // A child starts after its parent. One that started before the process now under its parent's pid is an
+        // orphan of that pid's last holder (Windows keeps a dead parent's pid on its children, and reuses pids), not
+        // this run's.
+        if (later(child) && child.startedMs >= queue[at]!.startedMs && !found.has(child.pid)) {
           found.set(child.pid, child)
           queue.push(child)
         }

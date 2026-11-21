@@ -9,7 +9,7 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { createControlDirectory, createPrivateControlSocket } from "./private-socket.js"
-import { requireProof } from "@mako/sessions/private-pipe"
+import { requireProof, restrictPipes } from "@mako/lazy/private-pipe"
 import { onWindows } from "./platform.js"
 import {
   controlClient,
@@ -104,6 +104,7 @@ export async function serveControlSession(
       transport.server.listen(socket, resolve)
     })
     if (!endpoint.proof) await chmod(socket, 0o600)
+    else void restrictPipes([socket])
     await writeFile(file, JSON.stringify(descriptor) + "\n", {
       mode: 0o600,
       flag: "wx",

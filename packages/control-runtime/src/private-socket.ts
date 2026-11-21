@@ -3,13 +3,13 @@ import { chmod, lstat, mkdir, mkdtemp, open, readdir, rename, rm, rmdir } from "
 import { createConnection, createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path"
-import { drawKeptPipe, makoLocalFolder, requireProof } from "@mako/sessions/private-pipe"
+import { drawKeptPipe, makoLocalFolder, requireProof, restrictPipes } from "@mako/lazy/private-pipe"
 import { onWindows } from "./platform.js"
 
 /**
  * Windows has no Unix sockets in Node: a control endpoint there is a named pipe drawn for its one listener, with a
  * secret every client proves it knows, and that proves the listener knows it, before anything crosses
- * (`@mako/sessions/private-pipe`). The secret travels only in the session file, in a launch folder under the user's own
+ * (`@mako/lazy/private-pipe`). The secret travels only in the session file, in a launch folder under the user's own
  * `%LOCALAPPDATA%\Mako\control`, which no other account can read.
  */
 export const windowsControlRoot = (): string => join(makoLocalFolder(), "control")
@@ -251,6 +251,8 @@ async function listenProvenControlPipe(endpoint: ControlEndpoint, proof: string)
       resolve()
     })
   })
+  // Its DACL narrowed to this user's, once it listens; the handshake guards it either way.
+  void restrictPipes([path])
   let released: Promise<void> | undefined
   const release = () => (released ??= new Promise<void>((resolve) => server.close(() => resolve())))
   return {

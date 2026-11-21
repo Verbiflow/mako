@@ -1,16 +1,17 @@
 import assert from "node:assert/strict"
-import { execFile, spawn } from "node:child_process"
+import { execFile, spawn, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { request } from "node:http"
 import { connect } from "node:net"
 import { tmpdir } from "node:os"
-import { delimiter, join, resolve } from "node:path"
+import { delimiter, dirname, join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 import { invokeRuntime, probeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
+import { connectProven } from "@mako/lazy/private-pipe"
 import { GROK_VERSIONS } from "@mako/host/harnesses/grok/versions"
 
 /**
@@ -165,6 +166,15 @@ try {
     asked.end("{}")
   })
   assert.match(bare, /^refused/, `the control pipe without its handshake: ${bare}`)
+  // Clients that prove themselves and drop at once, as a cancelled command does: the host hears each, and goes on
+  // serving. The command leaves nothing in the shell that ran it.
+  for (let round = 0; round < 20; round += 1) (await connectProven(session.socket, session.proof)).destroy()
+  await delay(500)
+  const controlCommand = join(dirname(dirname(control.sessionFile)), "mako-control.cmd")
+  const afterDrops = spawnSync(join(process.env.SystemRoot, "System32", "cmd.exe"), ["/d", "/v:on", "/s", "/c", `""${controlCommand}" status & echo [!MAKO_CONTROL_SESSION_FILE!]"`], { encoding: "utf8", windowsVerbatimArguments: true, timeout: 60_000 })
+  assert.match(afterDrops.stdout, /"native"/, `the session still answers after 20 dropped clients: ${afterDrops.stdout.slice(0, 200)} ${afterDrops.stderr.slice(0, 200)}`)
+  assert.match(afterDrops.stdout, /\[!MAKO_CONTROL_SESSION_FILE!\]/, "mako-control.cmd leaves its variables out of the caller's shell")
+  assert.equal((await probeRuntime(socket, { timeoutMs: 5_000 })).state, "ready", "the host survived them")
   passed("Local Control answers the agent's mako-control over its proven pipe", `native configured: ${answered.native.configured}; without the handshake ${bare}`)
 
   const detached = await mako("send", started.conversationId, "Once more", "--detach")
@@ -216,6 +226,19 @@ try {
   assert.equal(kept.filter((line) => line.kind === "user").length, 2, "the second host reads the conversation the first wrote")
   assert.match(text(kept), /the host reads each update/, "its words too")
   passed("mako-host stop runs the host's own stop; a host started again reads what it wrote", `pid ${ready.info.pid} exited 0, pid ${second.info.pid} read ${kept.length} lines back`)
+
+  // A host killed outright, as Task Manager or a crash ends one: no stop runs, and still none of its harness's tree
+  // is left, since each provider runs in a job object that ends with its host (`mako-windows run-in-job`).
+  await rm(grandchildFile, { force: true })
+  const last = await mako("start", "grok", "Measure the host", "--cwd", project)
+  assert.equal(last.at(-1)?.status, "completed", "a conversation on the second host")
+  const orphan = Number(await readFile(grandchildFile, "utf8"))
+  assert.ok(alive(orphan), "its harness's grandchild runs")
+  const killed = host
+  process.kill(killed.pid)
+  if (killed.exitCode === null) await Promise.race([once(killed, "exit"), delay(10_000)])
+  await until(async () => alive(orphan), (running) => !running, `the grandchild (pid ${orphan}) to end with its killed host`, 20_000)
+  passed("a host killed outright leaves none of its harness's tree behind", `host ${killed.pid} ended by TerminateProcess; grandchild ${orphan} gone`)
 } catch (error) {
   report.failures.push(error instanceof Error ? (error.stack ?? error.message) : String(error))
   console.error(`FAIL ${report.failures.at(-1)}`)

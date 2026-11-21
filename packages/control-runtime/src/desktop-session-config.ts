@@ -6,7 +6,7 @@ export const DesktopSessionConfigSchema = z
     taskId: z.string().min(1),
     /** The host's driver broker and this task's grant on it (`DriverBroker.grant`). */
     native: z
-      .object({ broker: z.string().min(1), token: z.string().min(1) })
+      .object({ broker: z.string().min(1), token: z.string().min(1), proof: z.string().optional() })
       .strict()
       .optional(),
     browser: z

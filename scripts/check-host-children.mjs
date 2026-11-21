@@ -34,6 +34,7 @@ const hostApproved = [
 ]
 const approved = [
   ...hostApproved.map(([file, ...rest]) => [`packages/host/src/${file}`, ...rest]),
+  ["packages/lazy/src/private-pipe.ts", "restrictPipes", "execFile", "the Windows helper narrowing a listening pipe's DACL, by whole path and bounded; standalone servers have no host scope"],
   ["packages/git/src/process-runner.ts", "inspect", "execFile", "bounded reaping helpers outside the cancelled scope"],
   ["packages/git/src/process-runner.ts", "spawnOwned", "spawn", "isolated group with confirmed cleanup; host scope injected into Git"],
   ["packages/git/src/process-runner.ts", "forkOwned", "fork", "isolated IPC group with confirmed cleanup"],

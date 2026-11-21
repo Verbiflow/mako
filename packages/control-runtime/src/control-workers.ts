@@ -6,7 +6,7 @@ import { ControlFault } from "@mako/control/control"
 import { controlSessionBuild, type SessionDescriptor } from "./control-session-protocol.js"
 import { DesktopWorkerReplySchema, type DesktopSessionConfig, type DesktopWorkerReply } from "./desktop-session-config.js"
 import { sweepAbandonedLaunches } from "./launch-folders.js"
-import { connectProven, drawKeptPipe, type KeptPipe } from "@mako/sessions/private-pipe"
+import { connectProven, drawKeptPipe, type KeptPipe } from "@mako/lazy/private-pipe"
 import { onWindows } from "./platform.js"
 import { GLOBAL_CONTROL_CLEANUP, type ControlCleanupPolicy } from "./private-socket.js"
 
@@ -17,6 +17,8 @@ const INHERITED = [
   "DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE",
   "WAYLAND_DISPLAY", "GDK_BACKEND", "QT_QPA_PLATFORM",
   "MAKO_VIDEO_HELPER", "MAKO_CONTROL_ASYNC_GUARD",
+  // Windows: where the helper that narrows the worker's pipe is, and what Node and Windows' own programs need.
+  "MAKO_WINDOWS_HELPER", "MAKO_HOST_EXECUTABLE", "SystemRoot", "LOCALAPPDATA", "APPDATA", "USERPROFILE",
 ]
 
 export interface ControlWorkerOptions {
@@ -101,13 +103,7 @@ export class ControlWorker {
     if (this.gone || !this.child.connected) return orElse(connection)
     if (this.relay) {
       const relay = this.relay
-      void connectProven(relay.pipe, relay.proof).then((upstream) => {
-        const end = () => { upstream.destroy(); connection.destroy() }
-        upstream.on("error", end)
-        connection.on("error", end)
-        connection.pipe(upstream)
-        upstream.pipe(connection)
-      }, () => orElse(connection))
+      relayConnection(connection, () => connectProven(relay.pipe, relay.proof), orElse)
       return
     }
     this.child.send({ kind: "connection" }, connection, (error) => {
@@ -249,4 +245,39 @@ export class ControlWorkers {
     }, () => {})
     return worker
   }
+}
+
+/**
+ * Joins a connection this process accepted to one it makes to where the connection is served (Windows, where no
+ * connection can be handed to another process). The client is listened to from the start, so one that drops while the
+ * other side is being reached is an ended relay, never an unheard error; whichever side ends or fails takes the other
+ * with it, and a side reached after the client has gone is closed at once. `orElse` answers a client that is still
+ * there when the other side can't be reached.
+ */
+export function relayConnection(connection: Socket, connect: () => Promise<Socket>, orElse: (connection: Socket) => void): void {
+  let gone = false
+  let upstream: Socket | undefined
+  const end = () => {
+    gone = true
+    connection.destroy()
+    upstream?.destroy()
+  }
+  connection.on("error", end)
+  connection.on("close", end)
+  void connect().then((reached) => {
+    if (gone || connection.destroyed) {
+      reached.destroy()
+      return
+    }
+    upstream = reached
+    reached.on("error", end)
+    reached.on("close", end)
+    connection.pipe(reached)
+    reached.pipe(connection)
+  }, () => {
+    if (gone || connection.destroyed) return
+    connection.off("error", end)
+    connection.off("close", end)
+    orElse(connection)
+  })
 }

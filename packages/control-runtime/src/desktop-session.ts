@@ -119,6 +119,13 @@ export async function startDesktopControlSession(
     listener.server.on("connection", (connection: Socket) => {
       if (state === "running" && worker) return worker.hand(connection, closed)
       if (state === "ended") return closed(connection)
+      // Parked until a worker serves it: one that drops meanwhile is forgotten, its error heard.
+      const dropped = () => {
+        const at = waiting.indexOf(connection)
+        if (at >= 0) waiting.splice(at, 1)
+      }
+      connection.on("error", dropped)
+      connection.once("close", dropped)
       waiting.push(connection)
       if (state === "waiting") starting = start(session)
     })
@@ -130,7 +137,7 @@ export async function startDesktopControlSession(
       const batch = (text: string) => text.replaceAll("%", "%%")
       await writeFile(
         command,
-        `@echo off\r\nset "ELECTRON_RUN_AS_NODE=1"\r\nset "MAKO_CONTROL_SESSION_FILE=${batch(sessionFile)}"\r\n"${batch(executable)}" "${batch(cli)}" %*\r\n`,
+        `@echo off\r\nsetlocal\r\nset "ELECTRON_RUN_AS_NODE=1"\r\nset "MAKO_CONTROL_SESSION_FILE=${batch(sessionFile)}"\r\n"${batch(executable)}" "${batch(cli)}" %*\r\n`,
         { flag: "wx" }
       )
     } else await writeFile(

@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises"
 import { dirname } from "node:path"
 import { createServer, Server, Socket } from "node:net"
-import { requireProof } from "@mako/sessions/private-pipe"
+import { requireProof, restrictPipes } from "@mako/lazy/private-pipe"
 import { createControlSession } from "./control-session.js"
 import { serveHandedControlSession } from "./control-session-server.js"
 import { controlSessionBuild, type SessionDescriptor } from "./control-session-protocol.js"
@@ -91,6 +91,7 @@ process.on("message", (raw, handle) => {
       void stop()
     })
     own.listen(relay.pipe, () => {
+      void restrictPipes([relay.pipe])
       try {
         bind(data.config, data.descriptor, data.directory, own)
       } catch {

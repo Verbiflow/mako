@@ -39,7 +39,6 @@
   "dependencies": {
     "@mako/control": "0.1.0",
     "@mako/lazy": "0.1.0",
-    "@mako/sessions": "0.1.0",
     "@modelcontextprotocol/sdk": "1.30.0",
     "devtools-protocol": "0.0.1692173",
     "image-size": "2.0.2",

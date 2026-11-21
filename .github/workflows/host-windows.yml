@@ -24,6 +24,7 @@ on:
       - packages/host/src/mako-host.ts
       - packages/host/src/workspaces/thread-processes.ts
       - packages/client/src/**
+      - packages/lazy/src/**
       - packages/control-runtime/src/**
       - packages/host/src/control/launch.ts
       - packages/control-runtime/src/executable.ts
@@ -87,6 +88,9 @@ jobs:
       - name: An impostor on each pipe hears nothing; no planted program runs
         if: success() || failure()
         run: npx tsx scripts/test-windows-pipes.ts
+      - name: The control relay and process-tree membership
+        if: success() || failure()
+        run: npx tsx scripts/test-control-relay.ts
       - name: A Thread's app run, started, found, named as its port's owner and stopped with its tree
         if: success() || failure()
         run: npx tsx scripts/windows-host/prove-thread-app.ts
@@ -129,6 +133,10 @@ jobs:
         env:
           MAKO_TEST_HOST_EXCEPT: scripts/test-keychain-safe-storage.ts
       - run: npx tsx scripts/windows-host/prove-thread-app.ts
+        if: success() || failure()
+      - run: npx tsx scripts/test-control-relay.ts
+        if: success() || failure()
+      - run: npm run test:control-cleanup
         if: success() || failure()
       - run: npx tsx scripts/test-mako-client.ts
         if: success() || failure()
