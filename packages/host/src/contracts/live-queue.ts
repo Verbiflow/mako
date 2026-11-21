@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-export const QueuedPromptEditSchema = z.object({
+export const QueuedPromptEditSchema = z.lazy(() => z.object({
   requestId: z.string().uuid(),
   expectedText: z.string().max(1_000_000),
   change: z.discriminatedUnion("kind", [
@@ -9,5 +9,5 @@ export const QueuedPromptEditSchema = z.object({
     z.object({ kind: z.literal("pause") }),
     z.object({ kind: z.literal("resume") }),
   ]),
-})
+}))
 export type QueuedPromptEdit = z.infer<typeof QueuedPromptEditSchema>

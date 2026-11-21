@@ -19,7 +19,7 @@ const at = z.number().nonnegative().optional()
  */
 const stream = RecordRefSchema.optional()
 const providerTurn = { ...providerTurnFields, at, stream }
-export const LiveUpdateSchema = z.discriminatedUnion("kind", [
+export const LiveUpdateSchema = z.lazy(() => z.discriminatedUnion("kind", [
   ProposedPlanSchema.omit({ type: true }).extend({
     kind: z.literal("proposed-plan"),
     text: z.string(),
@@ -128,7 +128,7 @@ export const LiveUpdateSchema = z.discriminatedUnion("kind", [
   }),
   /** The provider withdrew content it had sent: the turn's text, thinking and tool blocks with these ids go. */
   z.object({ kind: z.literal("retract"), ids: z.array(z.string()).min(1) }),
-])
+]))
 export type LiveUpdate = z.infer<typeof LiveUpdateSchema>
 
 /**
@@ -430,7 +430,7 @@ export interface ToolGrowth {
   output?: string
 }
 
-export const ToolGrowthSchema = z.object({ input: z.string().optional(), output: z.string().optional() })
+export const ToolGrowthSchema = z.lazy(() => z.object({ input: z.string().optional(), output: z.string().optional() }))
 
 /** The tool block after `growth`, by the rule a `tool-update` append follows. */
 export function growTool(block: Extract<Entry, { type: "tool" }>, growth: ToolGrowth): Extract<Entry, { type: "tool" }> {

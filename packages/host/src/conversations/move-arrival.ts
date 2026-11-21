@@ -36,7 +36,7 @@ import { sendCheckpoint } from "./machine-saves.js"
  * the Thread starts from (`start`), sent beside the Thread's records, so the device it came from weighs its worktree
  * against what the cloud began with, never against what it never had.
  */
-export const MoveArrivalInputSchema = z.object({
+export const MoveArrivalInputSchema = z.lazy(() => z.object({
   move: z.uuid(),
   folder: z.string().min(1),
   checkpoint: MoveCheckpointSchema.optional(),
@@ -67,7 +67,7 @@ export const MoveArrivalInputSchema = z.object({
    * first where this machine lacks one. All or nothing with the first. Absent from a sender before it.
    */
   others: z.array(QuietRepositorySchema).max(QUIET_OTHERS_MAX).optional(),
-}).strict()
+}).strict())
 export type MoveArrivalInput = z.infer<typeof MoveArrivalInputSchema>
 /** What a device sends: its IDs plain strings, which `MoveArrivalInputSchema` parses into the branded ones. */
 export type MoveArrivalWire = z.input<typeof MoveArrivalInputSchema>
@@ -142,7 +142,7 @@ export type MoveArrivalDeps = {
   ahead?: Map<string, Promise<void>>
 }
 
-export const MoveReadyInputSchema = z.object({
+export const MoveReadyInputSchema = z.lazy(() => z.object({
   folder: z.string().min(1),
   /** A project of several repositories: the others, cloned beside the first (the agent's) before this answers. */
   repositories: z.array(z.object({ path: z.string().min(1).max(4_096), url: z.string().regex(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/), branch: z.string().min(1).max(250).optional() }).strict()).max(31).optional(),
@@ -153,7 +153,7 @@ export const MoveReadyInputSchema = z.object({
    * catalog, read by starting it once) are read now, in the folder, so the hand-over's start finds them ready.
    */
   launches: z.array(z.object({ harness: z.string().min(1).max(64), tuning: SessionSettingsSchema.optional() }).strict()).max(256).optional(),
-}).strict()
+}).strict())
 export type MoveReadyInput = z.infer<typeof MoveReadyInputSchema>
 
 /**
@@ -233,13 +233,13 @@ const ArrivedMarkSchema = z.object({ move: z.uuid(), sha256: z.string(), at: z.n
 /** The checkout staged ahead of a move's hand-over, by its checkpoint's hash. */
 const StagedMarkSchema = z.object({ move: z.uuid(), sha256: z.string(), at: z.number() })
 
-export const MoveStageInputSchema = z.object({
+export const MoveStageInputSchema = z.lazy(() => z.object({
   move: z.uuid(),
   folder: z.string().min(1),
   /** The checkout and each session's records as the device sent them ahead, while the Thread still runs there. */
   checkpoint: MoveCheckpointSchema,
   sessions: z.array(z.object({ harness: z.string().min(1), nativeId: z.string().min(1) })).min(1).max(256),
-}).strict()
+}).strict())
 export type MoveStageInput = z.infer<typeof MoveStageInputSchema>
 
 export type MoveStage = { checkpointMs: number; recordsMs: number; staged: Array<{ harness: string; nativeId: string; versions: number; bytes: number }> }

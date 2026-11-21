@@ -48,84 +48,84 @@ export const AutomationIdSchema = z.string().regex(/^[a-z0-9][a-z0-9._-]{0,79}$/
 export const RunWhenSchema = z.string().trim().min(1).max(500)
 
 /** On a cron schedule, read in an IANA timezone (`UTC` when absent). */
-export const ScheduleTriggerSchema = z.object({
+export const ScheduleTriggerSchema = z.lazy(() => z.object({
   kind: z.literal("schedule"),
   cron: z.string().trim().min(1).max(120).refine((cron) => parseCron(cron).ok, { message: "Not a five-field cron schedule." }),
   timezone: z.string().min(1).max(64).default("UTC").refine(knownTimezone, { message: "Not an IANA timezone this Mac knows." }),
   runWhen: RunWhenSchema.optional(),
-})
+}))
 
 /** When the project's HEAD moves to another commit; `branch` only while that branch is checked out. */
-export const CommitTriggerSchema = z.object({
+export const CommitTriggerSchema = z.lazy(() => z.object({
   kind: z.literal("commit"),
   branch: z.string().min(1).max(200).optional(),
   runWhen: RunWhenSchema.optional(),
-})
+}))
 
 /** Run now only: the person's button or an agent's `run_now`. */
-export const ManualTriggerSchema = z.object({ kind: z.literal("manual") })
+export const ManualTriggerSchema = z.lazy(() => z.object({ kind: z.literal("manual") }))
 
 /** Filters on an external event's fields, each a value or any of several. */
 const EventFiltersSchema = z.record(z.string().min(1).max(80), z.union([z.string().max(400), z.array(z.string().max(400)).max(40)]))
 
 /** A GitHub repository's event, delivered by the cloud account's receiver (a later slice). */
-export const GithubTriggerSchema = z.object({
+export const GithubTriggerSchema = z.lazy(() => z.object({
   kind: z.literal("github"),
   event: z.enum(["release", "push", "pull_request", "check_failed", "issue_comment", "issues", "workflow_run"]),
   /** `owner/name`. */
   repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/),
   filters: EventFiltersSchema.optional(),
   runWhen: RunWhenSchema.optional(),
-})
+}))
 
 /** A Slack event, delivered by the cloud account's receiver (a later slice). */
-export const SlackTriggerSchema = z.object({
+export const SlackTriggerSchema = z.lazy(() => z.object({
   kind: z.literal("slack"),
   event: z.enum(["message", "mention", "reaction"]),
   channels: z.array(z.string().min(1).max(120)).max(40).default([]),
   filters: EventFiltersSchema.optional(),
   runWhen: RunWhenSchema.optional(),
-})
+}))
 
 /** A Linear event, delivered by the cloud account's receiver (a later slice). */
-export const LinearTriggerSchema = z.object({
+export const LinearTriggerSchema = z.lazy(() => z.object({
   kind: z.literal("linear"),
   event: z.enum(["issue_created", "issue_updated", "comment"]),
   team: z.string().min(1).max(120).optional(),
   filters: EventFiltersSchema.optional(),
   runWhen: RunWhenSchema.optional(),
-})
+}))
 
 /** A Sentry event, delivered by the cloud account's receiver (a later slice). */
-export const SentryTriggerSchema = z.object({
+export const SentryTriggerSchema = z.lazy(() => z.object({
   kind: z.literal("sentry"),
   event: z.enum(["issue_created", "issue_regressed", "alert"]),
   project: z.string().min(1).max(120).optional(),
   filters: EventFiltersSchema.optional(),
   runWhen: RunWhenSchema.optional(),
-})
+}))
 
 /** A signed HTTP call to the account's endpoint (a later slice). `secret` names a secret the account keeps, never its value: the file is committed. */
-export const WebhookTriggerSchema = z.object({
+export const WebhookTriggerSchema = z.lazy(() => z.object({
   kind: z.literal("webhook"),
   secret: z.string().regex(/^[A-Za-z0-9_.-]{1,80}$/, "A webhook names its secret, never its value."),
   /** Deliveries within this window start one run, whose cause counts them (`batch`). */
   coalesce: z.object({ windowS: z.number().int().min(1).max(3600) }).optional(),
   filters: EventFiltersSchema.optional(),
   runWhen: RunWhenSchema.optional(),
-})
+}))
 
 /**
  * A trigger this build can't read (a kind from a newer Mako, or a shape it doesn't know), kept word for word so a save
  * never loses it. It never fires; `why` says what was wrong with it.
  */
-export const UnsupportedTriggerSchema = z.object({
+export const UnsupportedTriggerSchema = z.lazy(() => z.object({
   kind: z.literal("unsupported"),
   raw: z.json(),
   why: z.string().max(400),
-})
+}))
 
-export const AutomationTriggerSchema = z.discriminatedUnion("kind", [
+export const AutomationTriggerSchema = z.lazy(() => z.discriminatedUnion("kind", [
   ScheduleTriggerSchema,
   CommitTriggerSchema,
   ManualTriggerSchema,
@@ -135,7 +135,7 @@ export const AutomationTriggerSchema = z.discriminatedUnion("kind", [
   SentryTriggerSchema,
   WebhookTriggerSchema,
   UnsupportedTriggerSchema,
-])
+]))
 export type AutomationTrigger = z.infer<typeof AutomationTriggerSchema>
 export type ScheduleTrigger = z.infer<typeof ScheduleTriggerSchema>
 export type AutomationTriggerKind = AutomationTrigger["kind"]
@@ -165,7 +165,7 @@ export function triggerLive(trigger: AutomationTrigger, cloudRegistered: boolean
  * (the occurrence's day, `YYYY-MM-DD`), `{time}` (`HHMM`), `{automation}` (its id) and `{run}` (the occurrence)
  * are filled in per run (`branchFor`).
  */
-export const AutomationStartSchema = z.object({
+export const AutomationStartSchema = z.lazy(() => z.object({
   /** claude, codex, cursor, grok, opencode or devin; absent: the person's first harness with room. */
   harness: z.string().min(1).max(40).optional(),
   /** A model the harness lists, by id or name; absent: what the person uses there. */
@@ -184,18 +184,18 @@ export const AutomationStartSchema = z.object({
   whenAway: z.enum(["cloud", "queue", "skip"]).default("queue"),
   /** Its own worktree: on `branch` if it exists, else a new branch from `base`. Absent: the project folder. */
   workspace: z.object({ base: z.string().min(1).max(200).optional(), branch: z.string().min(1).max(200).optional() }).optional(),
-})
+}))
 export type AutomationStart = z.infer<typeof AutomationStartSchema>
 
 /** A cheap deterministic check before a run: exit 0 runs, exit 1 skips, anything else fails. */
-export const AutomationGateSchema = z.object({
+export const AutomationGateSchema = z.lazy(() => z.object({
   /** Run with the login shell in the project folder. Its stdout, when a JSON object, is the run's context; its `key`, the dedupe key. */
   command: z.string().trim().min(1).max(2000),
   timeoutS: z.number().int().min(1).max(900).default(60),
-})
+}))
 export type AutomationGate = z.infer<typeof AutomationGateSchema>
 
-export const AutomationLimitsSchema = z.object({
+export const AutomationLimitsSchema = z.lazy(() => z.object({
   /** What a trigger does while a run is still going: `skip` records it skipped, `queue` starts it when that run ends. */
   overlap: z.enum(["skip", "queue"]).default("skip"),
   /** Runs started in any 24 hours, at most. */
@@ -204,7 +204,7 @@ export const AutomationLimitsSchema = z.object({
   timeoutMin: z.number().int().min(1).max(1440).default(60),
   /** Tokens one run may spend: its Thread runs as a goal with this budget, which stops it when spent. */
   tokenBudget: z.number().int().min(10_000).max(100_000_000).optional(),
-})
+}))
 export type AutomationLimits = z.infer<typeof AutomationLimitsSchema>
 
 /** What a run leaves: a pull request, a report in its Thread, or changes it made (`act`). */
@@ -246,39 +246,39 @@ export const AUTOMATION_DEFINITION_GUIDE = [
 export type AutomationDefinitionInput = z.input<typeof AutomationDefinitionSchema>
 
 /** The file: `{ version: 2, automations: [...] }`. */
-export const AutomationsFileSchema = z.object({
+export const AutomationsFileSchema = z.lazy(() => z.object({
   version: z.literal(AUTOMATIONS_FILE_VERSION),
   automations: z.array(z.json()).max(100),
-})
+}))
 
 /**
  * The first shape, read and never written: a plain `prompt`, and `trigger` as `"files" | "commit" | "manual"` or
  * `{ kind, … }`. Read as `triggers[0]` with default start settings; `files` and the Slack, Gmail and Calendar stubs
  * become `unsupported`, since they can't fire.
  */
-export const LegacyAutomationSchema = z.object({
+export const LegacyAutomationSchema = z.lazy(() => z.object({
   id: z.string().max(200).optional(),
   name: z.string().max(400).optional(),
   prompt: z.string().max(200_000).optional(),
   trigger: z.json().optional(),
   paths: z.json().optional(),
-})
+}))
 
 /* ------------------------------------------------------------------ */
 /* what this Mac keeps of each                                          */
 /* ------------------------------------------------------------------ */
 
 /** Why an automation that's on doesn't run, and what turns it back on. */
-export const AutomationPauseSchema = z.object({
+export const AutomationPauseSchema = z.lazy(() => z.object({
   kind: z.enum(["failures", "changed", "invalid"]),
   /** In words, for its row: "Paused after 3 failed runs in a row: …". Turning it on again clears it. */
   reason: z.string().max(1000),
   at: z.number(),
-})
+}))
 export type AutomationPause = z.infer<typeof AutomationPauseSchema>
 
 /** What this Mac keeps of one automation: never in the shared file. */
-export const AutomationLocalSchema = z.object({
+export const AutomationLocalSchema = z.lazy(() => z.object({
   enabled: z.boolean(),
   /**
    * The fingerprint (`automationFingerprint`) of the definition the person approved: turning it on, saving it in Mako,
@@ -306,7 +306,7 @@ export const AutomationLocalSchema = z.object({
   cloudRegistered: z.boolean().optional(),
   /** Why the cloud account wouldn't register it (a repository Mako's GitHub App can't read), in its words; its row says so. */
   cloudIssue: z.string().max(1000).optional(),
-})
+}))
 export type AutomationLocal = z.infer<typeof AutomationLocalSchema>
 
 /** Turns on after three failed runs in a row. */
@@ -331,7 +331,7 @@ export const AutomationRunStatusSchema = z.enum(["queued", "fired", "skipped", "
 export type AutomationRunStatus = z.infer<typeof AutomationRunStatusSchema>
 
 /** What started a run. */
-export const AutomationCauseSchema = z.discriminatedUnion("kind", [
+export const AutomationCauseSchema = z.lazy(() => z.discriminatedUnion("kind", [
   /** Its schedule, for the occurrence at `at`; `catchUp` when it was missed while the Mac slept or Mako was closed. */
   z.object({ kind: z.literal("schedule"), at: z.number(), catchUp: z.literal(true).optional() }),
   z.object({ kind: z.literal("commit"), head: z.string().max(80), subject: z.string().max(400).optional() }),
@@ -352,11 +352,11 @@ export const AutomationCauseSchema = z.discriminatedUnion("kind", [
     url: z.string().max(400).optional(),
     batch: z.number().int().min(1).max(500).optional(),
   }),
-])
+]))
 export type AutomationCause = z.infer<typeof AutomationCauseSchema>
 
 /** One run, from its trigger to its Thread's result. */
-export const AutomationRunSchema = z.object({
+export const AutomationRunSchema = z.lazy(() => z.object({
   /** Names the run within its automation: a schedule's slot (`2026-11-19T06:17Z`), `commit-<sha>`, `now-<key>`. */
   occurrence: z.string().min(1).max(200),
   automation: AutomationIdSchema,
@@ -392,7 +392,7 @@ export const AutomationRunSchema = z.object({
    * its cloud Thread once made. Its record follows the account's (`AutomationCloud`'s runs feed), not this Mac's clock.
    */
   cloud: z.object({ seq: z.number().int().nonnegative(), thread: z.string().max(200).optional() }).optional(),
-})
+}))
 export type AutomationRun = z.infer<typeof AutomationRunSchema>
 
 /**
@@ -431,7 +431,7 @@ export const AUTOMATION_PROPOSAL_TTL_MS = 3 * 24 * 60 * 60_000
  * answers `{ proposal, status: "pending" }` at once, and hears the decision as Mako's note in its Thread. `stale`: the
  * automation changed after it was proposed, so approving it would undo that change; it's never applied.
  */
-export const AutomationProposalSchema = z.object({
+export const AutomationProposalSchema = z.lazy(() => z.object({
   id: z.string().min(1).max(80),
   project: z.string().min(1).max(4096),
   automation: AutomationIdSchema,
@@ -472,11 +472,11 @@ export const AutomationProposalSchema = z.object({
   relay: z.enum(["awaiting", "settled"]).optional(),
   /** On the person's Mac: forwarded from the cloud Thread whose agent proposed it, which hears the decision. */
   from: z.object({ thread: z.string().max(200) }).optional(),
-})
+}))
 export type AutomationProposal = z.infer<typeof AutomationProposalSchema>
 
 /** How a forwarded proposal went on the person's Mac, as its cloud Thread's host is told. */
-export const ForwardedOutcomeSchema = z.object({ status: z.enum(["approved", "declined", "expired", "stale"]), note: z.string().max(1000).optional() })
+export const ForwardedOutcomeSchema = z.lazy(() => z.object({ status: z.enum(["approved", "declined", "expired", "stale"]), note: z.string().max(1000).optional() }))
 export type ForwardedOutcome = z.infer<typeof ForwardedOutcomeSchema>
 
 /** The parts of a definition a proposal's diff names, in the order a card shows them. */
@@ -518,7 +518,7 @@ export function automationDiff(before: JsonValue | undefined, after: JsonValue |
 export const AutomationStandingSchema = z.enum(["off", "on", "paused", "running", "unsupported"])
 
 /** One automation as a window shows it. */
-export const AutomationViewSchema = z.object({
+export const AutomationViewSchema = z.lazy(() => z.object({
   project: z.string(),
   definition: AutomationDefinitionSchema,
   local: AutomationLocalSchema,
@@ -530,11 +530,11 @@ export const AutomationViewSchema = z.object({
   fingerprint: z.string(),
   /** What can't be read or won't fire, in words. */
   issues: z.array(z.string()).default([]),
-})
+}))
 export type AutomationView = z.infer<typeof AutomationViewSchema>
 
 /** A project's automations, its proposals, and its file as read. */
-export const AutomationProjectReadingSchema = z.object({
+export const AutomationProjectReadingSchema = z.lazy(() => z.object({
   project: z.string(),
   automations: z.array(AutomationViewSchema),
   /** Pending first, then the newest decided. */
@@ -548,11 +548,11 @@ export const AutomationProjectReadingSchema = z.object({
     /** Entries that couldn't be read, kept in the file as they are. */
     skipped: z.array(z.string()).optional(),
   }),
-})
+}))
 export type AutomationProjectReading = z.infer<typeof AutomationProjectReadingSchema>
 
 /** Every project this host keeps automations for: the open ones, and those with one on. */
-export const AutomationsReadingSchema = z.object({ projects: z.array(AutomationProjectReadingSchema) })
+export const AutomationsReadingSchema = z.lazy(() => z.object({ projects: z.array(AutomationProjectReadingSchema) }))
 export type AutomationsReading = z.infer<typeof AutomationsReadingSchema>
 
 /** How Run now went: its run record, or why there's none. */

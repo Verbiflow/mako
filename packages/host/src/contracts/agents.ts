@@ -68,27 +68,27 @@ export const ORCHESTRATION_VERSION = 1
  * A Fin's Apex on another device, on the Fin's own edge: the device whose runtime its notices go to, the Apex's
  * conversation there, and the Apex's access as it started the Fin, which bounds what it answers for it.
  */
-export const RemoteParentSchema = z.object({
+export const RemoteParentSchema = z.lazy(() => z.object({
   device: z.string().uuid(),
   conversation: z.string().min(1).max(512).optional(),
   access: z.enum(ACCESS_TIER_NAMES),
   /** The newest of its Apex's messages that reached it, by the count its Apex's device keeps of them (`Placed.epoch`). */
   heard: z.number().int().positive().optional(),
-})
+}))
 export type RemoteParent = z.infer<typeof RemoteParentSchema>
 
 /** Where a placed Fin runs, as a call is addressed to it: a device's runtime, or a cloud Thread's machine. */
-export const PlaceTargetSchema = z.discriminatedUnion("kind", [
+export const PlaceTargetSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("device"), device: z.string().uuid(), name: z.string().min(1).max(200) }),
   z.object({ kind: z.literal("cloud"), thread: z.string().min(1).max(160) }),
-])
+]))
 export type PlaceTarget = z.infer<typeof PlaceTargetSchema>
 
 /**
  * A Fin placed elsewhere, on its Apex's device: the Apex's own record of where it put it. The Fin's edge is its
  * owner's, there; this one only routes the Apex's operations and takes the Fin's notices.
  */
-export const PlacedSchema = z.object({
+export const PlacedSchema = z.lazy(() => z.object({
   target: PlaceTargetSchema,
   /** Its Session and conversation where it runs, as its start answered them. */
   session: z.string().min(1).max(160).optional(),
@@ -112,17 +112,17 @@ export const PlacedSchema = z.object({
    * together, so an older word, a notice replayed or one that was on its way, changes nothing, after a restart too.
    */
   said: z.object({ owner: z.number(), seq: z.number() }).optional(),
-})
+}))
 export type Placed = z.infer<typeof PlacedSchema>
 
 /** What a child is asked to do, readable two levels down: the parent's intent, and how it knows it's done. */
-export const BriefSchema = z.object({
+export const BriefSchema = z.lazy(() => z.object({
   objective: z.string().min(1).max(200_000),
   doneWhen: z.array(z.string().min(1).max(2_000)).max(32).optional(),
   boundaries: z.array(z.string().min(1).max(2_000)).max(32).optional(),
   /** What its report must carry. */
   output: z.string().max(2_000).optional(),
-})
+}))
 export type Brief = z.infer<typeof BriefSchema>
 
 /** How a spawn's caller hears back: at once and woken by reports (`background`), or holding for its result (`wait`). */
@@ -138,7 +138,7 @@ export type WakeOn = z.infer<typeof WakeOnSchema>
  * harness, model, access, folder and branch) is its Thread's and Session's,
  * read there: a child continued on another harness is that Thread's fact.
  */
-export const ChildSpecSchema = z.object({
+export const ChildSpecSchema = z.lazy(() => z.object({
   brief: BriefSchema,
   harness: z.string().min(1).max(64).optional(),
   model: z.string().min(1).max(256).optional(),
@@ -154,7 +154,7 @@ export const ChildSpecSchema = z.object({
   mode: StartModeSchema.optional(),
   /** Absent: `decisions`. */
   wake: WakeOnSchema.optional(),
-})
+}))
 export type ChildSpec = z.infer<typeof ChildSpecSchema>
 
 /**
@@ -360,7 +360,7 @@ export function idleFor(state: ChildState, at: number, now: number): number | un
  * builds started keeps its exit status. Its end is written once and never
  * reopened.
  */
-export const FollowedRunSchema = z.object({
+export const FollowedRunSchema = z.lazy(() => z.object({
   harness: z.string().min(1).max(64),
   /** Native origin retained on historical discoveries, even once they leave the managed Fin lifecycle. */
   nativeAgent: NativeAgentOriginSchema.optional(),
@@ -382,7 +382,7 @@ export const FollowedRunSchema = z.object({
    * the next (`AgentRuns.untilGone`). `stuck` once it outlived its kill: the person is told Mako couldn't stop it.
    */
   stopping: z.object({ at: z.number(), stuck: z.literal(true).optional(), unconfirmed: z.literal(true).optional() }).optional(),
-})
+}))
 export type FollowedRun = z.infer<typeof FollowedRunSchema>
 
 const HarnessName = z.string().min(1).max(64)
@@ -398,7 +398,7 @@ export const FinStepSchema = z.discriminatedUnion("why", [
  * (`from`), until when, another account the person could switch to (`instead`), and from this build the account at
  * its limit, the step it took (`to`), when it moved mid-run (`at`, absent at its start) and its row's words (`line`).
  */
-export const FinReroutedSchema = z.object({
+export const FinReroutedSchema = z.lazy(() => z.object({
   from: HarnessName,
   until: z.number().optional(),
   instead: z.string().max(320).optional(),
@@ -406,7 +406,7 @@ export const FinReroutedSchema = z.object({
   to: FinStepSchema.optional(),
   at: z.number().optional(),
   line: z.string().max(512).optional(),
-})
+}))
 export type FinRerouted = z.infer<typeof FinReroutedSchema>
 
 /**
@@ -414,15 +414,15 @@ export type FinRerouted = z.infer<typeof FinReroutedSchema>
  * the places it ran on (`placeKey`), the waits for a limit it already moved for, and the host generation taking a
  * move now and for which wait. It's cleared once a turn of the Fin ends without a limit.
  */
-export const FinTurnSchema = z.object({
+export const FinTurnSchema = z.lazy(() => z.object({
   visited: z.array(z.string().min(1).max(400)).max(64),
   handled: z.array(z.string().min(1).max(600)).max(64),
   moving: z.object({ owner: z.number(), wait: z.string().min(1).max(600), at: z.number() }).optional(),
-})
+}))
 export type FinTurn = z.infer<typeof FinTurnSchema>
 
 /** A limit's one notice for a tree (`limit_notices`, by its root Thread): said once, kept until seen or its reset passes. */
-export const LimitNoticeSchema = z.object({
+export const LimitNoticeSchema = z.lazy(() => z.object({
   id: z.string().min(1).max(600),
   fin: z.string().min(1).max(200),
   /** The harness that ran out, which the Fin that carries it has left. */
@@ -433,15 +433,15 @@ export const LimitNoticeSchema = z.object({
   seen: z.literal(true).optional(),
   /** What the limit did to its tree so far, kept as it happens so a restart loses none of it: nobody reads it until it's said. */
   gathering: z.object({ account: z.string().optional(), apex: z.string().optional(), moved: z.array(z.string()), stopped: z.number() }).optional(),
-})
+}))
 export type LimitNotice = z.infer<typeof LimitNoticeSchema>
 
 /** The exact held work and fallback place shown by a Shiver notice; a press cannot take newer work with it. */
-export const LimitNoticeChoiceSchema = z.object({
+export const LimitNoticeChoiceSchema = z.lazy(() => z.object({
   notice: z.string().min(1).max(600),
   place: z.string().min(1).max(1200),
   waits: z.array(z.object({ thread: z.string().uuid(), request: z.string().uuid() })).min(1).max(64),
-})
+}))
 /** @wire z.object({ notice: z.string().min(1).max(600), place: z.string().min(1).max(1200), waits: z.array(z.object({ thread: z.string().uuid(), request: z.string().uuid() })).min(1).max(64) }) */
 export type LimitNoticeChoice = z.infer<typeof LimitNoticeChoiceSchema>
 
@@ -546,13 +546,13 @@ export type ChildStart = z.input<typeof ChildStartSchema>
 /** A typed report from a child: explicit (`agents_report`), or implicit when its turn or run ended without one. */
 export const ReportStatusSchema = z.enum(["progress", "done", "blocked", "needs-input", "failed"])
 export type ReportStatus = z.infer<typeof ReportStatusSchema>
-export const ArtifactSchema = z.object({
+export const ArtifactSchema = z.lazy(() => z.object({
   kind: z.enum(["branch", "commit", "pull-request", "file", "screenshot", "test-run", "link"]),
   ref: z.string().min(1).max(4096),
   label: z.string().max(200).optional(),
-})
+}))
 export type Artifact = z.infer<typeof ArtifactSchema>
-export const ReportSchema = z.object({
+export const ReportSchema = z.lazy(() => z.object({
   /** Explicit: `report:{child}:{clientKey}`. Implicit: `report:{child}:{turn}`, the request or run whose end it is. */
   id: z.string().min(1).max(600),
   child: ThreadIdSchema,
@@ -609,11 +609,11 @@ export const ReportSchema = z.object({
   /** The child owner's generation when it was written: a report from a stale owner is refused. */
   ownerGeneration: z.number().int().positive(),
   at: z.number(),
-})
+}))
 export type Report = z.infer<typeof ReportSchema>
 
 /** `notice:{child}:{reportId}`: a report its Apex's owner hears, under an ID a resend repeats; a digest in the Apex's queue carries its notices (`LiveRequest.digest`). */
-export const NoticeSchema = z.object({
+export const NoticeSchema = z.lazy(() => z.object({
   id: z.string(),
   report: ReportSchema,
   /** The Fin as the digest names it: `"name" (Harness)`. */
@@ -642,7 +642,7 @@ export const NoticeSchema = z.object({
    * turns ended, a reminder among them (`Agents.owedOf`). Its report is the digest's words alone, kept nowhere.
    */
   unanswered: z.object({ request: z.string(), at: z.number(), turns: z.number(), line: z.string().max(400) }).optional(),
-})
+}))
 export type Notice = z.infer<typeof NoticeSchema>
 
 /** Whether a digest of these notices asks its Apex something: it goes as soon as it can, whatever the minute's budget. */

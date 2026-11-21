@@ -14,18 +14,18 @@ const CODEX_GOAL_STATUS = {
 } as const satisfies Record<ThreadGoalStatus, GoalObservation["status"]>
 
 /** `ThreadGoal` from the app-server's v2 protocol. */
-export const CodexThreadGoalSchema = z.object({
+export const CodexThreadGoalSchema = z.lazy(() => z.object({
   threadId: z.string(),
   objective: z.string(),
   status: CodexGoalStatusSchema,
   tokenBudget: z.number().nonnegative().nullish(),
   tokensUsed: z.number().nonnegative(),
   timeUsedSeconds: z.number().nonnegative(),
-})
+}))
 export type CodexThreadGoal = z.infer<typeof CodexThreadGoalSchema>
 
-export const CodexGoalSetResultSchema = z.object({ goal: CodexThreadGoalSchema })
-export const CodexGoalClearResultSchema = z.object({ cleared: z.boolean() })
+export const CodexGoalSetResultSchema = z.lazy(() => z.object({ goal: CodexThreadGoalSchema }))
+export const CodexGoalClearResultSchema = z.lazy(() => z.object({ cleared: z.boolean() }))
 
 export function codexGoalObservation(goal: CodexThreadGoal): GoalObservation {
   return {

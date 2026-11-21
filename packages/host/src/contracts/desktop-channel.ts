@@ -124,12 +124,12 @@ export type DesktopParams<Method extends DesktopMethod> = z.infer<(typeof DESKTO
 export type DesktopResult<Method extends DesktopMethod> = z.infer<(typeof DESKTOP_CALLS)[Method]["result"]>
 
 /** Host to desktop. */
-export const DesktopAskSchema = z.object({
+export const DesktopAskSchema = z.lazy(() => z.object({
   kind: z.literal("ask"),
   id: z.number().int().positive(),
   method: z.enum(DESKTOP_METHODS),
   params: z.json(),
-})
+}))
 export type DesktopAsk = z.infer<typeof DesktopAskSchema>
 
 /**
@@ -137,7 +137,7 @@ export type DesktopAsk = z.infer<typeof DesktopAskSchema>
  * say on their own, where its updater is, sent after the hello and on
  * every change, and the units of the live video it encodes.
  */
-export const DesktopFrameSchema = z.union([
+export const DesktopFrameSchema = z.lazy(() => z.union([
   z.object({ kind: z.literal("hello"), pid: z.number().int(), methods: z.array(z.string().max(100)).max(64) }),
   z.object({ kind: z.literal("reply"), id: z.number().int().positive(), ok: z.literal(true), value: z.json() }),
   z.object({ kind: z.literal("reply"), id: z.number().int().positive(), ok: z.literal(false), error: z.string().max(4000) }),
@@ -146,7 +146,7 @@ export const DesktopFrameSchema = z.union([
   z.object({ kind: z.literal("page"), page: PageIdSchema, destroyed: z.literal(true) }),
   z.object({ kind: z.literal("update"), state: UpdateStateSchema }),
   ...LiveVideoFrameEventSchema.options,
-])
+]))
 export type DesktopFrame = z.infer<typeof DesktopFrameSchema>
 
 /** A line as one side reads it from the other, or nothing when it isn't one. */

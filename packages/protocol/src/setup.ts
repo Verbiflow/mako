@@ -41,7 +41,7 @@ export const PLATFORMS = ["mac", "linux", "windows", "other"] as const
 export type Platform = (typeof PLATFORMS)[number]
 
 /** A place a project's Threads run in: a device of the account's (this one, or another), or the cloud's machines. */
-export const SetupPlaceSchema = z.discriminatedUnion("kind", [
+export const SetupPlaceSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("device"),
@@ -58,7 +58,7 @@ export const SetupPlaceSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("cloud") }).strict(),
-])
+]))
 export type SetupPlace = z.infer<typeof SetupPlaceSchema>
 
 /** A place's ID on the wire and in a URL: `cloud`, or `device:<id>`. */
@@ -83,7 +83,7 @@ const At = z.number().int().nonnegative()
 const Words = z.string().min(1).max(200)
 
 /** Where one row stands against its source, said in a few words and one dot, never by colour alone. */
-export const SyncStateSchema = z.discriminatedUnion("state", [
+export const SyncStateSchema = z.lazy(() => z.discriminatedUnion("state", [
   /** The place has the source's current version. */
   z.object({ state: z.literal("synced"), at: At }).strict(),
   /** The source has a newer version than the place holds; Send takes it there. `source` is whose ("Mac's"). */
@@ -104,7 +104,7 @@ export const SyncStateSchema = z.discriminatedUnion("state", [
   z.object({ state: z.literal("up"), port: z.number().int().positive().max(65535).optional() }).strict(),
   /** A service reached through a device that's offline now. */
   z.object({ state: z.literal("offline"), through: Words }).strict(),
-])
+]))
 export type SyncState = z.infer<typeof SyncStateSchema>
 
 export type SyncTone = "positive" | "caution" | "negative" | "attention" | "neutral"
@@ -182,15 +182,15 @@ export type SetupReading = z.infer<typeof SetupReadingSchema>
 const Id = z.string().min(1).max(400)
 
 /** Where a row comes from: a grant, a lease under one, an agent's ask, or the place's own reading. */
-export const RowOriginSchema = z.discriminatedUnion("from", [
+export const RowOriginSchema = z.lazy(() => z.discriminatedUnion("from", [
   z.object({ from: z.literal("grant"), grant: Id }).strict(),
   z.object({ from: z.literal("lease"), lease: Id, grant: Id }).strict(),
   z.object({ from: z.literal("ask"), ask: Id }).strict(),
   z.object({ from: z.literal("reading"), reading: SetupReadingSchema }).strict(),
-])
+]))
 export type RowOrigin = z.infer<typeof RowOriginSchema>
 
-export const SetupRowSchema = z
+export const SetupRowSchema = z.lazy(() => z
   .object({
     id: Id,
     part: z.enum(SETUP_LIST_PARTS),
@@ -210,7 +210,7 @@ export const SetupRowSchema = z
     /** What an action acts on: a carried file's path, a tool's name. */
     target: z.string().max(1024).optional(),
   })
-  .strict()
+  .strict())
 export type SetupRow = z.infer<typeof SetupRowSchema>
 
 /** The row's one button: its own, or its state's. Away from its Mac (`SetupView.away`), only Stop does anything. */
@@ -226,9 +226,9 @@ export const SCOPE_WORDS = { thread: "Thread", project: "Project", account: "Acc
 // ---- Asks ----
 
 /** Who asked: the Thread (or Fin) as the person knows it. */
-export const AskerSchema = z
+export const AskerSchema = z.lazy(() => z
   .object({ thread: z.string().min(1).max(128), title: z.string().max(200), harness: z.string().max(64).optional(), fin: z.boolean() })
-  .strict()
+  .strict())
 export type Asker = z.infer<typeof AskerSchema>
 
 /**
@@ -238,10 +238,10 @@ export type Asker = z.infer<typeof AskerSchema>
  * agents never add to Setup themselves.
  */
 const AskBase = { id: Id, by: AskerSchema, at: At, why: z.string().max(500), /** The place the asking Thread runs in. */ place: Id }
-export const SetupAskSchema = z.discriminatedUnion("kind", [
+export const SetupAskSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ ...AskBase, kind: z.literal("borrow"), offer: AskOfferSchema, answer: z.enum(["grant", "source"]) }).strict(),
   z.object({ ...AskBase, kind: z.literal("tool"), tool: z.string().min(1).max(200), version: z.string().max(80).optional() }).strict(),
-])
+]))
 export type SetupAsk = z.infer<typeof SetupAskSchema>
 
 export const ASK_ANSWERS = ["allow-thread", "allow-project", "decline", "add-to-setup"] as const
@@ -400,10 +400,10 @@ export type SetupInput = {
 
 // ---- Output ----
 
-export const SetupPartViewSchema = z.object({ part: z.enum(SETUP_LIST_PARTS), rows: z.array(SetupRowSchema) }).strict()
+export const SetupPartViewSchema = z.lazy(() => z.object({ part: z.enum(SETUP_LIST_PARTS), rows: z.array(SetupRowSchema) }).strict())
 export type SetupPartView = z.infer<typeof SetupPartViewSchema>
 
-export const SetupPlaceViewSchema = z
+export const SetupPlaceViewSchema = z.lazy(() => z
   .object({
     id: Id,
     place: SetupPlaceSchema,
@@ -413,11 +413,11 @@ export const SetupPlaceViewSchema = z
     asks: z.array(SetupAskSchema),
     parts: z.array(SetupPartViewSchema),
   })
-  .strict()
+  .strict())
 export type SetupPlaceView = z.infer<typeof SetupPlaceViewSchema>
 
 /** A project's page: every place, its asks and its five parts. What a host, the account's broker and a fixture answer. */
-export const SetupViewSchema = z
+export const SetupViewSchema = z.lazy(() => z
   .object({
     project: z.string().max(200),
     root: z.string().max(1024),
@@ -431,7 +431,7 @@ export const SetupViewSchema = z
      */
     away: z.literal(true).optional(),
   })
-  .strict()
+  .strict())
 export type SetupView = z.infer<typeof SetupViewSchema>
 
 /** What a page built away from the Mac says of itself, for what it can't see. */
@@ -802,17 +802,17 @@ export function threadPlace(view: SetupView, place: string, thread: string): Set
 // ---- Acting ----
 
 /** What the person does on the page. Each is one tap; an agent never sends one. */
-export const SetupActSchema = z.discriminatedUnion("act", [
+export const SetupActSchema = z.lazy(() => z.discriminatedUnion("act", [
   z.object({ act: z.literal("answer"), ask: z.string().min(1).max(200), answer: AskAnswerSchema }).strict(),
   /** A row's button: Send, Add, Retry, Keep or Stop, on the row it names. */
   z.object({ act: z.literal("row"), place: z.string().min(1).max(200), row: z.string().min(1).max(400), action: z.enum(["send", "add", "retry", "keep", "stop"]) }).strict(),
   /** Rebuild the cloud's base now. */
   z.object({ act: z.literal("rebuild") }).strict(),
-])
+]))
 export type SetupAct = z.infer<typeof SetupActSchema>
 
 /** Whether an act went through, and why not in the person's words. The page reads itself again either way. */
-export const SetupActOutcomeSchema = z.union([z.object({ done: z.literal(true) }).strict(), z.object({ done: z.literal(false), why: Words }).strict()])
+export const SetupActOutcomeSchema = z.lazy(() => z.union([z.object({ done: z.literal(true) }).strict(), z.object({ done: z.literal(false), why: Words }).strict()]))
 export type SetupActOutcome = z.infer<typeof SetupActOutcomeSchema>
 
 /** What an add in the Add menu is, by part: the menu's rows, in its order. */

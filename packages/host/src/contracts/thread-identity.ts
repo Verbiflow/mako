@@ -41,11 +41,11 @@ export const SERVICE_ACTORS = [
  * acting through Mako's tools, or Mako itself. The host assigns it; it is
  * never read from a caller's input.
  */
-export const ActorSchema = z.discriminatedUnion("kind", [
+export const ActorSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("person"), principal: PrincipalIdSchema }),
   z.object({ kind: z.literal("agent"), session: SessionIdSchema }),
   z.object({ kind: z.literal("service"), name: z.enum(SERVICE_ACTORS) }),
-])
+]))
 export type Actor = z.infer<typeof ActorSchema>
 
 /** Where a journal or native session belongs. */

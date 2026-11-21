@@ -33,7 +33,7 @@ import { VersionRangeSchema } from "./version.js"
 /** A live form (`live-form.ts`) as a frame says it. */
 export const LiveFormSchema = z.union([z.literal(1), z.literal(2)]) satisfies z.ZodType<LiveForm>
 
-export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
+export const RuntimeFrameEnvelopeSchema = z.lazy(() => z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("enroll"),
@@ -175,7 +175,7 @@ export const RuntimeFrameEnvelopeSchema = z.discriminatedUnion("type", [
    * from the lease's own device. Missed beats end the lease.
    */
   z.object({ type: z.literal("lease-beat"), lease: z.string().min(1).max(128), progress: ProgressSchema.optional(), streams: z.array(StreamSchema).max(SESSION_STREAMS_MAX).optional() }).strict(),
-])
+]))
 
 /** What a device's runtime says it can serve, and its room (`advertise`). */
 export type Advertisement = Omit<Extract<RuntimeFrameEnvelope, { type: "advertise" }>, "type">
@@ -186,7 +186,7 @@ export type GoingQuietReason = Extract<RuntimeFrameEnvelope, { type: "going-quie
 /** A busy runtime says so at least this often; a gateway takes three missed as idle. */
 export const ACTIVITY_HEARTBEAT_MS = 60_000
 
-export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
+export const GatewayFrameEnvelopeSchema = z.lazy(() => z.discriminatedUnion("type", [
   z
     .object({
       type: z.literal("enrolled"),
@@ -330,7 +330,7 @@ export const GatewayFrameEnvelopeSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("lent"), lease: LeaseSchema }).strict(),
   /** A lease this device serves ended, and why (version 24 on): it stops the operation and frees its slot. */
   z.object({ type: z.literal("lent-ended"), lease: z.string().min(1).max(128), why: z.enum(LEASE_ENDS) }).strict(),
-])
+]))
 
 export type RuntimeFrameEnvelope = z.infer<typeof RuntimeFrameEnvelopeSchema>
 export type GatewayFrameEnvelope = z.infer<typeof GatewayFrameEnvelopeSchema>

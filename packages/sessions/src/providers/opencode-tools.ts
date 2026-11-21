@@ -5,7 +5,7 @@ import type { ToolDetail } from "../content.js"
 type JsonValue = string | number | boolean | null | { readonly [key: string]: JsonValue | undefined } | readonly JsonValue[]
 
 /** The fields of an OpenCode tool's input that name a file and a change to it. */
-export const OpenCodeEditInput = z.object({ path: z.string().optional(), filePath: z.string().optional(), oldString: z.string().optional(), newString: z.string().optional(), content: z.string().optional() })
+export const OpenCodeEditInput = z.lazy(() => z.object({ path: z.string().optional(), filePath: z.string().optional(), oldString: z.string().optional(), newString: z.string().optional(), content: z.string().optional() }))
 
 /** The file an OpenCode tool touched, and for an edit or a write the change it made. */
 export function openCodeToolDetails(name: string, edit: z.infer<typeof OpenCodeEditInput> | undefined, cwd: string): ToolDetail[] | undefined {

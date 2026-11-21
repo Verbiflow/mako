@@ -14,7 +14,7 @@ import { OutdatedRestoreSchema, type OutdatedRestore } from "./restore-plan.js"
 export { PromptAttachmentSchema } from "./prompt-attachments.js"
 
 export const ProviderSelectionSchema = SessionSettingsSchema
-export const TransferInputSchema = z.object({
+export const TransferInputSchema = z.lazy(() => z.object({
   /** Explicit retry of a failed compaction handoff; the host verifies the exact episode and destination. */
   recoveryOf: z.string().uuid().optional(),
   bindingId: z.string().uuid().optional(),
@@ -30,13 +30,13 @@ export const TransferInputSchema = z.object({
   /** What its message may attach (`LiveRequest.grants`), kept with the words it carries. */
   grants: z.array(z.string().max(1024)).max(100).optional(),
   notification: z.literal(true).optional(),
-})
+}))
 export type TransferInput = z.infer<typeof TransferInputSchema>
 /** A harness's running totals for one native session, as `NativeTotals`. */
-export const NativeTotalsSchema = z.object({
+export const NativeTotalsSchema = z.lazy(() => z.object({
   tokens: z.object({ input: z.number(), cacheRead: z.number(), cacheWrite: z.number(), output: z.number(), reasoning: z.number().optional() }),
   cost: z.number().nonnegative().optional(),
-})
+}))
 export const ProviderBindingSchema = z.object({
   executionContext: ExecutionContextSchema.optional(),
   checkpoint: z.string().optional(),
@@ -111,7 +111,7 @@ export function compareNativeCheckpoint(previous: string | undefined, current: s
 export function resumable(verdict: ResumeVerdict, record: "same" | "moved" = "moved"): boolean {
   return verdict.kind === "resumable" && (record === "moved" || verdict.record === "same")
 }
-export const ContextManifestSchema = z.object({
+export const ContextManifestSchema = z.lazy(() => z.object({
   file: z.string(),
   resources: z.array(z.string()).optional(),
   digest: z.string(),
@@ -130,9 +130,9 @@ export const ContextManifestSchema = z.object({
    * installed here is older than the one that wrote them (`restoreGate`).
    */
   outdated: OutdatedRestoreSchema.optional(),
-})
+}))
 export type ContextManifest = z.infer<typeof ContextManifestSchema>
-export const TransferStateSchema = z.discriminatedUnion("kind", [
+export const TransferStateSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("queued") }),
   z.object({ kind: z.literal("preparing") }),
   z.object({
@@ -160,7 +160,7 @@ export const TransferStateSchema = z.discriminatedUnion("kind", [
     removed: z.literal(true).optional(),
   }).overwrite(readStoredFailure),
   z.object({ kind: z.literal("uncertain"), error: z.string() }),
-])
+]))
 /**
  * An interruption's reason as a journal keeps it (`savedReason`): one every
  * build reads, and the exact one beside it, which is read back when this
@@ -172,14 +172,14 @@ export function readStoredReason<Fields extends { reason: InterruptionReason; ex
 }
 
 /** A message's next attempt after a failure that clears by itself (`RequestRetry`, `delivery-retry.ts`), as the journal keeps it. */
-export const RequestRetrySchema = z.object({
+export const RequestRetrySchema = z.lazy(() => z.object({
   at: z.number(),
   attempt: z.number().int().positive(),
   since: z.number(),
   cause: z.enum(["rate-limited", "provider-unavailable", "network", "launch-stalled", "busy"]),
   reason: z.string(),
   until: z.number().optional(),
-})
+}))
 
 /** One host-owned compaction incident. Original action receipts stay truthful and immutable. */
 const CompactionRecoveryBaseSchema = z.object({
@@ -207,7 +207,7 @@ export const NativeCompactionRecoverySchema = CompactionRecoveryBaseSchema.exten
   requestId: z.string().uuid(),
   state: CompactionFinalStateSchema,
 })
-export const CompactionRecoverySchema = z.union([ActionCompactionRecoverySchema, NativeCompactionRecoverySchema])
+export const CompactionRecoverySchema = z.lazy(() => z.union([ActionCompactionRecoverySchema, NativeCompactionRecoverySchema]))
 export type CompactionRecovery = z.infer<typeof CompactionRecoverySchema>
 export function compactionRecovering(recovery: CompactionRecovery | undefined): recovery is CompactionRecovery & { state: Extract<CompactionRecovery["state"], { kind: "retry" | "reconcile" | "replace" }> } {
   return recovery?.state.kind === "retry" || recovery?.state.kind === "reconcile" || recovery?.state.kind === "replace"
@@ -218,7 +218,7 @@ export function compactionPending(recovery: CompactionRecovery | undefined): boo
   return compactionRecovering(recovery) || recovery?.state.kind === "completed" && Boolean(recovery.state.waiting?.length)
 }
 
-export const ContextTransferSchema = z.object({
+export const ContextTransferSchema = z.lazy(() => z.object({
   inputDigest: z.string().optional(),
   /** Internal same-harness transcript replacement; never a caller-supplied resume/fork verdict. */
   compaction: z.object({ recoveryId: z.string().uuid(), bindingId: z.string().uuid() }).optional(),
@@ -250,7 +250,7 @@ export const ContextTransferSchema = z.object({
    * session that never ran a turn starts in its own binding. Host-owned.
    */
   reconnects: z.literal(true).optional(),
-})
+}))
 export type ContextTransfer = z.infer<typeof ContextTransferSchema>
 /** A switch with no message of its own: the Thread moves, and what next goes there carries its history. */
 export function quietSwitch(transfer: Pick<ContextTransfer, "input">): boolean {
@@ -268,14 +268,14 @@ export function retiredMove(transfer: ContextTransfer, error: string): ContextTr
   return { ...transfer, retry: undefined, state: { kind: "failed", error, removed: true } }
 }
 /** What a native session's transcript holds of Mako's note (`ConversationControl.noteHeard`). */
-export const NoteHeardSchema = z.object({
+export const NoteHeardSchema = z.lazy(() => z.object({
   bindingId: z.string(),
   nativeId: z.string(),
   cwd: z.string(),
   lines: z.record(z.string(), z.string()),
-})
+}))
 export type NoteHeard = z.infer<typeof NoteHeardSchema>
-export const ConversationControlSchema = z.object({
+export const ConversationControlSchema = z.lazy(() => z.object({
   questions: z.array(LiveQuestionSchema).max(2000).optional(),
   approvalResponses: z.array(ApprovalResponseSchema).optional(),
   // Native questions and later resolutions, independent of local answer intents.
@@ -347,11 +347,11 @@ export const ConversationControlSchema = z.object({
   bindings: z.array(ProviderBindingSchema),
   transfers: z.array(ContextTransferSchema),
 }).transform(({ pendingCompactionRecovery, ...control }) => pendingCompactionRecovery
-  ? { ...control, compactionRecovery: pendingCompactionRecovery } : control)
+  ? { ...control, compactionRecovery: pendingCompactionRecovery } : control))
 export type ConversationControl = z.infer<typeof ConversationControlSchema>
 
 /** The answer a fork goes on from: a live turn's, the prompt before one, or a saved answer by its place and identity. */
-export const ForkPointSchema = z.discriminatedUnion("kind", [
+export const ForkPointSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("run"), requestId: z.string().uuid() }),
   z.object({ kind: z.literal("before-run"), requestId: z.string().uuid() }),
   z.object({
@@ -365,9 +365,9 @@ export const ForkPointSchema = z.discriminatedUnion("kind", [
      */
     anchor: MessageAnchorSchema.optional(),
   }),
-])
+]))
 
-export const ForkInputSchema = z.object({
+export const ForkInputSchema = z.lazy(() => z.object({
   id: z.string().uuid(),
   provider: z.string().min(1),
   point: ForkPointSchema,
@@ -382,5 +382,5 @@ export const ForkInputSchema = z.object({
    * machine names it, so both stores file the fork alike and no machine's own randomness decides it.
    */
   session: z.string().uuid().optional(),
-})
+}))
 export type ForkInput = z.infer<typeof ForkInputSchema>

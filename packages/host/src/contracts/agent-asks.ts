@@ -1,7 +1,7 @@
 import { z } from "zod"
 
 /** The settings an agent may change for the person, each with its value. `commit-model`: the model that drafts commit messages (Settings › Utility models). */
-export const SettingSchema = z.discriminatedUnion("name", [
+export const SettingSchema = z.lazy(() => z.discriminatedUnion("name", [
   z.object({ name: z.literal("hand-off-on-sleep"), value: z.boolean() }),
   z.object({ name: z.literal("continue-after-restart"), value: z.boolean() }),
   z.object({ name: z.literal("harness-order"), value: z.array(z.string().min(1).max(40)).min(1).max(16) }),
@@ -9,7 +9,7 @@ export const SettingSchema = z.discriminatedUnion("name", [
   /** Settings › Conversation: keep this Mac awake while agents work, and with its lid closed on power. */
   z.object({ name: z.literal("keep-awake"), value: z.boolean() }),
   z.object({ name: z.literal("keep-awake-lid-closed"), value: z.boolean() }),
-])
+]))
 export type Setting = z.infer<typeof SettingSchema>
 
 /** A setting from a tool's arguments; undefined when the name or its value isn't one. */
@@ -22,7 +22,7 @@ export function settingValue(name: string, value: boolean | string | string[] | 
  * (`ConversationControl.asks`), so a restart keeps it and the desk, the web app and the phone read one fact. The person
  * answers on any of them (`mako:agent-ask-answer`, on the conversation's owner).
  */
-export const AgentAskWantSchema = z.discriminatedUnion("kind", [
+export const AgentAskWantSchema = z.lazy(() => z.discriminatedUnion("kind", [
   /** Move to the cloud. `handsOff`: its Thread works in its own worktree; otherwise it goes onto its own branch first, once its turns end. */
   z.object({ kind: z.literal("move"), move: z.string(), handsOff: z.boolean() }),
   /** Bring it back to this Mac, from inside a cloud Thread: its machine can't reach its Mac, so the person's allow presses it. */
@@ -42,17 +42,17 @@ export const AgentAskWantSchema = z.discriminatedUnion("kind", [
    * to answer, never an Apex's, and it doesn't hold the agent. `name` is the automation's, as the card says it.
    */
   z.object({ kind: z.literal("automation-proposal"), proposal: z.string(), change: z.enum(["create", "update", "delete", "enable"]), id: z.string(), name: z.string().max(120).optional(), cwd: z.string().min(1) }),
-])
+]))
 export type AgentAskWant = z.infer<typeof AgentAskWantSchema>
 
-export const AgentAskSchema = z.object({ id: z.string(), at: z.number(), want: AgentAskWantSchema })
+export const AgentAskSchema = z.lazy(() => z.object({ id: z.string(), at: z.number(), want: AgentAskWantSchema }))
 export type AgentAsk = z.infer<typeof AgentAskSchema>
 
 /** Only a fresh accepted choice can begin a client action; joined and missing answers confer no new permission. */
-export const AgentAskAnswerSchema = z.discriminatedUnion("outcome", [
+export const AgentAskAnswerSchema = z.lazy(() => z.discriminatedUnion("outcome", [
   z.object({ outcome: z.enum(["answered", "joined"]), ask: z.string(), allow: z.boolean(), want: AgentAskWantSchema }),
   z.object({ outcome: z.enum(["missing", "unavailable"]), ask: z.string() }),
-])
+]))
 export type AgentAskAnswer = z.infer<typeof AgentAskAnswerSchema>
 
 /** An ask's two answers as an approval's options, on the path a Fin's asks take to its Apex and the person. */

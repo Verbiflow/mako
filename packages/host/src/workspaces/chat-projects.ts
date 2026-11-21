@@ -12,7 +12,7 @@ import type { WorkspaceConversations } from "./conversations.js"
 import { expandPath } from "./project-folders.js"
 
 /** A chat to turn into a project: its folder under `~/Mako/Chats`, and where the project goes (`~/…` or `/…`). */
-export const ChatProjectRequestSchema = z.object({ folder: z.string().min(1).max(4096), to: z.string().min(1).max(4096) }).strict()
+export const ChatProjectRequestSchema = z.lazy(() => z.object({ folder: z.string().min(1).max(4096), to: z.string().min(1).max(4096) }).strict())
 export type ChatProjectRequest = z.infer<typeof ChatProjectRequestSchema>
 
 const holds = (folder: string, path: string) => path === folder || path.startsWith(`${folder}/`)

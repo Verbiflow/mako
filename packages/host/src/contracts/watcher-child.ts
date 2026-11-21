@@ -8,20 +8,20 @@ import { z } from "zod"
 /** The folder under the temporary folder where the watcher child keeps the history marks it reads with. */
 export const HISTORY_SCRATCH = "mako-history"
 
-export const HistoryMarkSchema = z.object({ id: z.string().regex(/^\d+$/), at: z.string().regex(/^\d+$/) }).strict()
+export const HistoryMarkSchema = z.lazy(() => z.object({ id: z.string().regex(/^\d+$/), at: z.string().regex(/^\d+$/) }).strict())
 export type HistoryMark = z.infer<typeof HistoryMarkSchema>
 
 /** Native handles whose synchronous creation and close must stay off the host thread. */
-export const NativeWatchSchema = z.discriminatedUnion("kind", [
+export const NativeWatchSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("directory") }),
   /** Recursive app output, filtered to logs in the child before IPC. */
   z.object({ kind: z.literal("app-output") }),
   z.object({ kind: z.literal("git-markers"), markers: z.array(z.string()) }),
-])
+]))
 export type NativeWatch = z.infer<typeof NativeWatchSchema>
 
 /** What the host asks of the watcher child. Ids are the host's and never reused. */
-export const WatcherRequestSchema = z.discriminatedUnion("t", [
+export const WatcherRequestSchema = z.lazy(() => z.discriminatedUnion("t", [
   z.object({ t: z.literal("sub"), id: z.number().int(), root: z.string(), ignore: z.array(z.string()), native: NativeWatchSchema.optional() }),
   z.object({ t: z.literal("unsub"), id: z.number().int() }),
   /** Where the history stands now. */
@@ -64,13 +64,13 @@ export const WatcherRequestSchema = z.discriminatedUnion("t", [
   z.object({ t: z.literal("cancel"), id: z.number().int() }),
   /** How late a folder of the child's own hears `beats` writes, one after another: delivery measured now, not over the last minute. */
   z.object({ t: z.literal("probe"), id: z.number().int(), beats: z.number().int().positive().max(20) }),
-])
+]))
 
 /** FSEventStreamSetExclusionPaths ignores the whole list when it holds more than eight. */
 export const MAX_EXCLUDED = 8
 export type WatcherRequest = z.infer<typeof WatcherRequestSchema>
 
-export const WatchEventSchema = z.object({ path: z.string(), type: z.enum(["create", "update", "delete"]) })
+export const WatchEventSchema = z.lazy(() => z.object({ path: z.string(), type: z.enum(["create", "update", "delete"]) }))
 export type WatchEvent = z.infer<typeof WatchEventSchema>
 
 /**
@@ -83,9 +83,9 @@ export const DropReasonSchema = z.enum(["client", "kernel", "coalesced"])
 export type DropReason = z.infer<typeof DropReasonSchema>
 
 /** A process as `ps` gives it: what a run's look reads of it. */
-export const ProcessRowSchema = z.object({ pid: z.number().int(), ppid: z.number().int(), pgid: z.number().int(), rssKb: z.number(), startedMs: z.number(), command: z.string() })
+export const ProcessRowSchema = z.lazy(() => z.object({ pid: z.number().int(), ppid: z.number().int(), pgid: z.number().int(), rssKb: z.number(), startedMs: z.number(), command: z.string() }))
 
-export const WatcherReplySchema = z.discriminatedUnion("t", [
+export const WatcherReplySchema = z.lazy(() => z.discriminatedUnion("t", [
   z.object({ t: z.literal("table"), id: z.number().int(), text: z.string() }),
   z.object({ t: z.literal("members"), id: z.number().int(), rows: z.array(ProcessRowSchema) }),
   /** A probe's answer: its exit `code` (or `signal`), its output, and `failure` when it couldn't run or was cut short. */
@@ -127,7 +127,7 @@ export const WatcherReplySchema = z.discriminatedUnion("t", [
     capped: z.array(z.string()).optional(), unsent: z.number().int().nonnegative().optional(),
     caughtUpMs: z.number().nonnegative().optional(), readMs: z.number().nonnegative().optional(),
   }),
-])
+]))
 export type WatcherReply = z.infer<typeof WatcherReplySchema>
 
 /**
@@ -148,10 +148,10 @@ export const CALM_POLL_MS = 15_000
  * hears nothing while `deafWhile` exists, and one that hears each beat (and
  * each probe's) `lagMs` late, as a degraded fseventsd delivers.
  */
-export const CanaryTestSchema = z.object({
+export const CanaryTestSchema = z.lazy(() => z.object({
   everyMs: z.number().int().positive().optional(),
   withinMs: z.number().int().positive().optional(),
   deafWhile: z.string().optional(),
   lagMs: z.number().int().positive().optional(),
-})
+}))
 export type CanaryTest = z.infer<typeof CanaryTestSchema>

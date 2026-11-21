@@ -7,7 +7,7 @@ import { z } from "zod"
  */
 export const CloudDeviceKindSchema = z.enum(["desktop", "runtime", "cli", "browser"])
 
-export const CloudDeviceSchema = z.object({
+export const CloudDeviceSchema = z.lazy(() => z.object({
   id: z.string(),
   kind: CloudDeviceKindSchema,
   name: z.string(),
@@ -18,7 +18,7 @@ export const CloudDeviceSchema = z.object({
   lastSeenAt: z.string(),
   /** Where it joined the account from, as the cloud read its address: never the address. Absent from older clouds. */
   enrolledFrom: z.object({ city: z.string().nullable(), region: z.string().nullable(), country: z.string().nullable() }).nullish(),
-})
+}))
 export type CloudDevice = z.infer<typeof CloudDeviceSchema>
 
 /** Where a request came from, as the cloud read its address: never the address. */
@@ -29,7 +29,7 @@ const CloudPlaceSchema = z.object({ city: z.string().nullable(), region: z.strin
  * in, and when and where it was last used. `browser` and `os` are named by the cloud ("Chrome", "macOS"), null when it
  * couldn't tell.
  */
-export const CloudBrowserSessionSchema = z.object({
+export const CloudBrowserSessionSchema = z.lazy(() => z.object({
   id: z.string(),
   method: z.enum(["github", "google", "local"]).nullable().catch(null),
   browser: z.string().nullable(),
@@ -39,7 +39,7 @@ export const CloudBrowserSessionSchema = z.object({
   lastSeenAt: z.string(),
   lastSeenFrom: CloudPlaceSchema.nullable(),
   expiresAt: z.string(),
-})
+}))
 export type CloudBrowserSession = z.infer<typeof CloudBrowserSessionSchema>
 
 /**
@@ -59,14 +59,14 @@ export const CloudPersonSchema = z.object({
 export type CloudPerson = z.infer<typeof CloudPersonSchema>
 
 /** Why this Mac is signed out, when something other than the person did it. */
-export const CloudSignedOutNoticeSchema = z.object({
+export const CloudSignedOutNoticeSchema = z.lazy(() => z.object({
   /** `reused`: the cloud saw this Mac's sign-in used from somewhere else, and signed it out to keep the account safe. */
   kind: z.enum(["removed", "reused", "timed-out", "failed"]),
   message: z.string(),
-})
+}))
 export type CloudSignedOutNotice = z.infer<typeof CloudSignedOutNoticeSchema>
 
-export const CloudAccountStateSchema = z.discriminatedUnion("status", [
+export const CloudAccountStateSchema = z.lazy(() => z.discriminatedUnion("status", [
   /** No cloud is configured for this build, or this host may not reach it. */
   z.object({ status: z.literal("unavailable"), message: z.string() }),
   /**
@@ -93,12 +93,12 @@ export const CloudAccountStateSchema = z.discriminatedUnion("status", [
     /** Where the sign-in is kept: the keychain, or memory until Mako quits (no keychain, or a fixture desk that writes nothing). */
     kept: z.enum(["keychain", "memory", "fixture"]),
   }),
-])
+]))
 export type CloudAccountState = z.infer<typeof CloudAccountStateSchema>
 
-export const CloudAccountSchema = z.object({
+export const CloudAccountSchema = z.lazy(() => z.object({
   /** The cloud's address as people read it, such as `cloud.example.com` or `127.0.0.1:8787`. */
   cloud: z.string().nullable(),
   state: CloudAccountStateSchema,
-})
+}))
 export type CloudAccount = z.infer<typeof CloudAccountSchema>

@@ -70,10 +70,10 @@ export function decodeMediaMessage(message: Uint8Array): MediaMessage {
 }
 
 /** A socket's binary message as bytes, whether its runtime delivers an ArrayBuffer or a Node Buffer; a Blob isn't one. */
-export const BinaryMessageSchema = z.union([
+export const BinaryMessageSchema = z.lazy(() => z.union([
   z.instanceof(ArrayBuffer).transform((buffer) => new Uint8Array(buffer)),
   z.instanceof(Uint8Array),
-])
+]))
 
 /** What a watching client reads, in order: the stream's messages, then its end. */
 export type MediaDelivery = { kind: "data"; data: Uint8Array } | { kind: "ended"; problem?: Problem }

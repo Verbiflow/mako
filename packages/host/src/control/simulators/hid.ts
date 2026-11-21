@@ -27,11 +27,11 @@ export interface RawPoint {
   y: number
 }
 
-export const ScreenConfigSchema = z.object({
+export const ScreenConfigSchema = z.lazy(() => z.object({
   width: z.number().positive(),
   height: z.number().positive(),
   orientation: z.enum(["portrait", "portrait_upside_down", "landscape_left", "landscape_right"]),
-})
+}))
 export type ScreenConfig = z.infer<typeof ScreenConfigSchema>
 
 function tagged(kind: number, payload: { [field: string]: string | number }): Uint8Array {

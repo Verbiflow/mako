@@ -9,7 +9,7 @@ import { z } from "zod"
  * was lost, can't be). Windows order what a host said by it, then by revision (`LiveConversations.epoch`), never by a
  * clock: one moved back would have a newer host read as older.
  */
-export const HostStartSchema = z.object({ generation: z.number().int().positive(), root: z.string().regex(/^[A-Za-z0-9_-]{8,16}$/) })
+export const HostStartSchema = z.lazy(() => z.object({ generation: z.number().int().positive(), root: z.string().regex(/^[A-Za-z0-9_-]{8,16}$/) }))
 export type HostStart = z.infer<typeof HostStartSchema>
 
 /**

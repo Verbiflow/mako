@@ -52,14 +52,14 @@ export const MACHINE_IDENTITY_DIR = "/run/mako/secrets/identity"
  * One of the project's carried files the agent placed in the Thread's checkout (its `.env`, a local settings file):
  * its path and the variables it defines, never a value. The host checks a recipe's named secrets against them.
  */
-export const CarriedFileSchema = z.object({
+export const CarriedFileSchema = z.lazy(() => z.object({
   path: z.string().min(1).max(300),
   names: z.array(z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/)).max(200),
-}).strict()
+}).strict())
 export type CarriedFile = z.infer<typeof CarriedFileSchema>
 
 /** What the agent tells the host. */
-export const AgentMessageSchema = z.discriminatedUnion("type", [
+export const AgentMessageSchema = z.lazy(() => z.discriminatedUnion("type", [
   /**
    * Connect as this runtime with this credential: after enrolling, and again whenever either changes. The same
    * runtime with another credential is a renewal: the connection goes on, and the next one carries it.
@@ -127,7 +127,7 @@ export const AgentMessageSchema = z.discriminatedUnion("type", [
    * reaches it through the Thread's link (`SshRelay`), never from the network. Without it, every SSH stream is refused.
    */
   z.object({ type: z.literal("ssh"), port: z.number().int().min(1).max(65_535) }).strict(),
-])
+]))
 export type AgentMessage = z.infer<typeof AgentMessageSchema>
 
 /** The machine runtime as the host sees it, for the agent's state page and the host's log. */

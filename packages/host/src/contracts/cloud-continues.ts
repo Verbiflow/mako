@@ -93,7 +93,7 @@ async function askOnce(ask: ContinueAsk, request: Parameters<ContinueAsk>[0]): P
 }
 
 /** What a continue route's refusal says, as much of its problem document as a person reads. */
-export const ContinueProblemSchema = z.object({ title: z.string(), detail: z.string() }).partial()
+export const ContinueProblemSchema = z.lazy(() => z.object({ title: z.string(), detail: z.string() }).partial())
 
 /** A problem document's words: its title, and its detail after it. */
 export function problemWords(problem: z.infer<typeof ContinueProblemSchema> | undefined, status: number): string {

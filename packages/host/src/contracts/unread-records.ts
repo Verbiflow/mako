@@ -11,14 +11,14 @@ import { RecordRefSchema } from "@mako/sessions/entries"
  */
 
 /** The newest record of a row, which its Original opens: an entry of a saved session, or the stream line a live one came in. */
-export const UnreadExampleSchema = z.discriminatedUnion("kind", [
+export const UnreadExampleSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("entry"), path: z.string(), id: z.string(), record: RecordRefSchema.optional() }),
   z.object({ kind: z.literal("stream"), frame: RecordRefSchema }),
   z.object({ kind: z.literal("none") }),
-])
+]))
 export type UnreadExample = z.infer<typeof UnreadExampleSchema>
 
-export const UnreadRowSchema = z.object({
+export const UnreadRowSchema = z.lazy(() => z.object({
   harness: z.string(),
   /** Null where nothing names the version: the record store doesn't hold the session yet, or the launch reported none. */
   version: z.string().nullable(),
@@ -36,10 +36,10 @@ export const UnreadRowSchema = z.object({
   sessions: z.number().int().nonnegative().optional(),
   newestAt: z.number().nullable(),
   example: UnreadExampleSchema,
-})
+}))
 export type UnreadRow = z.infer<typeof UnreadRowSchema>
 
-export const UnreadReportSchema = z.object({
+export const UnreadReportSchema = z.lazy(() => z.object({
   rows: z.array(UnreadRowSchema),
   /** Saved sessions with any unread record, and those records in all. */
   sessions: z.number().int().nonnegative(),
@@ -48,5 +48,5 @@ export const UnreadReportSchema = z.object({
   unattributed: z.number().int().nonnegative(),
   /** When this host started counting live records. */
   liveSince: z.number(),
-})
+}))
 export type UnreadReport = z.infer<typeof UnreadReportSchema>
