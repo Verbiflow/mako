@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { ControlImageSchema } from "@mako/control-runtime/contracts"
+import { ControlImageSchema } from "@mako/control-runtime/preview-contracts"
 import { UpdateStateSchema } from "./automations-usage-updates.js"
 import { ControlVideoBoxSchema } from "./control-video.js"
 import { LiveVideoFrameEventSchema, LiveVideoFrameSchema, LiveVideoOpenSchema, LiveVideoOpenedSchema, LiveVideoSessionSchema } from "./live-video.js"

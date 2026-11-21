@@ -73,7 +73,8 @@ export function watchPluginChanges(dataRoot: string, emit: (event: HostEvent) =>
 
 export interface ToolMethodsDeps {
   tools: Tools
-  control: Control
+  /** Browser and computer use, loaded for the first call that reads it. */
+  control(reason: string): Promise<Control>
   /** The folder of the tab in front. */
   workspace(): Promise<string>
   dataRoot: string
@@ -111,14 +112,15 @@ export function declareToolMethods(methods: MethodTable, { tools, control, works
   })
   methods.handle("mako:integrations", () =>
     workspace().then(async (cwd) => {
-      await control.ensureLocalControl().catch(() => null)
+      const opened = await control("the integrations' catalog")
+      await opened.ensureLocalControl().catch(() => null)
       const [snapshot, github, driver, permissions] = await Promise.all([
         mcp.discover(cwd),
         githubStatus(cwd),
-        control.driverStatus(),
-        control.computerPermissions(),
+        opened.driverStatus(),
+        opened.computerPermissions(),
       ])
-      return integrationCatalog(snapshot, permissions, github.authenticated, control.browser.status(), driver)
+      return integrationCatalog(snapshot, permissions, github.authenticated, opened.browser.status(), driver)
     })
   )
   methods.handle("mako:mcp-sync-preview", (serverId: string, target: McpSyncTarget) =>

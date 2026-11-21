@@ -9,10 +9,12 @@
   "exports": {
     ".": "./dist/index.js",
     "./program": "./dist/program/index.js",
+    "./program/artifacts": "./dist/program/artifacts.js",
     "./computer": "./dist/computer/index.js",
     "./computer/outline": "./dist/computer/outline.js",
     "./control": "./dist/control/index.js",
     "./control/scope": "./dist/control/scope.js",
+    "./control/fault": "./dist/control/fault.js",
     "./control/recording": "./dist/control/recording.js",
     "./browser": "./dist/browser/index.js"
   },

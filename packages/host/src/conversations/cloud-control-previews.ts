@@ -1,6 +1,6 @@
 import { randomBytes } from "node:crypto"
 import { Payload, type ClientSession, type MediaWatch, type Problem } from "@mako/protocol"
-import { decodeControlVideo, encodeControlVideoBatch, type ControlActivity, type ControlPreview, type ControlVideoBatch } from "@mako/control-runtime/contracts"
+import { decodeControlVideo, encodeControlVideoBatch, type ControlActivity, type ControlPreview, type ControlVideoBatch } from "@mako/control-runtime/preview-contracts"
 import { controlVideoEnding, type ControlVideoEnding, type ControlVideoWatch } from "../contracts/control-video.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import type { MethodTable } from "../base/methods.js"
