@@ -28,6 +28,7 @@ on:
       - native/video-windows/**
       - native/windows-helper/**
       - vendor/cua-driver/**
+      - vendor/spdx-licenses/**
       - scripts/package-control-driver-windows.mjs
       - scripts/driver-third-party-notices.mjs
       - packages/host/src/control/cua-embedded.ts
