@@ -26,8 +26,11 @@ import { longestHold, type LoopHold } from "./lib/loop-hold.ts"
  * day's. Three interleaved pairs of fresh hosts take up copies of that same left state, at once and in slices.
  * The median of the paired ratios of the CPU each spent in its busiest gap must stay under a quarter (`TIMES`): a
  * runner that preempts the process stretches a gap's wall time with no work in it, and a synchronous stretch of the
- * resume's own shows as CPU. The sliced resume's longest gap by the clock is held to a loose bound (`SLICED_WALL_MS`). Every pair must resume exactly the same: the same messages sent on, the same
- * turns continued, every Fin's requests in the same states. Every raw timing and the paired median are printed.
+ * resume's own shows as CPU. The sliced resume's longest gap by the clock is held to a loose bound (`SLICED_WALL_MS`).
+ * The turns a resume continues answer only once it has been timed (`takeUp`): what's judged is the resume's own work,
+ * not four scripted turns ending in the middle of it. Every pair must resume exactly the same: the same messages sent
+ * on, the same turns continued, every Fin's requests in the same states. Every raw timing and the paired median are
+ * printed.
  *
  * And nothing the resume reads is read whole: every conversation it reads in from its journal (`LiveRecords.load` of
  * one not in memory) must have been read in first. A settled Apex whose Fin's report was kept but not yet heard when
@@ -163,7 +166,15 @@ async function readWhole(run: () => Promise<void>): Promise<string[]> {
 
 /** A fresh host on a copy of what the last one left, taking it up at once or in slices. */
 async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: boolean): Promise<Taken> {
-  const script: Script = () => "Done after the restart."
+  // The turns the resume continues answer once it has been timed. Answering at once, the four cut Fins' turns ended
+  // together between two slices, and their ends (a report kept, its Apex told, each conversation written) made the
+  // sliced resume's busiest gap, which the check then judged as the resume's: 26.5% and 27.6% of at once on CI
+  // (2026-11-20), and over ten runs on two cores a gap of 12 to 56 ms and a median anywhere from 10.0% to 26.5%. Timed
+  // without them the gap is the resume's slices, 8 to 24 ms, and twenty runs' medians were 7.0% to 11.1%. A provider
+  // answers seconds after a host starts, never inside its resume.
+  let timed = () => {}
+  const untilTimed = new Promise<void>((resolve) => { timed = resolve })
+  const script: Script = () => untilTimed.then(() => "Done after the restart.")
   let world: AgentsWorld | undefined
   let gap: LoopHold = { ms: 0, fromMs: 0, toMs: 0, cpuMs: 0, busiest: { ms: 0, fromMs: 0, toMs: 0, cpuMs: 0 } }
   let constructedMs = 0
@@ -176,7 +187,7 @@ async function takeUp(at: string, fins: ReadonlyMap<string, string>, inSlices: b
       await world.resumed
       resumeMs = performance.now() - opened
     })
-  })
+  }).finally(timed)
   assert.ok(world)
   if (inSlices) assert.deepEqual(whole, [], "resuming in slices reads nothing whole")
   else {

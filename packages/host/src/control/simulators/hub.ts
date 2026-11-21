@@ -53,11 +53,11 @@ const AxElementSchema = z.object({
   enabled: z.boolean().optional(),
   frame: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }),
 })
-export const AxSnapshotSchema = z.object({ screen: z.object({ width: z.number(), height: z.number() }).optional(), elements: z.array(AxElementSchema) })
+export const AxSnapshotSchema = z.lazy(() => z.object({ screen: z.object({ width: z.number(), height: z.number() }).optional(), elements: z.array(AxElementSchema) }))
 export type AxSnapshot = z.infer<typeof AxSnapshotSchema>
 export type AxElement = z.infer<typeof AxElementSchema>
 
-export const InspectorTargetSchema = z.object({
+export const InspectorTargetSchema = z.lazy(() => z.object({
   id: z.string(),
   pid: z.number(),
   app: z.string().optional(),
@@ -66,7 +66,7 @@ export const InspectorTargetSchema = z.object({
   url: z.string(),
   type: z.string(),
   inUse: z.boolean(),
-})
+}))
 export type InspectorTarget = z.infer<typeof InspectorTargetSchema>
 
 /**

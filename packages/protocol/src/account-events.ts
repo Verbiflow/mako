@@ -17,9 +17,9 @@ import { WAITING_PER_SESSION, WaitingMessageSchema } from "./waiting.js"
  */
 
 /** Where a request came from, as the cloud read its address: never the address. */
-export const AccountPlaceSchema = z.object({ city: z.string().nullable(), region: z.string().nullable(), country: z.string().nullable() })
+export const AccountPlaceSchema = z.lazy(() => z.object({ city: z.string().nullable(), region: z.string().nullable(), country: z.string().nullable() }))
 
-export const AccountEventSchema = z.discriminatedUnion("type", [
+export const AccountEventSchema = z.lazy(() => z.discriminatedUnion("type", [
   z.object({
     type: z.literal("device-joined"),
     device: z.object({
@@ -69,7 +69,7 @@ export const AccountEventSchema = z.discriminatedUnion("type", [
    * `GET /v1/automations/runs` on from the last it took, its poll kept as the fallback.
    */
   AutomationsChangedEventSchema,
-])
+]))
 export type AccountEvent = z.infer<typeof AccountEventSchema>
 /** An event about the account's devices, as against its Threads. */
 export type AccountDeviceEvent = Extract<AccountEvent, { type: "device-joined" | "device-removed" }>

@@ -1,6 +1,6 @@
 import { z } from "zod"
 
-export const SettingValueSchema = z.union([z.string(), z.boolean()])
+export const SettingValueSchema = z.lazy(() => z.union([z.string(), z.boolean()]))
 export type SettingValue = z.infer<typeof SettingValueSchema>
 
 /** Only requested/observed values. Absence means inherit, never false or medium. */
@@ -10,13 +10,13 @@ export const SessionSettingsSchema = z.object({
 })
 export type SessionSettings = z.infer<typeof SessionSettingsSchema>
 
-export const ModelChoiceSchema = z.object({
+export const ModelChoiceSchema = z.lazy(() => z.object({
   value: z.string(),
   label: z.string(),
   description: z.string().optional(),
   default: z.boolean().optional(),
   aliases: z.array(z.string()).optional(),
-})
+}))
 export type ModelChoice = z.infer<typeof ModelChoiceSchema>
 
 const optionFields = {
@@ -34,7 +34,7 @@ const optionFields = {
   disabledReason: z.string().optional(),
   change: z.literal("launch").optional(),
 }
-export const ModelOptionSchema = z.discriminatedUnion("kind", [
+export const ModelOptionSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({
     ...optionFields,
     kind: z.literal("select"),
@@ -48,20 +48,20 @@ export const ModelOptionSchema = z.discriminatedUnion("kind", [
     kind: z.literal("boolean"),
     current: z.boolean().optional(),
   }),
-])
+]))
 export type ModelOption = z.infer<typeof ModelOptionSchema>
 
-export const ModelVariantSchema = z.object({
+export const ModelVariantSchema = z.lazy(() => z.object({
   id: z.string(),
   label: z.string(),
   values: z.record(z.string(), SettingValueSchema),
   contextWindow: z.number().optional(),
   maxOutputTokens: z.number().optional(),
   description: z.string().optional(),
-})
+}))
 export type ModelVariant = z.infer<typeof ModelVariantSchema>
 
-export const SessionModelSchema = z.object({
+export const SessionModelSchema = z.lazy(() => z.object({
   id: z.string(),
   launchId: z.string().optional(),
   label: z.string(),
@@ -77,7 +77,7 @@ export const SessionModelSchema = z.object({
    * pass over it.
    */
   unavailable: z.string().optional(),
-})
+}))
 export type SessionModel = z.infer<typeof SessionModelSchema>
 
 export type SettingSource =
@@ -85,10 +85,10 @@ export type SettingSource =
 export type ResolvedSetting<T extends SettingValue = SettingValue> =
   { kind: "known"; value: T; source: SettingSource } | { kind: "unknown" }
 
-export const SettingsPreferenceSchema = z.object({
+export const SettingsPreferenceSchema = z.lazy(() => z.object({
   source: z.literal("saved"),
   settings: SessionSettingsSchema,
-})
+}))
 export type SettingsPreference = z.infer<typeof SettingsPreferenceSchema>
 
 export type SettingsIssue =

@@ -4,7 +4,7 @@ import type { PageObservationNode } from "../browser/observation.js"
 
 /** An exact accessible name, or a pattern for names that carry live text
  * ("Draft 2m", "Settings ⌘ ,"). Patterns ignore case and repeated spaces. */
-export const NameMatchSchema = z.union([
+export const NameMatchSchema = z.lazy(() => z.union([
   z.string(),
   z.object({ prefix: z.string().min(1) }).strict(),
   z.object({ contains: z.string().min(1) }).strict(),
@@ -17,7 +17,7 @@ export const NameMatchSchema = z.union([
         .optional(),
     })
     .strict(),
-])
+]))
 export type NameMatch = z.infer<typeof NameMatchSchema>
 const spaced = (text: string) =>
   text.replace(/\s+/g, " ").trim().toLocaleLowerCase()
@@ -41,9 +41,9 @@ export const ControlSelectorSchema = z
   .strict()
 /** A container to read inside. Landmarks such as main and banner are often
  * unnamed, so the name may be left out; the scope still needs exactly one. */
-export const ControlScopeSchema = z
+export const ControlScopeSchema = z.lazy(() => z
   .object({ role: z.string().min(1), name: NameMatchSchema.optional() })
-  .strict()
+  .strict())
 /** `match` filters a read, so a role alone keeps every row of that role. */
 export const ControlReadScopeSchema = z.object({
   within: z.array(ControlScopeSchema).max(8).default([]),

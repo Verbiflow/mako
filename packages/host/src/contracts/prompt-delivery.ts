@@ -1,7 +1,7 @@
 import { z } from "zod"
 
 /** Delivery evidence is independent of whether the native execution succeeded. */
-export const PromptDeliveryEvidenceSchema = z.discriminatedUnion("kind", [
+export const PromptDeliveryEvidenceSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("prepared") }),
   z.object({
     kind: z.literal("submitted"),
@@ -19,11 +19,11 @@ export const PromptDeliveryEvidenceSchema = z.discriminatedUnion("kind", [
     reason: z.string(),
   }),
   z.object({ kind: z.literal("uncertain"), reason: z.string() }),
-])
+]))
 export type PromptDeliveryEvidence = z.infer<
   typeof PromptDeliveryEvidenceSchema
 >
-export const PromptDeliverySchema = z.object({
+export const PromptDeliverySchema = z.lazy(() => z.object({
   attemptId: z.string().uuid(),
   bindingId: z.string(),
   ownerEpoch: z.string(),
@@ -39,7 +39,7 @@ export const PromptDeliverySchema = z.object({
    */
   gated: z.literal(true).optional(),
   evidence: PromptDeliveryEvidenceSchema,
-})
+}))
 export type PromptDelivery = z.infer<typeof PromptDeliverySchema>
 
 /** No persisted field means legacy/unknown, never implied native acceptance. */

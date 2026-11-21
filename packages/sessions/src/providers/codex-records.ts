@@ -812,7 +812,7 @@ function remember(set: Set<string>, value: string): void {
 }
 
 /** What `CodexRecords` knew before a turn's first line, which a reader begun there needs. */
-export const CodexCarrySchema = z.object({
+export const CodexCarrySchema = z.lazy(() => z.object({
   started: z.boolean(),
   contextTokens: z.number().optional(),
   cwd: z.string().optional(),
@@ -821,7 +821,7 @@ export const CodexCarrySchema = z.object({
   compaction: z.enum(["record", "event"]).optional(),
   reviewEcho: z.string().optional(),
   reviewing: z.boolean().optional(),
-})
+}))
 export type CodexCarry = z.infer<typeof CodexCarrySchema>
 
 export class CodexRecords {

@@ -129,12 +129,12 @@ export async function streamFiles(root: string): Promise<StreamFiles> {
  * appends with a fresh open each time, so a file removed under a live
  * launch would come back holding only what followed, at the wrong offsets.
  */
-export const StreamWriterSchema = z.object({
+export const StreamWriterSchema = z.lazy(() => z.object({
   id: z.string().regex(/^[\w-]{1,64}$/),
   pid: z.number().int().positive(),
   /** When the process started, where the platform says (Linux's /proc): with the pid, one process, not whoever the kernel gave the pid to since. */
   start: z.number().optional(),
-})
+}))
 export type StreamWriter = z.infer<typeof StreamWriterSchema>
 
 /** BSD's open(2) flag for an exclusive lock taken with the open; Node passes it through but doesn't name it. */

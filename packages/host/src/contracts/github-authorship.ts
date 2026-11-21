@@ -16,12 +16,12 @@ export const PULL_REQUESTS_AS = ["you", "mako", "mako-fallback"] as const
 export type PullRequestsAs = (typeof PULL_REQUESTS_AS)[number]
 
 /** The account's answer, read and saved alike (`/v1/accounts/:accountId/github-authorship`). */
-export const GitHubAuthorshipSchema = z.object({
+export const GitHubAuthorshipSchema = z.lazy(() => z.object({
   as: z.enum(COMMIT_AUTHORS),
   pullRequests: z.enum(PULL_REQUESTS_AS),
   /** The saved token's login, else null. */
   login: z.string().min(1).max(100).nullable(),
-})
+}))
 export type GitHubAuthorship = z.infer<typeof GitHubAuthorshipSchema>
 
 /**

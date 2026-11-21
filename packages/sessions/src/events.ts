@@ -15,12 +15,12 @@ import { formatTokens } from "./amounts.js"
  * when the record itself doesn't hold it (a command's output file, or the
  * copy kept of it once that file is gone, `KeptOutputs`).
  */
-export const NativeEventSourceSchema = z.object({
+export const NativeEventSourceSchema = z.lazy(() => z.object({
   harness: z.string().min(1),
   record: z.string().min(1),
   via: z.literal("wire").optional(),
   body: z.enum(["output-file", "kept-copy"]).optional(),
-})
+}))
 export type NativeEventSource = z.infer<typeof NativeEventSourceSchema>
 export type EventTone = "warning" | "error"
 
@@ -41,13 +41,13 @@ const durationMs = z.number().int().nonnegative().optional()
  * agent of the account until it lifts, so the transcript says it once for
  * all the work it stopped (`sameUsageLimit`).
  */
-export const UsageLimitSchema = z.object({
+export const UsageLimitSchema = z.lazy(() => z.object({
   window: z.string().optional(),
   resetsAt: z.number().nonnegative().optional(),
-})
+}))
 export type UsageLimit = z.infer<typeof UsageLimitSchema>
 
-export const TurnCauseSchema = z.discriminatedUnion("kind", [
+export const TurnCauseSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("command"),
     /** The command's description, else the command line. */
@@ -93,7 +93,7 @@ export const TurnCauseSchema = z.discriminatedUnion("kind", [
     /** The goal's objective, its first line; the whole objective is the event's body. */
     objective: z.string().optional(),
   }),
-])
+]))
 export type TurnCause = z.infer<typeof TurnCauseSchema>
 
 /**
@@ -102,11 +102,11 @@ export type TurnCause = z.infer<typeof TurnCauseSchema>
  * (`recovered`) or the failure it gave up on. Mako draws one marker for them
  * (`retriesEvent`); no harness's record keeps that measure.
  */
-export const RetriesSchema = z.object({
+export const RetriesSchema = z.lazy(() => z.object({
   count: z.number().int().positive(),
   outcome: z.enum(["recovered", "gave-up"]),
   durationMs,
-})
+}))
 export type Retries = z.infer<typeof RetriesSchema>
 
 /**
@@ -117,7 +117,7 @@ export type Retries = z.infer<typeof RetriesSchema>
  * is the person's words. Mako writes it into the Apex's conversation; no
  * harness's record holds it.
  */
-export const DirectRouteSchema = z.object({
+export const DirectRouteSchema = z.lazy(() => z.object({
   to: z.string().min(1).max(512),
   fin: z.string().uuid(),
   request: z.string().min(1).max(512),
@@ -125,7 +125,7 @@ export const DirectRouteSchema = z.object({
   delivery: z.enum(["turn", "steer", "queued", "interrupt"]),
   /** Epoch milliseconds. */
   at: z.number().int().nonnegative(),
-})
+}))
 export type DirectRoute = z.infer<typeof DirectRouteSchema>
 
 export interface TranscriptEvent {

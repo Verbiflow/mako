@@ -44,11 +44,11 @@ export const ClaudeModeSchema = z.enum([
   "auto",
   "bypassPermissions",
 ])
-export const ClaudeTuningSchema = z.object({
+export const ClaudeTuningSchema = z.lazy(() => z.object({
   effort: z.enum(["low", "medium", "high", "xhigh", "max"]).optional(),
   fast: z.boolean().optional(),
   agentTeams: z.boolean().optional(),
-})
+}))
 
 const ImageMimeSchema = z.enum([
   "image/png",

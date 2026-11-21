@@ -27,25 +27,25 @@ type JsonValue = z.infer<ReturnType<typeof z.json>>
  */
 const JsonSchema = z.custom<JsonValue>((value) => value !== undefined)
 
-export const CursorSdkModelParamSchema = z.object({ id: z.string(), value: z.string() })
-export const CursorSdkModelSelectionSchema = z.object({
+export const CursorSdkModelParamSchema = z.lazy(() => z.object({ id: z.string(), value: z.string() }))
+export const CursorSdkModelSelectionSchema = z.lazy(() => z.object({
   id: z.string(),
   params: z.array(CursorSdkModelParamSchema).optional(),
-})
+}))
 export type CursorSdkModelSelection = z.infer<typeof CursorSdkModelSelectionSchema>
 
-export const CursorSdkTokenUsageSchema = z.object({
+export const CursorSdkTokenUsageSchema = z.lazy(() => z.object({
   inputTokens: z.number(),
   outputTokens: z.number(),
   cacheReadTokens: z.number().optional(),
   cacheWriteTokens: z.number().optional(),
   reasoningTokens: z.number().optional(),
-})
+}))
 
 const messageBase = { agent_id: z.string(), run_id: z.string() }
 
 /** The SDK's `SDKMessage`, as `run.stream()` yields it and `run_events` keeps it. */
-export const CursorSdkMessageSchema = z.discriminatedUnion("type", [
+export const CursorSdkMessageSchema = z.lazy(() => z.discriminatedUnion("type", [
   z.object({
     ...messageBase,
     type: z.literal("system"),
@@ -117,11 +117,11 @@ export const CursorSdkMessageSchema = z.discriminatedUnion("type", [
     status: z.enum(["running", "completed", "error"]),
     fallback: z.boolean().optional(),
   }),
-])
+]))
 export type CursorSdkMessage = z.infer<typeof CursorSdkMessageSchema>
 
 /** The streamed deltas the transcript renders as they arrive; the rest of the SDK's update union is summarised by `CursorSdkMessage`. */
-export const CursorSdkDeltaSchema = z.discriminatedUnion("type", [
+export const CursorSdkDeltaSchema = z.lazy(() => z.discriminatedUnion("type", [
   z.object({ type: z.literal("text-delta"), text: z.string() }),
   z.object({ type: z.literal("thinking-delta"), text: z.string() }),
   z.object({ type: z.literal("thinking-completed") }),
@@ -152,7 +152,7 @@ export const CursorSdkDeltaSchema = z.discriminatedUnion("type", [
   }),
   /** An update kind this child does not know, sent once per kind. */
   z.object({ type: z.literal("unhandled"), kind: z.string() }),
-])
+]))
 export type CursorSdkDelta = z.infer<typeof CursorSdkDeltaSchema>
 
 export type CursorTurnOutcome = "finished" | "cancelled" | "error"

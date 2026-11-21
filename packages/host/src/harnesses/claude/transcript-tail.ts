@@ -12,13 +12,13 @@ import { claudeTaskReadsOutput, parseClaudeTaskNotification } from "@mako/sessio
  * turn on one. `output` is the end of a command's output as the body shows
  * it, read when the line was, so decoding the line reads no file.
  */
-export const TranscriptNotificationSchema = z.object({
+export const TranscriptNotificationSchema = z.lazy(() => z.object({
   kind: z.enum(["queued", "prompt"]),
   record: z.string(),
   at: z.string(),
   text: z.string(),
   output: z.object({ text: z.string(), from: z.enum(["output-file", "kept-copy"]) }).optional(),
-})
+}))
 export type TranscriptNotification = z.infer<typeof TranscriptNotificationSchema>
 
 /** What reading the transcript has cost, for the measurements in the host log and the audit. */

@@ -2,13 +2,13 @@ import { z } from "zod"
 
 export const SIDE_QUESTION_LIMIT = 4_000
 
-export const SideQuestionCommandSchema = z.discriminatedUnion("kind", [
+export const SideQuestionCommandSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("ask"), question: z.string().trim().min(1).max(SIDE_QUESTION_LIMIT) }),
   /** Stop the answer being written; the side conversation stays open. */
   z.object({ kind: z.literal("stop") }),
   /** Close the side conversation; a harness that copied the session for it discards the copy. */
   z.object({ kind: z.literal("close") }),
-])
+]))
 export type SideQuestionCommand = z.infer<typeof SideQuestionCommandSchema>
 
 export type SideExchangeStatus = "answering" | "answered" | "stopped" | "failed"

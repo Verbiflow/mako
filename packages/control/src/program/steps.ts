@@ -14,11 +14,11 @@ const STEP_NAME_MAX = 80
  * where it stands. The same call made again and again in a row is one step,
  * made `times` times, so a polling loop reads as one line, not a flood.
  */
-export const ControlStepSchema = z.object({
+export const ControlStepSchema = z.lazy(() => z.object({
   call: z.string().max(STEP_NAME_MAX),
   phase: z.enum(["running", "done", "failed"]),
   times: z.number().int().min(2).optional(),
-})
+}))
 export type ControlStep = z.infer<typeof ControlStepSchema>
 
 /**
@@ -27,10 +27,10 @@ export type ControlStep = z.infer<typeof ControlStepSchema>
  * the newest frame replaces every one before it and a lost frame loses
  * nothing.
  */
-export const ControlStepsSchema = z.object({
+export const ControlStepsSchema = z.lazy(() => z.object({
   steps: z.array(ControlStepSchema).max(STEPS_KEPT),
   total: z.number().int().nonnegative(),
-})
+}))
 export type ControlSteps = z.infer<typeof ControlStepsSchema>
 
 /** Keeps a running cell's steps as its calls start and settle (`ControlProgramExecution.steps`). */

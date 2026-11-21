@@ -37,7 +37,7 @@ const Edit = z.object({ old: z.string().max(MAX_EFFECT_TEXT), new: z.string().ma
  */
 const Seen = z.literal(true).optional()
 
-export const ToolEffectSchema = z.discriminatedUnion("kind", [
+export const ToolEffectSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("create"),
     path: AbsolutePath,
@@ -74,7 +74,7 @@ export const ToolEffectSchema = z.discriminatedUnion("kind", [
     /** Started in the background; its end arrives later as background work. */
     background: z.boolean().optional(),
   }),
-])
+]))
 export type ToolEffect = z.infer<typeof ToolEffectSchema>
 
 /** The effects of one tool call, with what identifies the call. */

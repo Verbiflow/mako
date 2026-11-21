@@ -13,11 +13,11 @@ export function presented<T extends object>(value: T, text: (value: T) => string
 /** The text a REPL prints for a value: a string as itself, an SDK result in
  * the form made for it. A program's own values fail to parse and print as
  * compact JSON exactly as built. */
-export const PresentationSchema = z.union([
+export const PresentationSchema = z.lazy(() => z.union([
   z.string(),
   z
     .custom<{ [PRESENT]: () => string }>(
       (value) => value instanceof Object && PRESENT in value && value[PRESENT] instanceof Function
     )
     .transform((value) => z.string().parse(value[PRESENT]())),
-])
+]))
