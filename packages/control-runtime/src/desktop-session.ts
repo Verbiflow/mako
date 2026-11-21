@@ -154,11 +154,11 @@ export async function startDesktopControlSession(
   if (!options.workers) void exited.then(() => workers.close())
   return {
     // The client loads with the first request: a launch that asks for nothing holds none of it.
-    request: async (operation: SessionOperation, signal: AbortSignal, steps?: (steps: ControlSteps) => void) => {
+    request: (operation: SessionOperation, signal: AbortSignal, steps?: (steps: ControlSteps) => void) => {
       if (state === "ended")
         throw new ControlFault("session-closed", "This task's Local Control session is no longer active.", "not-dispatched")
-      const { invokeControlSession } = await import("./control-session-client.js")
-      return invokeControlSession(session(), operation, signal, steps)
+      const descriptor = session()
+      return import("./control-session-client.js").then(({ invokeControlSession }) => invokeControlSession(descriptor, operation, signal, steps))
     },
     launch: { bin: directory, command, sessionFile } satisfies ControlLaunch,
     /** The worker serving this session, once it started and while it runs. */

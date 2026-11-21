@@ -1341,7 +1341,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     // A launch takes its session and its servers without control. On a Mac the simulator tools its `mako` server
     // offers follow the setup line, which control reads: it loads first there, as it has by then anyway.
     tools: async (bindingId, conversationId) => {
-      if (onMac()) await control.load("an agent's launch")
+      // The line is read as control loads, and has been long before most launches: one that comes first waits for it.
+      if (onMac()) await (await control.load("an agent's launch")).simulatorSetup.read().catch(() => undefined)
       return residency.tools(bindingId, conversationId)
     },
     controlInstructions: makoNote({
@@ -2238,9 +2239,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   trace("conversation tools ready")
   /**
    * The control domain's load: the modules a turn at a time, as the core's own load (`CORE_IMPORTS`), then control
-   * built, its service listening for agents' browser access, and its methods declared. The simulators' setup is read
-   * before it answers, as it had been long before a first launch when control loaded with the core: an agent's `mako`
-   * server offers the simulator tools by it.
+   * built, its service listening for agents' browser access, and its methods declared. Control starts reading the
+   * simulators' setup as it's built; the load doesn't wait for that, which on a Mac asks Xcode and can take half a
+   * minute, with the desktop app's attaching waiting on the load.
    */
   const openControlNow = async (): Promise<Control> => {
     for (const load of controlLoad) {
@@ -2258,7 +2259,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     }, borrowedSimulators)
     late.controlService = await opened.startService((conversationId, bindingId) => live.authorizeAgent(conversationId, bindingId))
     declareControlMethods(methods, opened, environment.appRoot, config.executable)
-    await opened.simulatorSetup.read().catch(() => undefined)
     return opened
   }
 
