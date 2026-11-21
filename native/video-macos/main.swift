@@ -47,6 +47,22 @@ var options = Options()
 var arguments = Array(CommandLine.arguments.dropFirst())
 guard let kind = arguments.first else { usage() }
 arguments.removeFirst()
+// mako-video poster <video> <out.jpg> [--side N]: a video's frame half a second in (most recordings open on black),
+// or its first, as a JPEG at most N on its longer side. AVFoundation decodes it; no FFmpeg.
+if kind == "poster" {
+  guard arguments.count >= 2 else { usage() }
+  let side = arguments.count >= 4 && arguments[2] == "--side" ? (Int(arguments[3]) ?? 1280) : 1280
+  let generator = AVAssetImageGenerator(asset: AVURLAsset(url: URL(fileURLWithPath: arguments[0])))
+  generator.appliesPreferredTrackTransform = true
+  generator.maximumSize = CGSize(width: side, height: side)
+  var image: CGImage?
+  for seconds in [0.5, 0.0] where image == nil {
+    image = try? generator.copyCGImage(at: CMTime(seconds: seconds, preferredTimescale: 600), actualTime: nil)
+  }
+  guard let image, let destination = CGImageDestinationCreateWithURL(URL(fileURLWithPath: arguments[1]) as CFURL, "public.jpeg" as CFString, 1, nil) else { exit(1) }
+  CGImageDestinationAddImage(destination, image, [kCGImageDestinationLossyCompressionQuality: 0.8] as CFDictionary)
+  exit(CGImageDestinationFinalize(destination) ? 0 : 1)
+}
 switch kind {
 case "frames": options.source = .frames
 case "display":

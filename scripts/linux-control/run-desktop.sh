@@ -23,7 +23,7 @@ trap 'docker rm -f "$name" >/dev/null 2>&1 || true' EXIT
 docker run --name "$name" --network none --user root -e HOME=/home/person \
   -v "$root:/repo:ro" -v "$driver:/driver:ro" -v "$evidence:/evidence" \
   -e MAKO_EVIDENCE=/evidence -e MAKO_DRIVER_DIR=/driver -e MAKO_VIDEO_HELPER=/tmp/mako-video \
-  -e MAKO_CUA_EMBEDDED=/repo/build/cua-embedded.mjs \
+  -e MAKO_CUA_EMBEDDED=/repo/build/cua-embedded.mjs -e MAKO_RECORD_LOOPS="${MAKO_RECORD_LOOPS:-0}" -e MAKO_FIRST_FRAME_LOOPS="${MAKO_FIRST_FRAME_LOOPS:-0}" -e MAKO_STILL_LOOPS="${MAKO_STILL_LOOPS:-0}" \
   "$image" sh -c '
     set -eu
     node /repo/scripts/build-video-helper.mjs --require --portal --output /tmp/mako-video
@@ -31,6 +31,6 @@ docker run --name "$name" --network none --user root -e HOME=/home/person \
     # GNOME without systemd-logind: with no seats, Mutter takes its dummy login manager.
     rmdir /run/systemd/seats 2>/dev/null || true
     mkdir -p /run/dbus && dbus-daemon --system --fork
-    exec runuser -u person -w HOME,MAKO_EVIDENCE,MAKO_DRIVER_DIR,MAKO_VIDEO_HELPER,MAKO_CUA_EMBEDDED -- \
+    exec runuser -u person -w HOME,MAKO_EVIDENCE,MAKO_DRIVER_DIR,MAKO_VIDEO_HELPER,MAKO_CUA_EMBEDDED,MAKO_RECORD_LOOPS,MAKO_FIRST_FRAME_LOOPS,MAKO_STILL_LOOPS -- \
       sh /repo/scripts/linux-control/desktop-session.sh "$0"
   ' "$kind"

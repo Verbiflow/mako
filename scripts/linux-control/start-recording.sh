@@ -3,6 +3,8 @@ set -eu
 mkdir -p "$HOME"
 . /repo/scripts/linux-control/identity.sh
 export DISPLAY=:92
+# A desktop session, as a person's login names it: the host's worker records its windows with the video helper.
+export XDG_SESSION_TYPE=x11
 export MAKO_RECORDING_DRIVER=${MAKO_RECORDING_DRIVER:-/target/debug/cua-driver}
 export NODE_PATH=/opt/mako-test/node_modules
 # Mako's video helper, compiled here from the payload against the image's libraries: recordings encode with it.

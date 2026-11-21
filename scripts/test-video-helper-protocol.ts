@@ -83,11 +83,11 @@ await leave()
 await assert.rejects(new BrowserVideo({ encoded: helperCapture(fake, { kind: "window", windowId: 0 }) }).join(viewer), /That window is gone/)
 
 // A portal capture: its source types and restore token file go to the helper as arguments.
-const portal = new BrowserVideo({ encoded: helperCapture(fake, { kind: "portal", types: "monitor", restore: join(root, "portal", "token"), still: true }) }, { fps: 30 })
+const portal = new BrowserVideo({ encoded: helperCapture(fake, { kind: "portal", types: "monitor", restore: join(root, "portal", "token"), still: true, cursor: "embedded" }) }, { fps: 30 })
 const leavePortal = await portal.join(viewer)
 // The newest start line, not the newest line: joining tells the open capture its box again (`BrowserVideo.join`).
 const portalStarted = read().findLastIndex((entry) => entry.args)
-assert.deepEqual(read()[portalStarted], { args: ["portal", "--types", "monitor", "--restore", join(root, "portal", "token"), "--still", "screenshot", "--fps", "30", "--box", "320x200"] })
+assert.deepEqual(read()[portalStarted], { args: ["portal", "--types", "monitor", "--restore", join(root, "portal", "token"), "--still", "screenshot", "--cursor", "embedded", "--fps", "30", "--box", "320x200"] })
 await until(() => read().length > portalStarted + 1, "the viewers' box told to the open portal capture")
 assert.deepEqual(read()[portalStarted + 1], { type: "B", length: 4, width: 320, height: 200 })
 assert.ok(existsSync(join(root, "portal")), "the token's folder is made for the helper")

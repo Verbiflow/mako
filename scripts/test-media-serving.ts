@@ -13,7 +13,9 @@ import { readSignedFile } from "@mako/host/workspaces/file-readers"
 import { fileResponse, localFile } from "@mako/host/workspaces/file-response"
 import { ConversationFiles } from "@mako/host/workspaces/files"
 import { mediaDimensions } from "@mako/host/workspaces/media-dimensions"
-import { MediaRenditions, pathFfmpeg, videoPosters } from "@mako/host/workspaces/media-renditions"
+import { MediaRenditions, posterHelper, videoPosters } from "@mako/host/workspaces/media-renditions"
+import { VideoHelper } from "@mako/control-runtime/desktop"
+import { Mp4Writer } from "../packages/control-runtime/src/mp4.js"
 
 /**
  * How the host serves what a transcript shows: signed URLs that expire and
@@ -235,27 +237,27 @@ try {
   assert.match(image.thumbnailUrl ?? "", /\?rendition=thumbnail$/)
   const video = await preview(join(elsewhere, "recording.mp4"))
   assert.deepEqual([video.media, video.width, video.height], ["video", 1280, 720])
-  // A poster only where FFmpeg is on PATH to take one; without, a viewer draws the video's own frame.
+  // A poster only where Mako's video helper is there to take one; without, a viewer draws the video's own frame.
   if (await videoPosters()) assert.match(video.posterUrl ?? "", /\?rendition=poster$/)
   else assert.equal(video.posterUrl, undefined)
   const report = await preview(join(elsewhere, "report.html"))
   assert.equal(report.mimeType, "text/html")
   assert.ok(report.previewUrl && (await verifyFilePreview(report.previewUrl)).kind === "file", "a page comes with its folder grant")
 
-  // Thumbnails, once per file version, made with sharp; posters where FFmpeg is on PATH.
+  // Thumbnails, once per file version, made with sharp; posters by the video helper, never an FFmpeg.
   {
     const sharp = (await import("sharp")).default
     const picture = (width: number, height: number) => sharp({ create: { width, height, channels: 3, background: { r: 40, g: 90, b: 160 } } }).png().toBuffer()
     const still = join(root, "still.png")
     await writeFile(still, await picture(1920, 1200))
     let runs = 0
-    const renditions = new MediaRenditions({ folder: join(root, "renditions"), ffmpeg: async () => { runs += 1; return pathFfmpeg() } })
+    const renditions = new MediaRenditions({ folder: join(root, "renditions"), helper: async () => { runs += 1; return posterHelper() } })
     const thumbnail = await renditions.rendition(still, fileIdentity(await stat(still)), "thumbnail")
     assert.deepEqual(await dimensionsOf(thumbnail!, "image/png"), { width: 640, height: 400 }, "a thumbnail keeps its picture's shape")
     const [one, two] = await Promise.all([0, 1].map(async () => renditions.rendition(still, fileIdentity(await stat(still)), "thumbnail")))
     assert.equal(one, thumbnail)
     assert.equal(two, thumbnail)
-    assert.equal(runs, 0, "a picture's rendition needs no FFmpeg")
+    assert.equal(runs, 0, "a picture's rendition needs no video helper")
     // A picture alone in the column draws the `inline` rendition, kept by what the picture holds: Mako's copies of
     // one attachment (the staged file, the one a conversation keeps) share it, and a rewritten file gets its own.
     const wide = join(root, "wide.png")
@@ -282,17 +284,31 @@ try {
     assert.equal(Number(unknown.headers.get("content-length")), (await stat(wide)).size, "a size nobody makes is the file")
     await unknown.body?.cancel()
     assert.equal((await readSignedFile(new Request(`${signedWide.replace(/\/[a-f0-9]{64}\//, `/${"0".repeat(64)}/`)}?rendition=inline`), renditions)).status, 404, "a URL this host didn't sign gets no rendition either")
-    const ffmpeg = await pathFfmpeg()
-    if (ffmpeg) {
+    const helper = await posterHelper()
+    if (helper) {
+      // A one-second clip the helper itself encodes (ten grey 640×360 pictures), written as Mako writes recordings.
       const clip = join(root, "clip.mp4")
-      execFileSync(ffmpeg, ["-v", "error", "-f", "lavfi", "-i", "testsrc=size=640x360:rate=10:duration=1", "-pix_fmt", "yuv420p", "-y", clip])
+      const writer = new Mp4Writer(clip, 100)
+      let writing: Promise<void> = Promise.resolve()
+      const encoder = new VideoHelper(helper, { kind: "frames" }, { fps: 10, keyint: 10, quality: 85 }, {
+        unit: (packet) => void (writing = writing.then(() => writer.add(packet, packet.sequence * 100))),
+        ended: () => {},
+      })
+      for (let index = 0; index < 10; index++)
+        await new Promise<void>((resolve, reject) => encoder.picture("rgb", index, index * 100, Buffer.alloc(640 * 360 * 3, 90 + index * 10), { width: 640, height: 360 }, (error) => (error ? reject(error) : resolve())))
+      encoder.close()
+      await encoder.exited
+      await writing
+      await writer.finish()
       const posterPath = await renditions.rendition(clip, fileIdentity(await stat(clip)), "poster")
       assert.ok(posterPath?.endsWith(".jpg"))
       assert.deepEqual(await dimensionsOf(posterPath!, "image/jpeg"), { width: 640, height: 360 })
       assert.equal(await renditions.rendition(join(root, "broken.mp4"), fileIdentity(await stat(join(root, "broken.mp4"))), "poster"), null)
-      const none = new MediaRenditions({ folder: join(root, "none"), ffmpeg: async () => undefined })
-      assert.equal(await none.rendition(clip, fileIdentity(await stat(clip)), "poster"), null, "no FFmpeg, no poster")
-    } else console.log("FFmpeg isn't on PATH here; no poster was made")
+      const none = new MediaRenditions({ folder: join(root, "none"), helper: async () => undefined })
+      assert.equal(await none.rendition(clip, fileIdentity(await stat(clip)), "poster"), null, "no helper, no poster")
+      // Nothing looks for an FFmpeg: the poster above was made with none asked of PATH.
+      assert.doesNotMatch(await readFile(new URL("../packages/host/src/workspaces/media-renditions.ts", import.meta.url), "utf8"), /findExecutable|hostExecFile/)
+    } else console.log("Mako's video helper isn't built here; no poster was made")
   }
 
   console.log("Media serving: signed URLs expire and pin the file, page grants serve only their assets, each type carries its policy, pages fit their frames, sizes come from headers, previews outside the Thread's folders stay links")

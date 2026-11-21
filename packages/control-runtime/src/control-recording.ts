@@ -145,7 +145,6 @@ export class ControlRecording {
   private captureStopped: Promise<void | string> | undefined
   private timer: ReturnType<typeof setTimeout> | undefined
   private sourceVideo: string | undefined
-  private pointerBounds: { x: number; y: number; width: number; height: number } | undefined
   private sourceFrames: number | undefined
   private video: string | undefined
   private timeline: string | undefined
@@ -242,13 +241,6 @@ export class ControlRecording {
     if (this.error) receipt.error = this.error
     return receipt
   }
-  /**
-   * The window's place in the video, in its pixels: a recording of the whole monitor (a Wayland desktop's portal) puts
-   * the driver's window-relative pointer points there.
-   */
-  pointersWithin(bounds: { x: number; y: number; width: number; height: number }) {
-    this.pointerBounds = bounds
-  }
   markStarted() {
     this.startedAt = Date.now()
     this.start = performance.now()
@@ -294,8 +286,8 @@ export class ControlRecording {
           if (point.at_ms <= this.endedAt)
             this.pointers.push({
               at: point.at_ms,
-              x: this.pointerBounds ? this.pointerBounds.x + point.x * this.pointerBounds.width : point.x * width,
-              y: this.pointerBounds ? this.pointerBounds.y + point.y * this.pointerBounds.height : point.y * height,
+              x: point.x * width,
+              y: point.y * height,
               pressed: point.pressed,
             })
           if (this.pointers.length > 20_000)

@@ -6,9 +6,12 @@ import { mkdtemp, readFile, readdir, writeFile, mkdir } from "node:fs/promises"
 import { join, dirname } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
+import { pathToFileURL } from "node:url"
 const root = process.env.MAKO_RUNTIME_ROOT ?? "/opt/mako-control"
 const require = createRequire(join(root, "package.json"))
 const cli = require.resolve("@mako/control-runtime/cli")
+// Recordings are read back as Mako reads them, with Mediabunny: the runtime image carries no FFmpeg.
+const { readMp4 } = await import(pathToFileURL(join(dirname(cli), "mp4.js")).href)
 const launcher = join(dirname(cli), "cloud-control-main.js")
 const run = promisify(execFile)
 const evidence = process.env.MAKO_RUNTIME_EVIDENCE ?? await mkdtemp("/tmp/mako-runtime-proof-")
@@ -106,8 +109,8 @@ try {
   await a.end()
   const recordings = await readdir(join(a.output, "recordings"))
   const video = join(a.output, "recordings", recordings[0], "recording.mp4")
-  const media = JSON.parse((await run("ffprobe", ["-v", "error", "-show_format", "-show_streams", "-of", "json", video])).stdout)
-  assert.ok(Number(media.format.duration) > 0)
+  const media = await readMp4(video)
+  assert.ok((media?.duration ?? 0) > 0)
   assert.equal((await b.cell("return await state.tab.cdp('Runtime.evaluate',{expression:'window.saves'})")).result.value, 1)
   await assert.rejects(b.cell(`return await control.tab(${JSON.stringify(oldTarget)}).observe()`), /earlier browser connection|generation|stale/)
   await b.end("SIGTERM")
@@ -163,7 +166,7 @@ try {
   await native.end()
   const nativeRecordings = await readdir(join(native.output, "recordings"))
   const nativeVideo = join(native.output,"recordings",nativeRecordings[0],"recording.mp4")
-  assert.ok(Number(JSON.parse((await run("ffprobe",["-v","error","-show_format","-of","json",nativeVideo])).stdout).format.duration)>0)
+  assert.ok(((await readMp4(nativeVideo))?.duration ?? 0) > 0)
 
   const mixed = await start("mixed", { native: { driver: join(root, "native/cua-driver") } })
   await form(mixed, "mixed services")
@@ -188,7 +191,7 @@ try {
   }
   // Existing output is a refusal, never permission to remove another job's files.
   await assert.rejects(run(process.execPath, [launcher, "--config", join(evidence, "browser-a.json")]), /EEXIST/)
-  console.log(JSON.stringify({ passed: true, evidence, scenarios: results.length, video, duration: media.format.duration }))
+  console.log(JSON.stringify({ passed: true, evidence, scenarios: results.length, video, duration: media.duration }))
 } finally {
   for (const child of active) child.kill("SIGTERM")
   await writeFile(join(evidence, "results.json"), JSON.stringify(results, null, 2))
