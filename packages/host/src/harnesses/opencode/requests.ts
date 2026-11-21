@@ -3,11 +3,11 @@ import { z } from "zod"
 import type { LivePermissionResponse } from "../../contracts/providers-acp.js"
 import { NativeForm, NativeFormAnswer, openCodeFormResponse } from "./forms.js"
 
-export const NativePermission = z.object({
+export const NativePermission = z.lazy(() => z.object({
   id: z.string().min(1).max(512), sessionID: z.string().min(1).max(512), action: z.string(), message: z.string().optional(),
   resources: z.array(z.string()), save: z.array(z.string()).optional(),
   source: z.object({ type: z.literal("tool"), id: z.string() }).optional(),
-})
+}))
 export type NativePermission = z.infer<typeof NativePermission>
 export type NativeFormRequest = z.infer<typeof NativeForm>
 

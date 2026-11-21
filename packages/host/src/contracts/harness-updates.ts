@@ -21,22 +21,22 @@ export const HarnessUpdateChannelSchema = z.enum([
 ])
 export type HarnessUpdateChannel = z.infer<typeof HarnessUpdateChannelSchema>
 
-export const HarnessUpdateCommandSchema = z.object({
+export const HarnessUpdateCommandSchema = z.lazy(() => z.object({
   label: z.string(),
   command: z.string(),
   args: z.array(z.string()),
-})
+}))
 export type HarnessUpdateCommand = z.infer<typeof HarnessUpdateCommandSchema>
 
 /** The receipt of the last update Mako ran for a runtime. */
-export const HarnessUpdateResultSchema = z.object({
+export const HarnessUpdateResultSchema = z.lazy(() => z.object({
   at: z.number(),
   outcome: z.enum(["installed", "updated", "unchanged", "failed"]),
   from: z.string().optional(),
   to: z.string().optional(),
   /** Why it failed, in Mako's sentence; what the updater itself printed is worded (`updateFailureWords`) and logged. */
   message: z.string().optional(),
-})
+}))
 export type HarnessUpdateResult = z.infer<typeof HarnessUpdateResultSchema>
 
 /** The sentences a failed update or install is said in; anything else an updater printed is the log's. */
@@ -52,7 +52,7 @@ export function updateFailureWords(printed: string): string {
   return UPDATE_FAILURES.find(([pattern]) => pattern.test(printed))?.[1] ?? "The updater didn't finish."
 }
 
-export const HarnessUpdateInfoSchema = z.object({
+export const HarnessUpdateInfoSchema = z.lazy(() => z.object({
   provider: z.string().optional(),
   label: z.string().optional(),
   description: z.string().optional(),
@@ -88,7 +88,7 @@ export const HarnessUpdateInfoSchema = z.object({
    * declares none: an unreadable version never stops anything.
    */
   versions: RuntimeVersionsSchema.optional(),
-})
+}))
 export type HarnessUpdateInfo = z.infer<typeof HarnessUpdateInfoSchema>
 
 export type HarnessUpdates = Record<string, HarnessUpdateInfo>

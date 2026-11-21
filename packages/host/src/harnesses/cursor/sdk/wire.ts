@@ -55,7 +55,7 @@ export function cursorSdkExitReason(code: number | null): string | undefined {
 export const JsonValueSchema = z.json()
 export type JsonValue = z.infer<typeof JsonValueSchema>
 
-export const SdkModelListItemSchema = z.object({
+export const SdkModelListItemSchema = z.lazy(() => z.object({
   id: z.string(),
   displayName: z.string(),
   description: z.string().optional(),
@@ -79,13 +79,13 @@ export const SdkModelListItemSchema = z.object({
       })
     )
     .optional(),
-})
+}))
 export type SdkModelListItem = z.infer<typeof SdkModelListItemSchema>
 
-export const SdkImageSchema = z.object({ data: z.string(), mimeType: z.string() })
+export const SdkImageSchema = z.lazy(() => z.object({ data: z.string(), mimeType: z.string() }))
 export type SdkImage = z.infer<typeof SdkImageSchema>
 
-export const SdkMcpServerSchema = z.union([
+export const SdkMcpServerSchema = z.lazy(() => z.union([
   z.object({
     type: z.literal("stdio"),
     command: z.string(),
@@ -98,14 +98,14 @@ export const SdkMcpServerSchema = z.union([
     url: z.string(),
     headers: z.record(z.string(), z.string()).optional(),
   }),
-])
+]))
 export type SdkMcpServer = z.infer<typeof SdkMcpServerSchema>
 
 /** Results a run's checkpoints kept for calls its stream never ended (`CursorSdkRunCheckpoints`). */
-export const SdkSettledCallsSchema = z.array(z.object({ callId: z.string(), output: z.string(), failed: z.boolean() }))
+export const SdkSettledCallsSchema = z.lazy(() => z.array(z.object({ callId: z.string(), output: z.string(), failed: z.boolean() })))
 export type SdkSettledCalls = z.infer<typeof SdkSettledCallsSchema>
 
-export const SdkRunResultSchema = z.object({
+export const SdkRunResultSchema = z.lazy(() => z.object({
   runId: z.string(),
   status: z.enum(["finished", "error", "cancelled"]),
   error: z.object({ message: z.string(), code: z.string().optional() }).optional(),
@@ -116,7 +116,7 @@ export const SdkRunResultSchema = z.object({
   settled: SdkSettledCallsSchema.optional(),
   /** The agent's turn had ended and no more work had begun when the run did (`turnEndedAfter`). */
   turnEnded: z.literal(true).optional(),
-})
+}))
 export type SdkRunResult = z.infer<typeof SdkRunResultSchema>
 
 /** SDK updates that begin more work in a run: after one, a turn that had ended is going on again. */
@@ -132,14 +132,14 @@ export function turnEndedAfter(ended: boolean, type: string): boolean {
   return type === "turn-ended" || (ended && !TURN_WORK.has(type))
 }
 
-export const SdkAuthStatusSchema = z.discriminatedUnion("status", [
+export const SdkAuthStatusSchema = z.lazy(() => z.discriminatedUnion("status", [
   z.object({ status: z.literal("logged-out") }),
   z.object({
     status: z.literal("logged-in"),
     email: z.string().optional(),
     apiKeyExpiresAtMs: z.number().optional(),
   }),
-])
+]))
 export type SdkAuthStatus = z.infer<typeof SdkAuthStatusSchema>
 
 /** How the SDK classified a failure; the host turns this into user guidance. */
@@ -164,19 +164,19 @@ export const CursorNetworkCauseSchema = z.enum([
   "UNABLE_TO_GET_ISSUER_CERT_LOCALLY", "ERR_TLS_CERT_ALTNAME_INVALID",
 ])
 
-export const SdkWireErrorSchema = z.object({
+export const SdkWireErrorSchema = z.lazy(() => z.object({
   message: z.string(),
   kind: SdkErrorKindSchema,
   code: z.string().optional(),
   retryable: z.boolean().optional(),
   networkCauses: z.array(CursorNetworkCauseSchema).max(8).optional(),
-})
+}))
 export type SdkWireError = z.infer<typeof SdkWireErrorSchema>
 
 // ---------------------------------------------------------------------------
 // Requests: host → child. One agent handle per child.
 
-export const SdkImportSourceSchema = z.object({
+export const SdkImportSourceSchema = z.lazy(() => z.object({
   /** The legacy `store.db`. */
   path: z.string(),
   /** The legacy row's catalog identity, recorded on the agent so the two collapse. */
@@ -184,7 +184,7 @@ export const SdkImportSourceSchema = z.object({
   /** The workspace and title the legacy row carried; the store itself records neither. */
   cwd: z.string().optional(),
   name: z.string().optional(),
-})
+}))
 export type SdkImportSource = z.infer<typeof SdkImportSourceSchema>
 
 /** `CallThread` on the wire. */
@@ -242,7 +242,7 @@ export const SdkHeadlessSpecSchema = SdkOpenParamsSchema.pick({
 }).extend({ prompt: z.string() })
 export type SdkHeadlessSpec = z.infer<typeof SdkHeadlessSpecSchema>
 
-export const SdkSendParamsSchema = z.object({
+export const SdkSendParamsSchema = z.lazy(() => z.object({
   /** Mako's id for the turn; every message, delta and result of the run carries it back. */
   turn: z.string(),
   /** The Thread as its shell commands are routed from this send on (`SdkOpenParams.calls`). */
@@ -252,7 +252,7 @@ export const SdkSendParamsSchema = z.object({
   model: CursorSdkModelSelectionSchema.optional(),
   /** Cursor's Plan mode for this send: the agent proposes a plan with `createPlan` and changes nothing. */
   plan: z.boolean().optional(),
-})
+}))
 
 /**
  * A side question, answered by a copy of the agent the child makes for the
@@ -260,13 +260,13 @@ export const SdkSendParamsSchema = z.object({
  * tools; a follow-up continues it, and `earlier` restores a side conversation
  * the copy no longer holds (after the child restarted).
  */
-export const SdkSideParamsSchema = z.object({
+export const SdkSideParamsSchema = z.lazy(() => z.object({
   side: z.string(),
   question: z.string(),
   earlier: z.array(z.object({ question: z.string(), answer: z.string() })),
-})
+}))
 
-export const SdkRequestSchema = z.discriminatedUnion("method", [
+export const SdkRequestSchema = z.lazy(() => z.discriminatedUnion("method", [
   z.object({ id: z.number(), method: z.literal("hello") }),
   z.object({ id: z.number(), method: z.literal("open"), params: SdkOpenParamsSchema }),
   /**
@@ -288,7 +288,7 @@ export const SdkRequestSchema = z.discriminatedUnion("method", [
   z.object({ id: z.number(), method: z.literal("side"), params: SdkSideParamsSchema }),
   z.object({ id: z.number(), method: z.literal("sideStop"), params: z.object({ side: z.string() }) }),
   z.object({ id: z.number(), method: z.literal("sideClose"), params: z.object({ side: z.string() }) }),
-])
+]))
 export type SdkRequest = z.infer<typeof SdkRequestSchema>
 export type SdkMethod = SdkRequest["method"]
 
@@ -348,16 +348,16 @@ export const SdkResultSchemas = {
 } satisfies Record<SdkMethod, z.ZodType>
 export type SdkResult<Method extends SdkMethod> = z.infer<(typeof SdkResultSchemas)[Method]>
 
-export const SdkResponseSchema = z.union([
+export const SdkResponseSchema = z.lazy(() => z.union([
   z.object({ id: z.number(), ok: z.literal(true), result: JsonValueSchema.optional() }),
   z.object({ id: z.number(), ok: z.literal(false), error: SdkWireErrorSchema }),
-])
+]))
 export type SdkResponse = z.infer<typeof SdkResponseSchema>
 
 // ---------------------------------------------------------------------------
 // Events: child → host, unsolicited.
 
-export const SdkEventSchema = z.discriminatedUnion("event", [
+export const SdkEventSchema = z.lazy(() => z.discriminatedUnion("event", [
   /**
    * `seq` counts the turn's messages from 0 and travels with a replayed
    * message unchanged, so the host can tell a message it was shown before.
@@ -410,9 +410,9 @@ export const SdkEventSchema = z.discriminatedUnion("event", [
   z.object({ event: z.literal("side-delta"), side: z.string(), text: z.string() }),
   z.object({ event: z.literal("login-url"), url: z.string() }),
   z.object({ event: z.literal("log"), level: z.enum(["info", "warn"]), message: z.string() }),
-])
+]))
 export type SdkEvent = z.infer<typeof SdkEventSchema>
 
 /** Everything the child writes: a response or an event. */
-export const SdkChildLineSchema = z.union([SdkResponseSchema, SdkEventSchema])
+export const SdkChildLineSchema = z.lazy(() => z.union([SdkResponseSchema, SdkEventSchema]))
 export type SdkChildLine = z.infer<typeof SdkChildLineSchema>

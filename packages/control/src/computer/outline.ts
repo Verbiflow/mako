@@ -87,7 +87,7 @@ type Row = z.infer<typeof OutlineRowSchema>
 const BoundsSchema = z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() })
 
 /** What an outline reads of `get_window_state`: the tree, and the picture its boxes are measured against. */
-export const WindowStateSchema = z.looseObject({
+export const WindowStateSchema = z.lazy(() => z.looseObject({
   app_name: z.string().optional(),
   window_title: z.string().optional(),
   elements: z.array(z.json()).optional(),
@@ -97,7 +97,7 @@ export const WindowStateSchema = z.looseObject({
   screenshot_height: z.number().optional(),
   screenshot_scale: z.number().optional(),
   screenshot_frame_valid: z.boolean().optional(),
-})
+}))
 export type WindowState = z.infer<typeof WindowStateSchema>
 
 /** Actions every element of a kind has, or that only scroll or raise: they say nothing about the element. */

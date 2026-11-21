@@ -7,7 +7,7 @@ import { MOVE_REASON_MAX } from "@mako/protocol/moves"
 import { decodeRuntimeValue, type EncodedValue } from "./runtime-value.js"
 
 /** A public GitHub repository a cloud Thread's machine clones and works in, as the cloud takes it. */
-export const CloudRepositorySchema = z
+export const CloudRepositorySchema = z.lazy(() => z
   .object({
     url: z
       .string()
@@ -19,7 +19,7 @@ export const CloudRepositorySchema = z
       .regex(/^(?![-/.])(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9_./-]+(?<![./])$/, "expected a branch name")
       .optional(),
   })
-  .strict()
+  .strict())
 
 export type CloudRepository = z.infer<typeof CloudRepositorySchema>
 
@@ -177,7 +177,7 @@ export type ThreadContinueOffer = { offer: ContinueOffer; waiting: number }
  * `project`, the repository its worktree was made from, isn't on this Mac anymore (moved or deleted), and `folder` is
  * the worktree. Bringing it back with the project's folder as it is now (`ThreadReturnOptions.project`) brings it there.
  */
-export const ReturnProjectMissingSchema = z.object({ folder: z.string(), project: z.string().optional() })
+export const ReturnProjectMissingSchema = z.lazy(() => z.object({ folder: z.string(), project: z.string().optional() }))
 export type ReturnProjectMissing = z.infer<typeof ReturnProjectMissingSchema>
 
 /** How a person asks a Thread back: `project`, the folder its project is in now, when the one it was made from moved. */

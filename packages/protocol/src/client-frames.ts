@@ -27,7 +27,7 @@ import { PROTOCOL_VERSION } from "./version.js"
  * These are the frames' envelopes; an operation's input, a reply's value and an event cross after
  * them, unread (`wire.ts`).
  */
-export const ClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
+export const ClientFrameEnvelopeSchema = z.lazy(() => z.discriminatedUnion("type", [
   /** An operation; its reply comes back as a `reply` frame with its id, in any order. */
   z
     .object({ type: z.literal("call"), operation: OperationEnvelopeSchema })
@@ -66,9 +66,9 @@ export const ClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
    * bytes follow as binary messages. `media-ack` and `media-unwatch` pace and end it as they do a watch.
    */
   z.object({ type: z.literal("ssh-open"), stream: MediaStreamIdSchema }).strict(),
-])
+]))
 
-export const GatewayClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
+export const GatewayClientFrameEnvelopeSchema = z.lazy(() => z.discriminatedUnion("type", [
   z.object({ type: z.literal("reply"), reply: ReplyEnvelopeSchema }).strict(),
   z
     .object({ type: z.literal("event"), event: EventFrameEnvelopeSchema })
@@ -125,7 +125,7 @@ export const GatewayClientFrameEnvelopeSchema = z.discriminatedUnion("type", [
       received: z.number().int().nonnegative(),
     })
     .strict(),
-])
+]))
 
 export type ClientFrameEnvelope = z.infer<typeof ClientFrameEnvelopeSchema>
 export type GatewayClientFrameEnvelope = z.infer<

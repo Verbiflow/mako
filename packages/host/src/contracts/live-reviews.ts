@@ -5,7 +5,7 @@ import { REVIEW_FENCE } from "@mako/sessions/review"
  * What a code review looks at: the working tree's uncommitted changes, the
  * current branch's changes against a base branch, or one commit.
  */
-export const ReviewTargetSchema = z.discriminatedUnion("kind", [
+export const ReviewTargetSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("changes") }),
   z.object({
     kind: z.literal("branch"),
@@ -17,7 +17,7 @@ export const ReviewTargetSchema = z.discriminatedUnion("kind", [
     /** The commit's subject, for the person reading the transcript. */
     title: z.string().trim().max(200).optional(),
   }),
-])
+]))
 export type ReviewTarget = z.infer<typeof ReviewTargetSchema>
 
 /** The target as the transcript names it: "uncommitted changes", "changes against main", "commit 1a2b3c4". */

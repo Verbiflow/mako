@@ -5,11 +5,11 @@ import { heavy } from "./heavy-packages.js"
 import type { JsonObject } from "./json.js"
 import { z } from "zod"
 
-export const ComputerDriverResultSchema = z.looseObject({
+export const ComputerDriverResultSchema = z.lazy(() => z.looseObject({
   content: z.array(z.json()),
   structuredContent: z.record(z.string(), z.json()).optional(),
   isError: z.boolean().optional(),
-})
+}))
 export type ComputerDriverResult = z.infer<typeof ComputerDriverResultSchema>
 
 /** Process transport for the currently installed native driver adapter. */

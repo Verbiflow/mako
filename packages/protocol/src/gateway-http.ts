@@ -73,7 +73,7 @@ export type GatewayCall = (path: string, init?: { method?: string; json?: unknow
 /** The gateway logs and traces a request under the ID this header gives. */
 export const CORRELATION_HEADER = "x-mako-correlation-id"
 const REPEATED = new Set([429, 500, 502, 503, 504])
-export const ProblemTitle = z.object({ title: z.string() }).partial()
+export const ProblemTitle = z.lazy(() => z.object({ title: z.string() }).partial())
 const ProblemCorrelation = z.object({ title: z.string(), detail: z.string(), correlationId: z.string() }).partial()
 
 /** What ended a try that got no answer: the network's code ("ECONNRESET"), else the error's name ("TimeoutError"). */

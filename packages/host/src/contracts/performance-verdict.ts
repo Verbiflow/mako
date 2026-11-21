@@ -10,7 +10,7 @@ import { z } from "zod"
  */
 export const PERFORMANCE_VERDICT_VARIABLE = "MAKO_PERFORMANCE_VERDICT"
 
-export const MeasuredRowSchema = z.object({
+export const MeasuredRowSchema = z.lazy(() => z.object({
   key: z.string(),
   /** The commit it was measured beside. */
   beside: z.string(),
@@ -24,10 +24,10 @@ export const MeasuredRowSchema = z.object({
   rounds: z.number().int().nonnegative(),
   /** The share of its runs measured while the machine was busy. */
   busyShare: z.number().min(0).max(1),
-})
+}))
 export type MeasuredRow = z.infer<typeof MeasuredRowSchema>
 
-export const PerformanceVerdictSchema = z.object({
+export const PerformanceVerdictSchema = z.lazy(() => z.object({
   script: z.string(),
   /** How much slower a row may be, as a multiple. */
   allowed: z.number(),
@@ -35,7 +35,7 @@ export const PerformanceVerdictSchema = z.object({
   /** The machine while the rows were measured, in words, and why it was too busy, if it was. */
   machine: z.string(),
   busy: z.array(z.string()),
-})
+}))
 export type PerformanceVerdict = z.infer<typeof PerformanceVerdictSchema>
 
 function percent(multiple: number): string {

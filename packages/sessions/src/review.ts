@@ -14,7 +14,7 @@ const MAX_SUMMARY = 4_000
 
 const bounded = (limit: number) => z.string().transform((text) => text.trim().slice(0, limit))
 
-export const ReviewFindingSchema = z.object({
+export const ReviewFindingSchema = z.lazy(() => z.object({
   title: bounded(MAX_TITLE).pipe(z.string().min(1)),
   body: bounded(MAX_BODY).optional(),
   /** As the harness wrote it: relative to the project, or absolute. */
@@ -24,7 +24,7 @@ export const ReviewFindingSchema = z.object({
   /** 0 is the most severe, as Codex's P0. */
   priority: z.number().int().min(0).max(3).optional(),
   category: bounded(40).optional(),
-})
+}))
 export type ReviewFinding = z.infer<typeof ReviewFindingSchema>
 
 export const ReviewReportSchema = z.object({
@@ -85,7 +85,7 @@ export function claudeReviewReport(input: string | undefined): ReviewReport | un
 }
 
 /** Codex's `ReviewOutputEvent`, as its rollout keeps it. */
-export const CodexReviewOutputSchema = z.object({
+export const CodexReviewOutputSchema = z.lazy(() => z.object({
   findings: z.array(z.looseObject({
     title: z.string(),
     body: z.string().optional(),
@@ -96,7 +96,7 @@ export const CodexReviewOutputSchema = z.object({
     }).optional(),
   })).default([]),
   overall_explanation: z.string().default(""),
-})
+}))
 
 export type CodexReviewOutput = z.infer<typeof CodexReviewOutputSchema>
 

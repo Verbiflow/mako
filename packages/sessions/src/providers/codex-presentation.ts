@@ -312,10 +312,10 @@ export function codexExecOutput(text: string): { output: string; exitCode?: numb
 
 const CELL_HEADER = /^Script (completed|failed)\nWall time [^\n]*\nOutput:\n/
 /** A code cell's output as Codex gives it to the model: one text, or text parts. */
-export const CodexCellOutputSchema = z.union([
+export const CodexCellOutputSchema = z.lazy(() => z.union([
   z.string().transform((text) => [text]),
   z.array(z.object({ text: z.string() }).loose()).transform((parts) => parts.map((part) => part.text)),
-])
+]))
 
 /**
  * What Codex gives the model when a code cell ends (codex 0.159.3): `Script
@@ -333,12 +333,12 @@ export function codexCellResult(texts: readonly string[]): { failed: boolean; ou
 const FUNCTION_OUTPUT_PLACEHOLDERS = { input_image: "[image]", input_audio: "[audio]", encrypted_content: "[encrypted content]" } as const
 
 /** A `FunctionCallOutput` item's body: one text, or content parts read as text. */
-export const CodexFunctionOutputSchema = z.union([z.string(), z.array(z.discriminatedUnion("type", [
+export const CodexFunctionOutputSchema = z.lazy(() => z.union([z.string(), z.array(z.discriminatedUnion("type", [
   z.object({ type: z.literal("input_text"), text: z.string() }),
   z.object({ type: z.literal("input_image") }).loose(),
   z.object({ type: z.literal("input_audio") }).loose(),
   z.object({ type: z.literal("encrypted_content") }).loose(),
-])).transform((parts) => parts.map((part) => part.type === "input_text" ? part.text : FUNCTION_OUTPUT_PLACEHOLDERS[part.type]).join("\n"))])
+])).transform((parts) => parts.map((part) => part.type === "input_text" ? part.text : FUNCTION_OUTPUT_PLACEHOLDERS[part.type]).join("\n"))]))
 
 const SearchActionSchema = z.object({
   query: z.string().nullish(),

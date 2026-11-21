@@ -11,7 +11,7 @@ import { z } from "zod"
 export const SharedStoreSchema = z.enum(["threads", "session-memory", "records", "unread", "outputs", "archive"])
 export type SharedStore = z.infer<typeof SharedStoreSchema>
 
-export const StoreStandingRowSchema = z.object({
+export const StoreStandingRowSchema = z.lazy(() => z.object({
   store: SharedStoreSchema,
   /** `write`: this build reads and writes it; `read`: a newer Mako changed it and this build only reads it; `refused`: this build can't read it. */
   access: z.enum(["write", "read", "refused"]),
@@ -24,8 +24,8 @@ export const StoreStandingRowSchema = z.object({
   writtenBy: z.string().optional(),
   /** The oldest Mako that reads the store, stamped the same way. */
   readableFrom: z.string().optional(),
-})
+}))
 export type StoreStandingRow = z.infer<typeof StoreStandingRowSchema>
 
-export const StoreFormatsSchema = z.object({ stores: z.array(StoreStandingRowSchema) })
+export const StoreFormatsSchema = z.lazy(() => z.object({ stores: z.array(StoreStandingRowSchema) }))
 export type StoreFormats = z.infer<typeof StoreFormatsSchema>

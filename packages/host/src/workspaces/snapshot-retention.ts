@@ -27,7 +27,7 @@ export const SnapshotRecordSchema = WorkspaceSnapshotSchema.extend({
   retiring: z.boolean().optional(),
 })
 export type SnapshotRecord = z.infer<typeof SnapshotRecordSchema>
-export const SnapshotRetentionPolicySchema = z.object({
+export const SnapshotRetentionPolicySchema = z.lazy(() => z.object({
   maxSnapshots: z.number().int().positive().default(1000),
   maxStorageBytes: z
     .number()
@@ -49,7 +49,7 @@ export const SnapshotRetentionPolicySchema = z.object({
     .int()
     .positive()
     .default(30 * 60 * 1000),
-})
+}))
 export type SnapshotRetentionPolicy = z.infer<
   typeof SnapshotRetentionPolicySchema
 >

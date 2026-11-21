@@ -2,11 +2,11 @@ import { z } from "zod"
 import type { PromptDelivery, PromptDeliveryEvidence } from "./prompt-delivery.js"
 
 /** A run/turn receipt is not necessarily the stored user's message ID. */
-export const NativePromptIdentityCapabilitySchema = z.discriminatedUnion("kind", [
+export const NativePromptIdentityCapabilitySchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("supplied-message-id"), evidence: z.string().min(1) }),
   z.object({ kind: z.literal("accepted-message-id"), evidence: z.string().min(1) }),
   z.object({ kind: z.literal("unavailable"), reason: z.string().min(1) }),
-])
+]))
 export type NativePromptIdentityCapability = z.infer<typeof NativePromptIdentityCapabilitySchema>
 
 export const NO_NATIVE_PROMPT_IDENTITY = {
@@ -15,14 +15,14 @@ export const NO_NATIVE_PROMPT_IDENTITY = {
 } as const
 
 /** Retained from this exact dispatch; never reconstructed from prompt words. */
-export const NativePromptReferenceSchema = z.object({
+export const NativePromptReferenceSchema = z.lazy(() => z.object({
   bindingId: z.string().min(1),
   attemptId: z.string().uuid(),
   provider: z.string().min(1),
   nativeId: z.string().min(1),
   path: z.string().min(1),
   messageId: z.string().min(1),
-})
+}))
 export type NativePromptReference = z.infer<typeof NativePromptReferenceSchema>
 
 export function nativePromptReference(

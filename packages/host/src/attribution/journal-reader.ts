@@ -21,7 +21,7 @@ const ShownLinesSchema = z.array(z.string()).nullable()
 const TurnUndoScopeSchema = z.union([z.object({ kind: z.literal("turn"), requestId: z.string() }), z.object({ kind: z.literal("thread") })])
 
 /** What the journal's reader is asked (`journal-reader-worker.ts`). */
-export const JournalReadSchema = z.discriminatedUnion("kind", [
+export const JournalReadSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ id: z.number(), kind: z.literal("thread-changes"), thread: z.string() }),
   z.object({ id: z.number(), kind: z.literal("resolve-files"), source: ReferenceSourceSchema, spellings: z.array(z.string()) }),
   z.object({ id: z.number(), kind: z.literal("moved-paths"), thread: z.string(), from: z.string(), to: z.string() }),
@@ -35,18 +35,18 @@ export const JournalReadSchema = z.discriminatedUnion("kind", [
   z.object({ id: z.number(), kind: z.literal("undo-plan"), thread: z.string(), scope: TurnUndoScopeSchema, checkout: z.string() }),
   z.object({ id: z.number(), kind: z.literal("change-usage"), since: z.number() }),
   z.object({ id: z.number(), kind: z.literal("count-turn"), thread: z.string(), turn: z.string(), state: z.enum(["settling", "settled"]) }),
-])
+]))
 type JournalRead = z.infer<typeof JournalReadSchema>
 
 /**
  * A Git read the reader asks its host to run, and the answer: resolving file names reads a repository's folder and
  * renames, and the host's Git has the helper, the queue and the log those go through. The worker starts no Git itself.
  */
-export const GitAskSchema = z.object({ git: z.number(), cwd: z.string(), args: z.array(z.string()), timeoutMs: z.number().optional() })
-export const GitAnswerSchema = z.union([
+export const GitAskSchema = z.lazy(() => z.object({ git: z.number(), cwd: z.string(), args: z.array(z.string()), timeoutMs: z.number().optional() }))
+export const GitAnswerSchema = z.lazy(() => z.union([
   z.object({ git: z.number(), ok: z.literal(true), stdout: z.instanceof(Uint8Array) }),
   z.object({ git: z.number(), ok: z.literal(false), error: z.string() }),
-])
+]))
 
 const CountSchema = z.number()
 const ThreadChangeSummarySchema = z.object({
