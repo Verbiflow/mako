@@ -65,6 +65,21 @@ interface Endpoint {
   close(): Promise<void>
 }
 
+/**
+ * What a daemon that replaces `current` is started with. On Windows that is a pipe name and a key of its own: the
+ * old ones were known to the daemon that exited, and a name or key that is never used twice is worth nothing to
+ * whoever learned it. A Unix daemon returns to its private socket file.
+ */
+async function replacement(current: Daemon): Promise<Pick<Daemon, "endpoint" | "args" | "env">> {
+  if (!onWindows()) return current
+  const endpoint = await daemonEndpoint("")
+  return {
+    endpoint,
+    args: current.args.map((argument) => (argument === current.socket ? endpoint.path : argument)),
+    env: { ...current.env, ...(current.key && { CUA_DRIVER_EMBEDDED_HOST_KEY: randomBytes(32).toString("hex") }) },
+  }
+}
+
 async function daemonEndpoint(stateDir: string): Promise<Endpoint> {
   // A pipe is no file: it goes when the daemon does, so there is nothing to sweep or unlink. The 128 random bits keep
   // another process from guessing the name; one that takes it first makes the daemon fail to create it (it asks for
@@ -95,7 +110,11 @@ function stopDaemon(child: ChildProcess): void {
   child.once("exit", () => clearTimeout(timer))
 }
 
-/** The first of Mako's driver releases that answers `prove` (`0008-windows-daemon-proof.patch`). */
+/**
+ * The first of Mako's driver releases that answers `prove` (`0008-windows-daemon-proof.patch`). An older driver is
+ * still started on Windows, without the proof, because installed apps carry one until they update. Once every
+ * supported Windows build ships `+mako.31` or later, `#start` should refuse an older driver there instead.
+ */
 const PROVING_RELEASE = 31
 
 /** Whether a driver's `--version` output names a release that proves itself to its host. */
@@ -107,7 +126,9 @@ export function driverProves(versionOutput: string): boolean {
 /** Asked of the executable the host itself found and is about to start, never of whatever answers on its endpoint. */
 async function proves(command: string, env: NodeJS.ProcessEnv): Promise<boolean> {
   try {
-    return driverProves((await hostCommand(command, ["--version"], { env, timeout: 8_000, windowsHide: true })).stdout)
+    // Asked as the daemon is started: without the person's own driver settings, and reporting nothing.
+    const asked = driverEnvironment(env, { CUA_DRIVER_RS_TELEMETRY_ENABLED: "0" })
+    return driverProves((await hostCommand(command, ["--version"], { env: asked, timeout: 8_000, windowsHide: true })).stdout)
   } catch {
     return false
   }
@@ -211,7 +232,7 @@ async function waitForSocket(
 
 /**
  * Mako's embedded driver daemon: `ensure` starts it, or returns the running
- * one's socket, and an unexpected exit is replaced on the same socket.
+ * one's socket, and an unexpected exit is replaced.
  */
 export class CuaEmbedded {
   #daemon: Daemon | null = null
@@ -262,10 +283,9 @@ export class CuaEmbedded {
   }
 
   /**
-   * Running task sessions were given this daemon's socket path and reconnect
-   * their driver process to it, so an unexpected exit is replaced on the same
-   * endpoint. A daemon that keeps exiting is left down until the next
-   * `ensure`.
+   * An unexpected exit is replaced: on the same socket file on a Mac or Linux, and on Windows on a new pipe name
+   * with a new key (`replacement`), which the driver broker reads from `ensure` and `address` when it reconnects.
+   * A daemon that keeps exiting is left down until the next `ensure`.
    */
   #restart(
     current: Daemon,
@@ -295,13 +315,9 @@ export class CuaEmbedded {
     })
     const generation = this.#stops
     const starting = (this.#starting ??= (async () => {
-      await unlink(current.socket).catch(() => undefined)
-      const next = await this.#spawn(
-        current.executable,
-        current.endpoint,
-        current.args,
-        current.env
-      )
+      if (!onWindows()) await unlink(current.socket).catch(() => undefined)
+      const { endpoint, args, env } = await replacement(current)
+      const next = await this.#spawn(current.executable, endpoint, args, env)
       if (generation !== this.#stops) {
         stopDaemon(next.child)
         void next.endpoint.close().catch(() => undefined)

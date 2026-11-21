@@ -11,7 +11,8 @@ import { execFile, spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { delimiter, join, resolve } from "node:path"
+import { createHmac } from "node:crypto"
+import { basename, delimiter, join, resolve } from "node:path"
 import { promisify } from "node:util"
 import { parseArgs } from "node:util"
 import { z } from "zod"
@@ -135,6 +136,53 @@ async function foreground(): Promise<number> {
   return Number((await run("powershell.exe", ["-NoProfile", "-Command", script])).stdout.trim())
 }
 
+/**
+ * The names of the `CUA_*` variables in another process's environment, read from that process by Windows (its PEB's
+ * process parameters, 64-bit layout): what it holds now, not what it was started with. Names only.
+ */
+async function environmentNames(pid: number): Promise<string[]> {
+  const script = join(root, "environment-names.ps1")
+  if (!existsSync(script)) await writeFile(script, ENVIRONMENT_NAMES)
+  const { stdout } = await run("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Target", String(pid)], { timeout: 60_000 })
+  return stdout.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+}
+const ENVIRONMENT_NAMES = String.raw`param([int]$Target)
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+public static class MakoEnvironment {
+  [StructLayout(LayoutKind.Sequential)] struct Basic { public IntPtr Reserved1; public IntPtr Peb; public IntPtr Reserved2; public IntPtr Reserved3; public IntPtr Id; public IntPtr Reserved4; }
+  [DllImport("ntdll.dll")] static extern int NtQueryInformationProcess(IntPtr process, int kind, ref Basic basic, int length, out int returned);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern IntPtr OpenProcess(int access, bool inherit, int id);
+  [DllImport("kernel32.dll", SetLastError = true)] static extern bool ReadProcessMemory(IntPtr process, IntPtr address, byte[] buffer, IntPtr size, out IntPtr read);
+  [DllImport("kernel32.dll")] static extern bool CloseHandle(IntPtr handle);
+  static long Pointer(IntPtr process, long address) {
+    var buffer = new byte[8]; IntPtr read;
+    if (!ReadProcessMemory(process, new IntPtr(address), buffer, new IntPtr(8), out read)) throw new Exception("read " + Marshal.GetLastWin32Error());
+    return BitConverter.ToInt64(buffer, 0);
+  }
+  public static string Of(int id) {
+    var process = OpenProcess(0x0410, false, id);
+    if (process == IntPtr.Zero) throw new Exception("open " + Marshal.GetLastWin32Error());
+    try {
+      var basic = new Basic(); int returned;
+      if (NtQueryInformationProcess(process, 0, ref basic, Marshal.SizeOf(typeof(Basic)), out returned) != 0) throw new Exception("query");
+      var parameters = Pointer(process, basic.Peb.ToInt64() + 0x20);
+      var block = Pointer(process, parameters + 0x80);
+      var size = Pointer(process, parameters + 0x3F0);
+      if (size <= 0 || size > 4 * 1024 * 1024) throw new Exception("environment size " + size);
+      var buffer = new byte[size]; IntPtr read;
+      if (!ReadProcessMemory(process, new IntPtr(block), buffer, new IntPtr(size), out read)) throw new Exception("read block " + Marshal.GetLastWin32Error());
+      return Encoding.Unicode.GetString(buffer);
+    } finally { CloseHandle(process); }
+  }
+}
+'@
+[MakoEnvironment]::Of($Target).Split([char]0) | Where-Object { $_ -like 'CUA_*=*' } | ForEach-Object { $_.Substring(0, $_.IndexOf('=')) }
+`
+
 /** CPU seconds, working set and threads of a process, from Windows' own counters. */
 async function processSample(pid: number) {
   const { stdout } = await run("powershell.exe", ["-NoProfile", "-Command", `Get-Process -Id ${pid} | Select-Object @{n='cpu';e={$_.TotalProcessorTime.TotalMilliseconds}},@{n='ws';e={$_.WorkingSet64}},@{n='private';e={$_.PrivateMemorySize64}},@{n='threads';e={$_.Threads.Count}},@{n='handles';e={$_.HandleCount}} | ConvertTo-Json -Compress`])
@@ -163,6 +211,7 @@ const Structured = z.record(z.string(), z.json())
 const Sample = z.object({ cpu: z.number(), ws: z.number(), private: z.number(), threads: z.number(), handles: z.number() })
 const Rates = z.array(z.number())
 const Json = z.json()
+const Challenge = z.looseObject({ method: z.literal("prove"), args: z.looseObject({ challenge: z.string() }) })
 const RecordingReceipt = z.looseObject({ status: z.string(), video: z.string().optional(), error: z.string().nullable() })
 
 const cua = new CuaEmbedded()
@@ -208,7 +257,7 @@ try {
   const daemonPid = cua.pid()
   assert.ok(daemonPid)
   // As the host wires it: the broker is given the daemon's endpoint, its key and its process's end.
-  broker = new DriverBroker({ socket: async () => socket, daemon: () => cua.address(), program: (name) => findExecutable(name), own: () => [] })
+  broker = new DriverBroker({ socket: () => cua.ensure(join(root, "cua"), "dev.mako.windows-control-test"), daemon: () => cua.address(), program: (name) => findExecutable(name), own: () => [] })
   client = await broker.connect({ kind: "appshots", label: "windows test" }, { parallel: true })
   const tools = (await client.listTools()).map((tool) => tool.name).sort()
   results.driver = { socket, pid: daemonPid, tools, started: await processSample(daemonPid) }
@@ -703,6 +752,21 @@ try {
     await new Promise<void>((done) => server.listen(impostor, done))
     try {
       assert.equal(await daemonAnswers(impostor, { key: address.key }), false, "an impostor on a pipe is refused")
+      // Nor is the right answer for another endpoint: the proof covers the name it was asked on.
+      const elsewhere = `${impostor}-relay`
+      const relay = createServer((connection) => {
+        connection.on("data", (chunk) => {
+          const challenge = Challenge.parse(JSON.parse(String(chunk).split("\n")[0]!)).args.challenge
+          connection.write(`${JSON.stringify({ ok: true, result: { proof: createHmac("sha256", address.key!).update(`${challenge}\n${address.path}`).digest("hex") } })}\n`)
+        })
+        connection.on("error", () => undefined)
+      })
+      await new Promise<void>((done) => relay.listen(elsewhere, done))
+      try {
+        assert.equal(await daemonAnswers(elsewhere, { key: address.key }), false, "the daemon's proof for its own pipe is no proof on another")
+      } finally {
+        relay.close()
+      }
       const impostorBroker = new DriverBroker({ socket: async () => impostor, daemon: () => ({ key: address.key }), own: () => [] })
       await assert.rejects(impostorBroker.connect({ kind: "appshots", label: "impostor" }), "the broker dispatches nothing to it")
       await impostorBroker.close()
@@ -737,6 +801,41 @@ try {
     } finally {
       process.env[pathKey] = (process.env[pathKey] ?? "").split(delimiter).filter((folder) => folder !== outside).join(delimiter)
       await rm(outside, { recursive: true, force: true }).catch(() => undefined)
+    }
+  })
+
+  await check("the daemon keeps the host's key and pid out of its environment and out of what it starts", async () => {
+    const address = cua.address()
+    assert.ok(address?.key, "the host gave its daemon a key")
+    const secret = (names: string[]) => names.filter((name) => /^CUA_DRIVER_EMBEDDED_HOST_(KEY|PID)$/i.test(name))
+    // The daemon itself, read from its process by Windows: it took both out before it started anything.
+    const own = await environmentNames(daemonPid)
+    assert.ok(own.includes("CUA_DRIVER_EMBEDDED"), `the daemon's environment was read: ${own.join(" ")}`)
+    assert.deepEqual(secret(own), [], "the daemon's own environment")
+    assert.equal(await daemonAnswers(address.path, { key: address.key }), true, "and it still proves itself, from memory")
+    // A program launch_app starts writes the driver variables it was given.
+    const seen = join(root, "launched-environment.txt")
+    await writeFile(join(driverFolder, "mako-environment-app.cmd"), `@set CUA_> "${seen}"\r\n`)
+    await call("launch_app", { name: "mako-environment-app" })
+    const launched = await until(async () => { const text = await readFile(seen, "utf8"); return /CUA_DRIVER_EMBEDDED=1/i.test(text) && text }, "the launched program wrote its environment", 20_000)
+    assert.ok(!/EMBEDDED_HOST_(KEY|PID)/i.test(launched) && !launched.includes(address.key), `what launch_app started was given: ${launched.replaceAll(address.key, "<key>")}`)
+    // The video helper, while it records.
+    const id = "windows-environment-check"
+    const started = await call("start_recording", { recording_id: id, output_dir: join(root, "environment-recording"), record_video: true, capture_actions: false, window_target: target, fps: 30 })
+    assert.equal(started.data.video_active, true, `video started: ${started.text}`)
+    try {
+      const helper = basename(process.env.MAKO_VIDEO_HELPER ?? "").toLowerCase()
+      const helperPid = await until(async () => {
+        const { stdout } = await run("powershell.exe", ["-NoProfile", "-Command", `Get-CimInstance Win32_Process -Filter "ParentProcessId=${daemonPid}" | ForEach-Object { "$($_.ProcessId) $($_.Name)" }`])
+        const line = stdout.split(/\r?\n/).map((entry) => entry.trim().split(" ")).find(([, name]) => name?.toLowerCase() === helper)
+        return line && Number(line[0])
+      }, `the daemon runs ${helper}`, 20_000)
+      const recorder = await environmentNames(helperPid)
+      assert.ok(recorder.includes("CUA_DRIVER_EMBEDDED"), `the helper's environment was read: ${recorder.join(" ")}`)
+      assert.deepEqual(secret(recorder), [], "the video helper's environment")
+      return { daemon: own.length, launched: launched.split(/\r?\n/).filter(Boolean).length, helper: recorder.length }
+    } finally {
+      await call("stop_recording", { recording_id: id }, 30_000)
     }
   })
 
@@ -806,13 +905,57 @@ try {
     return idle
   })
 
+  await check("a daemon that exits is replaced on a new pipe name with a new key; the old ones open nothing", async () => {
+    const old = cua.address()
+    assert.ok(old?.key, "the running daemon has a key")
+    process.kill(daemonPid)
+    const next = await until(async () => { const address = cua.address(); return address && cua.pid() !== daemonPid && address }, "the host restarted its driver", 30_000)
+    assert.ok(next.key, "the new daemon has a key")
+    assert.notEqual(next.path, old.path, "a new pipe name")
+    assert.notEqual(next.key, old.key, "a new key")
+    assert.equal(await daemonAnswers(next.path, { key: next.key }), true, "the new daemon proves itself")
+    assert.equal(await daemonAnswers(next.path, { key: old.key }), false, "the old key proves nothing to the host on the new pipe")
+    // A process that kept the old key takes the old name and answers every challenge as the old daemon did.
+    let heard = ""
+    const squatter = createServer((connection) => {
+      connection.on("data", (chunk) => {
+        heard += String(chunk)
+        const challenge = Challenge.parse(JSON.parse(String(chunk).split("\n")[0]!)).args.challenge
+        connection.write(`${JSON.stringify({ ok: true, result: { proof: createHmac("sha256", old.key!).update(`${challenge}\n${old.path}`).digest("hex") } })}\n`)
+      })
+      connection.on("error", () => undefined)
+    })
+    await new Promise<void>((done) => squatter.listen(old.path, done))
+    try {
+      assert.equal(await daemonAnswers(old.path, { key: old.key }), true, "the stand-in answers as the old daemon would")
+      assert.equal(await daemonAnswers(old.path, { key: next.key }), false, "it is not accepted as the daemon the host now has")
+      heard = ""
+      // The broker, wired as in the host, reaches the new daemon and sends the old name nothing.
+      const again = await broker!.connect({ kind: "appshots", label: "after restart" }, { parallel: true })
+      try {
+        const listed = await again.callTool("list_windows", { pid: fixture.pid }, { timeout: 30_000 })
+        assert.ok(!listed.isError, "a call after the restart is answered")
+      } finally {
+        await again.close()
+      }
+      const status = broker!.status().daemon
+      assert.equal(status.state === "connected" && status.socket, next.path, "the broker is on the new pipe")
+      assert.equal(heard, "", "nothing went to the old name")
+    } finally {
+      squatter.close()
+    }
+    return { restartedPid: cua.pid() }
+  })
+
   await check("stopping the host's driver ends the daemon", async () => {
     await client?.close()
     client = undefined
     await broker?.close()
     broker = undefined
+    const running = cua.pid()
+    assert.ok(running, "a daemon is running")
     cua.stop()
-    await until(async () => { try { await processSample(daemonPid); return false } catch { return true } }, "the daemon exited", 10_000)
+    await until(async () => { try { await processSample(running); return false } catch { return true } }, "the daemon exited", 10_000)
   })
 } catch (error) {
   console.error(error)

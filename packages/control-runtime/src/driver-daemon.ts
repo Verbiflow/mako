@@ -66,7 +66,8 @@ const unreachable = (error: NodeJS.ErrnoException) => ["ENOENT", "ECONNREFUSED",
 /**
  * What a caller knows of the daemon it means to reach. `key` is the secret its host started it with
  * (`CUA_DRIVER_EMBEDDED_HOST_KEY`): every connection first has the far end prove it holds the key, so a process that
- * took the daemon's pipe name is told nothing but a random challenge. `gone` aborts when the daemon's process has
+ * took the daemon's pipe name is told nothing but a random challenge. The proof covers the endpoint's name with the
+ * challenge, and each daemon gets its own name and key, so neither is of use on another. `gone` aborts when the daemon's process has
  * exited: connections to its endpoint are closed then, whoever answers on it.
  */
 export interface DaemonPeer {
@@ -99,7 +100,8 @@ async function connect(socket: string, peer: DaemonPeer = {}): Promise<Socket> {
   try {
     connection.write(`${JSON.stringify({ method: "prove", args: { challenge } } satisfies DaemonRequest)}\n`)
     const reply = ProofSchema.safeParse(JSON.parse((await readLine(connection, 64 * 1024)).toString("utf8")))
-    const expected = createHmac("sha256", peer.key).update(challenge).digest()
+    // Keyed over the challenge and this endpoint's name, so an answer is good for the one endpoint it was asked on.
+    const expected = createHmac("sha256", peer.key).update(`${challenge}\n${socket}`).digest()
     const given = reply.success ? Buffer.from(reply.data.result.proof, "hex") : Buffer.alloc(0)
     if (given.length !== expected.length || !timingSafeEqual(given, expected)) throw new Error("no proof")
     return connection

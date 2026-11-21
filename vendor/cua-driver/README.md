@@ -13,18 +13,25 @@ the version.
 
 ### 0008: the Windows daemon proves itself
 
-Two Windows-only changes for the embedded daemon's host:
+Three Windows-only changes for the embedded daemon's host:
 
 - A `prove` request. A daemon given a key (`CUA_DRIVER_EMBEDDED_HOST_KEY`,
-  at least 32 characters) answers a challenge with HMAC-SHA256 of it under
-  the key, in hex (`embedded_host_proof`, `cua-driver-core/src/lib.rs`; the
-  request in the Windows `run_serve`). Mako's host gives the key to a driver
-  of this release or later, and then asks on every connection before it writes
-  anything else, so a process that took the pipe's name is never spoken to. A
-  daemon given no key answers with an error.
-- `launch_app` refuses a name that matches no installed app. Upstream handed
-  it to ShellExecute, which searches the current folder and `PATH`. A whole
-  path, an AppUserModelID, a `shell:` item or a URL launches as before.
+  at least 32 characters) answers a challenge with HMAC-SHA256, under the
+  key, of the challenge, a line feed and its pipe's name, in hex
+  (`embedded_host_proof`, `cua-driver-core/src/lib.rs`; the request in the
+  Windows `run_serve`). Mako's host gives the key to a driver of this release
+  or later, and then asks on every connection before it writes anything else,
+  so a process that took the pipe's name is never spoken to, and an answer is
+  good for that pipe alone. A daemon given no key answers with an error.
+- The key and the host's pid (`CUA_DRIVER_EMBEDDED_HOST_PID`) are read into
+  memory first thing in `main` and removed from the daemon's environment
+  (`take_embedded_host_secrets`), so no process the daemon starts inherits
+  them. The pipe's accept loop reads the pid from memory.
+- `launch_app` launches only an installed app, an absolute path, an
+  AppUserModelID, a `shell:` item or a URL (`launch_target_is_explicit`).
+  Upstream handed anything else to ShellExecute, which searches the current
+  folder and `PATH` for a bare name and reads a relative or drive-relative
+  path (`sub\tool.exe`, `C:tool.exe`) against the current folder.
 
 ### 0007: no FFmpeg in the Linux build
 

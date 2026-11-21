@@ -1311,30 +1311,64 @@ index c349e73..e390109 100644
      fn token_round_trips_through_format_then_parse() {
          assert_eq!(format_token(0x1234, 42), "s00001234:42");
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
-index 11c7fb3..d81e6d7 100644
+index 11c7fb3..45ae14a 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/lib.rs
-@@ -37,6 +37,19 @@ pub fn embedded_mode() -> bool {
+@@ -37,6 +37,53 @@ pub fn embedded_mode() -> bool {
  /// Parent-EOF shutdown is valid only for a directly embedded daemon. Requiring
  /// both sentinels prevents an ambient variable from changing ordinary
  /// standalone or MCP stdin behavior.
 +/// The key an embedding host shares with its daemon to tell it from another process holding the daemon's endpoint.
 +pub const EMBEDDED_HOST_KEY_ENV: &str = "CUA_DRIVER_EMBEDDED_HOST_KEY";
++/// The pid of the host whose connections an embedded daemon serves.
++pub const EMBEDDED_HOST_PID_ENV: &str = "CUA_DRIVER_EMBEDDED_HOST_PID";
 +
-+/// HMAC-SHA256 of `challenge` under the host's key, in hex: what an embedded daemon answers a `prove` request with.
-+/// None without a key of at least 32 characters, so a daemon that was given none proves nothing.
-+pub fn embedded_host_proof(challenge: &str) -> Option<String> {
++/// What the host told its daemon about itself, held in memory only.
++struct EmbeddedHost {
++    key: Option<String>,
++    pid: Option<u32>,
++}
++static EMBEDDED_HOST: std::sync::OnceLock<EmbeddedHost> = std::sync::OnceLock::new();
++
++/// Read the host's key and pid once and take both out of this process's environment, so that nothing the daemon
++/// starts (a shell, the video helper, an app `launch_app` opens and whatever that app starts in turn) inherits them.
++/// Called first thing in `main` on Windows, before any thread or child exists; later calls change nothing.
++pub fn take_embedded_host_secrets() {
++    EMBEDDED_HOST.get_or_init(|| {
++        let host = EmbeddedHost {
++            key: std::env::var(EMBEDDED_HOST_KEY_ENV).ok().filter(|key| key.len() >= 32),
++            pid: std::env::var(EMBEDDED_HOST_PID_ENV).ok().and_then(|value| value.parse().ok()),
++        };
++        std::env::remove_var(EMBEDDED_HOST_KEY_ENV);
++        std::env::remove_var(EMBEDDED_HOST_PID_ENV);
++        host
++    });
++}
++
++/// The embedding host's pid, as it was given at startup.
++pub fn embedded_host_pid() -> Option<u32> {
++    take_embedded_host_secrets();
++    EMBEDDED_HOST.get().and_then(|host| host.pid)
++}
++
++/// HMAC-SHA256, in hex, of `challenge`, a line feed and `endpoint` under the host's key: what an embedded daemon
++/// answers a `prove` request with. The endpoint is the daemon's own (its pipe's name), so an answer is good for that
++/// endpoint alone. None without a key of at least 32 characters, so a daemon that was given none proves nothing.
++pub fn embedded_host_proof(challenge: &str, endpoint: &str) -> Option<String> {
 +    use hmac::{Hmac, Mac};
-+    let key = std::env::var(EMBEDDED_HOST_KEY_ENV).ok().filter(|key| key.len() >= 32)?;
++    take_embedded_host_secrets();
++    let key = EMBEDDED_HOST.get()?.key.as_deref()?;
 +    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(key.as_bytes()).ok()?;
 +    mac.update(challenge.as_bytes());
++    mac.update(b"\n");
++    mac.update(endpoint.as_bytes());
 +    Some(mac.finalize().into_bytes().iter().map(|byte| format!("{byte:02x}")).collect())
 +}
 +
  pub fn parent_liveness_stdin_enabled() -> bool {
      embedded_mode() && std::env::var_os(PARENT_LIVENESS_STDIN_ENV).is_some_and(|value| value == "1")
  }
-@@ -58,6 +71,7 @@ pub mod element_cache;
+@@ -58,6 +105,7 @@ pub mod element_cache;
  pub mod element_query;
  pub mod element_token;
  pub mod expectation;
@@ -1342,7 +1376,7 @@ index 11c7fb3..d81e6d7 100644
  pub mod ffmpeg_install;
  pub mod health_report;
  pub mod history;
-@@ -85,7 +99,24 @@ pub mod tool;
+@@ -85,7 +133,24 @@ pub mod tool;
  pub mod tool_args;
  pub mod tool_schema;
  pub mod video;
@@ -3444,7 +3478,7 @@ index 46584ae..9e71535 100644
      let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
      let db = format!("{home}/Library/Application Support/com.apple.TCC/TCC.db");
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/main.rs b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
-index 5d6ac1f..227f638 100644
+index 5d6ac1f..f4d2929 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/main.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/main.rs
 @@ -726,6 +726,9 @@ fn main() {
@@ -3457,6 +3491,16 @@ index 5d6ac1f..227f638 100644
                  let _ = serve_handle.join();
              }
          }
+@@ -882,6 +885,9 @@ fn main() {
+ 
+ #[cfg(not(target_os = "macos"))]
+ fn main() -> anyhow::Result<()> {
++    // Before anything else runs or is started: the embedding host's key and pid leave the environment.
++    #[cfg(target_os = "windows")]
++    cua_driver_core::take_embedded_host_secrets();
+     if let Some(code) = history_runtime::run_offline_purge_if_requested() {
+         std::process::exit(code);
+     }
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs b/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
 index a26a6bf..d23239e 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/sdk_adapter.rs
@@ -3523,7 +3567,7 @@ index a26a6bf..d23239e 100644
      async fn public_observation_mirror_revives_an_implicit_transport_session() {
          let _runtime_guard = crate::test_runtime_lock().lock().await;
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
-index 67e123b..8279730 100644
+index 67e123b..ccac38d 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
 @@ -972,6 +972,8 @@ pub async fn run_serve(
@@ -3626,7 +3670,16 @@ index 67e123b..8279730 100644
      security_attrs_from_sddl(&format!("D:P(A;;GA;;;{sid})S:(ML;;NW;;;LW)"))
  }
  
-@@ -1794,6 +1832,14 @@ pub async fn run_serve(
+@@ -1786,20 +1824,27 @@ pub async fn run_serve(
+                     let _ = server.disconnect();
+                     continue;
+                 }
+-                let expected_host_process_id = std::env::var("CUA_DRIVER_EMBEDDED_HOST_PID")
+-                    .ok()
+-                    .and_then(|value| value.parse::<u32>().ok());
++                let expected_host_process_id = cua_driver_core::embedded_host_pid();
+                 let trusted_host_connection = embedded
+                     && named_pipe_host_pid_is_authorized(
                          expected_host_process_id,
                          client_process_id,
                      );
@@ -3641,7 +3694,14 @@ index 67e123b..8279730 100644
                  let history_cli_executable_path =
                      client_process_id.and_then(platform_windows::history::process_executable_path);
  
-@@ -1811,6 +1857,7 @@ pub async fn run_serve(
+                 let reg = sdk.clone();
+                 let shutdown_tx2 = shutdown_tx.clone();
+                 let trusted_resume_registry = trusted_resume_registry.clone();
++                let proof_endpoint = socket_path.to_owned();
+ 
+                 tokio::spawn(async move {
+                     let (reader, mut writer) = tokio::io::split(server);
+@@ -1811,6 +1856,7 @@ pub async fn run_serve(
                      // ERROR_BROKEN_PIPE on the next read, ending the while-let
                      // loop equally reliably.
                      let mut control_session_id: Option<String> = None;
@@ -3649,7 +3709,7 @@ index 67e123b..8279730 100644
                      let mut trusted_session: Option<TrustedConnectionSession> = None;
  
                      while let Ok(Some(line)) = lines.next_line().await {
-@@ -1836,6 +1883,18 @@ pub async fn run_serve(
+@@ -1836,6 +1882,18 @@ pub async fn run_serve(
                                  let _ = crate::mcp_envelope::accept(reg.clone(), lines.into_inner(), writer).await;
                                  return;
                              }
@@ -3657,7 +3717,7 @@ index 67e123b..8279730 100644
 +                            // pipe's name: the answer is keyed with what only the two of them were given.
 +                            "prove" => {
 +                                let challenge = req.args.as_ref().and_then(|args| args.get("challenge")).and_then(|value| value.as_str()).filter(|value| value.len() <= 256);
-+                                let resp = match challenge.and_then(cua_driver_core::embedded_host_proof) {
++                                let resp = match challenge.and_then(|challenge| cua_driver_core::embedded_host_proof(challenge, &proof_endpoint)) {
 +                                    Some(proof) => DaemonResponse::ok(serde_json::json!({ "proof": proof })),
 +                                    None => DaemonResponse::err("this daemon was given no host key to prove itself with", 77),
 +                                };
@@ -3668,7 +3728,7 @@ index 67e123b..8279730 100644
                              "metadata" => {
                                  let resp = daemon_metadata_response();
                                  let _ = writer.write_all(
-@@ -2074,12 +2133,13 @@ pub async fn run_serve(
+@@ -2074,12 +2132,13 @@ pub async fn run_serve(
                                      (serde_json::to_string(&resp).unwrap() + "\n").as_bytes()
                                  ).await;
                              }
@@ -3683,7 +3743,7 @@ index 67e123b..8279730 100644
                                      control_session_id = Some(sid.to_owned());
                                      active_proxy_sessions()
                                          .lock()
-@@ -2128,6 +2188,7 @@ pub async fn run_serve(
+@@ -2128,6 +2187,7 @@ pub async fn run_serve(
                      if let Some(sid) = control_session_id {
                          active_proxy_sessions().lock().unwrap().remove(&sid);
                          reg.end_transport_sessions(&sid);
@@ -12218,7 +12278,7 @@ index a1ed48d..ed25bf3 100644
                  help_text: None,
                  actions: Vec::new(),
 diff --git a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
-index 9d0d4cf..00b65fa 100644
+index 9d0d4cf..5637d88 100644
 --- a/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 +++ b/libs/cua-driver/rust/crates/platform-windows/src/tools/impl_.rs
 @@ -1073,6 +1073,7 @@ mod get_window_state_actions_tests {
@@ -12254,7 +12314,60 @@ index 9d0d4cf..00b65fa 100644
          entry["value"] = json!(value);
      }
      if let Some(enabled) = n.enabled {
-@@ -1637,6 +1645,8 @@ impl Tool for GetWindowStateTool {
+@@ -1177,6 +1185,52 @@ fn build_element_entry(
+     Some(entry)
+ }
+ 
++/// Whether a launch target names exactly one thing wherever the daemon runs: an absolute path on a drive or a share
++/// (after `%VAR%` references are expanded, as `list_apps` writes desktop apps' paths), or an item with a scheme
++/// (`shell:`, `https:`, `ms-settings:`). A single letter before the colon is a drive, so `C:tool.exe` is relative.
++fn launch_target_is_explicit(target: &str) -> bool {
++    let mut expanded = String::new();
++    let mut rest = target;
++    while let Some(start) = rest.find('%') {
++        let Some(length) = rest[start + 1..].find('%') else { break };
++        expanded.push_str(&rest[..start]);
++        match std::env::var(&rest[start + 1..start + 1 + length]) {
++            Ok(value) => expanded.push_str(&value),
++            Err(_) => expanded.push_str(&rest[start..start + length + 2]),
++        }
++        rest = &rest[start + length + 2..];
++    }
++    expanded.push_str(rest);
++    let bytes = expanded.as_bytes();
++    if expanded.starts_with("\\\\") || expanded.starts_with("//") {
++        return true;
++    }
++    if bytes.len() >= 2 && bytes[1] == b':' && bytes[0].is_ascii_alphabetic() {
++        return bytes.len() >= 3 && (bytes[2] == b'\\' || bytes[2] == b'/');
++    }
++    match expanded.find(':') {
++        Some(colon) if colon >= 2 => {
++            bytes[0].is_ascii_alphabetic() && bytes[..colon].iter().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'.' | b'-'))
++        }
++        _ => false,
++    }
++}
++
++#[cfg(test)]
++mod launch_target_tests {
++    use super::launch_target_is_explicit;
++
++    #[test]
++    fn only_absolute_paths_and_schemes_are_explicit() {
++        for explicit in [r"C:\Windows\System32\notepad.exe", "C:/tools/app.exe", r"\\server\share\app.exe", r"shell:AppsFolder\Microsoft.WindowsCalculator_8wekyb3d8bbwe!App", "https://example.com", "ms-settings:display"] {
++            assert!(launch_target_is_explicit(explicit), "{explicit}");
++        }
++        for relative in ["notepad", "tool.exe", r"sub\tool.exe", r"..\x.exe", "./x.exe", "C:tool.exe", r"\Windows\notepad.exe", "", ":x", "1:x"] {
++            assert!(!launch_target_is_explicit(relative), "{relative}");
++        }
++    }
++}
++
+ pub struct GetWindowStateTool {
+     state: Arc<ToolState>,
+ }
+@@ -1637,6 +1691,8 @@ impl Tool for GetWindowStateTool {
                      is_error: None,
                      structured_content: Some(structured),
                      action_record: None,
@@ -12263,7 +12376,7 @@ index 9d0d4cf..00b65fa 100644
                  }
              }
              Err(e) => ToolResult::error(format!("Error: {e}")),
-@@ -2025,7 +2035,7 @@ impl Tool for LaunchAppTool {
+@@ -2025,7 +2081,7 @@ impl Tool for LaunchAppTool {
                  where the legacy .exe in System32 is a ~7 KB stub that exits immediately. A \
                  plain `name` first attempts a `shell:AppsFolder` lookup; packaged matches use \
                  the activation manager while desktop registrations are launched through their \
@@ -12272,7 +12385,7 @@ index 9d0d4cf..00b65fa 100644
                  Returns the launched app's pid, name, active flag, AND a `windows` array — \
                  same per-window shape `list_windows` returns. When the launch settles but no \
                  window has materialized yet (transient; rare), `windows` comes back empty — \
-@@ -2042,7 +2052,7 @@ impl Tool for LaunchAppTool {
+@@ -2042,7 +2098,7 @@ impl Tool for LaunchAppTool {
              input_schema: json!({"type":"object","properties":{
                  "bundle_id":{"type":"string","description":"App User Model ID (AUMID) for a packaged app — pattern `{PackageFamilyName}!{ApplicationId}`, e.g. `Microsoft.WindowsNotepad_8wekyb3d8bbwe!App`. Falls back to a `name` alias if no `!` is present. Either bundle_id, name, aumid, path, or launch_path must be provided."},
                  "aumid":{"type":"string","description":"Explicit AUMID for a packaged app. Cleaner alternative to overloading `bundle_id`. Takes precedence over `bundle_id` / `name` when present."},
@@ -12281,20 +12394,21 @@ index 9d0d4cf..00b65fa 100644
                  "path":{"type":"string","description":"Full path to executable. Windows-only; takes precedence over name/bundle_id/aumid (but not over `launch_path`)."},
                  "launch_path":{"type":"string","description":"Round-trip the `launch_path` returned by `list_apps`. Highest precedence — when set, this exact string is handed to ShellExecuteEx unchanged. For Windows desktop apps it's the full `.exe` commandline (path + arguments preserved from the source shortcut); for UWP apps it's `shell:appsFolder\\{PackageFamilyName}!{AppId}`. For precise UWP pid capture, prefer `aumid` over `launch_path`."},
                  "urls":{"type":"array","items":{"type":"string"},"description":"URLs to open in the default browser via ShellExecuteEx (no activation)."},
-@@ -2347,6 +2357,22 @@ impl Tool for LaunchAppTool {
+@@ -2347,6 +2403,23 @@ impl Tool for LaunchAppTool {
              }));
          }
  
-+        // A name that matched no installed app is not handed to ShellExecuteEx to search for: it would look in the
-+        // current folder and on PATH, where any program of that name would run as this user. Only a whole path, an
-+        // AppUserModelID, a `shell:` item or a URL is launched.
++        // Nothing is handed to ShellExecuteEx to search for or to resolve against a folder: a bare name would be
++        // looked for in the current folder and on PATH, and a relative path (`sub\\tool.exe`, `..\\x.exe`) or a
++        // drive-relative one (`C:tool.exe`) is read against the current folder, where any program so named would run
++        // as this user. Only an absolute path, an AppUserModelID, a `shell:` item or a URL is launched.
 +        if aumid_for_uwp.is_none() {
 +            if let Some(target) = target_file_opt.as_deref() {
-+                if !target.is_empty() && !target.contains([':', '\\', '/']) {
++                if !target.is_empty() && !launch_target_is_explicit(target) {
 +                    return ToolResult::error(format!(
-+                        "launch_app: no installed app is named {target:?}, and a bare program name is not searched \
-+                         for on PATH or in the current folder. Give its whole path (`path`), its AppUserModelID \
-+                         (`aumid`), or a `launch_path` from list_apps. No process was started."
++                        "launch_app: no installed app is named {target:?}, and a name or relative path is not \
++                         searched for on PATH or in the current folder. Give an absolute path (`path`), an \
++                         AppUserModelID (`aumid`), or a `launch_path` from list_apps. No process was started."
 +                    ))
 +                    .with_structured(json!({ "code": "app_not_found", "name": target }));
 +                }
@@ -12304,7 +12418,7 @@ index 9d0d4cf..00b65fa 100644
          // Branch: AUMID activation if we resolved one; else legacy
          // ShellExecuteExW. Both branches still need to handle `urls`
          // (additional URLs always go through ShellExecuteExW since the
-@@ -5721,7 +5747,9 @@ impl Tool for HotkeyTool {
+@@ -5721,7 +5794,9 @@ impl Tool for HotkeyTool {
              }
          };
  
@@ -12315,7 +12429,7 @@ index 9d0d4cf..00b65fa 100644
              let mut accelerator_keys = mods.clone();
              accelerator_keys.push(key.clone());
              let accelerator_combo = accelerator_keys.join("+");
-@@ -7897,6 +7925,8 @@ impl Tool for GetDesktopStateTool {
+@@ -7897,6 +7972,8 @@ impl Tool for GetDesktopStateTool {
              is_error: None,
              structured_content: Some(structured),
              action_record: None,
@@ -12324,7 +12438,7 @@ index 9d0d4cf..00b65fa 100644
          }
      }
  }
-@@ -8399,7 +8429,9 @@ if ($null -ne $rid) {{ Write-Output ([int]$rid) }}
+@@ -8399,7 +8476,9 @@ if ($null -ne $rid) {{ Write-Output ([int]$rid) }}
  "#,
          pid = pid
      );
@@ -12335,7 +12449,7 @@ index 9d0d4cf..00b65fa 100644
          .args([
              "-NoProfile",
              "-NonInteractive",
-@@ -8849,6 +8881,8 @@ impl Tool for ZoomTool {
+@@ -8849,6 +8928,8 @@ impl Tool for ZoomTool {
                          "mime_type": "image/jpeg"
                      })),
                      action_record: None,
