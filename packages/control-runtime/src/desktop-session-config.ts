@@ -31,6 +31,11 @@ export const DesktopSessionMessageSchema = z.discriminatedUnion("kind", [
       config: DesktopSessionConfigSchema,
       descriptor: SessionDescriptorSchema,
       directory: z.string(),
+      /**
+       * On Windows, where no listener or connection can be handed to another process: the pipe the worker listens on
+       * itself, and its secret. The host relays each connection it accepted there (`ControlWorker.hand`).
+       */
+      relay: z.object({ pipe: z.string(), proof: z.string() }).strict().optional(),
     })
     .strict(),
   z.object({ kind: z.literal("connection") }).strict(),

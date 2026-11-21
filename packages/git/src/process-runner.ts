@@ -1,3 +1,4 @@
+import { win32 } from "node:path"
 import { execFile, spawn, fork, type ChildProcess, type SpawnOptions, type ForkOptions } from "node:child_process"
 import { promisify } from "node:util"
 import { setTimeout as delay } from "node:timers/promises"
@@ -80,8 +81,15 @@ async function stopGroup(child: ChildProcess, first: NodeJS.Signals | number): P
   const pid = child.pid
   if (!pid) return
   if (onWindows()) {
-    if (child.exitCode === null && child.signalCode === null)
-      await inspect("taskkill", ["/PID", String(pid), "/T", "/F"], { timeout: 5_000 })
+    const gone = () => child.exitCode !== null || child.signalCode !== null
+    if (gone()) return
+    // By its whole path: a bare name is looked for in the working folder first on Windows. taskkill fails for a
+    // process that ended as it was asked (128), which is the outcome wanted: only one still there is a failure.
+    const taskkill = win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe")
+    const failed = await inspect(taskkill, ["/PID", String(pid), "/T", "/F"], { timeout: 5_000, windowsHide: true }).then(() => undefined, (error: Error) => error)
+    if (!failed) return
+    for (const deadline = Date.now() + 2_000; !gone() && Date.now() < deadline; ) await delay(20)
+    if (!gone()) throw new Error(`taskkill could not end the command's process tree (pid ${pid})`, { cause: failed })
     return
   }
   let denied: Error | undefined

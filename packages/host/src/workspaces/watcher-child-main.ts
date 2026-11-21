@@ -6,7 +6,7 @@ import { homedir, tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { watchGitMarkersHere } from "./git-marker-native.js"
 import { OTHER_APPS_DATA } from "../base/other-apps-data.js"
-import { onLinux } from "../base/platform.js"
+import { onLinux, onWindows } from "../base/platform.js"
 import { membersOnly, parseTable, PS_ARGS, type RunLeader } from "./process-table.js"
 import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, WatcherRequestSchema, type CanaryTest, type DropReason, type HistoryMark, type WatcherReply, type WatcherRequest } from "../contracts/watcher-child.js"
 
@@ -505,6 +505,8 @@ const TABLE_MS = 15_000
 
 /** The process table as `ps` prints it: one `ps` per ask, in this child's process group, ended with it. */
 function readTable(): Promise<string> {
+  // Windows has no `ps`, and would look for one in the working folder first: the host reads its own table there.
+  if (onWindows()) return Promise.reject(new Error("No ps on Windows"))
   return new Promise<string>((done, fail) => {
     execFile("ps", [...PS_ARGS], { env: { ...process.env, LC_ALL: "C" }, maxBuffer: TABLE_BYTES, timeout: TABLE_MS }, (error, stdout) => {
       if (error) fail(error)
@@ -523,7 +525,8 @@ function runProbe(asked: Extract<WatcherRequest, { t: "run" }>): void {
   const { id, file, args } = asked
   const program = basename(file)
   const lowered = program === "nice" ? basename(args[2] ?? "") : program
-  if (!PROBE_PROGRAMS.has(program) || lowered === "nice" || !PROBE_PROGRAMS.has(lowered)) {
+  // None of these is a Windows program, and a bare name there is looked for in the working folder first.
+  if (onWindows() || !PROBE_PROGRAMS.has(program) || lowered === "nice" || !PROBE_PROGRAMS.has(lowered)) {
     reply({ t: "failed", id, message: `Not a probe: ${file}` })
     return
   }

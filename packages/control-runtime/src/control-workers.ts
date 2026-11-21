@@ -6,6 +6,8 @@ import { ControlFault } from "@mako/control/control"
 import { controlSessionBuild, type SessionDescriptor } from "./control-session-protocol.js"
 import { DesktopWorkerReplySchema, type DesktopSessionConfig, type DesktopWorkerReply } from "./desktop-session-config.js"
 import { sweepAbandonedLaunches } from "./launch-folders.js"
+import { connectProven, drawKeptPipe, type KeptPipe } from "@mako/sessions/private-pipe"
+import { onWindows } from "./platform.js"
 import { GLOBAL_CONTROL_CLEANUP, type ControlCleanupPolicy } from "./private-socket.js"
 
 /** What a worker inherits: no credentials, which reach it in its `bind`. */
@@ -60,6 +62,9 @@ export class ControlWorker {
     options.onSpawn?.(this.child)
   }
 
+  /** On Windows, the worker's own pipe and its secret, once bound. */
+  private relay: KeptPipe | undefined
+
   get pid(): number | undefined {
     return this.gone ? undefined : this.child.pid
   }
@@ -77,15 +82,34 @@ export class ControlWorker {
         "not-dispatched"
       )
     const ready = this.until("ready", (reply) => reply.kind === "ready" || undefined)
-    this.child.send({ kind: "bind", config, descriptor, directory }, listener, (error) => {
-      if (error) void this.stop()
-    })
+    if (onWindows()) {
+      // Node hands no pipe to another process on Windows: the worker listens on a pipe drawn for it here, and each
+      // connection this process accepted is relayed there (`hand`).
+      this.relay = drawKeptPipe("mako-control-worker")
+      this.child.send({ kind: "bind", config, descriptor, directory, relay: this.relay }, (error) => {
+        if (error) void this.stop()
+      })
+    } else
+      this.child.send({ kind: "bind", config, descriptor, directory }, listener, (error) => {
+        if (error) void this.stop()
+      })
     await ready
   }
 
   /** A connection that reached this process first; the worker answers it, or `orElse` when it can't. */
   hand(connection: Socket, orElse: (connection: Socket) => void): void {
     if (this.gone || !this.child.connected) return orElse(connection)
+    if (this.relay) {
+      const relay = this.relay
+      void connectProven(relay.pipe, relay.proof).then((upstream) => {
+        const end = () => { upstream.destroy(); connection.destroy() }
+        upstream.on("error", end)
+        connection.on("error", end)
+        connection.pipe(upstream)
+        upstream.pipe(connection)
+      }, () => orElse(connection))
+      return
+    }
     this.child.send({ kind: "connection" }, connection, (error) => {
       if (error) orElse(connection)
     })

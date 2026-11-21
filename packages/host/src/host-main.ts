@@ -91,7 +91,8 @@ await host.start().catch(async (error: Error) => {
 
 /** An error with what caused it, each its own words: an aggregate's message alone named no step that failed to drain. */
 function causeWords(error: Error): string {
-  const words = [error.message]
+  // An aggregate inside an aggregate (outside work that didn't stop) names each of its own.
+  const words = [error instanceof AggregateError ? `${error.message} (${error.errors.map(causeWords).join(" | ")})` : error.message]
   for (let cause = error.cause; cause instanceof Error && words.length < 5; cause = cause.cause) words.push(cause.message)
   return words.join(": ")
 }

@@ -29,7 +29,8 @@ type CommandResult = { stdout: string; stderr: string }
  */
 export function hostProbe(file: string, args: readonly string[], options: ProbeOptions = {}): Promise<CommandResult> {
   const probes = hostStopping()?.probes
-  if (probes && isProbe(file, args)) return probes.run(file, args, options)
+  // Windows has none of these programs: the launcher there answers a missing one, by whole path, without a search.
+  if (probes && !onWindows() && isProbe(file, args)) return probes.run(file, args, options)
   return hostCommand(file, args, options)
 }
 

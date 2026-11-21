@@ -1,6 +1,6 @@
 import { createHmac, randomBytes, timingSafeEqual } from "node:crypto"
 import { closeSync, constants, mkdirSync, openSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
-import { createConnection, type Server, type Socket } from "node:net"
+import { createConnection, Socket, type Server } from "node:net"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { z } from "zod"
@@ -175,21 +175,25 @@ export function connectProven(path: string, secret: string): Promise<Socket> {
 }
 
 /**
- * Makes every connection `server` accepts prove itself first: its own `connection` listeners (HTTP's, or a
- * protocol's) hear a socket only once the client has proved it knows `secret()`; one that doesn't is closed having
- * been told nothing but this server's proof of the nonce it sent. Call it before `listen`.
+ * Makes every connection `server` accepts prove itself first: its `connection` listeners (HTTP's, or a protocol's),
+ * whenever they were or are added, hear a socket only once the client has proved it knows `secret()`; one that doesn't
+ * is closed having been told nothing but this server's proof of the nonce it sent.
  */
 export function requireProof(server: Server, secret: () => string | undefined): void {
-  const listeners = server.listeners("connection")
-  server.removeAllListeners("connection")
-  server.on("connection", (socket: Socket) => {
+  // The server's own `emit` is what announces a connection: taken over, so no listener's order matters.
+  const emit = server.emit.bind(server)
+  const proven = (socket: Socket) => emit("connection", socket)
+  const accept = (socket: Socket) => {
     const known = secret()
     if (!known) {
-      for (const listener of listeners) listener.call(server, socket)
+      proven(socket)
       return
     }
     const nonce = randomBytes(16).toString("hex")
     let stage: "greeting" | "client" = "greeting"
+    // A server that takes its connections paused (`pauseOnConnect`) gets them back paused, the handshake read between.
+    const paused = socket.readableFlowing === false
+    if (paused) socket.resume()
     lines(socket, (line) => {
       if (stage === "greeting") {
         const [greeting = "", version = "", clientNonce = ""] = line.split(" ")
@@ -205,11 +209,19 @@ export function requireProof(server: Server, secret: () => string | undefined): 
         socket.destroy()
         return
       }
+      if (paused) socket.pause()
       socket.write("ok\n")
       // Handed over in this same turn, so nothing the client sends next arrives with no listener to hear it.
-      for (const listener of listeners) listener.call(server, socket)
+      proven(socket)
     })
-  })
+  }
+  // SAFETY: `emit` keeps Node's own signature; only a `connection` and its socket are read before passing on.
+  server.emit = ((event: string | symbol, ...args: unknown[]) => {
+    if (event !== "connection") return emit(event, ...args)
+    const [socket] = args
+    if (socket instanceof Socket) accept(socket)
+    return true
+  }) as typeof server.emit
 }
 
 

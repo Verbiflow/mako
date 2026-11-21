@@ -28,6 +28,9 @@
     },
     {
       "path": "../lazy"
+    },
+    {
+      "path": "../sessions"
     }
   ]
 }

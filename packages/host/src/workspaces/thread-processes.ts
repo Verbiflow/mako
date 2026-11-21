@@ -1,5 +1,5 @@
 import type { WatchBackend, WatchListener } from "./watch-backend.js"
-import { hostSpawn, hostProbe } from "../base/host-command.js"
+import { hostCommand, hostSpawn, hostProbe } from "../base/host-command.js"
 import { hostStopping } from "../base/host-stopping.js"
 import { setTimeout as wait } from "node:timers/promises"
 import { spawn } from "node:child_process"
@@ -8,17 +8,17 @@ import { mkdir, open, readdir, readFile, realpath, rename, rm, stat, truncate, w
 import { createHash, randomUUID } from "node:crypto"
 import { join } from "node:path"
 import { z } from "zod"
-import { inside, workingDirectories } from "./app-probe.js"
+import { inside, windowsListening, workingDirectories } from "./app-probe.js"
 import { STEPS_FOLDER_VARIABLE, stepsOf, type StepRecord } from "./check-steps.js"
 import { belowAgents } from "../base/background-priority.js"
 import { signalProcessTree } from "../base/process-tree.js"
-import { windowsComSpec } from "../base/system-tools.js"
+import { windowsComSpec, windowsPowerShell } from "../base/system-tools.js"
 import { FIT_RUNS } from "../contracts/thread-app.js"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
 import { ContainerEngine, containersBy, type Container, type ContainerLook } from "./container-runtime.js"
 import { onLinux, onMac, onWindows } from "../base/platform.js"
 import { childInput } from "@mako/sessions/child-input"
-import { parseTable, PS_ARGS, TableIndex, type Row, type RunLeader } from "./process-table.js"
+import { parseTable, parseWindowsTable, PS_ARGS, TableIndex, WINDOWS_TABLE_SCRIPT, type Row, type RunLeader } from "./process-table.js"
 import { mapLimit } from "@mako/protocol/map-limit"
 
 
@@ -957,6 +957,7 @@ export class ThreadProcesses {
 
   /** A process started or was signalled: the next look reads the table again. */
   private tableChanged(): void {
+    windowsTables.delete(hostStopping() ?? NO_HOST)
     this.sharedTable = undefined
     this.sharedMembers = undefined
     this.sharedOverview = undefined
@@ -1305,7 +1306,7 @@ export class ThreadProcesses {
       child.unref()
       const release = childInput(child)!
       try {
-        const row = (await processTable()).find((candidate) => candidate.pid === pid)
+        const row = (await processTable(true)).find((candidate) => candidate.pid === pid)
         if (!row) throw new Error(`${spec.name} ended before it started, stopped by something outside Mako; see ${log}`)
         const run: Run = { kind: spec.kind, name: spec.name, command: spec.command, cwd: spec.cwd, pid, startedMs: row.startedMs, at: this.now() }
         if (spec.port !== undefined) run.port = spec.port
@@ -1531,7 +1532,28 @@ const ifMissing = <T>(value: T) => (error: NodeJS.ErrnoException): T => {
   throw error
 }
 
-async function processTable(): Promise<Row[]> {
+/**
+ * Windows' table costs a PowerShell start (a second or so), and a look asks for it several times over: one read serves
+ * every ask within `WINDOWS_TABLE_MS` of it, per host. A start or a signal asks afresh (`fresh`).
+ */
+const WINDOWS_TABLE_MS = 1_500
+const windowsTables = new WeakMap<object, { at: number; rows: Promise<Row[]> }>()
+const NO_HOST = Object.freeze({})
+
+async function windowsProcessTable(fresh: boolean): Promise<Row[]> {
+  const scope = hostStopping() ?? NO_HOST
+  const kept = windowsTables.get(scope)
+  if (!fresh && kept && performance.now() - kept.at < WINDOWS_TABLE_MS) return kept.rows
+  const rows = hostCommand(windowsPowerShell(), ["-NoProfile", "-NonInteractive", "-Command", WINDOWS_TABLE_SCRIPT], { maxBuffer: PROCESS_TABLE_BYTES, timeout: 30_000, windowsHide: true })
+    .then(({ stdout }) => parseWindowsTable(stdout))
+  const entry = { at: performance.now(), rows }
+  windowsTables.set(scope, entry)
+  rows.catch(() => { if (windowsTables.get(scope) === entry) windowsTables.delete(scope) })
+  return rows
+}
+
+async function processTable(fresh = false): Promise<Row[]> {
+  if (onWindows()) return windowsProcessTable(fresh)
   const { stdout } = await hostProbe("ps", [...PS_ARGS], {
     env: { ...process.env, LC_ALL: "C" },
     maxBuffer: PROCESS_TABLE_BYTES,
@@ -1569,7 +1591,8 @@ async function stopTree(record: Run, graceMs: number, owned: Set<string>, more?:
     }
   }
   const look = async () => {
-    const rows = await processTable()
+    // Read afresh each time: Windows' table is otherwise kept a moment, and this asks what's left after a signal.
+    const rows = await processTable(true)
     const known = owned.size
     for (const row of [...members(rows, record), ...await more?.(rows) ?? []]) owned.add(rowIdentity(row))
     if (owned.size > known) await kept?.()
@@ -1592,8 +1615,7 @@ async function stopTree(record: Run, graceMs: number, owned: Set<string>, more?:
 }
 
 async function listeningPids(port: number): Promise<number[]> {
-  // Windows has no lsof: no listener is known, as when it matches nothing.
-  if (onWindows()) return []
+  if (onWindows()) return (await windowsListening()).filter((entry) => entry.port === port).map((entry) => entry.pid)
   let stdout: string
   try {
     ({ stdout } = await hostProbe("lsof", ["-nP", `-iTCP:${port}`, "-sTCP:LISTEN", "-Fp"], {
@@ -1617,6 +1639,9 @@ async function runMarks(rows: Row[], mark = RUN_MARK): Promise<Map<number, strin
   const found = new Map<number, string>()
   if (!rows.length) return found
   const markIn = (variables: string) => new RegExp(`(?:^|\\s)${mark}=(\\S+)`).exec(variables)?.[1] ?? ""
+  // Windows shows no process's environment without reading its memory: no mark is known. A run's processes are found
+  // by their parents there, which a parent's end doesn't change.
+  if (onWindows()) return found
   if (onLinux()) {
     await Promise.all(rows.map(async (row) => {
       const text = await readFile(`/proc/${row.pid}/environ`, "utf8").catch(() => undefined)

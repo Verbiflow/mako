@@ -14,6 +14,7 @@ import { ControlFault } from "@mako/control/control"
 import type { ControlSteps } from "@mako/control/program"
 import { listenPrivateControlSocket, type ControlCleanupPolicy } from "./private-socket.js"
 import { createLaunchFolder } from "./launch-folders.js"
+import { onWindows } from "./platform.js"
 import { ControlWorkers, type ControlWorker, type ControlWorkerOptions } from "./control-workers.js"
 import type { DesktopSessionConfig } from "./desktop-session-config.js"
 
@@ -47,7 +48,8 @@ export async function startDesktopControlSession(
   workers.sweepAbandonedLaunches()
   const directory = await createLaunchFolder(workers.cleanup)
   const files = join(directory, "session")
-  const command = join(directory, "mako-control")
+  // Windows runs no `#!/bin/sh`: the command is a batch file, found as `mako-control` by PATHEXT.
+  const command = join(directory, onWindows() ? "mako-control.cmd" : "mako-control")
   const sessionFile = join(files, "session.json")
   let state: "waiting" | "starting" | "running" | "ended" = "waiting"
   let worker: ControlWorker | undefined
@@ -80,7 +82,8 @@ export async function startDesktopControlSession(
       if (over()) return
       state = "running"
       for (const connection of waiting.splice(0)) taken.hand(connection, closed)
-      await listener!.release()
+      // Windows: this process goes on accepting, and relays each connection to the worker.
+      if (!onWindows()) await listener!.release()
       void taken.exited.then((reason) => { if (!over()) void release(reason) })
     } catch (error) {
       const fault = error instanceof ControlFault ? { code: error.code, message: error.message } : {
@@ -110,6 +113,7 @@ export async function startDesktopControlSession(
       session: randomUUID(),
       socket: listener.path,
       pid: process.pid,
+      ...(listener.proof && { proof: listener.proof }),
     }
     const session = descriptor
     listener.server.on("connection", (connection: Socket) => {
@@ -121,7 +125,15 @@ export async function startDesktopControlSession(
     await writeFile(sessionFile, JSON.stringify(descriptor) + "\n", { mode: 0o600, flag: "wx" })
     const executable = options.executable ?? process.execPath
     const cli = fileURLToPath(new URL("./control-cli.js", import.meta.url))
-    await writeFile(
+    if (onWindows()) {
+      // `%` doubled, as a batch file reads it; nothing else in a path is special inside the quotes.
+      const batch = (text: string) => text.replaceAll("%", "%%")
+      await writeFile(
+        command,
+        `@echo off\r\nset "ELECTRON_RUN_AS_NODE=1"\r\nset "MAKO_CONTROL_SESSION_FILE=${batch(sessionFile)}"\r\n"${batch(executable)}" "${batch(cli)}" %*\r\n`,
+        { flag: "wx" }
+      )
+    } else await writeFile(
       command,
       `#!/bin/sh\nexport ELECTRON_RUN_AS_NODE=1\nexport MAKO_CONTROL_SESSION_FILE=${quote(sessionFile)}\nexec ${quote(executable)} ${quote(cli)} "$@"\n`,
       { mode: 0o700, flag: "wx" }

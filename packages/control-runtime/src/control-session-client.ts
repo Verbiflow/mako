@@ -1,8 +1,11 @@
 import { constants } from "node:fs"
 import { lstat, open } from "node:fs/promises"
-import { request } from "node:http"
+import { request, type ClientRequestArgs } from "node:http"
 import { dirname, isAbsolute } from "node:path"
 import { randomUUID } from "node:crypto"
+import type { Duplex } from "node:stream"
+import { connectProven, isPipePath } from "@mako/sessions/private-pipe"
+import { onWindows } from "./platform.js"
 import { z } from "zod"
 import { ControlFault } from "@mako/control/control"
 import { ControlStepsSchema, type ControlSteps } from "@mako/control/program"
@@ -15,6 +18,9 @@ import {
 } from "./control-session-protocol.js"
 
 async function assertPrivate(path: string, kind: "directory" | "socket") {
+  // Windows keeps no modes or owner ids: the session file sits in the user's own folder, and its pipe's server proves
+  // it knows the secret kept there before anything is sent (`requestControlSession`).
+  if (onWindows()) return
   const info = await lstat(path)
   if (
     (info.mode & 0o077) !== 0 ||
@@ -48,8 +54,7 @@ async function readDescriptor(file: string): Promise<SessionDescriptor> {
     if (
       !info.isFile() ||
       info.size > 8192 ||
-      (info.mode & 0o077) !== 0 ||
-      info.uid !== process.getuid?.()
+      (!onWindows() && ((info.mode & 0o077) !== 0 || info.uid !== process.getuid?.()))
     )
       throw new ControlFault(
         "invalid-session",
@@ -59,6 +64,8 @@ async function readDescriptor(file: string): Promise<SessionDescriptor> {
     const descriptor = SessionDescriptorSchema.parse(
       JSON.parse(await handle.readFile("utf8"))
     )
+    if (onWindows() && (!descriptor.proof || !isPipePath(descriptor.socket)))
+      throw new ControlFault("invalid-session", "A session on Windows is a named pipe with its proof.", "not-dispatched")
     if (!isAbsolute(descriptor.socket))
       throw new ControlFault(
         "invalid-session",
@@ -123,16 +130,23 @@ export async function requestControlSession(
       "not-dispatched"
     )
   const requestId = randomUUID()
+  const proof = descriptor.proof
   let submitted = false
   try {
     return await new Promise<ReturnType<typeof SessionReplySchema.parse>>(
       (resolve, reject) => {
         const call = request(
           {
-            socketPath: descriptor.socket,
+            // Windows: a connection whose server has proved it knows the session's secret, and this client too.
+            ...(proof
+              ? { createConnection: (_options: ClientRequestArgs, made: (error: Error | null, socket: Duplex) => void) => {
+                  // SAFETY: a failure is reported without a socket, as Node's own connection does; the type asks for one.
+                  connectProven(descriptor.socket, proof).then((socket) => made(null, socket), (error: Error) => made(error, undefined as never))
+                  return undefined
+                } }
+              : { socketPath: descriptor.socket, agent: false as const }),
             path: "/request",
             method: "POST",
-            agent: false,
             headers: { "content-type": "application/json" },
             signal,
           },
@@ -173,6 +187,7 @@ export async function requestControlSession(
             ...descriptor,
             pid: undefined,
             socket: undefined,
+            proof: undefined,
             requestId,
             operation,
             ...steps && { steps: true },

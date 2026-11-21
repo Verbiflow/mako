@@ -16,7 +16,8 @@ export type HostStopReason =
   /** The host couldn't start; the process ends with code 1 once cleanup is done. */
   | { kind: "failed"; error: string }
 
-export type StopSignal = "SIGTERM" | "SIGINT" | "SIGHUP"
+/** `SIGBREAK` is Windows' Ctrl-Break; its console closing, logging off or shutting down arrives as `SIGHUP`. */
+export type StopSignal = "SIGTERM" | "SIGINT" | "SIGHUP" | "SIGBREAK"
 
 export type HostLifecycleState =
   | { kind: "running" }
@@ -84,7 +85,9 @@ function reasonFields(reason: HostStopReason): StopFields {
  */
 export function stopOnSignals(lifecycle: HostLifecycle): void {
   let signalled = false
-  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+  // Windows delivers no SIGTERM (ending a process there ends it outright; `mako-host stop` asks instead), but its
+  // console's Ctrl-C, Ctrl-Break and closing do arrive, the last with a few seconds before Windows ends the process.
+  for (const signal of ["SIGTERM", "SIGINT", "SIGHUP", "SIGBREAK"] as const) {
     const stop = () => {
       if (signalled) {
         process.removeListener(signal, stop)

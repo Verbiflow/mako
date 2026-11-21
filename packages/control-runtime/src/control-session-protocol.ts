@@ -15,6 +15,11 @@ export const SessionDescriptorSchema = z
     session: z.string().uuid(),
     socket: z.string().min(1),
     pid: z.number().int().positive(),
+    /**
+     * On Windows, where the socket is a named pipe: the secret both ends of every connection prove they know before a
+     * request crosses it (`@mako/sessions/private-pipe`). It lives only in the session file, which only its user reads.
+     */
+    proof: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   })
   .strict()
 export type SessionDescriptor = z.infer<typeof SessionDescriptorSchema>

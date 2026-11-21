@@ -14,6 +14,7 @@ import { enableMainCompileCache } from "./base/compile-cache.js"
 const USAGE = `Usage:
   mako-host            run the host; MAKO_DATA_ROOT for data outside the default, MAKO_WEB_SOCKET for its socket elsewhere
   mako-host inspect    what a running host has loaded and runs (mako-host inspect --help)
+  mako-host stop       ask a running host to quit through its own stop (mako-host stop --help)
   mako-host join       add this machine to your Mako account with a code (mako-host join --help)
   mako-host status     this machine's device, account and links
   mako-host leave      sign this machine out and remove it from the account`
@@ -22,6 +23,9 @@ const [command, ...args] = process.argv.slice(2)
 if (command === "inspect") {
   const { inspectHost } = await import("./inspect.js")
   process.exitCode = await inspectHost(args)
+} else if (command === "stop") {
+  const { stopHost } = await import("./stop.js")
+  process.exitCode = await stopHost(args)
 } else if (command === "join" || command === "status" || command === "leave") {
   const { loadDeviceCommands } = await import("./usage/index.js")
   process.exitCode = await (await loadDeviceCommands()).deviceCommand(command, args)
