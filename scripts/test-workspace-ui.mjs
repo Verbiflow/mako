@@ -108,17 +108,17 @@ async function checkWindow() {
         const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2)
         return { x, y, top: document.elementFromPoint(x, y) }
       }
-      // Pressed once it has stood still for a frame with nothing over it: a menu still opening moves its items, and one
-      // still closing keeps the page's presses to itself.
+      // Pressed once it has stood still for two frames with nothing over it: a menu still opening moves its items, and
+      // one still closing keeps the page's presses to itself. Two, since what is laid out at a placeholder's size
+      // (content-visibility) stands there through its first frame and takes its own size in the second: the queue's
+      // rows did, and "Jump to latest" above them was measured 31 px from where the press then found it.
       const deadline = performance.now() + ${PRESSABLE_MS}
       let at = read()
-      for (;;) {
+      for (let still = 0; still < 2 && performance.now() <= deadline; ) {
         await new Promise((resolve) => requestAnimationFrame(resolve))
         const next = read()
-        const still = next.x === at.x && next.y === at.y
+        still = next.x === at.x && next.y === at.y && next.top && node.contains(next.top) ? still + 1 : 0
         at = next
-        if (still && at.top && node.contains(at.top)) break
-        if (performance.now() > deadline) break
       }
       const { x, y, top } = at
       const drawn = Boolean(top) && node.contains(top)
