@@ -57,9 +57,6 @@ build/mako-notification-status
 build/mako-sleep-watch
 build/mako-video
 build/mako-video.exe
-build/cua-driver.exe
-build/LICENSE-Cua.md
-build/THIRD-PARTY-NOTICES-cua-driver.txt
 release/
 .env*
 

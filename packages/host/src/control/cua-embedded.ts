@@ -1,7 +1,6 @@
 import { hostSpawn } from "../base/host-command.js"
 import { endChildInput } from "@mako/sessions/child-input"
 import type { ChildProcess } from "node:child_process"
-import { existsSync } from "node:fs"
 import { randomBytes } from "node:crypto"
 import { access, chmod, mkdir, readdir, unlink } from "node:fs/promises"
 import { createConnection } from "node:net"
@@ -10,7 +9,7 @@ import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { hostLog } from "../base/host-log.js"
 import { trackProviderChild, untrackProviderPid } from "../base/provider-children.js"
 import { createPrivateControlSocket, linuxDesktop, videoHelperExecutable } from "@mako/control-runtime/desktop"
-import { findExecutable, resolveExecutable, trustedProgram } from "../base/executable.js"
+import { findExecutable } from "../base/executable.js"
 import { onMac, onWindows } from "../base/platform.js"
 
 /**
@@ -104,30 +103,13 @@ const STARTED_SETTLE_MS = 150
 const RESTART_WINDOW_MS = 60_000
 const RESTARTS_PER_WINDOW = 3
 
-/**
- * The driver an installed Mako ships beside `Mako.exe` on Windows, used before any on PATH so the installed app drives
- * with the build it was released with: where it really is, and only if no other account could have put it there
- * (`trustedProgram`). Undefined elsewhere, and in a checkout.
- */
-export function shippedDriver(env: NodeJS.ProcessEnv = process.env): string | undefined {
-  const host = env.MAKO_HOST_EXECUTABLE ?? process.env.MAKO_HOST_EXECUTABLE
-  if (!onWindows() || !host) return undefined
-  const beside = join(dirname(host), "cua-driver.exe")
-  return existsSync(beside) ? trustedProgram(beside, env) : undefined
-}
-
-/** The driver this host would run: the one it ships, else the person's own on PATH. */
-export function driverExecutable(env: NodeJS.ProcessEnv = process.env): string | null {
-  return shippedDriver(env) ?? resolveExecutable("cua-driver", env)
-}
-
 async function executable(
   command: string,
   env: NodeJS.ProcessEnv
 ): Promise<string | null> {
   // On Windows the host's own resolver finds it: by PATHEXT's extensions, in PATH's whole-path folders and the user's
   // own, and only where no other account could have put it (`executable-trust.ts`). Never a bare name.
-  if (onWindows()) return (isAbsolute(command) ? undefined : shippedDriver(env)) ?? findExecutable(command, env)
+  if (onWindows()) return findExecutable(command, env)
   const candidates = isAbsolute(command)
     ? [command]
     : [

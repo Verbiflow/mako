@@ -27,10 +27,6 @@ on:
       - scripts/bundle-main.mjs
       - native/video-windows/**
       - native/windows-helper/**
-      - vendor/cua-driver/**
-      - scripts/package-control-driver-windows.mjs
-      - scripts/driver-third-party-notices.mjs
-      - packages/host/src/control/cua-embedded.ts
       - scripts/build-windows-helper.mjs
       - package.json
       - package-lock.json
@@ -46,7 +42,7 @@ concurrency:
 jobs:
   windows-x64:
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 60
     environment:
       name: ${{ startsWith(github.ref, 'refs/tags/v') && 'release' || 'test' }}
     defaults:
@@ -73,53 +69,6 @@ jobs:
 
       - name: Deep links
         run: npm run test:desktop-deep-link
-
-      # The control driver, shipped beside Mako.exe: upstream Cua's Rust driver at the pinned commit plus Mako's reviewed
-      # patch (vendor/cua-driver), built and audited by the script the driver's own workflow uses.
-      - name: Reconstruct the reviewed driver source
-        run: |
-          native="$RUNNER_TEMP/cua"
-          git init -q "$native"
-          git -C "$native" remote add origin https://github.com/trycua/cua.git
-          base=$(node -p 'require("./vendor/cua-driver/release.json").base')
-          git -C "$native" fetch -q --depth=1 origin "$base"
-          git -C "$native" checkout -q --detach FETCH_HEAD
-          git -C "$native" apply "$GITHUB_WORKSPACE/vendor/cua-driver/release.patch"
-          git -C "$native" add -N libs/cua-driver/rust libs/cua-driver/wayland-helper
-          echo "MAKO_NATIVE_CHECKOUT=$native" >> "$GITHUB_ENV"
-      # The same key as the driver's workflow (windows-control.yml), so either one's build serves the other. Read on
-      # every run; written only off a version tag, so a release never publishes what its own run cached.
-      - id: cargo-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ${{ runner.temp }}/cua-target
-          key: cua-driver-windows-x64-${{ hashFiles('vendor/cua-driver/release.json', 'vendor/cua-driver/release.patch') }}
-          restore-keys: cua-driver-windows-x64-
-      - name: Build and audit the control driver
-        run: |
-          node scripts/package-control-driver-windows.mjs "$MAKO_NATIVE_CHECKOUT" --target-dir="$RUNNER_TEMP/cua-target"
-          version=$(node -p 'require("./vendor/cua-driver/release.json").version')
-          package="release/control-driver/$version/windows-x64"
-          mkdir -p build
-          cp "$package/cua-driver.exe" build/cua-driver.exe
-          cp "$package/LICENSE-Cua.md" build/LICENSE-Cua.md
-          cat "$package/provenance.json"
-          # Every linked crate's licence and notices, shipped beside the driver with Cua's own.
-          node scripts/driver-third-party-notices.mjs "$MAKO_NATIVE_CHECKOUT" build/THIRD-PARTY-NOTICES-cua-driver.txt
-          wc -c build/THIRD-PARTY-NOTICES-cua-driver.txt
-      - if: steps.cargo-cache.outputs.cache-hit != 'true' && !startsWith(github.ref, 'refs/tags/v') && github.event_name != 'pull_request'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry/index
-            ~/.cargo/registry/cache
-            ~/.cargo/git/db
-            ${{ runner.temp }}/cua-target
-          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
 
       # Authenticode on a version tag, from the `release` environment's credentials (see scripts/package-windows.mjs);
       # every other run is unsigned and never sees them. Unsigned installs and runs but turns the updater off, as an

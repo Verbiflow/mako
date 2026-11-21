@@ -134,9 +134,7 @@ try {
     const builder = HELPER_BUILDS[helper.from]
     if (builder) execFileSync(process.execPath, [join(project, builder), "--require"], { cwd: project, stdio: "inherit" })
   }
-  // The control driver is built from its pinned source, which this script doesn't fetch: scripts/package-control-driver-windows.mjs
-  // builds it (the release workflow reconstructs the source and copies the result into build/).
-  for (const helper of helpers) assert.ok(existsSync(join(project, helper.from)), `build.win.extraFiles names ${helper.from}, which isn't built${/cua-driver|LICENSE-Cua/.test(helper.from) ? ": build the driver with scripts/package-control-driver-windows.mjs, copy cua-driver.exe and LICENSE-Cua.md into build/, and write its notices with scripts/driver-third-party-notices.mjs" : ""}`)
+  for (const helper of helpers) assert.ok(existsSync(join(project, helper.from)), `build.win.extraFiles names ${helper.from}, which isn't built`)
   const before = await manifest(project)
   for (const path of inputs) {
     await mkdir(dirname(join(stage, path)), { recursive: true })

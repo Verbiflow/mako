@@ -114,16 +114,10 @@ try {
   // The host's native security helper (#1117), which it runs from beside Mako.exe.
   check("mako-windows.exe beside Mako.exe", existsSync(join(installDirectory, "mako-windows.exe")), installDirectory, true)
   check("mako-video.exe beside Mako.exe", existsSync(join(installDirectory, "mako-video.exe")), installDirectory)
-  check("cua-driver.exe beside Mako.exe", ["cua-driver.exe", "LICENSE-Cua.md", "THIRD-PARTY-NOTICES-cua-driver.txt"].every((name) => existsSync(join(installDirectory, name))), installDirectory)
   const health = await hostHealth(began)
   report.hostHealthMs = health.ms
   check("host answers health", health.ok, health.detail, true)
   if (requireHost) assert.ok(health.ok, `The host never answered: ${health.detail}`)
-
-  // Computer control on the installed app: the host lists the windows on screen and takes an Appshot of Mako's own,
-  // through the driver it ships beside Mako.exe and no other.
-  report.appshot = await hostAppshot()
-  check("host takes an Appshot", report.appshot.ok, report.appshot, true)
 
   await delay(2_000)
   await powershell(`
@@ -204,7 +198,6 @@ try {
   report.uninstallMs = Math.round(performance.now() - began)
   check("app removed", !existsSync(executable))
   check("no Mako.exe left running", (await makoProcesses()).length === 0)
-  check("no driver left running", !(await powershell("@(Get-Process -Name cua-driver -ErrorAction SilentlyContinue).Count")).trim().replace(/^0$/, ""))
   check("login item removed", !(await registryValue(RUN_KEY, "Mako")))
   check("mako: scheme removed", !(await registryKey(SCHEME_KEY)))
   const remaining = []
@@ -429,40 +422,6 @@ async function hostHealth(began) {
     }
   }
   return { ok: false, detail: last }
-}
-
-/** The host's own Appshot calls, as a window makes them, and where the driver that served them runs from. */
-async function hostAppshot() {
-  const connection = new URL("../packages/host/dist/transport/connection.js", import.meta.url)
-  const service = new URL("../packages/host/dist/transport/service.js", import.meta.url)
-  try {
-    const { invokeRuntime } = await import(connection.href)
-    const { runtimeDataRoot, runtimeLocation } = await import(service.href)
-    const socket = runtimeLocation(runtimeDataRoot(appData, {})).socket
-    const client = randomUUID()
-    let windows = []
-    // The driver starts on the first ask; the window may take a moment to be listed.
-    for (let tries = 0; tries < 30 && !windows.some((entry) => /Mako/i.test(`${entry.app ?? ""} ${entry.title ?? ""}`)); tries++) {
-      windows = await invokeRuntime(socket, client, "mako:appshot-windows", [])
-      if (!windows.length) await delay(1_000)
-    }
-    const target = windows.find((entry) => /Mako/i.test(`${entry.app ?? ""} ${entry.title ?? ""}`)) ?? windows[0]
-    if (!target) return { ok: false, detail: "the host listed no window" }
-    const shot = await invokeRuntime(socket, client, "mako:appshot-capture", [{ pid: target.pid, windowId: target.windowId }])
-    const bytes = JSON.stringify(shot ?? null).length
-    const drivers = (await powershell("@(Get-Process -Name cua-driver -ErrorAction SilentlyContinue | ForEach-Object { $_.Path }) -join '|'")).split("|").filter(Boolean)
-    const shipped = join(installDirectory, "cua-driver.exe").toLowerCase()
-    return {
-      ok: bytes > 10_000 && drivers.length > 0 && drivers.every((path) => path.toLowerCase() === shipped),
-      windows: windows.length,
-      target: { app: target.app, title: target.title },
-      shotKeys: Object.keys(shot ?? {}),
-      shotBytes: bytes,
-      drivers,
-    }
-  } catch (error) {
-    return { ok: false, detail: error instanceof Error ? error.message : String(error) }
-  }
 }
 
 /** `Mako.exe --keep-awake`, as the host runs it: says where the power comes from, holds, shows in powercfg, lets go, leaves. */
