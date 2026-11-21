@@ -27,6 +27,8 @@ export const STEPS = [
   [1, "npx tsx scripts/test-host-liveness.ts"],
   // A host without the desktop app holds none of browser and computer use until its first use (create-host's control domain).
   [20, "node scripts/test-control-on-demand.mjs"],
+  // A host with no window and no project keeps neither the watcher's child nor the Git helper.
+  [45, "node scripts/test-idle-helpers.mjs"],
   // An agent's `computer` server answers its handshake and tools/list from a manifest, byte for byte as Local Control's server does.
   [2, "npm run -s test:computer-manifest"],
   // A window opening and `/` typed in its composer ask the host nothing that is a use of browser and computer use.

@@ -228,6 +228,29 @@ try {
 } finally {
   // Held open as a host is, so a stop that never ends fails here rather than letting the process exit under it.
   const held = setInterval(() => {}, 1_000)
+  // A helper with nothing to run goes after its wait, with no warning and no pause before the next: the `git` that
+  // finds it gone is run by the host itself while another helper starts, which takes the ones after and goes in turn.
+  {
+    const own = new GitHelper(direct, undefined, 200)
+    helpers.push(own)
+    const git = new Git({ processes: own.runner() })
+    const gone = async (what: string) => {
+      for (let tries = 0; own.pid() !== undefined; tries++) {
+        if (tries > 400) throw new Error(`Timed out waiting for ${what}`)
+        await new Promise((resolve) => setTimeout(resolve, 25))
+      }
+    }
+    const head = await git.text({ cwd: repo, args: ["rev-parse", "HEAD"] })
+    const first = own.pid()
+    assert.ok(first, "the helper ran the first git")
+    await gone("the idle helper to go")
+    assert.equal(await git.text({ cwd: repo, args: ["rev-parse", "HEAD"] }), head, "a git after the helper went answers as before")
+    const second = own.pid()
+    assert.ok(second && second !== first, "and starts the next helper")
+    assert.equal(await git.text({ cwd: repo, args: ["rev-parse", "HEAD"] }), head)
+    assert.equal(own.pid(), second, "which runs the git after it")
+    await gone("that one to go in turn")
+  }
   const stopping = Date.now()
   for (const each of helpers) await each.stop()
   clearInterval(held)
