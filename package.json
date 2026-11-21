@@ -721,6 +721,18 @@
         {
           "from": "build/mako-windows.exe",
           "to": "mako-windows.exe"
+        },
+        {
+          "from": "build/cua-driver.exe",
+          "to": "cua-driver.exe"
+        },
+        {
+          "from": "build/LICENSE-Cua.md",
+          "to": "LICENSE-Cua.md"
+        },
+        {
+          "from": "build/THIRD-PARTY-NOTICES-cua-driver.txt",
+          "to": "THIRD-PARTY-NOTICES-cua-driver.txt"
         }
       ]
     },

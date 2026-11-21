@@ -37,7 +37,7 @@ import { ControlSessions } from "./sessions.js"
 import { startControlService } from "./service.js"
 import { findExecutable, resolveExecutable } from "../base/executable.js"
 import { trackProviderPid, untrackProviderPid } from "../base/provider-children.js"
-import { CuaEmbedded } from "./cua-embedded.js"
+import { CuaEmbedded, driverExecutable } from "./cua-embedded.js"
 import { CuaDriverVersions } from "./cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "../application/index.js"
 import { computerPermissions } from "./computer-permissions.js"
@@ -163,7 +163,7 @@ export function openControl(
   const installedBrowsers = new InstalledBrowsers()
   const ensureLocalControl = () => cua.ensure(join(environment.dataRoot, "computer-use", "cua"), MAKO_BUNDLE_ID)
   const driver = new DriverBroker({
-    socket: async () => (resolveExecutable("cua-driver") ? ensureLocalControl() : null),
+    socket: async () => (driverExecutable() ? ensureLocalControl() : null),
     // The daemon this host started: its process's end, which ends its calls in flight.
     daemon: () => cua.address(),
     // A bare name `launch_app` is given on Windows: an installed app's, or a program the host's trusted lookup finds.
@@ -322,7 +322,7 @@ export function openControl(
   const sessions = new ControlSessions(
     // A task's computer use goes through the embedded driver where Mako runs one: a Mac's, a Windows desktop's or a
     // Linux desktop's.
-    async (bindingId) => (resolveExecutable("cua-driver") && (onMac() || onWindows() || linuxDesktop()) ? driver.grant(`agent ${bindingId}`) : undefined),
+    async (bindingId) => (driverExecutable() && (onMac() || onWindows() || linuxDesktop()) ? driver.grant(`agent ${bindingId}`) : undefined),
     undefined,
     undefined,
     (bindingId) => driver.revoke(`agent ${bindingId}`)
@@ -371,18 +371,18 @@ export function openControl(
     /** An agent is using the desk browser, which holds a profile host up (`DeskBrowser.busy`). */
     deskBrowsing: () => deskBrowser.busy(),
     ensureLocalControl,
-    driverStatus: () => driverVersions.status(resolveExecutable("cua-driver")),
+    driverStatus: () => driverVersions.status(driverExecutable()),
     driverConnections: async () => ({ ...driver.status(), host: process.pid, workers: await sessions.processes() }),
     // The driver's updater replaces the app bundle and stops running daemons,
     // so the embedded driver is restarted from the new binary afterwards. Tasks
     // mid-session receive a fresh driver session on their next call.
     async updateDriver() {
-      const found = resolveExecutable("cua-driver")
+      const found = driverExecutable()
       if (!found) throw new Error("CUA Driver is not installed")
       await driverVersions.update(found)
       cua.stop()
       await ensureLocalControl().catch(() => null)
-      return driverVersions.status(resolveExecutable("cua-driver"))
+      return driverVersions.status(driverExecutable())
     },
     computerPermissions: readComputerPermissions,
     async startService(authorize) {
