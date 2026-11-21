@@ -770,16 +770,16 @@ const ReportSchema = z.object({
 /** A reading child holding more than this after a source is let go, and the next source starts a fresh one. */
 const CHILD_RSS_LIMIT = 128 * 1024 * 1024
 
-export const NamesJobSchema = z.object({
+export const NamesJobSchema = z.lazy(() => z.object({
   source: z.object({ path: z.string(), kind: z.enum(["archive", "sqlite", "text", "leveldb", "chromium", "firefox", "webkit"]), owner: z.string(), stamp: z.string() }),
   shared: z.string(),
   parts: PartsSchema,
-})
+}))
 export type NamesJob = z.infer<typeof NamesJobSchema>
-export const NamesReplySchema = z.discriminatedUnion("ok", [
+export const NamesReplySchema = z.lazy(() => z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), found: z.array(z.string()), parts: PartsSchema.optional(), peakRss: z.number().optional(), rss: z.number().optional() }),
   z.object({ ok: z.literal(false), error: z.string() }),
-])
+]))
 export type NamesReply = z.infer<typeof NamesReplySchema>
 
 /** What a child read, given what it was asked (`attachment-names-main.ts`). */

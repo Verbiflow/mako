@@ -35,7 +35,7 @@ const BETWEEN_TURNS = /^A Thread goes back between turns: (.*?)\.?$/s
 /** What the Thread's machine is refused for when it can't start: the words the cloud's refusals use (`thread/core.ts`). */
 const UNSTARTED = /couldn't start in the cloud|didn't start in the cloud in time|Mako Cloud is full/
 
-export const CloudArchivePlanSchema = z.object({
+export const CloudArchivePlanSchema = z.lazy(() => z.object({
   op: z.uuid(),
   thread: z.string(),
   /** Its conversations whose harness started on the machine, which it packs; none when nothing ran there. */
@@ -48,7 +48,7 @@ export const CloudArchivePlanSchema = z.object({
   reason: z.string().optional(),
   began: z.number(),
   timings: z.record(z.string(), z.number()).default({}),
-})
+}))
 export type CloudArchivePlan = z.infer<typeof CloudArchivePlanSchema>
 
 /** What archiving a cloud Thread asks its machine to pack: its conversations that started there, at its folder. */

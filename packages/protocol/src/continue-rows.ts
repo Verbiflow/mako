@@ -17,7 +17,7 @@ export const CONTINUE_REASON_MAX = 2_000
  * A continue as each of its Session's rows says it, the account's own word beside its owner's report (link version 16
  * on): `from`, the device whose Session it is; `by`, the device it was pressed on; `cloudThread`, where it goes.
  */
-export const ListedContinueSchema = z
+export const ListedContinueSchema = z.lazy(() => z
   .object({
     op: z.uuid(),
     phase: ContinuePhaseSchema,
@@ -27,14 +27,14 @@ export const ListedContinueSchema = z
     at: z.iso.datetime(),
     reason: z.string().max(CONTINUE_REASON_MAX).optional(),
   })
-  .strip()
+  .strip())
 export type ListedContinue = z.infer<typeof ListedContinueSchema>
 
 /** The repository a continued Thread's machine clones: the device's origin on GitHub, at the branch it last pushed. */
-export const ContinueRepositorySchema = z
+export const ContinueRepositorySchema = z.lazy(() => z
   .object({
     url: z.string().max(200).regex(/^https:\/\/github\.com\/[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
     branch: z.string().min(1).max(250).optional(),
   })
-  .strict()
+  .strict())
 export type ContinueRepository = z.infer<typeof ContinueRepositorySchema>

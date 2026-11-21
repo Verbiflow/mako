@@ -1,8 +1,8 @@
 import { z } from "zod"
-export const ControlFaultSchema = z.object({
+export const ControlFaultSchema = z.lazy(() => z.object({
   code: z.string().min(1),
   outcome: z.enum(["not-dispatched", "rejected", "unknown"]),
-})
+}))
 export type ControlFaultData = z.infer<typeof ControlFaultSchema>
 export class ControlFault extends Error {
   constructor(

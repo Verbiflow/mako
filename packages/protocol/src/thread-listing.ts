@@ -35,13 +35,13 @@ const HarnessSchema = z.string().regex(/^[a-z][a-z0-9-]{0,31}$/)
  * when that step began, on the owner's clock. Said from the move's first step, while the row's `state` is still what it
  * was, until its new owner lists it, so every device sees a move from where it starts, not only once it's in transit.
  */
-export const ListedMoveSchema = z
+export const ListedMoveSchema = z.lazy(() => z
   .object({
     to: z.enum(["cloud", "device"]),
     step: z.string().regex(/^[a-z][a-z-]{0,31}$/),
     since: z.iso.datetime(),
   })
-  .strict()
+  .strict())
 export type ListedMove = z.infer<typeof ListedMoveSchema>
 
 const BranchSchema = z.string().min(1).max(256)
@@ -50,11 +50,11 @@ const BranchSchema = z.string().min(1).max(256)
  * What a checkout has checked out, as a rail shows it beside its project: a branch, the branch a rebase is replaying
  * onto, or a commit while detached (link version 12 on).
  */
-export const ListedHeadSchema = z.discriminatedUnion("kind", [
+export const ListedHeadSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("branch"), name: BranchSchema }).strict(),
   z.object({ kind: z.literal("rebasing"), name: BranchSchema }).strict(),
   z.object({ kind: z.literal("detached"), commit: z.string().regex(/^[0-9a-f]{7,64}$/) }).strict(),
-])
+]))
 export type ListedHead = z.infer<typeof ListedHeadSchema>
 
 /**
@@ -62,12 +62,12 @@ export type ListedHead = z.infer<typeof ListedHeadSchema>
  * the Session's own folder or, for one working in a Thread's worktree, the folder that worktree was made from; and what
  * the project's own checkout has checked out, once its owner has read it.
  */
-export const ListedProjectSchema = z
+export const ListedProjectSchema = z.lazy(() => z
   .object({
     folder: z.string().min(1).max(1024),
     head: ListedHeadSchema.optional(),
   })
-  .strict()
+  .strict())
 export type ListedProject = z.infer<typeof ListedProjectSchema>
 
 /** The most options an asking row carries, each a tap on the person's phone; the rest are answered in the Thread. */
@@ -78,7 +78,7 @@ export const LISTED_ASK_OPTIONS = 6
  * of their own, so their asks are the Apex's. `under` is where the Session itself stands, and what its row says once
  * the ask is answered, so an answer is never heard as its turn finishing.
  */
-export const ListedAskingSchema = z
+export const ListedAskingSchema = z.lazy(() => z
   .object({
     /** The Fin, by Thread ID, and by the name its Apex gave it. */
     fin: ThreadIdSchema,
@@ -92,7 +92,7 @@ export const ListedAskingSchema = z
     /** How many more of its Fins ask behind this one. */
     more: z.number().int().positive().max(10_000).optional(),
   })
-  .strict()
+  .strict())
 export type ListedAsking = z.infer<typeof ListedAskingSchema>
 
 /** The most Fins a row says: a tree's started budget. */
@@ -125,7 +125,7 @@ const ListedWaitingOnSchema = z.discriminatedUnion("kind", [
  * the row's `asking` says, or what a blocked or ended one still waits on, which none of them reads. A link of version
  * 19 says less of it (`FIN_STATES_VERSION`).
  */
-export const ListedFinStateSchema = z.discriminatedUnion("kind", [
+export const ListedFinStateSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("queued"),
@@ -171,7 +171,7 @@ export const ListedFinStateSchema = z.discriminatedUnion("kind", [
       decision: z.object({ question: finNote, on: z.enum(["lead", "person"]) }).strict().optional(),
     })
     .strict(),
-])
+]))
 export type ListedFinState = z.infer<typeof ListedFinStateSchema>
 
 /**
@@ -179,7 +179,7 @@ export type ListedFinState = z.infer<typeof ListedFinStateSchema>
  * its row says them, written by its owner alone and moving with it. Names and states only: a Fin's brief, reports and
  * transcript are read from the owner.
  */
-export const ListedFinSchema = z
+export const ListedFinSchema = z.lazy(() => z
   .object({
     /** Its Thread, or for a start still held the Thread it will have. */
     thread: ThreadIdSchema,
@@ -189,7 +189,7 @@ export const ListedFinSchema = z
     state: ListedFinStateSchema,
     startedAt: z.iso.datetime(),
   })
-  .strict()
+  .strict())
 export type ListedFin = z.infer<typeof ListedFinSchema>
 
 /** The harnesses a Session ran in before its current one, oldest first, as its rail row wears them: at most this many. */
@@ -300,10 +300,10 @@ export const ReportedSessionSchema = z
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
 
 /** Where a Session runs, as the cloud knows it from who reported it: a device's own runtime, or a cloud Thread's machine. */
-export const RunsOnSchema = z.discriminatedUnion("kind", [
+export const RunsOnSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("device"), deviceId: z.uuid() }).strict(),
   z.object({ kind: z.literal("cloud"), threadId: ThreadIdSchema }).strict(),
-])
+]))
 export type RunsOn = z.infer<typeof RunsOnSchema>
 
 /**
@@ -328,12 +328,12 @@ export type ListedSession = z.infer<typeof ListedSessionSchema>
  * at work or waiting on a person, since nothing on a device that can't be reached runs or answers for anyone else. A
  * message to one waits in the account (`waiting.ts`).
  */
-export const QuietDeviceSchema = z.object({
+export const QuietDeviceSchema = z.lazy(() => z.object({
   deviceId: z.uuid(),
   since: z.iso.datetime(),
   /** Its Mako takes a Thread continued in the cloud meanwhile as moved when it's back (link version 16 on): its Sessions may continue. */
   continues: z.literal(true).optional(),
-})
+}))
 export type QuietDevice = z.infer<typeof QuietDeviceSchema>
 
 /** A quiet device as the list says it, `continues` only when it takes a continue back. */
@@ -354,7 +354,7 @@ export const LISTED_PER_OWNER = 2_000
  * `LISTED_PER_FRAME`, the rest in the reports after it; `gone` are Sessions it no longer lists (closed, or older
  * than the list keeps).
  */
-export const SessionsReportSchema = z
+export const SessionsReportSchema = z.lazy(() => z
   .object({
     owned: z.array(z.object({ session: z.uuid(), generation: GenerationSchema }).strict()).max(LISTED_PER_OWNER).optional(),
     listed: z.array(ReportedSessionSchema).max(LISTED_PER_FRAME),
@@ -362,7 +362,7 @@ export const SessionsReportSchema = z
     /** When the owner sent it, on its clock (link version 9 on), for the gateway's log of how long a report took. */
     reportedAt: z.iso.datetime().optional(),
   })
-  .strict()
+  .strict())
 export type SessionsReport = z.infer<typeof SessionsReportSchema>
 
 /**
@@ -371,7 +371,7 @@ export type SessionsReport = z.infer<typeof SessionsReportSchema>
  * by the Thread's own object, the one authority on whether it's archived; no device keeps an archive state of its own
  * for it.
  */
-export const ArchivedThreadSchema = z
+export const ArchivedThreadSchema = z.lazy(() => z
   .object({
     /** The cloud Thread, as `runsOn` names it. */
     thread: ThreadIdSchema,
@@ -383,14 +383,14 @@ export const ArchivedThreadSchema = z
     /** Its Sessions as the list showed them when it was archived. */
     sessions: z.array(ListedSessionSchema).max(LISTED_PER_FRAME),
   })
-  .strip()
+  .strip())
 export type ArchivedThread = z.infer<typeof ArchivedThreadSchema>
 
 /**
  * `GET /v1/sessions`: every listed Session of the account, and the account stream's number as they were read. A client
  * lists, then follows the stream after `seq`, and misses nothing between.
  */
-export const SessionListingsSchema = z.object({
+export const SessionListingsSchema = z.lazy(() => z.object({
   sessions: z.array(ListedSessionSchema),
   seq: z.number().int().nonnegative(),
   /** Messages waiting for Sessions whose owner is off (`waiting.ts`), as they stood at `seq`. */
@@ -399,7 +399,7 @@ export const SessionListingsSchema = z.object({
   quiet: z.array(QuietDeviceSchema).optional(),
   /** The account's archived cloud Threads, newest first, as they stood at `seq`. Absent from a gateway before archiving. */
   archived: z.array(ArchivedThreadSchema).optional(),
-})
+}))
 export type SessionListings = z.infer<typeof SessionListingsSchema>
 
 /** A Fin's state as link version 19 says it (`FIN_STATES_VERSION`): a stopped Fin's work reads as stopped, not unfinished. */

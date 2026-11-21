@@ -7,7 +7,7 @@ import { ASK_OPTIONS, AskOptionSchema } from "./native-agents.js"
  * from, never the digest's words. Which Fin (its Thread, name and harness), what it did, the line the digest gave
  * it, and for an ask its question, options and recommendation; for a finished one what it made.
  */
-export const FinReportCardSchema = z.object({
+export const FinReportCardSchema = z.lazy(() => z.object({
   /** The report's own ID, which a Fin's open ask for the person carries too (`FinAsk.id`). */
   report: z.string().min(1).max(600),
   fin: z.string().min(1).max(200),
@@ -29,7 +29,7 @@ export const FinReportCardSchema = z.object({
   decides: z.enum(["lead", "person"]).optional(),
   /** What it waits on outside its tree, in words (`waitingWords`): "waiting on #412 checks". */
   waiting: z.string().max(1_000).optional(),
-}).strict()
+}).strict())
 export type FinReportCard = z.infer<typeof FinReportCardSchema>
 
 /** The most cards one wake carries; a digest of more notices than this goes as wakes of this many (`nextBatch`). */

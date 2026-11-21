@@ -97,7 +97,7 @@ function trustedAddress(address: string, make: boolean): boolean {
 }
 
 /** Where a follower Thread's session runs, so the owner reads it as that Thread's. */
-export const PlacedSessionSchema = z.object({ path: AbsolutePathSchema, thread: ThreadIdSchema, session: SessionRefSchema }).strict()
+export const PlacedSessionSchema = z.lazy(() => z.object({ path: AbsolutePathSchema, thread: ThreadIdSchema, session: SessionRefSchema }).strict())
 export type PlacedSession = z.infer<typeof PlacedSessionSchema>
 
 export interface SettledOptions {

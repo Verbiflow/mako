@@ -20,11 +20,11 @@ const CommandLine = z.union([
  * server (`/calls/<pre|post>`): Claude Code's hook event, which Devin and
  * Codex share.
  */
-export const HookCall = z.object({
+export const HookCall = z.lazy(() => z.object({
   tool_name: z.string().optional(),
   tool_input: z.object({ command: CommandLine.optional(), workdir: z.string().optional() }).loose().optional(),
   cwd: z.string().optional(),
-}).loose()
+}).loose())
 export type HookCall = z.infer<typeof HookCall>
 
 /**

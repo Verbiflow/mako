@@ -69,7 +69,7 @@ export function acpSavedRefusal(kind: string): UnreadRecord["reason"] | undefine
 export const SavedAcpUpdateSchema = z.looseObject({ sessionUpdate: z.string() })
 /** A saved `session/update` as its store keeps it, before the screen; hooks read its `_meta` too. */
 export type SavedAcpNotification = z.infer<typeof SavedAcpNotificationSchema>
-export const SavedAcpNotificationSchema = z.looseObject({ sessionId: z.string(), update: SavedAcpUpdateSchema })
+export const SavedAcpNotificationSchema = z.lazy(() => z.looseObject({ sessionId: z.string(), update: SavedAcpUpdateSchema }))
 
 /** A saved `session/update` the shared decoder reads, or nothing for a kind it leaves to the reader. */
 export function acpSavedNotification(saved: SavedAcpNotification): SessionNotification | undefined {

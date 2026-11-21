@@ -167,7 +167,7 @@ export const COMPUTER_TOOL_INPUTS = {
     })
     .strict(),
 }
-export const controlHelpInputSchema = z
+export const controlHelpInputSchema = z.lazy(() => z
   .object({
     syntax: z.enum(["script", "repl"]).optional(),
     topic: z
@@ -190,7 +190,7 @@ export const controlHelpInputSchema = z
   .refine((value) => value.method === undefined || value.domain !== undefined, {
     message: "method requires domain",
   })
-  .strict()
+  .strict())
 const computerArgumentsSchema = z.record(z.string(), z.json())
 type ComputerArguments = z.infer<typeof computerArgumentsSchema>
 const programImageSchema = z.object({

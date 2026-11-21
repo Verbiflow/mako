@@ -26,7 +26,7 @@ export interface LagSummary {
   diffMs: number
 }
 
-export const LagSummarySchema = z.object({ flushes: z.number(), p50: z.number(), p95: z.number(), max: z.number(), hashMs: z.number(), diffMs: z.number() })
+export const LagSummarySchema = z.lazy(() => z.object({ flushes: z.number(), p50: z.number(), p95: z.number(), max: z.number(), hashMs: z.number(), diffMs: z.number() }))
 
 export function lagSummary(flushes: readonly { lagMs: number; hashMs: number; diffMs: number; writeMs: number }[]): LagSummary | null {
   if (!flushes.length) return null

@@ -4,7 +4,7 @@ import { z } from "zod"
 export const UNCOMMITTED_LISTED = 200
 
 /** A file with changes Git hasn't committed, as `git status` sees it. */
-export const UncommittedFileSchema = z.object({
+export const UncommittedFileSchema = z.lazy(() => z.object({
   path: z.string(),
   change: z.enum(["edited", "added", "deleted", "renamed", "untracked", "conflicted"]),
   /** A renamed file's earlier path. */
@@ -14,7 +14,7 @@ export const UncommittedFileSchema = z.object({
    * "you" for the person. Absent when the journal names nobody.
    */
   by: z.array(z.string()).optional(),
-})
+}))
 export type UncommittedFile = z.infer<typeof UncommittedFileSchema>
 
 /**
@@ -23,13 +23,13 @@ export type UncommittedFile = z.infer<typeof UncommittedFileSchema>
  * local build takes the checkout as it is, so this is what it carries beyond
  * its revision.
  */
-export const UncommittedChangesSchema = z.object({
+export const UncommittedChangesSchema = z.lazy(() => z.object({
   count: z.number().int().nonnegative(),
   files: z.array(UncommittedFileSchema),
-})
+}))
 export type UncommittedChanges = z.infer<typeof UncommittedChangesSchema>
 
-export const BuildIdentitySchema = z.object({
+export const BuildIdentitySchema = z.lazy(() => z.object({
   id: z.string().regex(/^[a-f0-9]{12,64}$/),
   builtAt: z.iso.datetime(),
   revision: z
@@ -43,9 +43,9 @@ export const BuildIdentitySchema = z.object({
    * packaged by an updater that didn't pass them (`dirty` says only that).
    */
   uncommitted: UncommittedChangesSchema.optional(),
-})
+}))
 export type BuildIdentity = z.infer<typeof BuildIdentitySchema>
-export const LifecycleWorkSchema = z.object({
+export const LifecycleWorkSchema = z.lazy(() => z.object({
   id: z.string(),
   token: z.string(),
   title: z.string(),
@@ -55,11 +55,11 @@ export const LifecycleWorkSchema = z.object({
   stoppable: z.boolean(),
   /** A Fin's Apex: the conversation whose Fins the sheet lists as one row. A Fin's turn an exit cuts short continues on the next start. */
   lead: z.object({ id: z.string(), title: z.string() }).optional(),
-})
+}))
 export type LifecycleWork = z.infer<typeof LifecycleWorkSchema>
 export const LifecycleActionSchema = z.enum(["quit", "install", "restart"])
 export type LifecycleAction = z.infer<typeof LifecycleActionSchema>
-export const LifecycleStateSchema = z.object({
+export const LifecycleStateSchema = z.lazy(() => z.object({
   work: z.array(LifecycleWorkSchema),
   revision: z.string(),
   operation: z.discriminatedUnion("kind", [
@@ -73,9 +73,9 @@ export const LifecycleStateSchema = z.object({
       message: z.string(),
     }),
   ]),
-})
+}))
 export type LifecycleState = z.infer<typeof LifecycleStateSchema>
-export const LifecycleCommandSchema = z.discriminatedUnion("kind", [
+export const LifecycleCommandSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("cancel") }),
   z.object({ kind: z.literal("wait"), action: LifecycleActionSchema }),
   z.object({
@@ -83,7 +83,7 @@ export const LifecycleCommandSchema = z.discriminatedUnion("kind", [
     action: LifecycleActionSchema,
     revision: z.string(),
   }),
-])
+]))
 export type LifecycleCommand = z.infer<typeof LifecycleCommandSchema>
 /**
  * The commits one revision has that another doesn't, along first parents: on

@@ -6,7 +6,7 @@ import { ProjectSlotSchema, ProjectPathSchema, plainProtocolValue } from "./hand
 export const SOURCE_PROJECT_PATH = "/v1/source-project"
 export const SOURCE_PROJECT_INTERNAL_PATH = "/internal/source-project"
 const Revision = z.number().int().positive().safe()
-export const SourceProjectSelectionSchema = z.object({
+export const SourceProjectSelectionSchema = z.lazy(() => z.object({
   move: z.uuid(), destination: ThreadIdSchema, sourceThread: z.uuid(),
   project: ProjectPathSchema,
   locators: z.array(ProjectSlotSchema.omit({ repositoryId: true }).strict()).min(1).max(32),
@@ -18,18 +18,18 @@ export const SourceProjectSelectionSchema = z.object({
     if (!slot.path.startsWith(value.project + "/") || slots.has(slot.slot) || urls.has(slot.url) || paths.some(path => path === slot.path || path.startsWith(slot.path + "/") || slot.path.startsWith(path + "/"))) ctx.addIssue({ code: "custom", message: "invalid selected membership" })
     slots.add(slot.slot); urls.add(slot.url); paths.push(slot.path)
   }
-})
+}))
 export type SourceProjectSelection = z.infer<typeof SourceProjectSelectionSchema>
-export const SourceProjectPublishSchema = z.object({ action: z.literal("publish"), revision: Revision, expiresAt: Revision, selection: SourceProjectSelectionSchema }).strict()
-export const SourceProjectCommandSchema = z.discriminatedUnion("action", [
+export const SourceProjectPublishSchema = z.lazy(() => z.object({ action: z.literal("publish"), revision: Revision, expiresAt: Revision, selection: SourceProjectSelectionSchema }).strict())
+export const SourceProjectCommandSchema = z.lazy(() => z.discriminatedUnion("action", [
   SourceProjectPublishSchema,
   z.object({ action: z.enum(["read", "invalidate"]), move: z.uuid(), revision: Revision, digest: z.string().regex(/^[0-9a-f]{64}$/) }).strict(),
-])
+]))
 export type SourceProjectCommand = z.infer<typeof SourceProjectCommandSchema>
-export const SourceProjectReceiptSchema = z.object({
+export const SourceProjectReceiptSchema = z.lazy(() => z.object({
   move: z.uuid(), revision: Revision, digest: z.string().regex(/^[0-9a-f]{64}$/),
   phase: z.enum(["invalidated", "ready"]), expiresAt: Revision, historical: z.boolean(), secondaryAdmission: z.literal(false),
-}).strict()
+}).strict())
 export type SourceProjectReceipt = z.infer<typeof SourceProjectReceiptSchema>
 export const sourceProjectCommand = z.preprocess(plainProtocolValue, SourceProjectCommandSchema).parse
 

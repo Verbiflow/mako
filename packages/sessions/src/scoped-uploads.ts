@@ -42,7 +42,7 @@ export const SyncFailureKindSchema = z.enum(["refused", "unreachable", "conflict
 export type SyncFailureKind = z.infer<typeof SyncFailureKindSchema>
 
 /** A push that failed, said as the person and an operator need it: the gateway's words and its correlation ID. */
-export const SyncFailureSchema = z.object({
+export const SyncFailureSchema = z.lazy(() => z.object({
   at: z.number(),
   harness: z.string(),
   nativeId: z.string(),
@@ -56,11 +56,11 @@ export const SyncFailureSchema = z.object({
    * each try's words, so a failure tried again is said once.
    */
   since: z.number().optional(),
-})
+}))
 export type SyncFailure = z.infer<typeof SyncFailureSchema>
 
 /** How one store's uploads go: what's in flight, what went, and what failed and wasn't pushed since. */
-export const UploadsStatusSchema = z.object({
+export const UploadsStatusSchema = z.lazy(() => z.object({
   /** In flight now. */
   sending: z.array(z.object({ harness: z.string(), nativeId: z.string() })),
   paused: z.boolean(),
@@ -89,7 +89,7 @@ export const UploadsStatusSchema = z.object({
    * Mac woke; `at`: the latest. Gone at the next answer.
    */
   unreachable: z.object({ since: z.number(), at: z.number() }).optional(),
-})
+}))
 export type UploadsStatus = z.infer<typeof UploadsStatusSchema>
 
 /**
@@ -98,7 +98,7 @@ export type UploadsStatus = z.infer<typeof UploadsStatusSchema>
  * must have taken first: `held`); and how many it has both of (`inCloud`). A Thread is in the cloud once each of its
  * Sessions in the tier is.
  */
-export const TierCountSchema = z.object({
+export const TierCountSchema = z.lazy(() => z.object({
   sessions: z.number().int().nonnegative(),
   threads: z.number().int().nonnegative(),
   readable: z.number().int().nonnegative(),
@@ -106,7 +106,7 @@ export const TierCountSchema = z.object({
   whole: z.number().int().nonnegative(),
   inCloud: z.number().int().nonnegative(),
   threadsInCloud: z.number().int().nonnegative(),
-})
+}))
 export type TierCount = z.infer<typeof TierCountSchema>
 
 /**

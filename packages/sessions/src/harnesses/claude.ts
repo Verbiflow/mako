@@ -270,7 +270,7 @@ export const CLAUDE_VOCABULARY = defineVocabulary({
  * turn's result, as the SDK streams it and the session file saves it.
  * `input_tokens` leaves out what the cache supplied.
  */
-export const ClaudeUsage = z.object({
+export const ClaudeUsage = z.lazy(() => z.object({
   input_tokens: tokenCount,
   output_tokens: tokenCount,
   cache_read_input_tokens: tokenCount,
@@ -278,7 +278,7 @@ export const ClaudeUsage = z.object({
   cache_creation: z.object({ ephemeral_1h_input_tokens: tokenCount }).nullish().catch(undefined),
   /** `standard` or `fast`: the mode the call was made in. */
   speed: z.string().nullish().catch(undefined),
-})
+}))
 export type ClaudeUsage = z.infer<typeof ClaudeUsage>
 
 export function claudeTokens(usage: ClaudeUsage): HarnessTokens {

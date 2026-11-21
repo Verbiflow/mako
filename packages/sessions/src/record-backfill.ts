@@ -70,7 +70,7 @@ const SLOW_SESSION_MS = 1_000
 export const BACKFILL_PROGRESS = "backfill.json"
 
 /** What a pass's rebuild of stale views came to. */
-export const ViewRebuildSchema = z.object({
+export const ViewRebuildSchema = z.lazy(() => z.object({
   /** Views and unread records an earlier build made, newest use first. */
   stale: z.number().int().nonnegative(),
   rebuilt: z.number().int().nonnegative(),
@@ -78,11 +78,11 @@ export const ViewRebuildSchema = z.object({
   gone: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
   ms: z.number().nonnegative(),
-})
+}))
 export type ViewRebuild = z.infer<typeof ViewRebuildSchema>
 
 /** What a pass's look for the writers of sessions nothing named one for came to (`fillWriters`), by where each was found. */
-export const WriterFillSchema = z.object({
+export const WriterFillSchema = z.lazy(() => z.object({
   looked: z.number().int().nonnegative(),
   record: z.number().int().nonnegative(),
   log: z.number().int().nonnegative(),
@@ -91,11 +91,11 @@ export const WriterFillSchema = z.object({
   unknown: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
   ms: z.number().nonnegative(),
-})
+}))
 export type WriterFill = z.infer<typeof WriterFillSchema>
 
 /** What a pass's linking of children's paths for sessions captured before captures named them came to (`SessionCatalog.linkChildren`). */
-export const ChildLinkFillSchema = z.object({
+export const ChildLinkFillSchema = z.lazy(() => z.object({
   looked: z.number().int().nonnegative(),
   /** Sessions with a child, and the children whose paths were kept. */
   parents: z.number().int().nonnegative(),
@@ -104,10 +104,10 @@ export const ChildLinkFillSchema = z.object({
   kept: z.number().int().nonnegative(),
   failed: z.number().int().nonnegative(),
   ms: z.number().nonnegative(),
-})
+}))
 export type ChildLinkFill = z.infer<typeof ChildLinkFillSchema>
 
-export const BackfillProgressSchema = z.object({
+export const BackfillProgressSchema = z.lazy(() => z.object({
   /** Why this pass ran: `start`, `again`, `lock`. */
   reason: z.string(),
   pid: z.number(),
@@ -163,7 +163,7 @@ export const BackfillProgressSchema = z.object({
     /** What held files this pass, each said once: a browser that can't be read, a running host of an older build. */
     holds: z.string().optional(),
   }).optional(),
-})
+}))
 export type BackfillProgress = z.infer<typeof BackfillProgressSchema>
 
 /** What a log line names beside its words: counts, bytes, ms, ids. */

@@ -2,7 +2,7 @@ import { z } from "zod"
 import { ReviewReportSchema } from "./review.js"
 
 /** Portable attachment references. Inline data is retained only within reader budgets. */
-export const AttachmentSourceSchema = z.discriminatedUnion("kind", [
+export const AttachmentSourceSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("file"),
     path: z.string().min(1),
@@ -11,15 +11,15 @@ export const AttachmentSourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("url"), url: z.string().min(1) }),
   z.object({ kind: z.literal("inline"), data: z.string() }),
   z.object({ kind: z.literal("unavailable"), reason: z.string() }),
-])
+]))
 
-export const AttachmentContentSchema = z.object({
+export const AttachmentContentSchema = z.lazy(() => z.object({
   type: z.literal("attachment"),
   id: z.string().optional(),
   name: z.string(),
   mimeType: z.string(),
   source: AttachmentSourceSchema,
-})
+}))
 
 export type AttachmentContent = z.infer<typeof AttachmentContentSchema>
 
@@ -63,7 +63,7 @@ export function attachmentDescription(attachment: AttachmentContent): string {
 }
 
 /** Provider-supplied results that cannot be reconstructed reliably from plain text. */
-export const ToolDetailSchema = z.discriminatedUnion("type", [
+export const ToolDetailSchema = z.lazy(() => z.discriminatedUnion("type", [
   z.object({
     type: z.literal("diff"),
     path: z.string(),
@@ -97,7 +97,7 @@ export const ToolDetailSchema = z.discriminatedUnion("type", [
       digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),
     })).min(1).max(64),
   }),
-])
+]))
 export type ToolDetail = z.infer<typeof ToolDetailSchema>
 
 export function describeToolDetails(details: ToolDetail[]): string {
