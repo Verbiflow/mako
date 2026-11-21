@@ -18,8 +18,15 @@ on:
       - packages/host/src/workspaces/chat-projects.ts
       - packages/host/src/workspaces/index.ts
       - packages/host/src/workspaces/project-folders.ts
+      - packages/host/src/workspaces/process-table.ts
+      - packages/host/src/workspaces/watcher-child-main.ts
+      - packages/host/src/stop.ts
+      - packages/host/src/mako-host.ts
       - packages/host/src/workspaces/thread-processes.ts
       - packages/client/src/**
+      - packages/lazy/src/**
+      - packages/control-runtime/src/**
+      - packages/host/src/control/launch.ts
       - packages/control-runtime/src/executable.ts
       - packages/sessions/src/private-pipe.ts
       - packages/sessions/src/daemon.ts
@@ -81,6 +88,12 @@ jobs:
       - name: An impostor on each pipe hears nothing; no planted program runs
         if: success() || failure()
         run: npx tsx scripts/test-windows-pipes.ts
+      - name: The control relay and process-tree membership
+        if: success() || failure()
+        run: npx tsx scripts/test-control-relay.ts
+      - name: A Thread's app run, started, found, named as its port's owner and stopped with its tree
+        if: success() || failure()
+        run: npx tsx scripts/windows-host/prove-thread-app.ts
       - name: The host, its clients, a conversation and a terminal
         if: success() || failure()
         run: node scripts/windows-host/prove.mjs --evidence "${{ runner.temp }}/evidence"
@@ -119,6 +132,12 @@ jobs:
         if: success() || failure()
         env:
           MAKO_TEST_HOST_EXCEPT: scripts/test-keychain-safe-storage.ts
+      - run: npx tsx scripts/windows-host/prove-thread-app.ts
+        if: success() || failure()
+      - run: npx tsx scripts/test-control-relay.ts
+        if: success() || failure()
+      - run: npm run test:control-cleanup
+        if: success() || failure()
       - run: npx tsx scripts/test-mako-client.ts
         if: success() || failure()
       - run: npx tsx scripts/test-terminal-daemon.ts

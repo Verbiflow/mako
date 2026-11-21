@@ -5,7 +5,7 @@ import { pathExtensions, windowsFolders } from "./base/executable.js"
 import { Foreground } from "./base/foreground.js"
 import { lstat, mkdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
-import { basename, dirname } from "node:path"
+import { basename, dirname, join } from "node:path"
 import type { HostConfig } from "./host-config.js"
 import { HostMethods, publishHostPipe, runtimeInfo, startWebHost } from "./transport/index.js"
 import { ensurePrivateDirectory } from "./base/private-directory.js"
@@ -432,6 +432,8 @@ async function listen(config: HostConfig, methods: HostMethods, handover: Secret
     // Mako's own folder first, which every Windows pipe's publication sits in, then this host's.
     await ensurePrivateDirectory(makoLocalFolder(), "Mako")
     await ensurePrivateDirectory(config.runtimeDirectory, "Mako host")
+    // Where each task's Local Control keeps its session file, with its pipe's secret.
+    await ensurePrivateDirectory(join(makoLocalFolder(), "control"), "Local Control")
   }
   else await mkdir(dirname(socket), { recursive: true, mode: 0o700 })
   const stale = pipe ? null : await lstat(socket).catch((error: NodeJS.ErrnoException) => {

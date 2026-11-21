@@ -1,8 +1,18 @@
 import { constants } from "node:fs"
-import { chmod, lstat, mkdtemp, open, readdir, rename, rm, rmdir } from "node:fs/promises"
+import { chmod, lstat, mkdir, mkdtemp, open, readdir, rename, rm, rmdir } from "node:fs/promises"
 import { createConnection, createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { basename, dirname, isAbsolute, join, relative, sep } from "node:path"
+import { drawKeptPipe, makoLocalFolder, requireProof, restrictPipes } from "@mako/lazy/private-pipe"
+import { onWindows } from "./platform.js"
+
+/**
+ * Windows has no Unix sockets in Node: a control endpoint there is a named pipe drawn for its one listener, with a
+ * secret every client proves it knows, and that proves the listener knows it, before anything crosses
+ * (`@mako/lazy/private-pipe`). The secret travels only in the session file, in a launch folder under the user's own
+ * `%LOCALAPPDATA%\Mako\control`, which no other account can read.
+ */
+export const windowsControlRoot = (): string => join(makoLocalFolder(), "control")
 
 /** Global cleanup crosses tasks. Owned roots never sweep abandoned launches or fall back to global /tmp. */
 export type ControlCleanupPolicy =
@@ -46,6 +56,8 @@ export function socketUnused(path: string): Promise<boolean> {
 
 /** Removes socket folders whose process is gone. Every socket made in `/tmp` sweeps, bounded to 25 ms and 128 checks. */
 async function sweepUnusedSocketDirectories(): Promise<void> {
+  // Windows makes no socket folders: its endpoints are pipes.
+  if (onWindows()) return
   const names = await readdir("/tmp")
   const deadline = Date.now() + 25
   let checked = 0
@@ -87,6 +99,14 @@ async function sweepUnusedSocketDirectories(): Promise<void> {
 export async function createControlDirectory(prefix: string, cleanup: ControlCleanupPolicy = GLOBAL_CONTROL_CLEANUP): Promise<string> {
   if (!/^[a-z][a-z0-9-]{0,40}$/.test(prefix))
     throw new Error("Invalid private runtime directory prefix")
+  // Windows: under the user's own Mako folder, never a shared temp one; a pipe needs no short path. Its modes and owner
+  // ids mean nothing there, and the folder is private by where it is.
+  if (onWindows()) {
+    const root = cleanup.scope === "owned" ? cleanup.root : windowsControlRoot()
+    if (!isAbsolute(root)) throw new Error("An owned control root must be absolute")
+    await mkdir(root, { recursive: true })
+    return mkdtemp(join(root, prefix))
+  }
   if (cleanup.scope === "owned") {
     if (!isAbsolute(cleanup.root)) throw new Error("An owned control root must be absolute")
     const handle = await open(cleanup.root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW)
@@ -112,16 +132,28 @@ export async function createControlDirectory(prefix: string, cleanup: ControlCle
   return directory
 }
 
+/** Where a control server listens: a socket's path, or on Windows a pipe with the secret its clients prove. */
+export interface ControlEndpoint {
+  path: string
+  proof: string | undefined
+  close(): Promise<void>
+}
+
 /** The owner closes this endpoint on startup failure, exit or cancellation. */
 export async function createPrivateControlSocket(
   directory: string,
   name: string,
   cleanup: ControlCleanupPolicy = GLOBAL_CONTROL_CLEANUP
-) {
+): Promise<ControlEndpoint> {
   if (!isAbsolute(directory) || !/^[a-zA-Z0-9.-]+\.sock$/.test(name))
     throw new Error(
       "A private socket needs an absolute directory and a socket filename"
     )
+  // Windows: a pipe drawn for this one listener and the secret its clients prove they know; nothing to remove.
+  if (onWindows()) {
+    const drawn = drawKeptPipe("mako-control")
+    return { path: drawn.pipe, proof: drawn.proof, close: () => Promise.resolve() }
+  }
   const desired = join(directory, name)
   if (cleanup.scope === "owned") {
     const within = relative(cleanup.root, directory)
@@ -140,6 +172,7 @@ export async function createPrivateControlSocket(
   let closing: Promise<void> | undefined
   return {
     path,
+    proof: undefined,
     close: () =>
       (closing ??= temporary
         ? rm(temporary, { recursive: true, force: true })
@@ -161,6 +194,7 @@ export function stagingPath(path: string): string {
  */
 export async function listenPrivateControlSocket(directory: string, name: string, cleanup: ControlCleanupPolicy = GLOBAL_CONTROL_CLEANUP) {
   const endpoint = await createPrivateControlSocket(directory, name, cleanup)
+  if (endpoint.proof) return listenProvenControlPipe(endpoint, endpoint.proof)
   const staging = stagingPath(endpoint.path)
   const server = createServer({ pauseOnConnect: true })
   try {
@@ -182,6 +216,7 @@ export async function listenPrivateControlSocket(directory: string, name: string
   const release = () => (released ??= new Promise<void>((resolve) => server.close(() => resolve())))
   return {
     path: endpoint.path,
+    proof: endpoint.proof,
     server,
     /** Stop accepting here; a process the listener was handed to goes on accepting. */
     release,
@@ -196,6 +231,38 @@ export async function listenPrivateControlSocket(directory: string, name: string
       for (let turn = 0; turn < 2; turn++) await new Promise((resolve) => setImmediate(resolve))
       await release()
       await endpoint.close()
+    },
+  }
+}
+
+/**
+ * `listenPrivateControlSocket` on Windows: the drawn pipe, every connection proving itself first and then held paused,
+ * as a Unix listener's are, for whoever serves it. A pipe's listener can't be handed to another process there (Node
+ * passes only TCP handles on Windows), so its connections are passed on instead (`ControlWorker.hand`).
+ */
+async function listenProvenControlPipe(endpoint: ControlEndpoint, proof: string) {
+  const path = endpoint.path
+  const server = createServer({ pauseOnConnect: true })
+  requireProof(server, () => proof)
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(path, () => {
+      server.off("error", reject)
+      resolve()
+    })
+  })
+  // Its DACL narrowed to this user's, once it listens; the handshake guards it either way.
+  void restrictPipes([path])
+  let released: Promise<void> | undefined
+  const release = () => (released ??= new Promise<void>((resolve) => server.close(() => resolve())))
+  return {
+    path,
+    proof: endpoint.proof,
+    server,
+    release,
+    close: async () => {
+      for (let turn = 0; turn < 2; turn++) await new Promise((resolve) => setImmediate(resolve))
+      await release()
     },
   }
 }

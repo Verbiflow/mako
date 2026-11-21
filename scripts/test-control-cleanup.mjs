@@ -121,6 +121,9 @@ async function fixture(options = {}) {
     "./desktop-session-config.js": { DesktopWorkerReplySchema: {} },
     "./control-session-client.js": { invokeControlSession: () => { throw new Error("fixture must not dispatch") } },
     "./control-session-server.js": { refuseControlConnection: () => { throw new Error("fixture must not receive clients") } },
+    // The fixture is a Unix one: Windows' pipes are never drawn or proved in it.
+    "./platform.js": { onWindows: () => false },
+    "@mako/lazy/private-pipe": Object.fromEntries(["connectProven", "drawKeptPipe", "makoLocalFolder", "requireProof", "restrictPipes"].map((name) => [name, () => { throw new Error(`fixture must not reach ${name}`) }])),
   }
   const entries = ["./launch-folders.js", "./private-socket.js", "./control-workers.js", "./desktop-session.js"]
   const api = fixtureGraph(context, entries, async (name) => {

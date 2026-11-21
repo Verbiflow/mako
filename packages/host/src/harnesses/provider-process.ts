@@ -1,5 +1,5 @@
 import { HostFailureError } from "../contracts/provider-failure.js"
-import { hostSpawn, closeHostChild, endHostChildWithParent } from "../base/host-command.js"
+import { hostSpawnTree, closeHostChild, endHostChildWithParent } from "../base/host-command.js"
 import type { ChildProcess, ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process"
 import { statSync } from "node:fs"
 import { hostWarn } from "../base/host-log.js"
@@ -45,7 +45,8 @@ export function spawnProviderProcess(
 ): ChildProcessWithoutNullStreams {
   if (options.cwd !== undefined && !workingDirectoryExists(options.cwd))
     throw new MissingWorkingDirectoryError(options.cwd)
-  const child = hostSpawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] })
+  // Its whole tree is the host's: on Windows in a job that ends with it, or with a host that is killed.
+  const child = hostSpawnTree(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] })
   endHostChildWithParent(child)
   const pid = child.pid
   if (tracked && pid) trackProviderPid({ pid, executable: child.spawnfile, ...tracked })

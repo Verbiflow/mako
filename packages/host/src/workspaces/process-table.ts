@@ -15,6 +15,34 @@ export interface Row {
   command: string
 }
 
+/**
+ * Windows' table, which has no `ps`: one CIM query of `Win32_Process` through Windows PowerShell, a line a process as
+ * `pid|parent|working set KB|started ms|command line`. Windows has no process groups, so each process is its own
+ * (`pgid` is its pid) and a run's members are its leader and its descendants by parent; a parent that ended stays its
+ * children's parent there, so none is lost to a reparenting.
+ */
+export const WINDOWS_TABLE_SCRIPT = [
+  "[Console]::OutputEncoding = [Text.Encoding]::UTF8",
+  "Get-CimInstance Win32_Process -Property ProcessId,ParentProcessId,WorkingSetSize,CreationDate,CommandLine,Name | ForEach-Object {",
+  "  if ($_.CreationDate) {",
+  "    $line = if ($_.CommandLine) { $_.CommandLine } else { $_.Name }",
+  "    [Console]::Out.WriteLine(('{0}|{1}|{2}|{3}|{4}' -f $_.ProcessId, $_.ParentProcessId, [int64]($_.WorkingSetSize / 1024), ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds(), ($line -replace '[\\r\\n]', ' ')))",
+  "  }",
+  "}",
+].join("\n")
+
+/** `WINDOWS_TABLE_SCRIPT`'s output, as rows. */
+export function parseWindowsTable(stdout: string): Row[] {
+  const rows: Row[] = []
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^(\d+)\|(\d+)\|(\d+)\|(\d+)\|(.*)$/.exec(line)
+    if (!match) continue
+    const pid = Number(match[1])
+    rows.push({ pid, ppid: Number(match[2]), pgid: pid, rssKb: Number(match[3]), startedMs: Number(match[4]), command: match[5]! })
+  }
+  return rows
+}
+
 /** A run as the table is asked about it: its group's leader and when it started. */
 export interface RunLeader {
   pid: number
@@ -68,7 +96,10 @@ export class TableIndex {
     const queue = [...found.values()]
     for (let at = 0; at < queue.length; at += 1)
       for (const child of this.byParent.get(queue[at]!.pid) ?? [])
-        if (later(child) && !found.has(child.pid)) {
+        // A child starts after its parent. One that started before the process now under its parent's pid is an
+        // orphan of that pid's last holder (Windows keeps a dead parent's pid on its children, and reuses pids), not
+        // this run's.
+        if (later(child) && child.startedMs >= queue[at]!.startedMs && !found.has(child.pid)) {
           found.set(child.pid, child)
           queue.push(child)
         }

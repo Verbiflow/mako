@@ -1,8 +1,9 @@
 import { constants, type Stats } from "node:fs"
-import { lstat, open, readdir, rmdir, unlink, type FileHandle } from "node:fs/promises"
+import { lstat, open, readdir, rm, rmdir, unlink, type FileHandle } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
-import { createControlDirectory, processAbsent, socketUnused, stagingPath, type ControlCleanupPolicy } from "./private-socket.js"
+import { createControlDirectory, processAbsent, socketUnused, stagingPath, windowsControlRoot, type ControlCleanupPolicy } from "./private-socket.js"
+import { onWindows } from "./platform.js"
 
 const LAUNCH = /^mako-cli-(?:([1-9]\d*)-)?[a-zA-Z0-9]{6}$/
 
@@ -35,6 +36,7 @@ async function directoryAt(path: string): Promise<{ info: Stats; handle: FileHan
  * owner's pid go only once their socket refuses connections.
  */
 export async function sweepAbandonedLaunches(): Promise<void> {
+  if (onWindows()) return sweepWindowsLaunches()
   for (const root of new Set([tmpdir(), "/tmp"])) {
     // A shared temp folder can hold tens of thousands of names; listing them
     // runs off the event loop, so the budget covers only the checks.
@@ -113,5 +115,24 @@ export async function sweepAbandonedLaunches(): Promise<void> {
         await owned?.handle.close().catch(() => {})
       }
     }
+  }
+}
+
+/**
+ * Windows' sweep: launch folders in this user's own control folder (never a shared temp one) whose owner's pid is
+ * gone. Nothing there is another account's to plant, and a launch's pipe goes with its process, so the folder is all
+ * there is to remove. Bounded as the others are.
+ */
+async function sweepWindowsLaunches(): Promise<void> {
+  const root = windowsControlRoot()
+  const names = await readdir(root).catch((): string[] => [])
+  const deadline = Date.now() + 25
+  let checked = 0
+  for (const name of names) {
+    const launch = LAUNCH.exec(name)
+    if (!launch?.[1]) continue
+    if (Date.now() >= deadline || ++checked > 128) break
+    if (!processAbsent(Number(launch[1]))) continue
+    await rm(join(root, name), { recursive: true, force: true }).catch(() => {})
   }
 }

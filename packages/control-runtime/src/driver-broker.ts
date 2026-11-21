@@ -34,6 +34,7 @@ import {
 import type { JsonObject } from "./json.js"
 import { warmAppshots, type AppshotRead } from "./native-appshot.js"
 import { createControlDirectory, createPrivateControlSocket } from "./private-socket.js"
+import { requireProof, restrictPipes } from "@mako/lazy/private-pipe"
 
 /**
  * The one owner of Mako's connection to its native driver daemon. Every
@@ -229,7 +230,7 @@ export class DriverBroker {
   private readonly recent: CallRecord[] = []
   private readonly totals = { calls: 0, errors: 0, bytes: 0, superseded: 0, leases: 0 }
   private readonly grants = new Map<string, string>()
-  private server: Promise<{ path: string; server: Server; close(): Promise<void> }> | undefined
+  private server: Promise<{ path: string; proof: string | undefined; server: Server; close(): Promise<void> }> | undefined
   private endpointPath: string | null = null
 
   constructor(options: DriverBrokerOptions) {
@@ -556,11 +557,11 @@ export class DriverBroker {
    * as it always did, so its first call doesn't wait for it.
    */
   async grant(label: string): Promise<BrokeredDriverEndpoint> {
-    const { path } = await (this.server ??= this.listen())
+    const { path, proof } = await (this.server ??= this.listen())
     const token = randomBytes(24).toString("base64url")
     this.grants.set(token, label)
     void this.generation().catch(() => {})
-    return { broker: path, token }
+    return proof ? { broker: path, token, proof } : { broker: path, token }
   }
 
   /** The task ended: its grants stop working and its leases end. */
@@ -573,6 +574,10 @@ export class DriverBroker {
     const directory = await createControlDirectory("mako-driver-")
     const endpoint = await createPrivateControlSocket(directory, "broker.sock")
     const server = createServer((connection) => this.serve(connection))
+    // Windows: a pipe drawn for this broker, every connection proving itself before its request is read; its secret
+    // goes to each task with its grant.
+    const proof = endpoint.proof
+    if (proof) requireProof(server, () => proof)
     try {
       await new Promise<void>((resolve, reject) => {
         server.once("error", reject)
@@ -581,7 +586,8 @@ export class DriverBroker {
           resolve()
         })
       })
-      await chmod(endpoint.path, 0o600)
+      if (proof) void restrictPipes([endpoint.path])
+      else await chmod(endpoint.path, 0o600)
       this.endpointPath = endpoint.path
     } catch (error) {
       server.close()
@@ -591,6 +597,7 @@ export class DriverBroker {
     }
     return {
       path: endpoint.path,
+      proof,
       server,
       close: async () => {
         this.endpointPath = null

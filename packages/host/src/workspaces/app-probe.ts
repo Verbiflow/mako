@@ -9,6 +9,7 @@ import { HistoryMarkSchema } from "../contracts/watcher-child.js"
 import { listed, toolText, when } from "../base/tool-text.js"
 import type { FileHistory } from "./watch-backend.js"
 import { onMac, onWindows } from "../base/platform.js"
+import { windowsPowerShell } from "../base/system-tools.js"
 
 const run = hostCommand
 
@@ -125,9 +126,33 @@ function privateLinked(path: string): string {
   return onMac() ? path.replace(/^\/(tmp|var|etc)(?=\/|$)/, "/private/$1") : path
 }
 
+/**
+ * Windows' listening TCP ports and the process that owns each, by one `Get-NetTCPConnection` through Windows
+ * PowerShell: asked only when a look needs it, since it costs a PowerShell start. What a process has open, its
+ * working folder and its connections aren't read on Windows: they stay unknown, never guessed.
+ */
+export async function windowsListening(): Promise<{ port: number; pid: number }[]> {
+  const script = "Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | ForEach-Object { [Console]::Out.WriteLine(('{0}|{1}' -f $_.LocalPort, $_.OwningProcess)) }"
+  const { stdout } = await hostCommand(windowsPowerShell(), ["-NoProfile", "-NonInteractive", "-Command", script], { maxBuffer: LSOF_BYTES, timeout: 30_000, windowsHide: true })
+  const seen = new Set<string>()
+  const listening: { port: number; pid: number }[] = []
+  for (const line of stdout.split(/\r?\n/)) {
+    const match = /^(\d+)\|(\d+)$/.exec(line)
+    if (!match || seen.has(line)) continue
+    seen.add(line)
+    listening.push({ port: Number(match[1]), pid: Number(match[2]) })
+  }
+  return listening
+}
+
 export async function openBy(pids: number[]): Promise<Open> {
   const found: Open = { listening: [], connected: [], files: [], cwds: new Map(), commands: new Map() }
   if (!pids.length) return found
+  if (onWindows()) {
+    const asked = new Set(pids)
+    found.listening = (await windowsListening().catch(() => [])).filter((entry) => asked.has(entry.pid))
+    return found
+  }
   const sockets: { own: number; remote: { host: string; port: number }; pid: number }[] = []
   let pid = 0
   let fd = ""

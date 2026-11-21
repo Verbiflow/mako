@@ -1,16 +1,17 @@
 import assert from "node:assert/strict"
-import { execFile, spawn } from "node:child_process"
+import { execFile, spawn, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { request } from "node:http"
 import { connect } from "node:net"
 import { tmpdir } from "node:os"
-import { delimiter, join, resolve } from "node:path"
+import { delimiter, dirname, join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { promisify } from "node:util"
 import { invokeRuntime, probeRuntime } from "@mako/host/transport/connection"
 import { runtimeLocation } from "@mako/host/transport/service"
+import { connectProven } from "@mako/lazy/private-pipe"
 import { GROK_VERSIONS } from "@mako/host/harnesses/grok/versions"
 
 /**
@@ -35,6 +36,7 @@ const dataRoot = join(scratch, "data")
 const project = join(scratch, "project")
 const standIn = join(scratch, "bin")
 const grandchildFile = join(scratch, "grandchild.pid")
+const controlFile = join(scratch, "control.json")
 const report = { checks: [], failures: [] }
 const passed = (name, note) => {
   report.checks.push({ name, note })
@@ -73,6 +75,7 @@ try {
     MAKO_TELEMETRY: "off",
     MAKO_PROD: "1",
     MAKO_PROOF_GRANDCHILD_FILE: grandchildFile,
+    MAKO_PROOF_CONTROL_FILE: controlFile,
     MAKO_PROOF_GROK_VERSION: GROK_VERSIONS.tested,
     MEASURE_STREAM_MS: "2500",
     MEASURE_UNTIL_CANCELLED: "Once more",
@@ -146,6 +149,34 @@ try {
   assert.deepEqual(first.at(-1), { kind: "settled", requestId: started.requestId, status: "completed" })
   passed("a conversation on grok.cmd streams a turn to its end")
 
+  // Local Control, end to end: the agent's own `mako-control status`, run by the stand-in from its shell, reached the
+  // task's session over its pipe (the handshake, the host's relay to the worker) and was answered.
+  const control = JSON.parse(await readFile(controlFile, "utf8"))
+  assert.equal(control.code, 0, `mako-control status: ${JSON.stringify(control)}`)
+  assert.match(control.sessionFile ?? "", /\\Mako\\control\\mako-cli-\d+-[^\\]+\\session\\session\.json$/, `the session file is in the user's own control folder: ${control.sessionFile}`)
+  const answered = JSON.parse(control.stdout)
+  assert.ok([true, false].includes(answered.native?.configured), `the session answered its status: ${control.stdout.slice(0, 300)}`)
+  const session = JSON.parse(await readFile(control.sessionFile, "utf8"))
+  assert.match(session.socket, /^\\\\\.\\pipe\\mako-control-[0-9a-f]{32}$/)
+  assert.match(session.proof, /^[0-9a-f]{64}$/)
+  // HTTP on the session's pipe without the handshake is answered nothing.
+  const bare = await new Promise((done) => {
+    const asked = request({ socketPath: session.socket, path: "/request", method: "POST", agent: false }, (response) => done(`answered ${response.statusCode}`))
+    asked.on("error", (error) => done(`refused: ${error.code ?? error.message}`))
+    asked.end("{}")
+  })
+  assert.match(bare, /^refused/, `the control pipe without its handshake: ${bare}`)
+  // Clients that prove themselves and drop at once, as a cancelled command does: the host hears each, and goes on
+  // serving. The command leaves nothing in the shell that ran it.
+  for (let round = 0; round < 20; round += 1) (await connectProven(session.socket, session.proof)).destroy()
+  await delay(500)
+  const controlCommand = join(dirname(dirname(control.sessionFile)), "mako-control.cmd")
+  const afterDrops = spawnSync(join(process.env.SystemRoot, "System32", "cmd.exe"), ["/d", "/v:on", "/s", "/c", `""${controlCommand}" status & echo [!MAKO_CONTROL_SESSION_FILE!]"`], { encoding: "utf8", windowsVerbatimArguments: true, timeout: 60_000 })
+  assert.match(afterDrops.stdout, /"native"/, `the session still answers after 20 dropped clients: ${afterDrops.stdout.slice(0, 200)} ${afterDrops.stderr.slice(0, 200)}`)
+  assert.match(afterDrops.stdout, /\[!MAKO_CONTROL_SESSION_FILE!\]/, "mako-control.cmd leaves its variables out of the caller's shell")
+  assert.equal((await probeRuntime(socket, { timeoutMs: 5_000 })).state, "ready", "the host survived them")
+  passed("Local Control answers the agent's mako-control over its proven pipe", `native configured: ${answered.native.configured}; without the handshake ${bare}`)
+
   const detached = await mako("send", started.conversationId, "Once more", "--detach")
   const { requestId } = detached[0]
   await delay(400)
@@ -169,13 +200,53 @@ try {
   const shell = await until(() => invokeRuntime(socket, client, "mako:terminal-attach", [terminal.id]), (attached) => /proof-42 on (Core|Desktop)/.test(JSON.stringify(attached)), "the terminal's echo", 30_000)
   await invokeRuntime(socket, client, "mako:terminal-kill", [terminal.id])
   passed("a terminal runs PowerShell through the terminal daemon", JSON.stringify(shell).match(/proof-42 on \w+/)?.[0])
+
+  // A graceful stop, where Windows has no signal to send: `mako-host stop` asks over the proven pipe, and the host's
+  // own stop runs to its end and exits 0. A host started again on the same data reads what the first one wrote.
+  const hostCli = join(repo, "packages", "host", "dist", "mako-host.js")
+  const firstHost = host
+  const { stdout: stoppedSaid } = await run(process.execPath, [hostCli, "stop", "--data-root", dataRoot, "--timeout", "60"], { env, timeout: 90_000 })
+  assert.match(stoppedSaid, /stopped/, stoppedSaid)
+  if (firstHost.exitCode === null) await Promise.race([once(firstHost, "exit"), delay(10_000)])
+  assert.equal(firstHost.exitCode, 0, "the host's own stop ran and it exited 0")
+  const firstLog = await readFile(join(dataRoot, "logs", "host.log"), "utf8")
+  assert.match(firstLog, /lifecycle stopping reason=quit/)
+  assert.match(firstLog, /lifecycle stopped/, "its stop ran to the end")
+  host = spawn(process.execPath, [hostCli], { env, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+  host.stdout.on("data", (chunk) => (hostOutput = (hostOutput + chunk).slice(-8_000)))
+  host.stderr.on("data", (chunk) => (hostOutput = (hostOutput + chunk).slice(-8_000)))
+  let again
+  const second = await until(async () => {
+    assert.equal(host.exitCode, null, `the second host exited while starting:\n${hostOutput}`)
+    again = runtimeLocation(dataRoot).socket
+    return probeRuntime(again, { timeoutMs: 2_000 }).catch(() => undefined)
+  }, (probe) => probe?.state === "ready" && probe.info.pid !== ready.info.pid, "the second host's /health", 90_000)
+  assert.notEqual(again, socket, "each start listens on a pipe of its own")
+  const kept = await mako("history", started.conversationId)
+  assert.equal(kept.filter((line) => line.kind === "user").length, 2, "the second host reads the conversation the first wrote")
+  assert.match(text(kept), /the host reads each update/, "its words too")
+  passed("mako-host stop runs the host's own stop; a host started again reads what it wrote", `pid ${ready.info.pid} exited 0, pid ${second.info.pid} read ${kept.length} lines back`)
+
+  // A host killed outright, as Task Manager or a crash ends one: no stop runs, and still none of its harness's tree
+  // is left, since each provider runs in a job object that ends with its host (`mako-windows run-in-job`).
+  await rm(grandchildFile, { force: true })
+  const last = await mako("start", "grok", "Measure the host", "--cwd", project)
+  assert.equal(last.at(-1)?.status, "completed", "a conversation on the second host")
+  const orphan = Number(await readFile(grandchildFile, "utf8"))
+  assert.ok(alive(orphan), "its harness's grandchild runs")
+  const killed = host
+  process.kill(killed.pid)
+  if (killed.exitCode === null) await Promise.race([once(killed, "exit"), delay(10_000)])
+  await until(async () => alive(orphan), (running) => !running, `the grandchild (pid ${orphan}) to end with its killed host`, 20_000)
+  passed("a host killed outright leaves none of its harness's tree behind", `host ${killed.pid} ended by TerminateProcess; grandchild ${orphan} gone`)
 } catch (error) {
   report.failures.push(error instanceof Error ? (error.stack ?? error.message) : String(error))
   console.error(`FAIL ${report.failures.at(-1)}`)
 } finally {
   if (host && host.exitCode === null) {
-    // Windows has no SIGTERM for a console program: Node ends it outright, and its tree with it here.
-    await run("taskkill", ["/PID", String(host.pid), "/T", "/F"]).catch(() => undefined)
+    // Asked to stop as above; ended outright, with its tree, only if that fails.
+    await run(process.execPath, [join(repo, "packages", "host", "dist", "mako-host.js"), "stop", "--data-root", dataRoot, "--now", "--timeout", "30"], { timeout: 60_000 }).catch(() => undefined)
+    if (host.exitCode === null) await run("taskkill", ["/PID", String(host.pid), "/T", "/F"]).catch(() => undefined)
     await Promise.race([once(host, "exit"), delay(10_000)])
   }
   const log = await readFile(join(dataRoot, "logs", "host.log"), "utf8").catch(() => "")
