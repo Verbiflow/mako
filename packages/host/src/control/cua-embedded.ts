@@ -10,13 +10,9 @@ import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { hostLog } from "../base/host-log.js"
 import { trackProviderChild, untrackProviderPid } from "../base/provider-children.js"
 import { createPrivateControlSocket, linuxDesktop, videoHelperExecutable } from "@mako/control-runtime/desktop"
-<<<<<<< origin/main
-import { findExecutable, resolveExecutable, trustedProgram } from "../base/executable.js"
-=======
 import { daemonAnswers } from "@mako/control-runtime/host"
-import { findExecutable } from "../base/executable.js"
+import { findExecutable, resolveExecutable, trustedProgram } from "../base/executable.js"
 import { parseCuaDriverVersion } from "./cua-driver-version.js"
->>>>>>> ca37ac0030788f271e2305a48c10ca1b2471b625
 import { onMac, onWindows } from "../base/platform.js"
 
 /**
