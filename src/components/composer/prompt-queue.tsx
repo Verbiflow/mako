@@ -327,7 +327,10 @@ function QueueRow({
     }
   }
   return (
-    <div className="group/queued contain-turn border-t border-hairline px-3 py-2">
+    // Laid out as it is from its first frame, not as a turn of the transcript (`.contain-turn`): that stands at 120 px
+    // until it's found on screen, so a queue of two messages came up 31 px too tall for a frame and the conversation
+    // above, with its "Jump to latest", moved up and back under the pointer.
+    <div className="group/queued border-t border-hairline px-3 py-2">
       {editing ? (
         <div className="space-y-2">
           <textarea

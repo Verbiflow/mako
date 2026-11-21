@@ -14,6 +14,9 @@ on:
       - runtime/control/**
       - scripts/**
       - vendor/cua-driver/**
+      - vendor/spdx-licenses/**
+      - scripts/driver-third-party-notices.mjs
+      - scripts/package-control-driver-linux.mjs
       - package.json
       - package-lock.json
       - tsconfig*.json

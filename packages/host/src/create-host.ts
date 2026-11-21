@@ -154,6 +154,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     breadcrumb: (note) => owner.crashes.breadcrumb(note),
     declaring: (channel) => declaring(channel),
     nothingShownHere: () => core.current() !== undefined && control.started() === undefined,
+    knownUnloaded: (channel, args) => (control.started() === undefined ? core.current()?.knownWithoutControl(channel, args) : undefined),
     work: loop,
   })
   const terminals: Domain<TerminalClients> = domains.declare("terminals", {

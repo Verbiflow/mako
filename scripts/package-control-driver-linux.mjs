@@ -141,6 +141,15 @@ try {
     await run("docker", ["rm", container])
   }
   await cp(join(root, "LICENSE.md"), join(output, "LICENSE-Cua.md"))
+  // Every linked crate's licence and notices, beside Cua's own: read by this machine's cargo from the same source and
+  // lockfile the image built, for the same target and features.
+  await run(process.execPath, [
+    "scripts/driver-third-party-notices.mjs",
+    root,
+    join(output, "THIRD-PARTY-NOTICES-cua-driver.txt"),
+    `--target=${arch === "arm64" ? "aarch64" : "x86_64"}-unknown-linux-gnu`,
+    "--features=cua-driver/portal-input",
+  ], { maxBuffer: 8 * 1024 * 1024 })
   await cp(
     join(snapshot, "libs/cua-driver/wayland-helper"),
     join(output, "wayland-helper"),

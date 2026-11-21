@@ -36,7 +36,11 @@ if (process.versions.electron) {
   const env = { ...process.env, MAKO_UI_TEST_ROOT: root, MAKO_UI_TEST_URL: server.resolvedUrls.local[0] }
   delete env.ELECTRON_RUN_AS_NODE
   try {
-    const child = spawn(resolve("node_modules/.bin/electron"), [root], { stdio: "inherit", env })
+    // The window draws macOS's overlay scrollers, as the interface is made for (`index.css`, "No drawn scrollbars"),
+    // whatever the Mac running it shows: a CI Mac always shows scrollbars, each 15 px of its list's width, so the rail's
+    // rows moved 15 px left as its list first overflowed, a moment after the desk came up.
+    const scrollers = process.platform === "darwin" ? ["-AppleShowScrollBars", process.env.MAKO_UI_TEST_SCROLLBARS ?? "WhenScrolling"] : []
+    const child = spawn(resolve("node_modules/.bin/electron"), [root, ...scrollers], { stdio: "inherit", env })
     process.exitCode = await new Promise((resolve, reject) => {
       child.once("error", reject)
       child.once("exit", (code) => resolve(code ?? 1))
@@ -45,6 +49,11 @@ if (process.versions.electron) {
     await server.close()
   }
 }
+
+/** How long a press waits for its target to stand still with nothing over it, before it lands where the target is. */
+const PRESSABLE_MS = 1_000
+/** Waited between measuring a target and pressing it, for a person checking what a slow runner does to a press. */
+const BETWEEN_MEASURE_AND_PRESS_MS = Number(process.env.MAKO_UI_TEST_PRESS_AFTER_MS ?? 0)
 
 async function checkWindow() {
   const { app, BrowserWindow } = await import("electron")
@@ -87,10 +96,48 @@ async function checkWindow() {
     }
   }
   // The press lands on whatever is drawn at the point; `exposed` says what covers the target rather than press it.
+  // A target drawn at its point when measured, and no longer under the press when it lands, fails here, by how far it
+  // moved and what took the press. The rail's New button moved 15 px so, its press opened the menu beside it, and all
+  // the failure said was that the project never changed (suites 3, 2026-11-20 and 21).
   const click = async (selector, { exposed = false } = {}) => {
-    const point = await evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) throw new Error('Missing click target'); const r = node.getBoundingClientRect(); const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2); const top = document.elementFromPoint(x, y); if (${exposed} && top && !node.contains(top)) throw new Error(${JSON.stringify(selector)} + ' covered by ' + top.tagName + ' ' + [...top.attributes].map(a => a.name + '=' + a.value.slice(0, 40)).join(' ').slice(0, 200)); return {x, y} })()`)
+    const point = await evaluate(`(async () => {
+      const node = document.querySelector(${JSON.stringify(selector)})
+      if (!node) throw new Error('Missing click target')
+      const read = () => {
+        const r = node.getBoundingClientRect()
+        const x = Math.round(r.x + r.width / 2), y = Math.round(r.y + r.height / 2)
+        return { x, y, top: document.elementFromPoint(x, y) }
+      }
+      // Pressed once it has stood still for two frames with nothing over it: a menu still opening moves its items, and
+      // one still closing keeps the page's presses to itself. Two, since what is laid out at a placeholder's size
+      // (content-visibility) stands there through its first frame and takes its own size in the second: the queue's
+      // rows did, and "Jump to latest" above them was measured 31 px from where the press then found it.
+      const deadline = performance.now() + ${PRESSABLE_MS}
+      let at = read()
+      for (let still = 0; still < 2 && performance.now() <= deadline; ) {
+        await new Promise((resolve) => requestAnimationFrame(resolve))
+        const next = read()
+        still = next.x === at.x && next.y === at.y && next.top && node.contains(next.top) ? still + 1 : 0
+        at = next
+      }
+      const { x, y, top } = at
+      const drawn = Boolean(top) && node.contains(top)
+      if (${exposed} && top && !drawn) throw new Error(${JSON.stringify(selector)} + ' covered by ' + top.tagName + ' ' + [...top.attributes].map(a => a.name + '=' + a.value.slice(0, 40)).join(' ').slice(0, 200))
+      window.__pressMoved = undefined
+      window.addEventListener('pointerdown', (event) => {
+        if (!drawn || !node.isConnected || node.contains(event.target)) return
+        const now = node.getBoundingClientRect()
+        const dx = Math.round(now.x + now.width / 2) - x, dy = Math.round(now.y + now.height / 2) - y
+        const landed = event.target.closest('button,a,[role]') ?? event.target
+        window.__pressMoved = 'moved ' + dx + ',' + dy + ' px between being measured and pressed, and the press landed on ' + landed.tagName + ' ' + [...landed.attributes].map(a => a.name + '=' + a.value.slice(0, 40)).join(' ').slice(0, 200)
+      }, { capture: true, once: true })
+      return { x, y }
+    })()`)
+    if (BETWEEN_MEASURE_AND_PRESS_MS) await new Promise((resolve) => setTimeout(resolve, BETWEEN_MEASURE_AND_PRESS_MS))
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...point })
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, ...point })
+    const moved = await evaluate("window.__pressMoved").catch(() => undefined)
+    if (moved) throw new Error(`${selector} ${moved}`)
   }
   // Orbs paint in a worker and pause while the page is hidden, as this test
   // window is; the main-thread orb draws the same motion and can be read back.
