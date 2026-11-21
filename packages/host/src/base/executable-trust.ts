@@ -116,9 +116,16 @@ export function underAny(path: string, folders: readonly string[]): boolean {
       return folder
     }
   }
-  const lower = real(path).toLowerCase().replace(/[\\/]+$/, "")
+  const lower = withoutTrailingSeparators(real(path).toLowerCase())
   return folders.some((folder) => {
-    const base = real(folder).toLowerCase().replace(/[\\/]+$/, "")
+    const base = withoutTrailingSeparators(real(folder).toLowerCase())
     return lower === base || lower.startsWith(`${base}\\`) || lower.startsWith(`${base}/`)
   })
+}
+
+/** A path without the separators it ends in, counted from its end so a long run of them costs its length once. */
+function withoutTrailingSeparators(path: string): string {
+  let end = path.length
+  while (end > 0 && (path[end - 1] === "\\" || path[end - 1] === "/")) end -= 1
+  return path.slice(0, end)
 }

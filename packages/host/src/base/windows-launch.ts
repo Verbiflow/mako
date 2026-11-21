@@ -55,7 +55,7 @@ function shimNode(shim: string, node: string | null, env: NodeJS.ProcessEnv): Pi
 /** One word for cmd.exe's command line, as the program it starts will split it again. */
 export function cmdArgument(word: string, batch = true): string {
   // Backslashes before a quote, or before the closing quote added below, are doubled; the quote itself escaped.
-  let quoted = word.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\*)$/, "$1$1")
+  let quoted = doubledBeforeQuotes(word)
   quoted = `"${quoted}"`.replace(CMD_META, "^$1")
   // A batch file hands its arguments to cmd.exe once more as it expands `%*`.
   return batch ? quoted.replace(CMD_META, "^$1") : quoted
@@ -82,4 +82,22 @@ export function windowsLaunch(file: string, args: readonly string[], env: NodeJS
   if (args.some((arg) => /[\r\n\0]/.test(arg))) throw new BatchLaunchError(`${file} can't be given a word with a line break or NUL in it`)
   const line = [file.replace(CMD_META, "^$1"), ...args.map((arg) => cmdArgument(arg))].join(" ")
   return { file: windowsComSpec(env), args: ["/d", "/v:off", "/s", "/c", `"${line}"`], verbatim: true }
+}
+
+/**
+ * A word with each quote escaped and the backslashes before a quote, or at its end, doubled: what the C runtime's
+ * argument rules ask of a word about to be wrapped in quotes. One pass, so a long run of backslashes costs its length.
+ */
+function doubledBeforeQuotes(word: string): string {
+  let result = ""
+  let backslashes = 0
+  for (const character of word) {
+    if (character === "\\") {
+      backslashes += 1
+      continue
+    }
+    result += "\\".repeat(character === '"' ? backslashes * 2 + 1 : backslashes) + character
+    backslashes = 0
+  }
+  return result + "\\".repeat(backslashes * 2)
 }
