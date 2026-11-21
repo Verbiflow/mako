@@ -44,7 +44,7 @@ function realPath(file: string): string {
   }
 }
 
-const sameFolder = (left: string, right: string) => left.toLowerCase().replace(/[\\/]+$/, "") === right.toLowerCase().replace(/[\\/]+$/, "")
+const sameFolder = (left: string, right: string) => withoutTrailingSeparators(left.toLowerCase()) === withoutTrailingSeparators(right.toLowerCase())
 
 /** Where `file` really is, when that is in the profile or directly in `System32` or `SysWOW64`. */
 export function trustedWithoutAsking(file: string, { env, home }: TrustOptions): string | undefined {
@@ -171,9 +171,16 @@ export class ExecutableTrust {
  * any link (`C:\Users\RUNNER~1` is `C:\Users\runner-admin`).
  */
 export function underAny(path: string, folders: readonly string[]): boolean {
-  const lower = realPath(path).toLowerCase().replace(/[\\/]+$/, "")
+  const lower = withoutTrailingSeparators(realPath(path).toLowerCase())
   return folders.some((folder) => {
-    const base = realPath(folder).toLowerCase().replace(/[\\/]+$/, "")
+    const base = withoutTrailingSeparators(realPath(folder).toLowerCase())
     return lower === base || lower.startsWith(`${base}\\`) || lower.startsWith(`${base}/`)
   })
+}
+
+/** A path without the separators it ends in, counted from its end so a long run of them costs its length once. */
+function withoutTrailingSeparators(path: string): string {
+  let end = path.length
+  while (end > 0 && (path[end - 1] === "\\" || path[end - 1] === "/")) end -= 1
+  return path.slice(0, end)
 }
