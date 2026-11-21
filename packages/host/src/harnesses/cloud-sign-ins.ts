@@ -24,7 +24,10 @@ import { credentialFingerprint } from "./accounts-common.js"
 import { chainFingerprint, type CloudSignInCapability, type CloudSignInMirror, type CloudSignInPlace } from "./cloud-sign-in.js"
 import type { ProviderRegistry } from "./registry.js"
 
-/** How often this Mac reads every harness's sign-in; a harness refreshes in place, and Mako Cloud follows within this. */
+/**
+ * How often this Mac reads every harness's sign-in while it has somewhere to send them (signed in to an account with
+ * the cloud, sharing on): a harness refreshes in place and says nothing of it, and Mako Cloud follows within this.
+ */
 const CHECK_MS = 60_000
 /** A sign-in this close to lapsing is refreshed by its harness, as running it would, before it's sent. */
 const RENEW_BEFORE_MS = 10 * 60_000
@@ -163,6 +166,9 @@ export class CloudSignInSync {
   #timer: NodeJS.Timeout | undefined
   #checking: Promise<CloudSignInsState> | undefined
   #next: Promise<CloudSignInsState> | undefined
+  /** A person, or the account's own change, asked for the check to come: it reads the harnesses even with nowhere to send. */
+  #asked = false
+  #stopped = false
   #loaded: Promise<void>
   /** Whether the last check reached the cloud. */
   #reached = false
@@ -176,6 +182,7 @@ export class CloudSignInSync {
   #behind = false
   #hurried = 0
   readonly #wakeRetryMs: readonly number[]
+  readonly #checkMs: number
   readonly #wakeHoldMs: number
   /** Harnesses whose refresh lock a wake holds now: a write to them doesn't take it again. */
   readonly #held = new Set<CloudSignInHarness>()
@@ -189,12 +196,15 @@ export class CloudSignInSync {
     /** Where the person's choice is kept. */
     dataRoot: string
     onChange: (state: CloudSignInsState) => void
+    /** How often the harnesses are read while there's somewhere to send; shorter in tests. */
+    checkMs?: number
     /** The waits between checks after a wake; shorter in tests. */
     wakeRetryMs?: readonly number[]
     /** The longest a wake holds the harnesses' refresh locks; shorter in tests. */
     wakeHoldMs?: number
   }) {
     this.#wakeRetryMs = options.wakeRetryMs ?? WAKE_RETRY_MS
+    this.#checkMs = options.checkMs ?? CHECK_MS
     this.#wakeHoldMs = options.wakeHoldMs ?? WAKE_HOLD_MS
     this.#accounts = options.accounts
     this.#capabilities = options.capabilities
@@ -217,15 +227,24 @@ export class CloudSignInSync {
     return this.#sharing ?? true
   }
 
+  /**
+   * The first check, which starts the timer only if there's somewhere to send (`#check`). Signed out of Mako, or with
+   * no cloud, it reads no harness's store and holds no timer: an idle host read the Keychain every minute, a `security`
+   * process each time, for sign-ins it could send nowhere. The account's own change checks again (`check`).
+   */
   start(): void {
     void this.#loaded.then(() => {
-      if (!this.#shares) return
-      void this.check()
-      this.#schedule()
+      if (this.#shares) void this.#look()
     })
   }
 
+  /** The host is stopping: no check starts the timer again. */
   stop(): void {
+    this.#stopped = true
+    this.#rest()
+  }
+
+  #rest(): void {
     clearInterval(this.#timer)
     this.#timer = undefined
   }
@@ -247,13 +266,13 @@ export class CloudSignInSync {
       let checks = 0
       try {
         checks += 1
-        await this.check()
+        await this.#look()
         for (const wait of this.#wakeRetryMs) {
           if (this.#reached || !this.#shares) break
           await new Promise((resolve) => setTimeout(resolve, wait).unref())
           if (performance.now() - woke > this.#wakeHoldMs) release.now()
           checks += 1
-          await this.check()
+          await this.#look()
         }
       } finally {
         release.now()
@@ -349,9 +368,8 @@ export class CloudSignInSync {
     this.#sharing = sharing
     await this.#save()
     hostLog("cloud", sharing ? "sharing sign-ins with Mako Cloud" : "no longer sharing sign-ins")
-    if (sharing) this.#schedule()
-    else {
-      this.stop()
+    if (!sharing) {
+      this.#rest()
       if ((await this.#store.blocked()) === undefined) {
         const listed = await this.#store.list()
         for (const listing of listed.signIns) if (listing.mine) await this.#store.remove(listing.harness)
@@ -369,13 +387,19 @@ export class CloudSignInSync {
    * it, which every call meanwhile shares, so what it's told was read after it asked.
    */
   check(): Promise<CloudSignInsState> {
+    this.#asked = true
+    return this.#look()
+  }
+
+  /** A check nobody asked for (the timer's, a start's, a wake's): with nowhere to send, it reads no harness's store. */
+  #look(): Promise<CloudSignInsState> {
     if (this.#checking)
       return (this.#next ??= this.#checking.then(
         () => undefined,
         () => undefined,
       ).then(() => {
         this.#next = undefined
-        return this.check()
+        return this.#look()
       }))
     this.#checking = this.#check().finally(() => {
       this.#checking = undefined
@@ -384,8 +408,8 @@ export class CloudSignInSync {
   }
 
   #schedule(): void {
-    if (this.#timer) return
-    this.#timer = setInterval(() => void this.check(), CHECK_MS)
+    if (this.#timer || this.#stopped) return
+    this.#timer = setInterval(() => void this.#look(), this.#checkMs)
     this.#timer.unref()
   }
 
@@ -398,8 +422,24 @@ export class CloudSignInSync {
 
   async #check(): Promise<CloudSignInsState> {
     await this.#loaded
+    const asked = this.#asked
+    this.#asked = false
     const blocked = await this.#store.blocked().catch(() => "signed-out" as const)
     const send = this.#shares && !blocked
+    // The timer runs only while there's somewhere to send; what unblocks it is the account's change, which checks.
+    if (send) this.#schedule()
+    else this.#rest()
+    if (!send && !asked) {
+      // Nowhere to send and nobody asking: no harness's store is read. What a person asked for before stands until
+      // they ask again (`state`), which reads them.
+      this.#reached = true
+      const same = this.#state.blocked === blocked && this.#state.sharing === this.#shares
+      const state: CloudSignInsState = { sharing: this.#shares, checkedAt: new Date().toISOString(), harnesses: same ? this.#state.harnesses : [] }
+      if (blocked) state.blocked = blocked
+      this.#state = state
+      this.#onChange(this.#state)
+      return this.#state
+    }
     const listed = blocked ? undefined : await this.#listed()
     this.#reached = blocked !== undefined || listed !== undefined
     // What this Mac sent before it last started, so a harness signed out meanwhile is removed there too.
@@ -426,7 +466,7 @@ export class CloudSignInSync {
       }
     if (this.#behind && this.#hurried < HURRY_TRIES) {
       this.#hurried += 1
-      setTimeout(() => void this.check(), HURRY_MS).unref()
+      setTimeout(() => void this.#look(), HURRY_MS).unref()
     } else if (!this.#behind) this.#hurried = 0
     const state: CloudSignInsState = { sharing: this.#shares, checkedAt: new Date().toISOString(), harnesses }
     if (blocked) state.blocked = blocked

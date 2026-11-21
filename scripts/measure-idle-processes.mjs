@@ -12,13 +12,15 @@ import { invokeRuntime, probeRuntime, subscribeRuntime } from "@mako/host/transp
 import { runtimeLocation } from "@mako/host/transport/service"
 import { GROK_VERSIONS } from "@mako/host/harnesses/grok/versions"
 import { helperName, hostProcesses } from "./lib/host-processes.mjs"
+import { processStarts, recordProcessStarts, startsFile } from "./lib/process-starts.mjs"
 
 /**
  * What a host keeps running, and what each process holds, as a person leaves it: started with no window, then a
  * window on a quiet project, a turn of an agent (a stand-in for Grok's CLI that streams over ACP), and the window
  * closed again. Each state is read after the helpers' idle wait (30 to 45 s), so what's listed is what stays. Memory is
  * each process's own (`scripts/lib/host-processes.mjs`): `footprint` on a Mac, PSS on Linux, the private working set
- * on Windows. Beside them, what a first use after idle waits for: a call that needs the harnesses looked at, `git
+ * on Windows. Then how many processes the host starts by itself in two idle minutes, each written as it starts. Beside
+ * them, what a first use after idle waits for: a call that needs the harnesses looked at, `git
  * status` with the Git helper gone, and a file's change heard through a watch just made.
  *
  *   node scripts/measure-idle-processes.mjs [--json <file>] [--quick]
@@ -63,7 +65,9 @@ else {
   await mkdir(env.HOME, { recursive: true })
 }
 
-const host = spawn(process.execPath, [hostCli], { env, stdio: ["ignore", "ignore", "pipe"], windowsHide: true })
+// Every process the host and its Node children start is written as it starts (`process-starts-preload.cjs`).
+const starts = startsFile(scratch)
+const host = spawn(process.execPath, [hostCli], { env: { ...env, ...recordProcessStarts(starts) }, stdio: ["ignore", "ignore", "pipe"], windowsHide: true })
 let said = ""
 host.stderr.on("data", (chunk) => { said = (said + chunk).slice(-4_000) })
 const location = runtimeLocation(dataRoot)
@@ -101,6 +105,16 @@ try {
 
   await delay(settleMs)
   await state(`idle, no window (${settleMs / 1000} s after start)`)
+
+  // Still nobody there: what the host starts by itself over two minutes, however briefly each runs.
+  const idleFrom = Date.now()
+  await delay(process.argv.includes("--quick") ? 10_000 : 120_000)
+  const started = await processStarts(starts, idleFrom)
+  const counts = new Map()
+  for (const start of started) counts.set(start, (counts.get(start) ?? 0) + 1)
+  report.idleStarts = { seconds: (Date.now() - idleFrom) / 1000, count: started.length, each: Object.fromEntries(counts) }
+  console.log(`\nprocesses started in ${Math.round(report.idleStarts.seconds)} s idle with no window: ${started.length}`)
+  for (const [start, count] of counts) console.log(`  ${String(count).padStart(3)} x ${start}`)
 
   // No window yet: a caller that must know what the harnesses' processes do, and the Git helper's first work.
   const lister = randomUUID()

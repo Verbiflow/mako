@@ -42,6 +42,12 @@ on:
       - scripts/check-host-children.mjs
       - scripts/windows-host/**
       - scripts/lib/host-processes.mjs
+      - scripts/lib/process-starts.mjs
+      - scripts/fixtures/process-starts-preload.cjs
+      - scripts/test-host-socket-folder.mjs
+      - packages/host/src/base/host-idle.ts
+      - packages/host/src/create-host.ts
+      - packages/host/src/harnesses/cloud-sign-ins.ts
       - scripts/test-idle-helpers.mjs
       - scripts/measure-idle-processes.mjs
       - scripts/test-windows-launch.ts
@@ -103,9 +109,12 @@ jobs:
       - name: The host, its clients, a conversation and a terminal
         if: success() || failure()
         run: node scripts/windows-host/prove.mjs --evidence "${{ runner.temp }}/evidence"
-      - name: An idle host with no window keeps no helper process
+      - name: An idle host with no window keeps no helper process and starts none
         if: success() || failure()
         run: node scripts/test-idle-helpers.mjs
+      - name: A stop removes the host's own runtime folder and nothing else
+        if: success() || failure()
+        run: node scripts/test-host-socket-folder.mjs
       - name: What the host keeps running and what each process holds, idle, with a window, and after a turn
         if: success() || failure()
         run: node scripts/measure-idle-processes.mjs --json "${{ runner.temp }}/evidence/idle-processes.json"

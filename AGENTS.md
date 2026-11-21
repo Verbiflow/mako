@@ -2269,7 +2269,31 @@ thread (`test-host-jobs.ts`).
 `test-probe-names.ts` the names; `test-idle-helpers.mjs` holds a real host
 with no window to no helper process at all, on a Mac, Linux and Windows, and
 `measure-idle-processes.mjs` prints every process a host keeps and what each
-holds, idle, with a window, after a turn and with the window closed again.
+holds, idle, with a window, after a turn and with the window closed again,
+and how many processes it starts in two idle minutes. The idle test holds
+that to none: every start is written as it happens by a preload
+(`scripts/fixtures/process-starts-preload.cjs`), since a listing misses a
+process that runs for twenty milliseconds.
+
+The harnesses' sign-ins are read for Mako Cloud (`CloudSignInSync`) on a
+minute's timer only while there is somewhere to send them: signed in to an
+account with the cloud, sharing on. A harness refreshes its sign-in in place
+and says nothing, so that much is polled. Signed out, or with no cloud, the
+timer isn't held and no harness's store is read, the Keychain's `security`
+process included; the account's own change checks again
+(`declareCloudAccountMethods`'s `onChange`), and Settings, which a person
+opened, reads them then (`state`). A host isolated from the person's Mako
+that runs in their own home shares none: it would read their sign-ins for an
+account that isn't theirs. One in a home of its own (`scratchHostHome`) reads
+that home's keychain alone, which is all `security` searches there.
+
+A stopping host takes away what it made and nothing else
+(`removeRuntimeDirectory`): its socket, its published pipe, the leases of
+launchers that are gone, and its runtime folder only when that is the
+profile's own (`runtimeLocation`) or one it made as it started, and only once
+empty. Nothing there deletes a folder's contents: a host whose socket was
+named in a folder of someone's (`MAKO_WEB_SOCKET=/tmp/h.sock`) once removed
+the folder whole (`test-host-socket-folder.mjs`, `test-host-idle.ts`).
 
 A probe sees a process, not a turn: Cursor's `cursor-agent` and another Mako
 host hold their stores open whether or not anything is running, so a reopened
@@ -6675,8 +6699,9 @@ holds it: no client, no lifecycle work and no launcher lease (`host-idle.ts`;
 the dev launcher holds a pid-keyed lease beside the host socket). Its
 `host.log` records what holds it each time that changes (`lifecycle idle
 watch holds=…`). The installed
-app's default-profile host never does. Every host removes its runtime
-directory on exit but the leases a live launcher holds there, which hold the
+app's default-profile host never does. Every host takes its own things out of
+its runtime directory on exit, and the directory when it is its own and empty
+(`removeRuntimeDirectory`), but the leases a live launcher holds there, which hold the
 profile's next host after a restart, and a new host removes driver sockets whose owner is dead.
 Retained previous applications are pruned after a verified, launched install:
 only the newest backup survives, and only staging directories holding nothing
