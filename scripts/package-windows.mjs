@@ -272,7 +272,7 @@ try {
   const report = await auditPackage(app, `win32-${arch}`, join(output, "package-size.json"))
   const imports = assertPackagedImports(app, resources)
   const installer = args.includes("--dir") ? undefined : join(output, artifactName.replace("${productName}", pkg.build.productName).replace("${arch}", arch).replace("${ext}", "exe"))
-  if (installer) assert.match(await readFile(join(output, "latest.yml"), "utf8"), new RegExp(basename(installer).replace(/[.]/g, "\\.")), "latest.yml must point at this installer")
+  if (installer) assert.ok((await readFile(join(output, "latest.yml"), "utf8")).includes(basename(installer)), "latest.yml must point at this installer")
   const installerBytes = installer ? (await stat(installer)).size : undefined
   await writeFile(
     join(output, "package-inputs.json"),
