@@ -6,7 +6,7 @@ import { join } from "node:path"
 import type { ComputerDriverClient } from "@mako/control-runtime/host"
 import { Appshots, type WindowCapturer } from "@mako/host/control/appshots"
 import { computerPermissions } from "@mako/host/control/computer-permissions"
-import { GNOME_HELPER, KWIN_CAPTURE_ENTRY, desktopPermissions, desktopPermissionsPending, grantDesktopPermissions, revokeDesktopPermissions, type DesktopGrantContext } from "@mako/host/control/desktop-grants"
+import { GNOME_HELPER, KWIN_CAPTURE_ENTRY, desktopPermissions, desktopPermissionsPending, grantDesktopPermissions, revokeDesktopPermissions, withExtension, withoutExtension, type DesktopGrantContext } from "@mako/host/control/desktop-grants"
 import { integrationCatalog } from "@mako/host/tools/integrations"
 import type { MakoComputerPermissions } from "@mako/host/contracts/mcp-skills-integrations"
 import { desktopAskHint, linuxDesktop } from "@mako/control-runtime/desktop"
@@ -98,23 +98,33 @@ try {
       await writeFile(driver, "")
       await writeFile(join(install, "wayland-helper", GNOME_HELPER, "metadata.json"), JSON.stringify({ uuid: GNOME_HELPER, version: 11 }))
       await writeFile(join(install, "wayland-helper", GNOME_HELPER, "extension.js"), "// helper\n")
-      // GNOME's settings and session bus, as the two programs the grants run answer.
+      // GNOME's settings, its extensions tool and the session bus, as the programs the grants run answer. The list
+      // is kept as the text `gsettings` prints, so what an edit does to it is seen byte for byte.
       interface GnomeDesk {
-        enabled: string[]
+        listed: string
+        off: boolean
+        tool: boolean
         running: number | undefined
         ran: string[][]
       }
-      const desk: GnomeDesk = { enabled: ["other@example"], running: undefined, ran: [] }
+      const desk: GnomeDesk = { listed: "['other@example']", off: false, tool: true, running: undefined, ran: [] }
       const context = (env: NodeJS.ProcessEnv = {}, program = driver): DesktopGrantContext => ({
         env,
         home,
         driver: async () => program,
-        program: async (name) => `/usr/bin/${name}`,
+        program: async (name) => (name === "gnome-extensions" && !desk.tool ? null : `/usr/bin/${name}`),
         run: async (file, args) => {
           desk.ran.push([file, ...args])
-          if (file === "/usr/bin/gsettings" && args[0] === "get") return `[${desk.enabled.map((name) => `'${name}'`).join(", ")}]\n`
-          if (file === "/usr/bin/gsettings" && args[0] === "set") {
-            desk.enabled = [...args[3]!.matchAll(/'([^']*)'/g)].map((match) => match[1]!)
+          const [verb, , key, value] = args
+          if (file === "/usr/bin/gsettings" && verb === "get") return key === "disable-user-extensions" ? `${desk.off}\n` : `${desk.listed}\n`
+          if (file === "/usr/bin/gsettings" && verb === "set") {
+            if (key === "disable-user-extensions") desk.off = value === "true"
+            else desk.listed = value!
+            return ""
+          }
+          // GNOME's own tool touches its own entry and nothing else.
+          if (file === "/usr/bin/gnome-extensions") {
+            desk.listed = verb === "enable" ? withExtension(desk.listed, args[1]!) : withoutExtension(desk.listed, args[1]!)
             return ""
           }
           if (file === "/usr/bin/gdbus" && desk.running !== undefined) return `(uint32 ${desk.running},)\n`
@@ -140,20 +150,36 @@ try {
       await revokeDesktopPermissions(kde, context())
       await assert.rejects(readFile(entry, "utf8"))
       assert.deepEqual(await desktopPermissions(kde, context()), [{ id: "kwin-window-capture", state: "needed" }])
-      // A driver KWin could never match (it reads the first word only) can't be allowed, and says so.
-      const spaced = join(home, "with space")
-      await writeFile(spaced, "")
-      await assert.rejects(grantDesktopPermissions(kde, context({}, spaced)), /can't be allowed yet/)
+      // A driver at a path that is not plain (a space, a quote, anything an entry would need quoted) is never
+      // written into one: the row says why, and the action refuses.
+      for (const odd of ["with space", "semi;colon", "quo'te"]) {
+        const program = join(home, odd)
+        await writeFile(program, "")
+        assert.deepEqual(await desktopPermissions(kde, context({}, program)), [{ id: "kwin-window-capture", state: "blocked", reason: "driver-path" }])
+        await assert.rejects(grantDesktopPermissions(kde, context({}, program)), /can't be allowed/)
+        assert.deepEqual(await desktopPermissions(gnome, context({}, program)), [{ id: "gnome-shell-helper", state: "blocked", reason: "driver-path" }])
+      }
+      await assert.rejects(readFile(entry, "utf8"), "nothing was written for them")
 
       // GNOME: needed, then installed and waiting for the next login, then granted once the Shell runs it.
       const helper = join(home, ".local", "share", "gnome-shell", "extensions", GNOME_HELPER)
       assert.deepEqual(await desktopPermissions(gnome, context()), [{ id: "gnome-shell-helper", state: "needed" }])
-      assert.ok(desk.ran.every(([, verb]) => verb !== "set"), "reading a state changes no setting")
+      assert.ok(desk.ran.every(([file, verb]) => verb !== "set" && file !== "/usr/bin/gnome-extensions"), "reading a state changes no setting")
       await assert.rejects(readFile(join(helper, "extension.js"), "utf8"))
       await grantDesktopPermissions(gnome, context())
       assert.equal(await readFile(join(helper, "extension.js"), "utf8"), "// helper\n")
-      assert.deepEqual(desk.enabled, ["other@example", GNOME_HELPER], "the person's other extensions stay enabled")
+      assert.equal(await readFile(join(helper, "driver"), "utf8"), `${await realpath(driver)}\n`, "the helper is told the one program it answers")
+      assert.equal(desk.listed, `['other@example', '${GNOME_HELPER}']`, "the person's other extensions stay enabled")
+      assert.ok(desk.ran.some(([file, verb, id]) => file === "/usr/bin/gnome-extensions" && verb === "enable" && id === GNOME_HELPER), "GNOME's own tool makes the edit")
+      assert.ok(desk.ran.every(([file, verb, , key]) => !(file === "/usr/bin/gsettings" && verb === "set" && key === "enabled-extensions")), "the list itself is never rewritten while the tool is there")
       assert.ok(desk.ran.every(([file]) => file!.startsWith("/usr/bin/")), "programs run by their whole path")
+      assert.deepEqual(await desktopPermissions(gnome, context()), [{ id: "gnome-shell-helper", state: "restart" }])
+      // GNOME with every user extension turned off would never load it: that is its own step, on the same action.
+      desk.off = true
+      assert.deepEqual(await desktopPermissions(gnome, context()), [{ id: "gnome-shell-helper", state: "extensions-off" }])
+      assert.equal(desktopPermissionsPending([{ id: "gnome-shell-helper", state: "extensions-off" }]), true)
+      await grantDesktopPermissions(gnome, context())
+      assert.equal(desk.off, false, "the person's click turned user extensions on")
       assert.deepEqual(await desktopPermissions(gnome, context()), [{ id: "gnome-shell-helper", state: "restart" }])
       // The Shell still running an older helper is not this one loaded.
       desk.running = 10
@@ -161,12 +187,40 @@ try {
       desk.running = 11
       assert.deepEqual(await desktopPermissions(gnome, context()), [{ id: "gnome-shell-helper", state: "granted" }])
       assert.equal(desktopPermissionsPending([{ id: "gnome-shell-helper", state: "restart" }]), true)
+      assert.equal(desktopPermissionsPending([{ id: "kwin-window-capture", state: "blocked", reason: "driver-path" }]), true)
       assert.equal(desktopPermissionsPending([{ id: "kwin-window-capture", state: "granted" }, { id: "pointer-input", state: "unavailable" }]), false)
       await revokeDesktopPermissions(gnome, context())
-      assert.deepEqual(desk.enabled, ["other@example"])
+      assert.equal(desk.listed, "['other@example']")
       await assert.rejects(readFile(join(helper, "extension.js"), "utf8"))
       desk.running = undefined
       assert.deepEqual(await desktopPermissions(gnome, context()), [{ id: "gnome-shell-helper", state: "needed" }])
+
+      // The person's list is theirs. An id with an apostrophe, which GNOME prints in double quotes, and one with an
+      // escape survive an install and an uninstall byte for byte, through GNOME's tool.
+      for (const listed of [`["it's@example", 'other@example']`, `['a@example', "quo\\"ted@example"]`, "@as []"]) {
+        desk.listed = listed
+        await grantDesktopPermissions(gnome, context())
+        assert.ok(desk.listed.endsWith(`'${GNOME_HELPER}']`), desk.listed)
+        if (listed !== "@as []") assert.ok(desk.listed.startsWith(listed.slice(0, -1)), `everything before the new entry is untouched: ${desk.listed}`)
+        await revokeDesktopPermissions(gnome, context())
+        assert.equal(desk.listed, listed, "the list is as it was")
+      }
+      // Without GNOME's tool the edit is Mako's own: made on a list of plain ids, refused on any other.
+      desk.tool = false
+      desk.listed = "['a@example', 'b@example']"
+      await grantDesktopPermissions(gnome, context())
+      assert.equal(desk.listed, `['a@example', 'b@example', '${GNOME_HELPER}']`)
+      await revokeDesktopPermissions(gnome, context())
+      assert.equal(desk.listed, "['a@example', 'b@example']")
+      for (const listed of [`["it's@example", 'other@example']`, `['a@example', "quo\\"ted@example"]`]) {
+        desk.listed = listed
+        assert.deepEqual(await desktopPermissions(gnome, context()), [{ id: "gnome-shell-helper", state: "blocked", reason: "extension-list" }])
+        await assert.rejects(grantDesktopPermissions(gnome, context()), /won't rewrite; nothing was installed/)
+        assert.equal(desk.listed, listed, "a list Mako can't edit safely is left alone")
+        await assert.rejects(readFile(join(helper, "extension.js"), "utf8"), "and nothing is installed beside it")
+      }
+      desk.tool = true
+      desk.listed = "['other@example']"
       // An install with no helper beside its driver says so and installs nothing.
       await assert.rejects(grantDesktopPermissions(gnome, context({}, newer)), /no Shell helper/)
       // X11 and wlroots ask for nothing.
@@ -189,6 +243,9 @@ try {
   assert.deepEqual(local([{ id: "kwin-window-capture", state: "needed" }]), { kind: "needs-permission", detail: "Allow window capture" })
   assert.deepEqual(local([{ id: "gnome-shell-helper", state: "needed" }]), { kind: "needs-permission", detail: "Install Mako's Shell helper" })
   assert.deepEqual(local([{ id: "gnome-shell-helper", state: "restart" }]), { kind: "unavailable", detail: "Log out and back in once to finish" })
+  assert.deepEqual(local([{ id: "gnome-shell-helper", state: "extensions-off" }]), { kind: "needs-permission", detail: "Turn on GNOME's user extensions" })
+  assert.deepEqual(local([{ id: "kwin-window-capture", state: "blocked", reason: "driver-path" }]), { kind: "unavailable", detail: "Reinstall Mako at a plain path" })
+  assert.deepEqual(local([{ id: "gnome-shell-helper", state: "blocked", reason: "extension-list" }]), { kind: "unavailable", detail: "Install GNOME's gnome-extensions tool" })
   assert.equal(local([{ id: "kwin-window-capture", state: "granted" }, { id: "pointer-input", state: "unavailable" }])?.kind, "ready")
 
   // App shots list windows from the driver; pictures and live sources come from a capturer when there is one.

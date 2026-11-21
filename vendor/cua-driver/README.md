@@ -55,6 +55,16 @@ and 6), so `wayland/kwin_helper.rs` is now that adapter with nothing installed:
   adapter"). An unanswered activation is now asked again inside 3 s; a refusal
   Shell did answer is final, and with no helper on the bus nothing waits.
 
+- **KWin is the session's compositor.** Where KWin's executable can't be read
+  (file capabilities hide it), the process answering as `org.kde.KWin` must be
+  the one the kernel names behind `$WAYLAND_DISPLAY`'s socket (`SO_PEERCRED`),
+  or the child of KWin's own wrapper that opened it; otherwise it is refused.
+- **The Shell helper answers its driver only** (helper version 12). It took
+  every session-bus caller. It now reads the caller's pid from the bus and that
+  pid's executable from `/proc`, and answers only the driver whose path its
+  installer wrote beside it (`driver`), or a `gdbus` that driver started, which
+  is how the driver asks. `GetVersion` alone answers anyone.
+
 `cargo test -p platform-linux` covers the snapshot parser, the token, the raw
 picture's conversion and the activation retry (the contract tests in
 `tests/kwin_helper_contract.rs` were rewritten for the script's snapshot).

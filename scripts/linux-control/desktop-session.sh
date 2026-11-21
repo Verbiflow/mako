@@ -66,7 +66,6 @@ gnome)
   export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=GNOME LIBGL_ALWAYS_SOFTWARE=1
   exec dbus-run-session -- sh -c '
     set -eu
-    gsettings set org.gnome.shell disable-user-extensions false
     node "$0/desktop-grant.mjs"
     gsettings set org.gnome.shell welcome-dialog-last-shown-version "46"
     gsettings set org.gnome.desktop.interface enable-animations false

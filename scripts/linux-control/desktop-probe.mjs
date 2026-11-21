@@ -150,6 +150,14 @@ try {
       assert.deepEqual(asked, [{ id: "gnome-shell-helper", state: "granted" }])
       return asked
     })
+  if (kind === "gnome")
+    await step("permissions: the Shell helper refuses a caller that is not its driver", async () => {
+      const ask = (method) => run("gdbus", ["call", "--session", "--dest", "org.cua.WinRects", "--object-path", "/org/cua/WinRects", "--method", `org.cua.WinRects.${method}`]).then(({ stdout }) => stdout.trim(), (error) => String(error.stderr ?? error.message))
+      assert.match(await ask("GetVersion"), /uint32 \d+/, "its version answers anyone")
+      const refused = await ask("GetRects")
+      assert.match(refused, /NotAllowed/, refused.slice(0, 300))
+      return { refused: refused.trim().split("\n").at(-1).slice(0, 160) }
+    })
   if (kind === "kde" || kind === "kde6") {
     // Nothing allowed KWin's window capture yet: the screenshot is refused, and the refusal names the person's action.
     await step("permissions: a screenshot before window capture is allowed names the action", async () => {

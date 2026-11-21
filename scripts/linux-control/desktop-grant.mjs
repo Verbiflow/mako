@@ -14,8 +14,15 @@ const gnome = { session: "wayland", compositor: "gnome", xwayland: true }
 const context = desktopGrantContext(() => cuaDriverExecutable())
 const before = await desktopPermissions(gnome, context)
 assert.deepEqual(before, [{ id: "gnome-shell-helper", state: "needed" }], "nothing is installed until the person asks")
-await grantDesktopPermissions(gnome, context)
+// Each press of the row's one action: install, then (where GNOME has user extensions turned off) turn them on.
+const steps = []
+for (let state = before[0].state; state === "needed" || state === "extensions-off"; ) {
+  await grantDesktopPermissions(gnome, context)
+  state = (await desktopPermissions(gnome, context))[0].state
+  steps.push(state)
+  assert.ok(steps.length <= 2, `the action converges: ${steps.join(", ")}`)
+}
 const after = await desktopPermissions(gnome, context)
 assert.deepEqual(after, [{ id: "gnome-shell-helper", state: "restart" }], "installed, and waiting for the next login")
-await writeFile(join(process.env.MAKO_EVIDENCE ?? "/tmp", "gnome-grant.json"), JSON.stringify({ before, after }))
-console.log(JSON.stringify({ name: "permissions: install GNOME's Shell helper as Settings does", before, after }))
+await writeFile(join(process.env.MAKO_EVIDENCE ?? "/tmp", "gnome-grant.json"), JSON.stringify({ before, steps, after }))
+console.log(JSON.stringify({ name: "permissions: install GNOME's Shell helper as Settings does", before, steps, after }))

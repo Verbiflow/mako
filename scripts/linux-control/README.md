@@ -156,13 +156,21 @@ GNOME's window list, screenshots, activation and agent cursor come from the
 driver's Shell helper (`wayland-helper/winrects@cua`), an extension that lets
 Mako list and activate windows. Nothing installs it on its own. Settings shows
 "Shell helper" under Computer use with "Install helper", which copies it into
-`~/.local/share/gnome-shell/extensions/` and adds it to GNOME's enabled
-extensions (`gsettings`, by its whole path). The Shell loads a new extension
-only at login, so the row then reads "Log out and back in once to finish", and
+`~/.local/share/gnome-shell/extensions/` with the driver's whole path beside it,
+and enables it through GNOME's own `gnome-extensions` tool, which touches that
+one entry. Without the tool the host adds the entry to the printed list itself,
+and only when the list holds nothing but plain quoted ids: one printed with a
+double quote or a backslash is never rewritten, and the row says so. The helper
+answers only that driver (it checks its caller's executable; version 12), and
+its version to anyone. Where GNOME has user extensions turned off the row says
+so, with "Turn on user extensions". The Shell loads a new extension only at
+login, so the row then reads "Log out and back in once to finish", and
 "Installed" once the helper of that version answers on the session bus.
 "Uninstall" removes both. Without it GNOME lists windows through AT-SPI alone
 and refuses screenshots and foreground input, and the refusal names "Install
-helper" for the agent to ask for. This desktop installs it the same way:
+helper" for the agent to ask for. A driver at a path that is not plain letters,
+digits and `/._+-` gets neither grant, on KDE or GNOME, and the row says why.
+This desktop installs it the same way:
 `desktop-grant.mjs` runs the host's grant before the Shell starts, and the
 probe then finds it granted.
 

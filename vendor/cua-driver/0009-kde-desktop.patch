@@ -162,7 +162,7 @@ index d920139..834dba2 100644
          }
          if portal_libei_enabled {
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/kwin_helper.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/kwin_helper.rs
-index 2c94e56..759b223 100644
+index 2c94e56..f1829a3 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/kwin_helper.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/kwin_helper.rs
 @@ -1,37 +1,90 @@
@@ -666,7 +666,7 @@ index 2c94e56..759b223 100644
              })
          })
          .collect()
-@@ -300,125 +364,394 @@ pub fn parse_snapshot(raw: &str) -> Option<Vec<KwinWindow>> {
+@@ -300,125 +364,433 @@ pub fn parse_snapshot(raw: &str) -> Option<Vec<KwinWindow>> {
  
  fn json_i32(value: &serde_json::Value, key: &str) -> Option<i32> {
      let number = value.get(key)?.as_f64()?;
@@ -874,13 +874,55 @@ index 2c94e56..759b223 100644
 +            path.file_name().and_then(|name| name.to_str()) == Some("kwin_wayland")
 +                && metadata.is_some_and(|meta| meta.uid() == 0 && meta.permissions().mode() & 0o022 == 0)
 +        }
-+        // KWin with file capabilities hides its executable from an ordinary process; the name owner check stands.
-+        None => true,
++        // KWin with file capabilities hides its executable from an ordinary process. It must then be the session's
++        // compositor itself: the process the kernel names as the far end of this session's Wayland socket.
++        None => {
++            let listener = wayland_socket_peer();
++            compositor_is(pid, listener, parent_of(pid), listener.and_then(command_of).as_deref())
++        }
 +    }
 +}
  
 -    let Some(owner_raw) = dbus_call("GetNameOwner", &[KWIN_DEST.to_owned()]) else {
++/// Whether `pid` is the compositor behind the Wayland socket whose listening process is `listener`: that process
++/// itself, or its child where the listener is KWin's own wrapper, which opens the socket and hands it to KWin.
++pub fn compositor_is(pid: u32, listener: Option<u32>, parent: Option<u32>, listener_command: Option<&str>) -> bool {
++    let Some(listener) = listener else {
+         return false;
+     };
+-    let Some(kwin_owner) = parse_quoted_string(&owner_raw) else {
 -        return false;
++    listener == pid || (parent == Some(listener) && listener_command.is_some_and(|command| command.starts_with("kwin_wayland")))
++}
++
++/// The pid the kernel records for the listening end of `$WAYLAND_DISPLAY`'s socket (`SO_PEERCRED`).
++fn wayland_socket_peer() -> Option<u32> {
++    use std::os::fd::AsRawFd;
++    let name = std::env::var_os("WAYLAND_DISPLAY")?;
++    let path = std::path::PathBuf::from(&name);
++    let path = if path.is_absolute() { path } else { std::path::PathBuf::from(std::env::var_os("XDG_RUNTIME_DIR")?).join(path) };
++    let stream = std::os::unix::net::UnixStream::connect(path).ok()?;
++    let mut peer = libc::ucred { pid: 0, uid: 0, gid: 0 };
++    let mut size = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
++    // SAFETY: `peer` and `size` are a ucred and its length, as SO_PEERCRED writes; the descriptor is open.
++    let read = unsafe {
++        libc::getsockopt(stream.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED, std::ptr::addr_of_mut!(peer).cast(), &mut size)
+     };
+-    if kwin_owner != helper_owner {
+-        return false;
++    (read == 0 && peer.pid > 0 && peer.uid == current_uid()).then_some(peer.pid as u32)
++}
++
++fn parent_of(pid: u32) -> Option<u32> {
++    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
++    // The fields after the command's closing parenthesis: state, then the parent's pid.
++    stat.rsplit_once(')')?.1.split_whitespace().nth(1)?.parse().ok()
++}
++
++fn command_of(pid: u32) -> Option<String> {
++    std::fs::read_to_string(format!("/proc/{pid}/comm")).ok().map(|command| command.trim().to_owned())
++}
++
 +fn script_directory() -> std::path::PathBuf {
 +    std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir)
 +}
@@ -922,9 +964,16 @@ index 2c94e56..759b223 100644
 +            ),
 +            Self::Failed(reason) => write!(f, "KWin window capture failed: {reason}"),
 +        }
-+    }
+     }
 +}
-+
+ 
+-    let executable = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
+-    match executable {
+-        Some(path) => {
+-            let metadata = std::fs::metadata(&path).ok();
+-            path.file_name().and_then(|name| name.to_str()) == Some("kwin_wayland")
+-                && metadata
+-                    .is_some_and(|meta| meta.uid() == 0 && meta.permissions().mode() & 0o022 == 0)
 +impl std::error::Error for CaptureError {}
 +
 +/// One exact window's pixels as PNG, at the size its geometry reports.
@@ -1007,8 +1056,9 @@ index 2c94e56..759b223 100644
 +            }
 +            Err(CaptureError::NotAuthorized) => {}
 +            Err(error) => return Err(error),
-+        }
-+    }
+         }
+-        None => true,
+     }
 +    if let Ok(mut at) = REFUSED_AT.lock() {
 +        *at = Some(Instant::now());
 +    }
@@ -1068,9 +1118,7 @@ index 2c94e56..759b223 100644
 +            )
 +            .await
 +        }
-     };
--    let Some(kwin_owner) = parse_quoted_string(&owner_raw) else {
--        return false;
++    };
 +    let reply = match reply {
 +        Err(_) => return Err(CaptureError::Failed("KWin did not answer in time".into())),
 +        Ok(Err(zbus::Error::MethodError(name, detail, _))) if name.as_str().ends_with("NoAuthorized") => {
@@ -1079,9 +1127,7 @@ index 2c94e56..759b223 100644
 +        }
 +        Ok(Err(error)) => return Err(CaptureError::Failed(error.to_string())),
 +        Ok(Ok(reply)) => reply,
-     };
--    if kwin_owner != helper_owner {
--        return false;
++    };
 +    let body = reply.body();
 +    let meta: HashMap<String, OwnedValue> = body.deserialize().map_err(|error| CaptureError::Failed(error.to_string()))?;
 +    let number = |key: &str| meta.get(key).and_then(|value| u32::try_from(&**value).ok());
@@ -1090,7 +1136,7 @@ index 2c94e56..759b223 100644
 +        if captured.is_some_and(|captured| captured != uuid) {
 +            return Err(CaptureError::Failed("KWin captured a different window".into()));
 +        }
-     }
++    }
 +    match (number("width"), number("height"), number("stride"), number("format")) {
 +        (Some(width), Some(height), Some(stride), Some(format)) if width > 0 && height > 0 => {
 +            Ok(Raster { width, height, stride: stride as usize, format })
@@ -1098,14 +1144,7 @@ index 2c94e56..759b223 100644
 +        _ => Err(CaptureError::Failed("KWin described no picture".into())),
 +    }
 +}
- 
--    let executable = std::fs::read_link(format!("/proc/{pid}/exe")).ok();
--    match executable {
--        Some(path) => {
--            let metadata = std::fs::metadata(&path).ok();
--            path.file_name().and_then(|name| name.to_str()) == Some("kwin_wayland")
--                && metadata
--                    .is_some_and(|meta| meta.uid() == 0 && meta.permissions().mode() & 0o022 == 0)
++
 +/// Qt's raw picture as RGBA. Formats KWin writes: RGB32 (4), ARGB32 (5), ARGB32_Premultiplied (6), and the RGBA
 +/// orders (RGBX8888 16, RGBA8888 17, RGBA8888_Premultiplied 18).
 +pub fn raster_to_image(raster: Raster, bytes: &[u8]) -> Option<image::RgbaImage> {
@@ -1132,9 +1171,8 @@ index 2c94e56..759b223 100644
 +                (r, g, b) = (straight(r), straight(g), straight(b));
 +            }
 +            rgba.extend_from_slice(&[r, g, b, a]);
-         }
--        None => true,
-     }
++        }
++    }
 +    image::RgbaImage::from_raw(raster.width, raster.height, rgba)
 +}
 +
@@ -1148,7 +1186,7 @@ index 2c94e56..759b223 100644
  }
  
  #[cfg(test)]
-@@ -426,17 +759,44 @@ mod tests {
+@@ -426,17 +798,55 @@ mod tests {
      use super::*;
  
      #[test]
@@ -1173,9 +1211,7 @@ index 2c94e56..759b223 100644
 +        assert!(raster_to_image(Raster { width: 1, height: 1, stride: 4, format: 99 }, &[0; 4]).is_none());
 +        assert!(raster_to_image(Raster { width: 2, height: 1, stride: 8, format: 5 }, &[0; 4]).is_none());
 +    }
- 
--        assert!(!called.get());
--        assert!(error.to_string().contains("target-bound KWin input path"));
++
 +    #[test]
 +    fn a_buffer_with_a_shadow_is_cut_to_the_window() {
 +        let window = parse_snapshot(
@@ -1198,6 +1234,19 @@ index 2c94e56..759b223 100644
 +        assert_eq!(window_picture(image::RgbaImage::new(1, 1), &window).map(|picture| picture.width()), Some(1));
 +    }
 +
++    #[test]
++    fn an_unreadable_kwin_must_be_the_session_compositor() {
++        // The listener of the Wayland socket is that process, or KWin's wrapper whose child it is.
++        assert!(compositor_is(40, Some(40), Some(1), Some("kwin_wayland")));
++        assert!(compositor_is(41, Some(40), Some(40), Some("kwin_wayland_wr")));
++        // Another process claiming KWin's name, a wrapper that is not KWin's, or no socket at all: refused.
++        assert!(!compositor_is(41, Some(40), Some(7), Some("kwin_wayland_wr")));
++        assert!(!compositor_is(41, Some(40), Some(40), Some("sh")));
++        assert!(!compositor_is(41, None, Some(40), None));
++    }
+ 
+-        assert!(!called.get());
+-        assert!(error.to_string().contains("target-bound KWin input path"));
 +    #[test]
 +    fn the_script_reports_to_this_request_only() {
 +        assert!(SCRIPT.contains("callDBus(__SERVICE__") && SCRIPT.contains("__NONCE__") && SCRIPT.contains("__ACTIVATE__"));
@@ -1452,7 +1501,7 @@ index 4141f40..9d3f3de 100644
  
  /// Run a focus-bound keyboard transaction only after a compositor adapter has
 diff --git a/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs b/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
-index f4ec49c..c27496a 100644
+index f4ec49c..e8deee3 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
 +++ b/libs/cua-driver/rust/crates/platform-linux/src/wayland/shell_helper.rs
 @@ -459,6 +459,10 @@ fn trusted_shell_windows(filter_pid: Option<u32>) -> Option<Vec<ShellWindow>> {
@@ -1598,6 +1647,28 @@ index f4ec49c..c27496a 100644
      const EXTENSION_SOURCE: &str =
          include_str!("../../../../../wayland-helper/winrects@cua/extension.js");
      const EXTENSION_METADATA: &str =
+@@ -715,7 +780,7 @@ mod tests {
+     #[test]
+     fn bundled_helper_v9_retains_host_owned_modifier_badge_chips() {
+         assert!(EXTENSION_SOURCE.contains("GetVersion()"));
+-        assert!(EXTENSION_SOURCE.contains("return 11;"));
++        assert!(EXTENSION_SOURCE.contains("return 12;"));
+         assert!(EXTENSION_SOURCE.contains("SetCursorState"));
+         assert!(EXTENSION_SOURCE.contains("SetCursorColor"));
+         assert!(EXTENSION_SOURCE.contains("SetSessionLabel"));
+@@ -740,7 +805,11 @@ mod tests {
+         assert!(!EXTENSION_SOURCE.contains("function drawModifiers"));
+         let metadata: serde_json::Value =
+             serde_json::from_str(EXTENSION_METADATA).expect("valid bundled helper metadata");
+-        assert_eq!(metadata["version"], 11);
++        assert_eq!(metadata["version"], 12);
++        // The helper answers only the driver it was installed for; its version alone answers anyone.
++        assert!(EXTENSION_SOURCE.contains("wrapJSObject(IFACE, this._gated())"));
++        assert!(EXTENSION_SOURCE.contains("method.name !== 'GetVersion'"));
++        assert!(EXTENSION_SOURCE.contains("org.cua.WinRects.NotAllowed"));
+ 
+         for action in [
+             "idle", "observe", "click", "drag", "scroll", "text", "key", "navigate", "app",
 diff --git a/libs/cua-driver/rust/crates/platform-linux/tests/kwin_helper_contract.rs b/libs/cua-driver/rust/crates/platform-linux/tests/kwin_helper_contract.rs
 index bc9192c..39b54e7 100644
 --- a/libs/cua-driver/rust/crates/platform-linux/tests/kwin_helper_contract.rs
@@ -1785,4 +1856,120 @@ index bc9192c..39b54e7 100644
 +    if std::env::var("XDG_CURRENT_DESKTOP").is_err() {
 +        assert!(result.is_err() && !called.get(), "input body must not run without KWin's confirmation");
 +    }
+ }
+diff --git a/libs/cua-driver/wayland-helper/winrects@cua/extension.js b/libs/cua-driver/wayland-helper/winrects@cua/extension.js
+index c5a1ebc..0e0f955 100644
+--- a/libs/cua-driver/wayland-helper/winrects@cua/extension.js
++++ b/libs/cua-driver/wayland-helper/winrects@cua/extension.js
+@@ -680,9 +680,90 @@ function drawBadgeChip(cr, glyph, filled, fillColor) {
+   }
+ }
+ 
++// Everything here acts inside the compositor (window pixels, activation), so it answers one caller only: the driver
++// this helper was installed for, whose whole path its installer wrote into the `driver` file beside this one. The
++// caller is found from the bus (its pid) and from the kernel (that pid's executable). The driver asks through `gdbus`,
++// a child it starts, so a `gdbus` whose parent is that driver is the driver asking. `GetVersion` alone answers
++// anyone: it says only that the helper is running, which the installer's own state check reads.
++function executableOf(pid) {
++  try {
++    return GLib.file_read_link(`/proc/${pid}/exe`);
++  } catch (_error) {
++    return null;
++  }
++}
++
++function parentOf(pid) {
++  try {
++    const [ok, bytes] = GLib.file_get_contents(`/proc/${pid}/stat`);
++    if (!ok) return 0;
++    // The fields after the command's closing parenthesis: state, then the parent's pid.
++    const text = new TextDecoder().decode(bytes);
++    return Number(text.slice(text.lastIndexOf(')') + 2).split(' ')[1]) || 0;
++  } catch (_error) {
++    return 0;
++  }
++}
++
++export function callerIsDriver(pid, driver, executable = executableOf, parent = parentOf) {
++  if (!driver || !pid) return false;
++  const program = executable(pid);
++  if (program === driver) return true;
++  return Boolean(program) && program.split('/').pop() === 'gdbus' && executable(parent(pid)) === driver;
++}
++
+ export default class WinRectsExtension extends Extension {
++  _installedDriver() {
++    try {
++      const [ok, bytes] = GLib.file_get_contents(`${this.path}/driver`);
++      return ok ? new TextDecoder().decode(bytes).trim() : '';
++    } catch (_error) {
++      return '';
++    }
++  }
++  _callerPid(sender) {
++    return new Promise((resolve) => {
++      Gio.DBus.session.call(
++        'org.freedesktop.DBus', '/org/freedesktop/DBus', 'org.freedesktop.DBus', 'GetConnectionUnixProcessID',
++        new GLib.Variant('(s)', [sender]), new GLib.VariantType('(u)'), Gio.DBusCallFlags.NONE, 1000, null,
++        (connection, result) => {
++          try {
++            resolve(connection.call_finish(result).deepUnpack()[0]);
++          } catch (_error) {
++            resolve(0);
++          }
++        });
++    });
++  }
++  // Each method of the interface behind the caller check. A method written to answer its own invocation (`…Async`)
++  // is handed it; a plain one has its return value sent, in the interface's own signature.
++  _gated() {
++    const gate = {};
++    for (const method of Gio.DBusNodeInfo.new_for_xml(IFACE).interfaces[0].methods) {
++      const signature = `(${method.out_args.map((arg) => arg.signature).join('')})`;
++      gate[`${method.name}Async`] = async (params, invocation) => {
++        try {
++          if (method.name !== 'GetVersion' &&
++              !callerIsDriver(await this._callerPid(invocation.get_sender()), this._installedDriver())) {
++            invocation.return_dbus_error('org.cua.WinRects.NotAllowed',
++              "This helper answers only the computer control driver it was installed for");
++            return;
++          }
++          if (this[`${method.name}Async`]) {
++            await this[`${method.name}Async`](params, invocation);
++            return;
++          }
++          const value = this[method.name](...params);
++          invocation.return_value(method.out_args.length ? new GLib.Variant(signature, [value]) : null);
++        } catch (error) {
++          invocation.return_dbus_error('org.cua.WinRects.Failed', String(error));
++        }
++      };
++    }
++    return gate;
++  }
+   enable() {
+-    this._impl = Gio.DBusExportedObject.wrapJSObject(IFACE, this);
++    this._impl = Gio.DBusExportedObject.wrapJSObject(IFACE, this._gated());
+     this._impl.export(Gio.DBus.session, '/org/cua/WinRects');
+     this._nameId = Gio.bus_own_name(
+       Gio.BusType.SESSION,
+@@ -873,7 +954,7 @@ export default class WinRectsExtension extends Extension {
+     }
+   }
+   GetVersion() {
+-    return 11;
++    return 12;
+   }
+   GetRects() {
+     const actors = global.get_window_actors();
+diff --git a/libs/cua-driver/wayland-helper/winrects@cua/metadata.json b/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
+index 280788c..897dead 100644
+--- a/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
++++ b/libs/cua-driver/wayland-helper/winrects@cua/metadata.json
+@@ -3,5 +3,5 @@
+   "name": "WinRects",
+   "description": "Expose window geometry, capture, cursor, and verified activation for cua-driver on Wayland.",
+   "shell-version": ["45", "46", "47", "48", "49", "50"],
+-  "version": 11
++  "version": 12
  }
