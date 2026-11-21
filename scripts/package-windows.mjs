@@ -60,18 +60,9 @@ assert.ok(
 )
 const pkgSource = JSON.parse(await readFile(join(project, "package.json"), "utf8"))
 /** Windows's helpers beside `Mako.exe`, as `build.win.extraFiles` declares them (the video helper, the control driver). */
-/**
- * The helpers this checkout builds itself, each by its script with `--require`: the host's native security helper
- * (#1117), which the host runs from beside `Mako.exe`. One whose script this checkout doesn't have yet is left out with
- * a warning, so a tree from before it still packages; once the script is here, the helper is required.
- */
+/** The helpers built here, each by its script with `--require`: the host's native security helper, which it runs from beside `Mako.exe`. */
 const HELPER_BUILDS = { "build/mako-windows.exe": "scripts/build-windows-helper.mjs" }
-const helpers = z.array(z.object({ from: z.string(), to: z.string() })).parse(pkgSource.build.win?.extraFiles ?? []).filter((helper) => {
-  const builder = HELPER_BUILDS[helper.from]
-  if (!builder || existsSync(join(project, builder))) return true
-  console.warn(`::warning::${helper.to} isn't packaged: this checkout has no ${builder} to build it`)
-  return false
-})
+const helpers = z.array(z.object({ from: z.string(), to: z.string() })).parse(pkgSource.build.win?.extraFiles ?? [])
 const inputs = [
   "dist",
   "dist-electron",
@@ -138,7 +129,7 @@ const stage = await mkdtemp(join(tmpdir(), "mako-package-windows-"))
 try {
   // The video helper, when this checkout can build one for Windows (`scripts/build-video-helper.mjs`); a declared
   // helper that isn't there fails below rather than shipping an app without it.
-  execFileSync(process.execPath, [join(project, "scripts/build-video-helper.mjs"), "--if-fresh"], { cwd: project, stdio: "inherit" })
+  execFileSync(process.execPath, [join(project, "scripts/build-video-helper.mjs"), "--require", "--if-fresh"], { cwd: project, stdio: "inherit" })
   for (const helper of helpers) {
     const builder = HELPER_BUILDS[helper.from]
     if (builder) execFileSync(process.execPath, [join(project, builder), "--require"], { cwd: project, stdio: "inherit" })

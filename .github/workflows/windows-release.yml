@@ -90,10 +90,8 @@ jobs:
           node scripts/package-windows.mjs
           cat release/package-inputs.json
 
-      # What needs the host is reported until the Windows host lands (scratch/windows-host); then this adds
-      # --require-host, and the window, the host's /health, the hand-over and the close are required too.
       - name: Install, launch, measure and uninstall
-        run: node scripts/smoke-windows-install.mjs release/Mako-Setup-x64.exe --evidence smoke-evidence
+        run: node scripts/smoke-windows-install.mjs release/Mako-Setup-x64.exe --evidence smoke-evidence --require-host
 
       - name: Write checksums
         run: |

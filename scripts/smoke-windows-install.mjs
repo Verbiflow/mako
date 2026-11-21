@@ -16,10 +16,10 @@ import { promisify } from "node:util"
  *
  *   node scripts/smoke-windows-install.mjs <Mako-Setup-x64.exe> [--evidence <directory>] [--require-host]
  *
- * What needs the host (the window, which shows only once its host answers; the host's process and `/health`; a second
- * launch handing over; closing the window leaving the host) is reported, and required with `--require-host`: until the
- * host runs on Windows (on main it refuses its folder and listens on a Unix socket), the desktop shows "Mako could not
- * attach to its shared host" instead.
+ * What needs the host (the window, which shows only once its host answers; the host's process, its helper and
+ * `/health`; a second launch handing over; the link proofs; closing the window leaving the host) is required with
+ * `--require-host`, as the release workflow runs it; without it those are reported only, for a tree whose host can't
+ * start.
  * Writes `<evidence>/smoke.json` with the installer's size, the install and uninstall times, the cold start, and idle
  * memory and CPU.
  */
@@ -113,6 +113,7 @@ try {
   check("host process starts", Boolean(host), host?.command, true)
   // The host's native security helper (#1117), which it runs from beside Mako.exe.
   check("mako-windows.exe beside Mako.exe", existsSync(join(installDirectory, "mako-windows.exe")), installDirectory, true)
+  check("mako-video.exe beside Mako.exe", existsSync(join(installDirectory, "mako-video.exe")), installDirectory)
   const health = await hostHealth(began)
   report.hostHealthMs = health.ms
   check("host answers health", health.ok, health.detail, true)
