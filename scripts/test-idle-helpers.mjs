@@ -48,9 +48,12 @@ try {
     const core = await health().then((answer) => answer.domains.find((domain) => domain.name === "core"), () => undefined)
     if (core?.state === "ready") break
   }
-  // The watcher's child goes 30 s after its last watch: long enough for one started as the core opened to have gone.
+  // What the host does once its core is ready may start either (a `git` in the folder it was started in, a watch
+  // made and let go): each then goes 30 s after its last work.
+  await delay(10_000)
   for (const deadline = Date.now() + 75_000; helpers().length; await delay(1_000))
     assert.ok(Date.now() < deadline, `An idle host with no window keeps no helper process, but ${helpers().join(" and ")} still ran after 75 s`)
+  await delay(5_000)
   await delay(5_000)
   assert.deepEqual(helpers(), [], "and starts none while it idles")
   console.log("idle helpers: a host with no window and no project runs neither the watcher's child nor the Git helper")
