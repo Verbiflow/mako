@@ -85,8 +85,9 @@ const LINE_BYTES = 64 * 1024
 
 /**
  * Whether a process runs under one of `names`, matched as `lsof -c` matches them: a name begins the command's, and
- * `/…/` is a regular expression. True when that can't be told, so lsof answers as before: the host's probes read the
- * names only on Linux (`HostProbes.commands`), and elsewhere lsof itself is asked.
+ * `/…/` is a regular expression. True when that can't be told, so lsof answers as before: where the host's probes
+ * don't read the names (`HostProbes.commands`), and for a name read only in part (`RunningCommand.cut`) that the
+ * whole could match.
  */
 async function anyRunning(names: string[], runningIf?: (command: RunningCommand) => boolean): Promise<boolean> {
   if (!names.length) return true
@@ -95,9 +96,13 @@ async function anyRunning(names: string[], runningIf?: (command: RunningCommand)
   if (runningIf) return running.some(runningIf)
   const matches = names.map((name) => {
     const pattern = /^\/(.*)\/([bix]*)$/.exec(name)
-    if (!pattern) return (command: string) => command.startsWith(name)
-    const regex = new RegExp(pattern[1]!, pattern[2]!.includes("i") ? "i" : "")
-    return (command: string) => regex.test(command)
+    if (!pattern) return ({ comm, cut }: RunningCommand) => comm.startsWith(name) || Boolean(cut && name.startsWith(comm))
+    const source = pattern[1]!
+    const regex = new RegExp(source, pattern[2]!.includes("i") ? "i" : "")
+    // The one name an expression like `^grok$` matches; any other expression could match what wasn't read of a cut name.
+    const one = source.startsWith("^") && source.endsWith("$") ? source.slice(1, -1) : ""
+    const only = !pattern[2] && one && [...one].every((char) => /[\w-]/.test(char)) ? one : undefined
+    return ({ comm, cut }: RunningCommand) => cut ? only === undefined || only.startsWith(comm) : regex.test(comm)
   })
-  return running.some(({ comm }) => matches.some((match) => match(comm)))
+  return running.some((command) => matches.some((match) => match(command)))
 }

@@ -24,7 +24,7 @@ import {
   environmentForExecutable,
   resolveExecutable,
 } from "@mako/host/base/executable"
-import { ProviderActivityEngine } from "@mako/host/threads/activity-engine"
+import { NeededActivity, ProviderActivityEngine } from "@mako/host/threads/activity-engine"
 import { CONFIRMED_EVERY_MS, ProviderProfileCache } from "@mako/host/harnesses/provider-profile-cache"
 import { mock } from "node:test"
 import {
@@ -259,6 +259,58 @@ assert.deepEqual(activityUpdates, [["live:active"], ["live:needs-input"], []])
   const after = looks
   await waitFor(() => looks >= after + 3)
   quiet.stop()
+}
+
+// Nobody reading the answer, the harnesses aren't looked at: an idle host asked each one every half minute, which
+// alone kept its probes' child running. A reader coming on looks at once, and one going rests it again with what it
+// last read; whoever must know while it rests gets one look made for the ask, shared by everyone asking then.
+{
+  let looks = 0
+  let open = false
+  let wanted = false
+  const engine = new ProviderActivityEngine([{
+    provider: "rested",
+    pollIntervalMs: 5,
+    idlePollMs: 5,
+    async probe() {
+      looks += 1
+      await new Promise((resolve) => setTimeout(resolve, 2))
+      return { kind: "available", sessions: open ? [{ nativeId: "opened", status: "open" }] : [] }
+    },
+  } satisfies ProviderProcessProbe])
+  const seen: string[][] = []
+  engine.onChange((snapshot) => seen.push(snapshot.sessions.map((session) => session.nativeId ?? "")))
+  const need = new NeededActivity(engine, () => wanted, 40)
+  need.follow()
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(looks, 0, "with no reader, no harness is looked at, not even once as the host starts")
+
+  open = true
+  assert.deepEqual(await Promise.all([need.settled(), need.settled()]), [true, true], "an ask while it rests waits for a look")
+  assert.equal(looks, 1, "one look answers everyone asking together")
+  assert.deepEqual(seen, [["opened"]], "and what it found is said before the ask goes on")
+  assert.equal(await need.settled(), false, "an ask just after is answered by that look")
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(looks, 1, "the ask didn't start the engine")
+  assert.equal(await need.settled(), true, "a later ask looks again")
+  assert.equal(looks, 2)
+
+  wanted = true
+  open = false
+  need.follow()
+  assert.equal(await need.settled(), true, "a reader coming on looks at once, and an ask then waits for that look")
+  assert.deepEqual(seen, [["opened"], []], "which says what changed while nobody looked")
+  const running = looks
+  await waitFor(() => looks >= running + 3)
+  assert.equal(await need.settled(), false, "while it looks, an ask is answered from what it holds")
+
+  wanted = false
+  need.follow()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  const rested = looks
+  await new Promise((resolve) => setTimeout(resolve, 60))
+  assert.equal(looks, rested, "the last reader gone, it rests again")
+  engine.stop()
 }
 
 const claudeProbeHome = await mkdtemp(join(tmpdir(), "mako-claude-probe-"))

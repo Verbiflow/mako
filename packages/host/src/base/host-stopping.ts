@@ -40,8 +40,9 @@ export interface HostProbes {
   /** When `pid` started, as `ps -o lstart` says; every pid asked about in one turn is read by one `ps`. */
   startedAt(pid: number, signal?: AbortSignal): Promise<number>
   /**
-   * Every running process's command name, as `lsof -c` matches it, read once for every probe that asks within a beat;
-   * undefined where it isn't read this way (only Linux reads it, from /proc, with no process started).
+   * Every running process's command name, as `lsof -c` matches it, read once for every probe that asks within a beat:
+   * on Linux from /proc, with no process started, and on a Mac by one `ps`. Undefined where it isn't read (Windows),
+   * or couldn't be.
    */
   commands?(): Promise<RunningCommand[] | undefined>
 }
@@ -50,6 +51,8 @@ export interface HostProbes {
 export interface RunningCommand {
   comm: string
   args: string
+  /** Only the start of the name was read, and the whole may be longer: a Mac's `ps` gives a name's first 16 bytes. */
+  cut?: boolean
 }
 
 /**

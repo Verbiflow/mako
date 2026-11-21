@@ -63,7 +63,7 @@ import { headlessNodeExecutable } from "../base/headless-node.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { StoppableWorker } from "../base/worker-stop.js"
 import { onProviderChildChange } from "../base/provider-children.js"
-import type { HostJobs } from "../base/host-jobs.js"
+import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { threadFileWorkspace } from "../contracts/thread-file-workspace.js"
 import type { WorktreeOrigins } from "./worktree-origins.js"
 import type { Lineage } from "./lineage.js"
@@ -75,7 +75,7 @@ import {
   type MessageAnchor,
 } from "../contracts/message-anchor.js"
 import { tmpdir } from "node:os"
-import { ProviderActivityEngine } from "./activity-engine.js"
+import { NeededActivity, ProviderActivityEngine } from "./activity-engine.js"
 import type { ProviderActivitySession, ThreadHarnesses } from "./harnesses.js"
 import {
   type ActivityIndex,
@@ -258,6 +258,11 @@ export interface ThreadCatalogDeps {
   readOnly: boolean
   /** How this build stamps a store format it sets (`storeWriter`), handed to the catalog's worker or reader. */
   writer?: string
+  /**
+   * Who reads what the harnesses' processes do (`ThreadCatalog.activity`): a window, agents at work. With every one off
+   * the harnesses aren't looked at, until a session is written or one of them comes on. Given none, they always are.
+   */
+  activityNeeds?: readonly JobDemand[]
   emit(event: HostEvent): void
 }
 
@@ -275,8 +280,17 @@ export interface ThreadCatalog {
   stop(): void
   /** Whether the serving reader has a complete initial catalog for the rail. */
   ready(): boolean
-  /** Sessions another app is running now, by path. */
+  /** Sessions another app is running now, by path, as last looked. */
   activity(): Record<string, ExternalThreadActivity>
+  /**
+   * The same, looked at now when nobody was looking (`ThreadCatalogDeps.activityNeeds`), and after the first look when
+   * looking has just started again: what decides whether a session is another app's to answer asks this, a window or
+   * not. `listing` waits only for a look made for it: a window that has just subscribed is told what the first look
+   * finds as events, and its list doesn't wait for them.
+   */
+  activityNow(listing?: "listing"): Promise<Record<string, ExternalThreadActivity>>
+  /** One more reader of the harnesses' processes: they're looked at while it's on (`ThreadCatalogDeps.activityNeeds`). */
+  needActivityWhile(demand: JobDemand): void
   /** For the settings surface: is the daemon doing the work, and since when. */
   daemonStatus(): Promise<DaemonStats | null>
   /** For Settings › Diagnostics: each time the reader serving this host was adopted or lost, and why. */
@@ -558,6 +572,10 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
   const daemonBusy = jobs.demand("the sync daemon works")
   let daemonWorkedAt = 0
   let activityEngine: ProviderActivityEngine | null = null
+  /** The engine, looking only while `activityNeeded`. */
+  let activityNeed: NeededActivity | null = null
+  const activityNeeds = new Set<JobDemand>()
+  for (const demand of deps.activityNeeds ?? []) needActivityWhile(demand)
   let stopNudges: (() => void) | undefined
   const providerActivity = new Map<string, ProviderActivitySession[]>()
   let emittedActivity = new Map<string, ExternalThreadActivity>()
@@ -739,6 +757,29 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
         emit({ type: "thread-activity", path, activity: activity ?? null })
     }
     emittedActivity = next
+    followActivityNeed()
+  }
+
+  /**
+   * Whether anyone needs the harnesses' processes looked at: a reader that's on (a window, agents at work), a session
+   * some other app runs or holds open (other devices list it so), or a store written this last while, which is how a
+   * harness started in a terminal is first heard of with no window open (`NeededActivity`).
+   */
+  function activityNeeded(): boolean {
+    if (!activityNeeds.size || storeWrites.size || emittedActivity.size) return true
+    for (const demand of activityNeeds) if (demand.on) return true
+    return false
+  }
+
+  function followActivityNeed(): void {
+    activityNeed?.follow()
+  }
+
+  function needActivityWhile(demand: JobDemand): void {
+    if (activityNeeds.has(demand)) return
+    activityNeeds.add(demand)
+    demand.onChange(followActivityNeed)
+    followActivityNeed()
   }
 
   function monitorProviderProcesses(): void {
@@ -748,7 +789,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
       providerActivity.set(snapshot.provider, snapshot.sessions)
       reconcileSoon()
     })
-    activityEngine.start()
+    activityNeed = new NeededActivity(activityEngine, activityNeeded)
+    followActivityNeed()
     // A harness Mako starts or sees end: looked at now, not at its idle half minute.
     stopNudges = onProviderChildChange(() => activityEngine?.nudge())
   }
@@ -758,6 +800,7 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     stopNudges = undefined
     activityEngine?.stop()
     activityEngine = null
+    activityNeed = null
     providerActivity.clear()
     emittedActivity = new Map()
     storeWrites.clear()
@@ -1315,6 +1358,13 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     return Object.fromEntries(emittedActivity)
   }
 
+  async function threadActivityNow(listing?: "listing"): Promise<Record<string, ExternalThreadActivity>> {
+    const need = activityNeed
+    // What a look made for this ask read is said now, not at the next reconcile.
+    if (need && (!listing || need.resting) && await need.settled() && need === activityNeed) reconcileProviderActivity()
+    return threadActivitySnapshot()
+  }
+
   async function daemonStatus(): Promise<DaemonStats | null> {
     // The worker is this host watching for itself, not the daemon that keeps
     // syncing while Mako is closed; Settings reports only the latter.
@@ -1814,6 +1864,8 @@ export function threadCatalog(deps: ThreadCatalogDeps): ThreadCatalog {
     stop,
     ready: threadsReady,
     activity: threadActivitySnapshot,
+    activityNow: threadActivityNow,
+    needActivityWhile,
     daemonStatus,
     readerHistory,
     list: listThreads,

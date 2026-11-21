@@ -108,8 +108,10 @@ export { MovePlanSchema, MoveRefused, resumeMove, rewriteInPlace, type InPlaceFi
 /** A long quiet, not a short timer: a stopped app keeps its files and data, and restarting it for nothing costs more than it frees. */
 const THREAD_APP_IDLE_MS = 6 * 60 * 60 * 1000
 /**
- * The checkpoints' history child stays this long without an ask: the next turn usually comes within it, and a child
- * started for a turn's mark could take longer than the checkpoint waits for history (`CHECKPOINT_HISTORY_MS`).
+ * The checkpoints' history child stays this long without an ask while a turn may come soon (`WorkspacesDeps.turnsNear`):
+ * the next turn usually comes within it, and a child started for a turn's mark could take longer than the checkpoint
+ * waits for history (`CHECKPOINT_HISTORY_MS`): 60 to 90 ms on an idle Mac against 1 ms from a child that's up, and
+ * seconds on a loaded one. It is 25 MB held; with no window and no agent at work it goes as the other children do.
  */
 const CHECKPOINT_HISTORY_IDLE_MS = 15 * 60_000
 
@@ -145,6 +147,7 @@ export interface Workspaces {
    * The same history, read for turns' checkpoints alone, in a child of their own that stays up between turns
    * (`CHECKPOINT_HISTORY_IDLE_MS`): a read holds parcel's FSEvents lock in its child, and behind the journal's and the
    * probes' reads from marks hours back a turn's mark or read waited seconds, past the checkpoint's wait for history.
+   * So it shares no child with `fileHistory`, whose reads are those.
    */
   checkpointHistory: ReturnType<typeof childHistory>
   close(): Promise<void>
@@ -163,6 +166,11 @@ export interface WorkspacesDeps {
   jobs: HostJobs
   /** On while a client is subscribed: the summaries' own pass runs only for someone who'd hear it. */
   subscribed?: JobDemand
+  /**
+   * On while a turn may come soon: a client is subscribed or agents work here. The checkpoints' history child is kept
+   * between turns only then (`CHECKPOINT_HISTORY_IDLE_MS`); without it, always.
+   */
+  turnsNear?: JobDemand
   emit(event: HostEvent): void
   /** What holds a worktree: its conversations and terminals, as a person would name them. */
   inUse(path: string): Promise<string[]>
@@ -219,7 +227,7 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     }, recipesRoot: recipes, where: deps.where, recipes: deps.recipes })
     : null
   const fileHistory = childHistory(undefined, deps.watchReadings, deps.daemonRestarts)
-  const checkpointHistory = childHistory(undefined, new WatchReadings((message, fields) => hostLog("checkpoints", message, fields)), deps.daemonRestarts, CHECKPOINT_HISTORY_IDLE_MS)
+  const checkpointHistory = childHistory(undefined, new WatchReadings((message, fields) => hostLog("checkpoints", message, fields)), deps.daemonRestarts, deps.turnsNear ? undefined : CHECKPOINT_HISTORY_IDLE_MS, { role: "checkpoints", ...(deps.turnsNear && { kept: { idleMs: CHECKPOINT_HISTORY_IDLE_MS, while: deps.turnsNear } }) })
   const whoseApp = (app: AppKey): string | undefined => {
     const thread = ThreadIdSchema.safeParse(app)
     if (thread.success) {
