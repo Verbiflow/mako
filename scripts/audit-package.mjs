@@ -9,7 +9,8 @@ export async function auditPackage(app, target, output) {
   assert.match(target, /^(darwin|linux|win32)-(arm64|x64)$/)
   const resources = join(app, target.startsWith("darwin-") ? "Contents/Resources" : "resources")
   const archive = join(resources, "app.asar")
-  const files = listPackage(archive).map((path) => path.replace(/^\//, ""))
+  // Listed with the platform's separator: backslashes on Windows.
+  const files = listPackage(archive).map((path) => path.replaceAll("\\", "/").replace(/^\//, ""))
   const roots = new Set(["dist", "dist-electron", "dist-browser-extension", "mako-icons", "node_modules", "package.json"])
   assert.deepEqual(files.filter((path) => !roots.has(path.split("/")[0])), [], "Unexpected repository files in app archive")
   const unwanted = files.filter((path) =>

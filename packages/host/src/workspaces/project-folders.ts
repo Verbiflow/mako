@@ -10,6 +10,7 @@ import { findExecutable } from "../base/executable.js"
 import { hostLog } from "../base/host-log.js"
 import { onMac, onWindows } from "../base/platform.js"
 import type { MethodTable } from "../base/methods.js"
+import { windowsDevicePath, windowsSharePath } from "../contracts/local-folder.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import {
   CloneRequestSchema,
@@ -82,11 +83,8 @@ export function typedWholePath(typed: string, windows = onWindows()): boolean {
   return windows && (typed.startsWith("~\\") || /^[a-zA-Z]:[\\/]/.test(typed) || /^\\\\[^\\]+\\[^\\]+/.test(typed))
 }
 
-/** A Windows device or raw path (`\\?\`, `\\.\`, in either slash). */
-export const windowsDevicePath = (path: string): boolean => /^[\\/]{2}[?.][\\/]/.test(path)
-
-/** A Windows share (`\\server\share`): reading one hands the server this user's NTLM credentials. */
-export const windowsSharePath = (path: string): boolean => /^[\\/]{2}/.test(path)
+// Which Windows paths are devices and shares: one rule, shared with the desktop's links (`contracts/local-folder.ts`).
+export { windowsDevicePath, windowsSharePath }
 
 /** What to write when a path isn't whole, in the platform's own words. */
 export function wholePathAdvice(windows = onWindows()): string {
