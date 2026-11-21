@@ -243,7 +243,7 @@ export function guardRefused(error: Error): boolean {
 export const JsonValueSchema = z.json()
 export type JsonValue = z.infer<typeof JsonValueSchema>
 /** A JSON object as another build wrote it: what a rewrite carries back. */
-export const JsonObjectSchema = z.record(z.string(), JsonValueSchema)
+export const JsonObjectSchema = z.lazy(() => z.record(z.string(), JsonValueSchema))
 export type JsonObject = z.infer<typeof JsonObjectSchema>
 
 const JsonFormatSchema = z.object({ version: z.number().int().nonnegative(), reads: z.number().int().nonnegative().optional() })

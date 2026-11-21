@@ -9,12 +9,12 @@ const AgentSource = z.object({ subagent: z.union([
 ]) }).transform(({ subagent }) => subagent)
 
 /** Parsed at the rollout/header I/O boundaries; malformed unrelated fields cannot erase a known review source. */
-export const CodexAgentMetaSchema = z.object({
+export const CodexAgentMetaSchema = z.lazy(() => z.object({
   thread_source: z.string().nullish().catch(undefined),
   parent_thread_id: z.string().nullish().catch(undefined),
   originator: z.string().nullish().catch(undefined),
   source: AgentSource.nullish().catch(undefined),
-})
+}))
 type CodexAgentMeta = z.infer<typeof CodexAgentMetaSchema>
 
 /** Only Codex's native source identifies an internal reviewer; titles and user-selected worker roles do not. */

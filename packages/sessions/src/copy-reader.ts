@@ -18,7 +18,7 @@ import { EntrySchema, type Entry } from "./entries.js"
 export const COPY_FORMAT = 1
 
 /** A copy's first line: what it's a copy of, drawn by which decoder build, from which state of its records, and when. */
-export const CopyHeaderSchema = z.object({
+export const CopyHeaderSchema = z.lazy(() => z.object({
   copy: z.literal(COPY_FORMAT),
   harness: z.string(),
   nativeId: z.string(),
@@ -30,18 +30,18 @@ export const CopyHeaderSchema = z.object({
   /** The records' stamp the view was drawn from (`SessionCatalog.stampOf`), with the decoder build. */
   stamp: z.string(),
   at: z.number(),
-})
+}))
 export type CopyHeader = z.infer<typeof CopyHeaderSchema>
 
 /** A copy as read here: its header, and its entries in order. */
 export type ReadCopy = { header: CopyHeader; entries: Entry[] }
 /** A run of a copy's entries ending before `before` (the newest when it isn't given), with the copy's header. */
-export const CopyPageSchema = z.object({
+export const CopyPageSchema = z.lazy(() => z.object({
   header: CopyHeaderSchema,
   entries: z.array(EntrySchema),
   start: z.number().int().nonnegative(),
   total: z.number().int().nonnegative(),
-})
+}))
 export type CopyPage = z.infer<typeof CopyPageSchema>
 
 /** A copy's text, read: its header line, then an entry a line, each checked; a line that isn't one fails the read. */
@@ -58,13 +58,13 @@ export function parseCopy(text: string): ReadCopy {
 }
 
 /** What a reader last read of one Session's copy: the records' number it read at, its chunks in order, and its size. */
-export const CopyManifestSchema = z.object({
+export const CopyManifestSchema = z.lazy(() => z.object({
   through: z.number().int().nonnegative(),
   /** Its chunks' hashes, in order, laid end to end, as a version names them. */
   chunks: z.string(),
   size: z.number().int().nonnegative(),
   readAt: z.number(),
-})
+}))
 export type CopyManifest = z.infer<typeof CopyManifestSchema>
 
 /**

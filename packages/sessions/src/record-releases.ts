@@ -59,7 +59,7 @@ export function writeReleaseTimeline(evidence: string, key: string, timeline: Re
 }
 
 /** What a timeline reads of an npm packument: when each version was published (and `created`, `modified`). */
-export const NpmTimesSchema = z.object({ time: z.record(z.string(), z.string()) })
+export const NpmTimesSchema = z.lazy(() => z.object({ time: z.record(z.string(), z.string()) }))
 export type NpmTimes = z.infer<typeof NpmTimesSchema>
 
 /** An npm packument's `time` as a timeline: every version, prereleases too, with when it was published. */

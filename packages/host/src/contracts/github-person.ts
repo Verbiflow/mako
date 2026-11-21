@@ -22,17 +22,17 @@ export const MAKO_GITHUB_APP = "Mako by Verbiflow"
 export const GITHUB_PERSON_SETTINGS = "git#pull-requests"
 
 /** What the account keeps, as any device sees it: never the token. */
-export const GitHubTokenListingSchema = z.object({
+export const GitHubTokenListingSchema = z.lazy(() => z.object({
   /** Who it belongs to on GitHub. */
   login: z.string().min(1).max(100),
   savedAt: z.string(),
   /** When GitHub says it lapses; null for a token without an expiry. */
   expiresAt: z.string().nullable(),
-})
+}))
 export type GitHubTokenListing = z.infer<typeof GitHubTokenListingSchema>
 
 /** The account's answer: the token's listing while it's on, null while it's off. */
-export const GitHubTokenAnswerSchema = z.object({ token: GitHubTokenListingSchema.nullable() })
+export const GitHubTokenAnswerSchema = z.lazy(() => z.object({ token: GitHubTokenListingSchema.nullable() }))
 
 /** A personal access token as GitHub prints one: fine-grained (`github_pat_…`) or classic (`ghp_…`). */
 export const PERSON_TOKEN = /^(github_pat_|ghp_)[A-Za-z0-9_]{20,250}$/
@@ -52,12 +52,12 @@ export const NEW_PERSON_TOKEN_URL =
  * On a cloud machine, whether its pull requests open as its person, as its agent says it (`github-person` in
  * `machine-agent.ts`): `on` with whose token, `off`, or why theirs can't be used.
  */
-export const GitHubPersonSchema = z.discriminatedUnion("state", [
+export const GitHubPersonSchema = z.lazy(() => z.discriminatedUnion("state", [
   z.object({ state: z.literal("on"), login: z.string().min(1).max(100), expiresAt: z.string().nullable() }).strict(),
   z.object({ state: z.literal("off") }).strict(),
   z.object({ state: z.literal("unusable"), problem: z.string().min(1).max(300) }).strict(),
   z.object({ state: z.literal("unknown"), problem: z.string().min(1).max(300) }).strict(),
-])
+]))
 export type GitHubPerson = z.infer<typeof GitHubPersonSchema>
 
 /** Who a pull request action goes as: the person (their login), or Mako's App, as the person chose for this one. */

@@ -118,6 +118,7 @@ export const openCodeUpdateSource: ProviderUpdateSource = {
  */
 export function openCodeBinaryTarget(binary: string): string {
   const real = realpathSync(binary)
+  if (/\.cmd$/i.test(real)) return cmdShimTarget(real) ?? binary
   if (statSync(real).size > 512) return binary
   const fd = openSync(real, "r")
   let script: string
@@ -138,6 +139,33 @@ export function openCodeBinaryTarget(binary: string): string {
     if (target) return target
   }
   return binary
+}
+
+/** A shim this long or longer isn't the few lines npm writes for an executable. */
+const CMD_SHIM_BYTES = 2_048
+
+/**
+ * The executable npm's Windows shim runs, where it runs one: on Windows `opencode` is found as `opencode.cmd` in npm's
+ * prefix, whose last line runs `"%dp0%\node_modules\@opencode\cli\bin\opencode.exe" %*`. The executable is what
+ * reports the version, and what its install laid out beside (`openCodeUnusedBuilds`). Null for any other script.
+ */
+export function cmdShimTarget(shim: string): string | null {
+  let script: string
+  try {
+    if (statSync(shim).size >= CMD_SHIM_BYTES) return null
+    script = readFileSync(shim, "utf8")
+  } catch {
+    return null
+  }
+  const target = /"%dp0%[\\/]([^"%]+\.exe)"/i.exec(script)?.[1]
+  if (!target) return null
+  const path = join(dirname(shim), ...target.split(/[\\/]/))
+  try {
+    statSync(path)
+    return path
+  } catch {
+    return null
+  }
 }
 
 function sameOpenCodeBinary(left: string, right: string): boolean {

@@ -97,7 +97,7 @@ const TurnSpendSchema = z.object({
   unrecorded: z.enum(["tokens", "cost"]).optional(),
 })
 /** A turn Mako didn't send, or what was spent after the last; see `HarnessTurn`. */
-export const HarnessTurnSchema = z.object({ id: z.string(), kind: z.enum(["turn", "after"]), spend: TurnSpendSchema })
+export const HarnessTurnSchema = z.lazy(() => z.object({ id: z.string(), kind: z.enum(["turn", "after"]), spend: TurnSpendSchema }))
 
 /**
  * A request as its row keeps it: a reason older builds don't know saved as the
@@ -2154,13 +2154,13 @@ export function buildTurnIndex(db: DatabaseSync, scan: ColdScan): boolean {
   }
 }
 
-export const ColdScanSchema = z.object({
+export const ColdScanSchema = z.lazy(() => z.object({
   revision: z.number().int().nonnegative(),
   count: z.number().int().nonnegative(),
   last: z.number().int().nullable(),
   appended: z.array(z.tuple([z.number().int(), z.number().int()])),
   turns: z.array(z.object({ id: z.number().int().nonnegative(), type: z.string().nullable(), steering: z.number().int(), request: z.string().nullable(), message: z.string().nullable() })),
-})
+}))
 export type ColdScan = z.infer<typeof ColdScanSchema>
 
 /** `ColdScan` of an open journal, in one read transaction the caller holds. */

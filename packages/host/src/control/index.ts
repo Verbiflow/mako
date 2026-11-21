@@ -8,8 +8,9 @@ import {
   MachineBrowser,
   MachineTabVideo,
   helperCapture,
-  helperCaptures,
   helperLiveEncoder,
+  helperWindowSource,
+  linuxDesktop,
   localBrowsers,
   publishDeskBrowserRegistration,
   videoHelperExecutable,
@@ -187,7 +188,7 @@ export function openControl(
       return desktop.deskPage(previewId)
     },
   })
-  const unknownPermissions = () => computerPermissions(environment, undefined)
+  const unknownPermissions = () => computerPermissions(environment, undefined, linuxDesktop())
   const readComputerPermissions = async (): Promise<MakoComputerPermissions> =>
     desktop.answers("computer-permissions") ? desktop.ask("computer-permissions", {}).catch(unknownPermissions) : unknownPermissions()
   let defaultBrowserApplication: Promise<string | undefined> | undefined
@@ -250,8 +251,8 @@ export function openControl(
     {
       preferencePath: join(environment.dataRoot, "browser-preference.json"),
       defaultApplication: preferredBrowserApplication,
-      // Agents' tabs open in it until someone chooses only where nobody sits at the machine: on a desktop the person's
-      // own browser is theirs to pick, and the machine's is one choice among them.
+      // Agents' tabs open in it until someone chooses only where nobody sits at the machine (a Linux server or cloud
+      // machine): on a desktop the person's own browser is theirs to pick, and the machine's is one choice among them.
       defaultBrowser: machine.kind === "absent" && onLinux() ? machineBrowser?.definition.id : undefined,
     }
   )
@@ -304,13 +305,18 @@ export function openControl(
     capture: {
       tab: (target) => (machineVideo && target.browser === MACHINE_BROWSER_ID ? machineVideo.source(target.tab) : desktopCapture.tab(target)),
       // Without the desktop app, a window is captured by the video helper: ScreenCaptureKit on a Mac, Windows Graphics
-      // Capture on Windows, an X display's on Linux.
-      window: (target) => desktopCapture.window(target) ?? (videoHelper && helperCaptures() ? helperCapture(videoHelper, { kind: "window", windowId: target.windowId }) : undefined),
+      // Capture on Windows, an X display's on Linux, or on Wayland the monitor the person shares through the portal.
+      window: (target) => {
+        const desktop = desktopCapture.window(target)
+        if (desktop) return desktop
+        const source = videoHelper && helperWindowSource(target.windowId, join(environment.dataRoot, "computer-use"), linuxDesktop())
+        return source ? helperCapture(videoHelper, source) : undefined
+      },
     },
   })
   const elementPicks = new ElementPicks(browser, previews, onMac() ? "mac" : "other")
   const sessions = new ControlSessions(
-    async (bindingId) => (resolveExecutable("cua-driver") && onMac() ? driver.grant(`agent ${bindingId}`) : undefined),
+    async (bindingId) => (resolveExecutable("cua-driver") && (onMac() || linuxDesktop()) ? driver.grant(`agent ${bindingId}`) : undefined),
     undefined,
     undefined,
     (bindingId) => driver.revoke(`agent ${bindingId}`)

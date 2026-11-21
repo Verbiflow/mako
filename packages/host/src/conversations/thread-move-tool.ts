@@ -197,7 +197,7 @@ export function threadToolSchema(tool: ThreadToolDefinition): z.ZodType {
 }
 
 /** A move's answer as a door relays it: the JSON the host sent, a refusal named by `refused`. */
-export const ThreadMoveAnswerSchema = z.looseObject({ refused: z.string().optional(), outcome: z.string().optional() })
+export const ThreadMoveAnswerSchema = z.lazy(() => z.looseObject({ refused: z.string().optional(), outcome: z.string().optional() }))
 export type ThreadMoveAnswer = z.infer<typeof ThreadMoveAnswerSchema>
 
 export interface ThreadToolDoor {

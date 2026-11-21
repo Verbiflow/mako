@@ -63,12 +63,12 @@ export class RecordSyncConflictError extends Error {
  * call sent more than once counts once, its tries in `tries` and what ended each in `failures`; the slowest names its
  * correlation ID, under which the gateway logged each of its tries.
  */
-export const SyncCallsSchema = z.object({
+export const SyncCallsSchema = z.lazy(() => z.object({
   count: z.number(), ms: z.number(),
   tries: z.number().optional(),
   failures: z.array(z.string()).optional(),
   slowest: z.object({ ms: z.number(), correlationId: z.string() }).optional(),
-})
+}))
 /** A call this slow names its correlation ID where the exchange is described. */
 export const SLOW_CALL_MS = 2_000
 /** The most failed tries an exchange's report keeps of one kind of call. */
@@ -130,7 +130,7 @@ function tallyTries(tally: SyncCalls, calls: number, tries: number, failures: re
 }
 
 /** Each unit of a session by its key, at its head version: what a store holds of it (`RecordStore.holdings`). */
-export const RecordHoldingsSchema = z.record(z.string(), z.number().int())
+export const RecordHoldingsSchema = z.lazy(() => z.record(z.string(), z.number().int()))
 
 /**
  * One session sent to a remote store (`SessionCatalog.sendRecords`). `holdings`: what went, each unit at its head, for
@@ -140,7 +140,7 @@ export const SentRecordsSchema = SyncReportSchema.extend({ harness: z.string(), 
 export type SentRecords = z.infer<typeof SentRecordsSchema>
 
 /** A session to take from a remote store (`SessionCatalog.receiveRecords`), with what its sender pushed of it when known. */
-export const ReceivingSessionSchema = z.object({ harness: z.string().min(1), nativeId: z.string().min(1), holdings: RecordHoldingsSchema.optional() })
+export const ReceivingSessionSchema = z.lazy(() => z.object({ harness: z.string().min(1), nativeId: z.string().min(1), holdings: RecordHoldingsSchema.optional() }))
 export type ReceivingSession = z.infer<typeof ReceivingSessionSchema>
 
 /**
@@ -151,7 +151,7 @@ export const StagedRecordsSchema = SyncReportSchema.extend({ harness: z.string()
 export type StagedRecords = z.infer<typeof StagedRecordsSchema>
 
 /** One session taken from a remote store and written into its harness's store here (`SessionCatalog.receiveRecords`). */
-export const ReceivedRecordsSchema = z.object({ harness: z.string(), nativeId: z.string(), pulled: SyncReportSchema, restored: KeptRestoreSchema })
+export const ReceivedRecordsSchema = z.lazy(() => z.object({ harness: z.string(), nativeId: z.string(), pulled: SyncReportSchema, restored: KeptRestoreSchema }))
 export type ReceivedRecords = z.infer<typeof ReceivedRecordsSchema>
 
 /** The most versions, and chunk hashes, one push carries: a bundle well under a request's size. */
@@ -678,7 +678,7 @@ function sumCalls(first: NonNullable<SyncReport["calls"]>, second: NonNullable<S
  * Where a store's records go: a remote's routes and the header its calls carry, with when the header's token is due
  * for renewal on this Mac's clock (`renewAtMs`), which a link handed to the catalog's process carries (`LinkCredential`).
  */
-export const RecordsLinkSchema = z.object({ id: z.string().min(1).max(2_048), base: z.url(), authorization: z.string().min(1).max(4_096), renewAt: z.number().optional() })
+export const RecordsLinkSchema = z.lazy(() => z.object({ id: z.string().min(1).max(2_048), base: z.url(), authorization: z.string().min(1).max(4_096), renewAt: z.number().optional() }))
 export type RecordsLink = z.infer<typeof RecordsLinkSchema>
 
 /** Which of a catalog's links (`SessionCatalog.syncRecords`, `syncCopies`, `syncOriginals`). */

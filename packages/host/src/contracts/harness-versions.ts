@@ -96,13 +96,13 @@ export const VersionStandingSchema = z.enum([
 export type VersionStanding = z.infer<typeof VersionStandingSchema>
 
 /** What the window reads of a runtime's declaration, beside its reading. Absent when the version is unreadable. */
-export const RuntimeVersionsSchema = z.object({
+export const RuntimeVersionsSchema = z.lazy(() => z.object({
   oldest: z.string().optional(),
   tested: z.string(),
   standing: VersionStandingSchema,
   /** Each shared feature this installation is too old for, with the version it needs. */
   needs: z.record(z.string(), z.string()).optional(),
-})
+}))
 export type RuntimeVersions = z.infer<typeof RuntimeVersionsSchema>
 
 /**

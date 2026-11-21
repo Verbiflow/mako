@@ -78,6 +78,12 @@ export interface RuntimeUpdateSource {
    * npm keeps them all, `--omit=optional` or not for a global install (npm 11.19, 2026-11-20).
    */
   unusedBuilds?(executable: string): string[]
+  /**
+   * What an install must also put in place, done once the installer exits cleanly and before the executable is read
+   * again; a failure is the install's. Cursor's sessions run on its SDK, which a host made without Cursor doesn't
+   * carry: its install adds the SDK beside the CLI its installer brings.
+   */
+  completeInstall?(env: NodeJS.ProcessEnv): Promise<void>
   githubRelease?: string
   acceptsLatest?(installed: string, latest: string): boolean
   /** The Homebrew formula or cask, when the CLI ships one. Without it a brew install is shown, never upgraded. */

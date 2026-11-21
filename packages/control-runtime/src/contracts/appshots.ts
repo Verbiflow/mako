@@ -1,12 +1,12 @@
 import { z } from "zod"
 import type { ControlImage } from "./control-preview.js"
 
-export const AppshotTargetSchema = z
+export const AppshotTargetSchema = z.lazy(() => z
   .object({
     pid: z.number().int().positive(),
     windowId: z.number().int().positive(),
   })
-  .strict()
+  .strict())
 export type AppshotTarget = z.infer<typeof AppshotTargetSchema>
 export interface AppshotWindow extends AppshotTarget {
   app: string
@@ -34,7 +34,7 @@ export interface Appshot {
 }
 
 /** The window an Appshot shortcut takes: the one the person is in, never Mako's own. */
-export const AppshotFrontRequestSchema = z
+export const AppshotFrontRequestSchema = z.lazy(() => z
   .object({
     /** Processes whose windows are never the answer: the Mako app that asked. */
     exclude: z.array(z.number().int().positive()).max(16),
@@ -45,5 +45,5 @@ export const AppshotFrontRequestSchema = z
      */
     front: z.number().int().positive().optional(),
   })
-  .strict()
+  .strict())
 export type AppshotFrontRequest = z.infer<typeof AppshotFrontRequestSchema>

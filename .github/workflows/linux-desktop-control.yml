@@ -1,0 +1,116 @@
+name: Linux desktop control
+
+# Mako's computer control on a person's Linux desktop: the host's embedded driver, a task's CLI and the video helper
+# on X11, Sway (wlroots), GNOME Shell and KWin (Wayland), each a private desktop in a container on an x64 runner
+# (scripts/linux-control/run-desktop.sh). One JSON report per desktop, with each operation's time, is the evidence.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/linux-desktop-control.yml
+      - native/video-linux/**
+      - packages/control-runtime/src/platform.ts
+      - packages/control-runtime/src/video-helper.ts
+      - packages/host/src/control/cua-embedded.ts
+      - packages/host/src/control/computer-permissions.ts
+      - packages/host/src/control/index.ts
+      - scripts/build-video-helper.mjs
+      - scripts/linux-control/Dockerfile.desktop
+      - scripts/linux-control/desktop-*
+      - scripts/linux-control/portal-consent.py
+      - scripts/linux-control/run-desktop.sh
+      - vendor/cua-driver/**
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-desktop-control-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  driver:
+    # The pinned driver, built from its reviewed patch for x64, once for the desktops below.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - name: Reconstruct reviewed native source
+        shell: bash
+        run: |
+          native_checkout="$RUNNER_TEMP/mako-native-driver"
+          git init "$native_checkout"
+          git -C "$native_checkout" remote add origin https://github.com/trycua/cua.git
+          base=$(node -p 'require("./vendor/cua-driver/release.json").base')
+          git -C "$native_checkout" fetch --depth=1 origin "$base"
+          git -C "$native_checkout" checkout --detach FETCH_HEAD
+          git -C "$native_checkout" apply "$GITHUB_WORKSPACE/vendor/cua-driver/release.patch"
+          git -C "$native_checkout" add -N libs/cua-driver/rust libs/cua-driver/wayland-helper
+          echo "MAKO_NATIVE_CHECKOUT=$native_checkout" >> "$GITHUB_ENV"
+      - name: Build the x64 driver package
+        run: |
+          docker build -t mako-control-linux:x64 - < scripts/linux-control/Dockerfile
+          node scripts/package-control-driver-linux.mjs "$MAKO_NATIVE_CHECKOUT" --arch=x64 --image=mako-control-linux:x64
+          version=$(node -p 'require("./vendor/cua-driver/release.json").version')
+          mkdir -p "$RUNNER_TEMP/driver"
+          cp -R "release/control-driver/$version/linux-x64/." "$RUNNER_TEMP/driver/"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: linux-desktop-driver
+          path: ${{ runner.temp }}/driver/
+          retention-days: 3
+
+  desktop:
+    needs: driver
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        desktop: [x11, sway, gnome, kde]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
+      - name: Build the control packages and bundle the host's embedded driver
+        run: |
+          npm run build:control-runtime
+          npx esbuild packages/host/src/control/cua-embedded.ts --bundle --platform=node --format=esm --tsconfig=tsconfig.json \
+            --external:@mako/control-runtime/* --external:zod --outfile=build/cua-embedded.mjs
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: linux-desktop-driver
+          path: ${{ runner.temp }}/driver
+      - name: Run the ${{ matrix.desktop }} desktop
+        run: |
+          chmod 755 "$RUNNER_TEMP/driver/cua-driver"
+          lscpu | grep -E 'Model name|^CPU\(s\)' | tee "$RUNNER_TEMP/cpu.txt"
+          sh scripts/linux-control/run-desktop.sh ${{ matrix.desktop }} . "$RUNNER_TEMP/driver" evidence
+      - name: Summarize
+        if: always()
+        run: |
+          cp "$RUNNER_TEMP/cpu.txt" evidence/ 2>/dev/null || true
+          node -e '
+            const r = require("./evidence/desktop-${{ matrix.desktop }}.json")
+            const rows = r.operations.map((o) => `| ${o.name} | ${o.ok ? "ok" : "failed"} | ${o.ms} |`)
+            console.log(["| operation | result | ms |", "| --- | --- | --- |", ...rows].join("\n"))
+          ' >> "$GITHUB_STEP_SUMMARY" || true
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: linux-desktop-${{ matrix.desktop }}
+          path: evidence/
+          retention-days: 14

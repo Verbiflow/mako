@@ -16,9 +16,9 @@ import { type LiveForm, WHOLE_LIVE_FORM, readsLiveForm } from "./live-form.js"
  * A notice is a line no runtime writes, so a reader that doesn't know it passes it over. An update written in a newer live
  * form than a watcher reads (`live-form.ts`) reaches it as `reread`, numbered as the update was.
  */
-export const StreamNoticeSchema = z
+export const StreamNoticeSchema = z.lazy(() => z
   .object({ streamNotice: z.enum(["head", "reread"]), head: z.number().int().nonnegative() })
-  .strict()
+  .strict())
 export type StreamNotice = z.infer<typeof StreamNoticeSchema>
 
 const NOTICE_START = '{"streamNotice":'

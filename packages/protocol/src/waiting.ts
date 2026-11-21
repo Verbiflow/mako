@@ -34,7 +34,7 @@ export const WaitingMessageSchema = WaitingInputSchema.extend({
 export type WaitingMessage = z.infer<typeof WaitingMessageSchema>
 
 /** `GET /v1/waiting`: the messages waiting for the Sessions the asking device owns, oldest first. */
-export const WaitingListSchema = z.object({ messages: z.array(WaitingMessageSchema) })
+export const WaitingListSchema = z.lazy(() => z.object({ messages: z.array(WaitingMessageSchema) }))
 export type WaitingList = z.infer<typeof WaitingListSchema>
 
 /** Whether two messages say the same: a message sent again under its ID is the same message, or refused. */
