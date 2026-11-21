@@ -33,6 +33,7 @@ import { resolveExecutable } from "@mako/host/base/executable"
 import { windowsHelperLines } from "@mako/host/base/windows-helper"
 import { identityOf, parseVerdict } from "@mako/host/base/executable-trust"
 import { terminalShell } from "@mako/host/terminals/shell"
+import { connectBrokeredDriver, DriverBroker, DriverNotDispatchedError } from "@mako/control-runtime/host"
 
 const run = promisify(execFile)
 
@@ -303,6 +304,28 @@ try {
     for (const folder of [guarded, handsDown, target, tools, besideDll]) await rm(folder, { recursive: true, force: true }).catch(() => undefined)
   }
   console.log("ok   refused: a program file anyone may write, one a folder hands write on, a junction anyone may repoint (even to a clean folder), a DLL anyone may write beside a program; the helper's file identity is Node's")
+
+
+  // The driver broker's pipe, which each task's worker reaches with its grant: the grant carries the pipe's secret,
+  // a connection without the handshake is answered nothing, and one that proves itself is answered by the broker
+  // (here that there is no driver), its token read only then.
+  const broker = new DriverBroker({ socket: async () => null })
+  const grant = await broker.grant("a task")
+  assert.match(grant.broker, /^\\\\\.\\pipe\\mako-control-[0-9a-f]{32}$/)
+  assert.match(grant.proof ?? "", /^[0-9a-f]{64}$/, "a grant carries its broker pipe's secret")
+  const unproven = await new Promise<string>((done) => {
+    let said = ""
+    const socket = connect(grant.broker)
+    socket.on("data", (chunk: Buffer) => (said += chunk.toString()))
+    socket.on("close", () => done(said))
+    socket.on("error", () => undefined)
+    socket.write(`${JSON.stringify({ token: grant.token })}\n`)
+  })
+  assert.equal(unproven, "", "the broker answers nothing without the handshake")
+  await assert.rejects(connectBrokeredDriver(grant), DriverNotDispatchedError, "through the handshake the broker itself answers: no driver here, nothing dispatched")
+  await assert.rejects(connectBrokeredDriver({ ...grant, proof: "0".repeat(64) }), DriverNotDispatchedError, "a wrong secret reaches no broker")
+  await broker.close()
+  console.log("ok   the driver broker's pipe proves itself; a grant carries its secret, and nothing is read without the handshake")
 
   console.log("PASS: Windows pipes prove their servers, and no planted program runs")
 } finally {

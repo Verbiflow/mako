@@ -12,7 +12,7 @@ import type { ControlCredentials } from "./service.js"
 
 type Session = Awaited<ReturnType<typeof startDesktopControlSession>>
 /** A binding's grant on the host's driver broker (`DriverBroker.grant`). */
-type NativeDriver = { broker: string; token: string }
+type NativeDriver = { broker: string; token: string; proof?: string }
 const STALE = "Local Control is off for new agent sessions: this Mako host is older than the Local Control code on disk. Restart Mako to load it."
 
 /**

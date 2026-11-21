@@ -5,6 +5,7 @@ import { resolveExecutable } from "./executable.js"
 import { hostStopping, type ProbeOptions } from "./host-stopping.js"
 import { onWindows } from "./platform.js"
 import { isBatchFile, windowsLaunch } from "./windows-launch.js"
+import { windowsHelper } from "./windows-helper.js"
 import { makoLocalFolder } from "./kept-pipe.js"
 
 /** Programs that only read the machine, which the host's probe child runs for it (`HostProbes`). */
@@ -29,7 +30,8 @@ type CommandResult = { stdout: string; stderr: string }
  */
 export function hostProbe(file: string, args: readonly string[], options: ProbeOptions = {}): Promise<CommandResult> {
   const probes = hostStopping()?.probes
-  if (probes && isProbe(file, args)) return probes.run(file, args, options)
+  // Windows has none of these programs: the launcher there answers a missing one, by whole path, without a search.
+  if (probes && !onWindows() && isProbe(file, args)) return probes.run(file, args, options)
   return hostCommand(file, args, options)
 }
 
@@ -112,6 +114,29 @@ function windowsSpawn(args: Parameters<typeof spawn>): Parameters<typeof spawn> 
   return [launch.file, launch.args, { ...options, env: launch.env ?? options?.env, windowsVerbatimArguments: launch.verbatim || options?.windowsVerbatimArguments }]
 }
 
+/**
+ * `hostSpawn` for a child whose whole tree is the host's to end: a provider's process. On Windows it runs under
+ * `mako-windows run-in-job`, in a job object that ends everything the child started when the helper ends, with the
+ * child or with this host, however the host ends; ending the helper ends the tree with no parent pids to follow.
+ * Where the helper isn't installed, and elsewhere (a process group does this there), it is `hostSpawn`.
+ */
+// SAFETY: the wrapped call keeps spawn's own overloads: only the program and its words change.
+const hostSpawnTree = ((...args: Parameters<typeof spawn>) => {
+  const helper = onWindows() ? windowsHelper() : undefined
+  if (!helper) return hostSpawn(...args)
+  const [file, words, options] = windowsSpawn(args)
+  // SAFETY: `windowsSpawn` answers spawn's three-argument form when it changes anything, and the caller's otherwise.
+  const list = (Array.isArray(words) ? words : []) as string[]
+  // SAFETY: as above: the third argument is the options when the second is the words.
+  const given = ((Array.isArray(words) ? options : words) ?? {}) as SpawnOptions
+  // A command line already written for cmd.exe is passed as it is: its program is quoted here, as Node would.
+  const program = given.windowsVerbatimArguments ? `"${file}"` : file
+  hostStopping()?.signal.throwIfAborted()
+  const child = processRunner.spawn(helper, ["run-in-job", String(process.pid), program, ...list], given)
+  followHostChild(child, file)
+  return child
+}) as typeof spawn
+
 // SAFETY: the underlying runner preserves Node's fork overloads; this wrapper only registers ownership.
 const hostFork = ((...args: Parameters<typeof fork>) => {
   hostStopping()?.signal.throwIfAborted()
@@ -120,7 +145,7 @@ const hostFork = ((...args: Parameters<typeof fork>) => {
   return child
 }) as typeof fork
 
-export { hostSpawn, hostFork }
+export { hostSpawn, hostSpawnTree, hostFork }
 
 function followHostChild(child: ChildProcess, name: string): void {
   const unregister = hostStopping()?.register(`command ${name} (pid ${child.pid})`, () => processRunner.close(child))

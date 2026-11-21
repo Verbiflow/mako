@@ -4,6 +4,7 @@ import { execFile } from "node:child_process"
 import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, relative, resolve } from "node:path"
+import { mock } from "node:test"
 import { promisify } from "node:util"
 import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
@@ -35,6 +36,8 @@ const repo = resolve(import.meta.dirname, "..")
 const cli = join(repo, "packages/client/dist/cli.js")
 const root = mkdtempSync(join(tmpdir(), "mako-agents-doors-"))
 const run = promisify(execFile)
+/** Waited between two lists that must read the same: over a second, so a clock reading left unpinned always differs. */
+const BETWEEN_LISTS_MS = 1_100
 
 function handRegistered(): string[] {
   const found: string[] = []
@@ -209,15 +212,22 @@ try {
   assert.ok("children" in fullFacts)
   const originalPulls = fullFacts.children.find(child => child.child === first.child)!.openPRs
   assert.equal(originalPulls?.length, 4)
-  // Each list's `mark` is its own clock reading, and each strip's `idleFor` whole seconds since its Fin's last activity,
-  // read as each call answers: two calls either side of a second differ there and nowhere else, which says nothing of
-  // the PR facts compared (#811's gate 1, idleFor 3 vs 4).
-  const ClockedListSchema = z.looseObject({ children: z.array(z.looseObject({})) })
-  const unmarked = (list: AgentAnswer) => {
-    const { mark: _mark, ...listed } = ClockedListSchema.parse(list)
-    return { ...listed, children: listed.children.map(({ idleFor: _idle, ...strip }) => strip) }
+  // Both lists read at one moment of the clock, and compared whole but for `mark`, which is each list's own: the next
+  // tick of the host's change clock, so one list's is never another's. A list says its clock readings in words at the
+  // model door (`compactAnswer`: a strip's `idle`, its report's `ago`, a wait's `since`), so two calls either side of a
+  // second differ there and say nothing of the PR facts. Compared a call apart with only `mark` and the raw `idleFor`
+  // left out, which this door never carries, `idle` read "3s" and then "4s" (gate 35, 2026-11-21).
+  const unmarked = (list: AgentAnswer) => Object.fromEntries(Object.entries(list).filter(([key]) => key !== "mark"))
+  const moment = Date.now()
+  const pinned = mock.method(Date, "now", () => moment)
+  try {
+    const byDefault = await call(thread, "agents_list", {})
+    // Past a second of the real clock: what a slow runner puts between two calls.
+    await new Promise((resolve) => setTimeout(resolve, BETWEEN_LISTS_MS))
+    assert.deepEqual(unmarked(byDefault), unmarked(await call(thread, "agents_list", { presentation: "full" })), "the model door defaults to complete PR facts")
+  } finally {
+    pinned.mock.restore()
   }
-  assert.deepEqual(unmarked(await call(thread, "agents_list", {})), unmarked(await call(thread, "agents_list", { presentation: "full" })), "the model door defaults to complete PR facts")
   const summarized = z.object({ children: z.array(z.looseObject({ child: z.string(), pulls: z.object({ reported: z.number(), read: z.object({ child: z.string(), view: z.literal("pulls"), snapshot: z.string() }) }) })) }).parse(await call(thread, "agents_list", { presentation: "summary" }))
   const reference = summarized.children.find(child => child.child === first.child)!.pulls.read
   assert.equal(summarized.children[0].pulls.reported, 4, "historical references stay explicitly unknown")

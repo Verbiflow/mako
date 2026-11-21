@@ -15,6 +15,9 @@
 //                                        was named, every folder and link on the way beyond anyone else's repointing,
 //                                        deleting or renaming. Prints "trusted <real path> <volume serial>:<file index>"
 //                                        or "untrusted <why>".
+//   mako-windows run-in-job <pid> <command line>
+//                                        runs the command in a job that ends its whole tree when this helper ends:
+//                                        with the command, or when process <pid> (its owner) is gone.
 //
 // Built with MSVC, /MT (scripts/build-windows-helper.mjs).
 #define WIN32_LEAN_AND_MEAN
@@ -347,8 +350,61 @@ static void trusted_from_stdin(void) {
   }
 }
 
+/**
+ * `run-in-job <owner pid> <command line>`: runs the command in a job object of this helper's that ends every process
+ * in it when its last handle closes, which is when this helper ends, however it ends. The command line is the rest of
+ * this process's own, passed on as written, and the command gets this helper's standard handles and every other
+ * handle its starter passed down (`STARTUPINFO`, as received). The helper ends, and the job with it, when the command
+ * ends (with its exit code) or when the owner does: a host that is killed outright leaves none of its children's
+ * trees behind, and ending this helper ends the whole tree with no parent pids to follow. A command that makes jobs
+ * of its own nests them inside (Windows 8 and later).
+ */
+static int run_in_job(void) {
+  const wchar_t *line = GetCommandLineW();
+  const wchar_t *at = wcsstr(line, L" run-in-job ");
+  if (!at) return 2;
+  at += wcslen(L" run-in-job ");
+  while (*at == L' ') at++;
+  DWORD owner = 0;
+  while (*at >= L'0' && *at <= L'9') owner = owner * 10 + (DWORD)(*at++ - L'0');
+  while (*at == L' ') at++;
+  if (!owner || !*at) return 2;
+  size_t length = wcslen(at) + 1;
+  wchar_t *command = (wchar_t *)HeapAlloc(GetProcessHeap(), 0, length * sizeof(wchar_t));
+  if (!command) return 1;
+  memcpy(command, at, length * sizeof(wchar_t));
+
+  HANDLE host = OpenProcess(SYNCHRONIZE, FALSE, owner);
+  HANDLE job = CreateJobObjectW(NULL, NULL);
+  if (job) {
+    JOBOBJECT_EXTENDED_LIMIT_INFORMATION limits;
+    ZeroMemory(&limits, sizeof(limits));
+    limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+    // Where this process can't join a job (one it is already in forbids nesting), the command runs without one.
+    if (!SetInformationJobObject(job, JobObjectExtendedLimitInformation, &limits, sizeof(limits)) || !AssignProcessToJobObject(job, GetCurrentProcess())) {
+      CloseHandle(job);
+      job = NULL;
+    }
+  }
+  STARTUPINFOW startup;
+  GetStartupInfoW(&startup);
+  PROCESS_INFORMATION started;
+  if (!CreateProcessW(NULL, command, NULL, NULL, TRUE, 0, NULL, NULL, &startup, &started)) {
+    fwprintf(stderr, L"mako-windows: the command couldn't start (%lu)\n", GetLastError());
+    return 127;
+  }
+  CloseHandle(started.hThread);
+  HANDLE waited[2] = { started.hProcess, host };
+  DWORD which = WaitForMultipleObjects(host ? 2 : 1, waited, FALSE, INFINITE);
+  DWORD code = 1;
+  // The owner ended first: leaving closes the job, which ends the command and everything it started.
+  if (which == WAIT_OBJECT_0) GetExitCodeProcess(started.hProcess, &code);
+  return (int)code;
+}
+
 int wmain(int argc, wchar_t **argv) {
   // Paths go out as UTF-8, whatever the console's code page.
+  if (argc >= 4 && wcscmp(argv[1], L"run-in-job") == 0) return run_in_job();
   _setmode(_fileno(stdout), _O_U8TEXT);
   if (argc >= 2 && wcscmp(argv[1], L"sid") == 0) return print_sid();
   if (argc >= 3 && wcscmp(argv[1], L"secure-pipe") == 0) {
