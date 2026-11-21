@@ -49,6 +49,15 @@ try {
   assert.equal(installed.version, "1.4.0")
   assert.deepEqual(installed.build, { makoCloud: "https://cloud.example" }, "A bundle's stamp travels with its environment")
 
+  // A Windows install keeps its app in `resources` beside Mako.exe: packaged there, and only there.
+  const windowsInstall = join(root, "Programs", "Mako", "resources", "app.asar")
+  await mkdir(windowsInstall, { recursive: true })
+  await writeFile(join(windowsInstall, "package.json"), JSON.stringify({ name: "mako", productName: "Mako", version: "1.4.0" }))
+  const windows = (appRoot: string) => resolveHostEnvironment({ env: { APPDATA: join(home, "AppData", "Roaming") }, appRoot, platform: "win32", home })
+  assert.equal(windows(windowsInstall).packaged, true, "resources\\app.asar is a Windows install")
+  assert.equal(windows(bundle).packaged, false, "a Mac bundle's Resources isn't a Windows install's")
+  assert.equal(mac(windowsInstall).packaged, false, "nor a Windows install's resources a Mac bundle's")
+
   const linux = resolveHostEnvironment({ env: { XDG_CONFIG_HOME: "/config" }, appRoot: checkout, platform: "linux", home })
   assert.equal(linux.appData, "/config", "Linux keeps data under XDG_CONFIG_HOME")
   assert.equal(resolveHostEnvironment({ env: {}, appRoot: checkout, platform: "linux", home }).appData, join(home, ".config"))

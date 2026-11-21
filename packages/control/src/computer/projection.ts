@@ -276,7 +276,7 @@ export function withoutMenuBar(structuredContent: JsonObject): JsonObject {
   }
 }
 
-export const WindowRecordSchema = z.looseObject({
+export const WindowRecordSchema = z.lazy(() => z.looseObject({
   window_id: z.number().int(),
   title: z.string().nullable().optional(),
   bounds: z
@@ -288,7 +288,7 @@ export const WindowRecordSchema = z.looseObject({
     })
     .optional(),
   is_on_screen: z.boolean().nullable().optional(),
-})
+}))
 export type WindowRecord = z.infer<typeof WindowRecordSchema>
 
 export type WindowKind = "document" | "helper" | "unknown"

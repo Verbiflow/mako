@@ -28,14 +28,14 @@ import { recordChunks, recordEncoding, statRecord } from "./record-files.js"
  *   only a lossy copy, or the link to the parent's call was inferred.
  * - `missing`: the parent names it and nothing on this Mac holds its record.
  */
-export const ChildStateSchema = z.discriminatedUnion("kind", [
+export const ChildStateSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("complete") }),
   z.object({ kind: z.literal("partial"), reason: z.string() }),
   z.object({ kind: z.literal("missing"), reason: z.string() }),
-])
+]))
 export type ChildState = z.infer<typeof ChildStateSchema>
 
-export const ChildTranscriptSchema = z.object({
+export const ChildTranscriptSchema = z.lazy(() => z.object({
   /** The harness's own id for the child: what its tool results and the live roster name it by. */
   nativeId: z.string(),
   /** The parent's tool call that started it, as the parent's transcript identifies that call (`EntryBlock.id`). */
@@ -56,20 +56,20 @@ export const ChildTranscriptSchema = z.object({
   updatedAt: z.string().optional(),
   /** Only Mako's archive still holds it; the harness's record is gone. */
   archived: z.literal(true).optional(),
-})
+}))
 export type ChildTranscript = z.infer<typeof ChildTranscriptSchema>
 
 /** At most this many children are listed for one session, the newest kept. */
 export const CHILD_LIMIT = 1024
 
-export const ChildTranscriptsSchema = z.object({
+export const ChildTranscriptsSchema = z.lazy(() => z.object({
   parent: z.object({ harness: z.string(), nativeId: z.string(), path: z.string() }),
   children: z.array(ChildTranscriptSchema).max(CHILD_LIMIT),
   /** More were found than `CHILD_LIMIT`; the oldest were left out. */
   limited: z.literal(true).optional(),
   /** Why this session's children can't be listed: its reader names none. */
   unsupported: z.string().optional(),
-})
+}))
 export type ChildTranscripts = z.infer<typeof ChildTranscriptsSchema>
 
 /** `raw` parsed as JSON and read by `schema`; undefined when it is neither. */

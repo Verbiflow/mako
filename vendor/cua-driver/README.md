@@ -3,10 +3,11 @@
 ## Current source release
 
 `release.json` pins upstream 0.28.2 and the complete `release.patch` for
-`0.28.2+mako.27`. +27 is +26 with `0005-windows-driver.patch` and the
-version. +26 is +25 with `0004-stable-wayland-seat-pointer.patch`
-and the version. +25 is +24 with `0003-transport-scoped-snapshots.patch`
-and the version.
+`0.28.2+mako.29`. +29 is +28 with `0005-windows-driver.patch` and the version
+(the patch was written beside 0006 as +27 and landed after it, so it is the
+later release despite its number). +28 is +26 with `0006-linux-desktop.patch`
+and the version. +26 is +25 with `0004-stable-wayland-seat-pointer.patch` and
+the version.
 
 ### 0005: the Windows driver
 
@@ -31,7 +32,17 @@ there), `diagnose` skipping its macOS sections on Linux, and wording.
   Whole-display video is refused on Windows.
 - No FFmpeg in the Windows build at all: `video_ffmpeg` and `ffmpeg_install`
   are compiled out, `install_ffmpeg` refuses, and what would probe or render
-  with FFmpeg finds none. Nothing can resolve an `ffmpeg` from `PATH`.
+  with FFmpeg finds none. Nothing can resolve an `ffmpeg` from `PATH`. The
+  skill pages the driver carries (`Skills/cua-driver/README.md`, `WINDOWS.md`,
+  `RECORDING.md`) say how Windows records now; the packaging script refuses a
+  Windows executable with FFmpeg's capture, encoder or package names in it.
+- The embedded daemon's pipe is the host's alone: its security descriptor
+  drops upstream's low mandatory label, so a low-integrity process of the same
+  user cannot open it, and a daemon told its host's pid
+  (`CUA_DRIVER_EMBEDDED_HOST_PID`) closes a connection from any other process
+  before reading a request. Upstream used the pid only for trusted sessions.
+  [Local Control on Windows](../../docs/local-control-windows.md#the-drivers-own-pipe)
+  has the references.
 - Programs by whole path: `cmd.exe`, `powershell.exe`, `schtasks.exe` and
   `taskkill.exe` run from the system directory (`GetSystemDirectoryW`, through
   `cua-driver-core/src/system_program.rs`), never by a bare name that Windows
@@ -60,6 +71,38 @@ there), `diagnose` skipping its macOS sections on Linux, and wording.
 crate's license checked for GPL, and the hashes in `provenance.json`. The
 `Windows computer control` workflow builds it on `windows-latest` and drives
 it; see [Local Control on Windows](../../docs/local-control-windows.md).
+
+### 0006: a person's Linux desktop
+
+Five Linux-only changes for running on a person's desktop rather than an
+isolated test session:
+
+- The GNOME Shell helper (`winrects@cua`, now v11) holds its agent cursor
+  still at rest. Its 33 ms timer used to repaint the floating cursor for as long
+  as it stayed up, so GNOME redrew the screen at 20–26 fps with nothing
+  happening, which a screen cast and a laptop's battery paid for. The timer now
+  runs only while an action, a badge or a fade animates, and stops itself.
+- The Shell helper's cursor respects the daemon and the session: a
+  `--no-overlay` daemon (Mako's embedded one) shows none, and a session that
+  turned its cursor off (`set_agent_cursor_enabled(false)`) stays off. The
+  helper keeps no per-session state, so a later click used to show it again.
+- `launch_app` splits `Exec=` as the desktop entry spec quotes it (double
+  quotes, `\"`, `` \` ``, `\$`, `\\`), undoes the value's own escapes and
+  drops field codes (`%%` is a percent sign). It used to split on spaces, so an
+  entry with a quoted path or title launched the wrong arguments.
+- Sway's tree failed to parse whenever an XWayland window was open: Sway
+  sends `"app_id": null` for one (and `"name": null` for a split container),
+  which the driver read as a string. Every Sway lookup (windows by pid, focus,
+  geometry) then answered nothing, so a native app such as foot went missing
+  from the window list too. Both are now read as empty when null.
+- An XWayland app under Sway is named by its X11 window id, which no
+  foreign-toplevel handle carries, so activation refused it. Sway's tree
+  carries the id (`window`): the exact container is focused and its focus
+  confirmed there, and focus attestation accepts that id.
+
+`cargo test -p platform-linux --lib` passes (454 tests, five ignored). The
+desktop acceptance is `scripts/linux-control/run-desktop.sh`. +25 is +24 with `0003-transport-scoped-snapshots.patch`
+and the version.
 
 ### 0004: a stable Wayland seat pointer
 

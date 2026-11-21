@@ -235,7 +235,7 @@ async function main(): Promise<void> {
   // Made before discovery, so a stop while the scan is still out holds when the scan, awaited by the stopping
   // catalog, resolves after it: no pass starts then.
   const script = process.argv[1]
-  const passes = script ? backfillPasses({ spawnPass: () => spawnBackfillPass(work, script), everyMs: BACKFILL_EVERY_MS, say }) : undefined
+  const passes = script ? backfillPasses({ spawnPass: () => spawnBackfillPass(work, script), everyMs: BACKFILL_EVERY_MS, say, due: () => catalog.list().length > 0 }) : undefined
   let server: Server
   try {
     await catalog.prepare()

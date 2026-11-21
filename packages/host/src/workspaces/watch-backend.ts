@@ -1,13 +1,14 @@
 import { hostStopping } from "../base/host-stopping.js"
 import { hostCommand, hostFork } from "../base/host-command.js"
-import type { HostProbes, ProbeOptions } from "../base/host-stopping.js"
+import type { HostProbes, ProbeOptions, RunningCommand } from "../base/host-stopping.js"
 import type { ChildProcess } from "node:child_process"
 import { z } from "zod"
 import { existsSync } from "node:fs"
+import { readdir, readFile } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { SLOW_DELIVERY_MS, WatcherReplySchema, type DropReason, type HistoryMark, type WatchEvent, type WatcherReply, type WatcherRequest, type NativeWatch } from "../contracts/watcher-child.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
-import { onMac } from "../base/platform.js"
+import { onLinux, onMac } from "../base/platform.js"
 import { WatchReadings, type ChildStart } from "./watch-readings.js"
 import type { Row, RunLeader } from "./process-table.js"
 import { sendToChild } from "@mako/sessions/child-input"
@@ -501,6 +502,32 @@ const LATE_MS = 250
 /** What a late deadline gives the reply to arrive over a running loop. */
 const GRACE_MS = 2_000
 
+/** One read of the process names serves every probe that asks within this long: the activity engine asks for each harness at once. */
+const NAMES_FRESH_MS = 2_000
+
+/**
+ * Every process's `comm` on Linux, the name `lsof -c` matches there, and the start of its command line: files read,
+ * no process started. Undefined if /proc can't be read.
+ */
+async function procCommands(): Promise<RunningCommand[] | undefined> {
+  try {
+    const pids = (await readdir("/proc")).filter((entry) => /^\d+$/.test(entry))
+    const read = await Promise.all(pids.map(async (pid): Promise<RunningCommand | undefined> => {
+      try {
+        const [comm, cmdline] = await Promise.all([readFile(`/proc/${pid}/comm`, "utf8"), readFile(`/proc/${pid}/cmdline`, "utf8")])
+        return { comm: comm.trimEnd(), args: cmdline.slice(0, ARGS_CHARS).replaceAll("\0", " ").trimEnd() }
+      } catch {
+        return undefined
+      }
+    }))
+    return read.filter((command) => command !== undefined)
+  } catch {
+    return undefined
+  }
+}
+/** As much of a command line as a probe matches against: the program and its first arguments. */
+const ARGS_CHARS = 1_024
+
 /** A table this late means the child is stuck; it's ended and the caller reads its own. */
 const TABLE_ASK_MS = 20_000
 
@@ -653,8 +680,19 @@ export function childProcessReader(script = defaultChildScript(), askMs = TABLE_
     }
   }
 
+  // Each process's command name, read once for every probe asking within `NAMES_FRESH_MS` (`HostProbes.commands`).
+  let names: { at: number; read: Promise<RunningCommand[] | undefined> } | undefined
+  const commands = (): Promise<RunningCommand[] | undefined> => {
+    if (!onLinux()) return Promise.resolve(undefined)
+    const now = performance.now()
+    if (names && now - names.at < NAMES_FRESH_MS) return names.read
+    names = { at: now, read: procCommands() }
+    return names.read
+  }
+
   return {
     run,
+    commands,
     startedAt: (pid, signal) => new Promise<number>((settle, fail) => {
       signal?.throwIfAborted()
       if (!starts) {

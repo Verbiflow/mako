@@ -21,7 +21,7 @@ export const ClientKindSchema = z.enum([
   "script",
 ])
 
-export const ActorSchema = z.discriminatedUnion("kind", [
+export const ActorSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z
     .object({
       kind: z.literal("client"),
@@ -30,7 +30,7 @@ export const ActorSchema = z.discriminatedUnion("kind", [
     })
     .strict(),
   z.object({ kind: z.literal("runtime"), runtimeId: RuntimeIdSchema }).strict(),
-])
+]))
 
 export const OperationNameSchema = z
   .string()
@@ -44,13 +44,13 @@ export const OperationNameSchema = z
  *   laptop's checkout. The gateway passes it through without reading its input; the runtime
  *   that serves it owns its catalog and checks its input.
  */
-export const TargetSchema = z.discriminatedUnion("kind", [
+export const TargetSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("thread"), threadId: ThreadIdSchema }).strict(),
   z.object({ kind: z.literal("runtime"), runtimeId: RuntimeIdSchema }).strict(),
-])
+]))
 
 /** What every hop reads of an operation; its input crosses after it, unread (`wire.ts`). */
-export const OperationEnvelopeSchema = z
+export const OperationEnvelopeSchema = z.lazy(() => z
   .object({
     v: z.literal(PROTOCOL_VERSION),
     id: OperationIdSchema,
@@ -93,7 +93,7 @@ export const OperationEnvelopeSchema = z
      */
     whenUnstarted: z.literal("refuse").optional(),
   })
-  .strict()
+  .strict())
 
 export const PROBLEM_TYPES = [
   "bad-request",
@@ -119,7 +119,7 @@ export const PROBLEM_DETAIL_LIMIT = 16_000
  * RFC 9457 problem details. `outcome` says whether the operation ran: a client may repeat an
  * operation that wasn't applied, and must not guess about one whose outcome is unknown.
  */
-export const ProblemSchema = z
+export const ProblemSchema = z.lazy(() => z
   .object({
     type: z.templateLiteral(["urn:mako:problem:", ProblemTypeSchema]),
     title: z.string().min(1).max(200),
@@ -132,10 +132,10 @@ export const ProblemSchema = z
     /** For `owner-unavailable` from a runtime: the conversation whose owner is gone. */
     conversationId: z.string().min(1).max(200).optional(),
   })
-  .strict()
+  .strict())
 
 /** What every hop reads of a reply; a success's value crosses after it, unread (`wire.ts`). */
-export const ReplyEnvelopeSchema = z.discriminatedUnion("ok", [
+export const ReplyEnvelopeSchema = z.lazy(() => z.discriminatedUnion("ok", [
   z
     .object({
       v: z.literal(PROTOCOL_VERSION),
@@ -155,7 +155,7 @@ export const ReplyEnvelopeSchema = z.discriminatedUnion("ok", [
       problem: ProblemSchema,
     })
     .strict(),
-])
+]))
 
 export type ClientKind = z.infer<typeof ClientKindSchema>
 export type Actor = z.infer<typeof ActorSchema>

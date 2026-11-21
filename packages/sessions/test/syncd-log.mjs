@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
-import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises"
+import { randomUUID } from "node:crypto"
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { connectDaemon } from "../dist/daemon.js"
@@ -58,6 +59,39 @@ try {
   }
 
   await mkdir(join(home, ".mako"), { recursive: true })
+
+  // With no session anywhere, a reader starts no backfill pass: a pass would find nothing to do. In a home of its own,
+  // so the reader below reads a log of only its own lines.
+  {
+    const empty = await mkdtemp("/tmp/mako-sdl-")
+    try {
+      await mkdir(join(empty, ".mako"), { recursive: true })
+      const emptyLog = () => readFile(syncdLogPath(join(empty, ".mako")), "utf8").catch(() => "")
+      const reader = spawn(process.execPath, [daemon, "--on-demand"], { env: { ...env, HOME: empty }, stdio: "ignore" })
+      const ended = exited(reader)
+      for (const deadline = Date.now() + 30_000; !(await emptyLog()).includes("discovered 0 sessions"); await delay(100))
+        assert.ok(Date.now() < deadline, "the reader discovers")
+      await delay(1_000)
+      reader.kill("SIGTERM")
+      await ended
+      assert.doesNotMatch(await emptyLog(), /backfill pass started/, "no pass without a session")
+    } finally {
+      await rm(empty, { recursive: true, force: true })
+    }
+  }
+
+  // A Codex session, so the reader below has one to backfill.
+  {
+    const id = randomUUID()
+    const at = new Date()
+    const folder = join(home, ".codex", "sessions", ...at.toISOString().slice(0, 10).split("-"))
+    await mkdir(folder, { recursive: true })
+    const line = (record) => JSON.stringify({ timestamp: at.toISOString(), ...record })
+    await writeFile(join(folder, `rollout-${at.toISOString().slice(0, 19).replaceAll(":", "-")}-${id}.jsonl`), [
+      line({ type: "session_meta", payload: { id, cwd: home, cli_version: "0.160.0" } }),
+      line({ type: "response_item", payload: { type: "message", role: "user", content: [{ type: "input_text", text: "a session to backfill" }] } }),
+    ].join("\n") + "\n")
+  }
 
   // An on-demand reader: its start, its socket, a client coming and going, its backfill pass, and the idle expiry
   // that retires it, through to its exit line.

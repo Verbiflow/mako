@@ -3,8 +3,11 @@
 // MAKO_MEASURE_SAMPLES, and the event loop's delay while the file named by
 // MAKO_MEASURE_LOOP exists: measure-host creates it for the phases that
 // measure the loop. Sampling the loop takes a timer every millisecond, about
-// 2% of a core, which would be most of what an idle host costs.
-const { appendFileSync, existsSync } = require("node:fs")
+// 2% of a core, which would be most of what an idle host costs. When measure-host
+// asks (a file beside the samples, `<samples>.collect`), it collects the heap in
+// full and says what was left (`<samples>.collected`): the heap between two
+// collections reads anywhere from that to half again as much.
+const { appendFileSync, existsSync, rmSync, writeFileSync } = require("node:fs")
 const { monitorEventLoopDelay } = require("node:perf_hooks")
 const { isMainThread } = require("node:worker_threads")
 
@@ -38,6 +41,15 @@ if (samples && loopSwitch && isMainThread && socket && host) {
       rssMb: Math.round(memory.rss / 1048576),
       heapMb: Math.round(memory.heapUsed / 1048576),
     }) + "\n")
+    if (existsSync(`${samples}.collect`)) {
+      rmSync(`${samples}.collect`, { force: true })
+      // V8's own collector, without the host having been started with --expose-gc.
+      require("node:v8").setFlagsFromString("--expose-gc")
+      const collect = require("node:vm").runInNewContext("gc")
+      collect()
+      collect()
+      writeFileSync(`${samples}.collected`, JSON.stringify({ heapMb: Math.round(process.memoryUsage().heapUsed / 1048576) }))
+    }
     delay.reset()
     const wanted = existsSync(loopSwitch)
     if (wanted && !sampling) delay.enable()

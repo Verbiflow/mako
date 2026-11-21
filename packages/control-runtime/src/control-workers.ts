@@ -6,6 +6,8 @@ import { ControlFault } from "@mako/control/control"
 import { controlSessionBuild, type SessionDescriptor } from "./control-session-protocol.js"
 import { DesktopWorkerReplySchema, type DesktopSessionConfig, type DesktopWorkerReply } from "./desktop-session-config.js"
 import { sweepAbandonedLaunches } from "./launch-folders.js"
+import { connectProven, drawKeptPipe, type KeptPipe } from "@mako/lazy/private-pipe"
+import { onWindows } from "./platform.js"
 import { GLOBAL_CONTROL_CLEANUP, type ControlCleanupPolicy } from "./private-socket.js"
 
 /** What a worker inherits: no credentials, which reach it in its `bind`. */
@@ -14,7 +16,12 @@ const INHERITED = [
   "TMPDIR", "TEMP", "TMP", "TZ",
   "DISPLAY", "XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE",
   "WAYLAND_DISPLAY", "GDK_BACKEND", "QT_QPA_PLATFORM",
+  // Which Linux desktop it is (`linuxDesktop`), and where the portal's restore token is kept.
+  "XDG_CURRENT_DESKTOP", "XDG_SESSION_DESKTOP", "DESKTOP_SESSION", "SWAYSOCK", "HYPRLAND_INSTANCE_SIGNATURE",
+  "XDG_STATE_HOME", "MAKO_SCREENLESS",
   "MAKO_VIDEO_HELPER", "MAKO_CONTROL_ASYNC_GUARD",
+  // Windows: where the helper that narrows the worker's pipe is, and what Node and Windows' own programs need.
+  "MAKO_WINDOWS_HELPER", "MAKO_HOST_EXECUTABLE", "SystemRoot", "LOCALAPPDATA", "APPDATA", "USERPROFILE",
 ]
 
 export interface ControlWorkerOptions {
@@ -60,6 +67,9 @@ export class ControlWorker {
     options.onSpawn?.(this.child)
   }
 
+  /** On Windows, the worker's own pipe and its secret, once bound. */
+  private relay: KeptPipe | undefined
+
   get pid(): number | undefined {
     return this.gone ? undefined : this.child.pid
   }
@@ -77,15 +87,28 @@ export class ControlWorker {
         "not-dispatched"
       )
     const ready = this.until("ready", (reply) => reply.kind === "ready" || undefined)
-    this.child.send({ kind: "bind", config, descriptor, directory }, listener, (error) => {
-      if (error) void this.stop()
-    })
+    if (onWindows()) {
+      // Node hands no pipe to another process on Windows: the worker listens on a pipe drawn for it here, and each
+      // connection this process accepted is relayed there (`hand`).
+      this.relay = drawKeptPipe("mako-control-worker")
+      this.child.send({ kind: "bind", config, descriptor, directory, relay: this.relay }, (error) => {
+        if (error) void this.stop()
+      })
+    } else
+      this.child.send({ kind: "bind", config, descriptor, directory }, listener, (error) => {
+        if (error) void this.stop()
+      })
     await ready
   }
 
   /** A connection that reached this process first; the worker answers it, or `orElse` when it can't. */
   hand(connection: Socket, orElse: (connection: Socket) => void): void {
     if (this.gone || !this.child.connected) return orElse(connection)
+    if (this.relay) {
+      const relay = this.relay
+      relayConnection(connection, () => connectProven(relay.pipe, relay.proof), orElse)
+      return
+    }
     this.child.send({ kind: "connection" }, connection, (error) => {
       if (error) orElse(connection)
     })
@@ -225,4 +248,39 @@ export class ControlWorkers {
     }, () => {})
     return worker
   }
+}
+
+/**
+ * Joins a connection this process accepted to one it makes to where the connection is served (Windows, where no
+ * connection can be handed to another process). The client is listened to from the start, so one that drops while the
+ * other side is being reached is an ended relay, never an unheard error; whichever side ends or fails takes the other
+ * with it, and a side reached after the client has gone is closed at once. `orElse` answers a client that is still
+ * there when the other side can't be reached.
+ */
+export function relayConnection(connection: Socket, connect: () => Promise<Socket>, orElse: (connection: Socket) => void): void {
+  let gone = false
+  let upstream: Socket | undefined
+  const end = () => {
+    gone = true
+    connection.destroy()
+    upstream?.destroy()
+  }
+  connection.on("error", end)
+  connection.on("close", end)
+  void connect().then((reached) => {
+    if (gone || connection.destroyed) {
+      reached.destroy()
+      return
+    }
+    upstream = reached
+    reached.on("error", end)
+    reached.on("close", end)
+    connection.pipe(reached)
+    reached.pipe(connection)
+  }, () => {
+    if (gone || connection.destroyed) return
+    connection.off("error", end)
+    connection.off("close", end)
+    orElse(connection)
+  })
 }

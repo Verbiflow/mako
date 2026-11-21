@@ -1,13 +1,13 @@
 diff --git a/libs/cua-driver/rust/Cargo.lock b/libs/cua-driver/rust/Cargo.lock
-index c6d0942..4e9ec2c 100644
+index bc07f41..abf9f5f 100644
 --- a/libs/cua-driver/rust/Cargo.lock
 +++ b/libs/cua-driver/rust/Cargo.lock
 @@ -1151,7 +1151,7 @@ dependencies = [
  
  [[package]]
  name = "cua-driver"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -15,8 +15,8 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "cua-driver-bindgen"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "cbindgen",
   "uniffi",
@@ -24,8 +24,8 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "cua-driver-contract"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "schemars",
   "serde",
@@ -33,8 +33,8 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "cua-driver-core"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -42,8 +42,8 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "cua-driver-sdk"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "async-trait",
   "core-foundation",
@@ -51,8 +51,8 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "cua-driver-testkit"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "core-foundation",
   "image",
@@ -60,8 +60,8 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "cua-driver-uia"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "anyhow",
   "cua-driver-core",
@@ -69,8 +69,8 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "cursor-overlay"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "anyhow",
   "cua-driver-contract",
@@ -78,8 +78,8 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "cursor-theme-cli"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "anyhow",
   "cursor-overlay",
@@ -87,8 +87,8 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "pip-preview"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "serde_json",
  ]
@@ -96,8 +96,8 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "platform-linux"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "anyhow",
   "ashpd",
@@ -105,8 +105,8 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "platform-macos"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "anyhow",
   "async-trait",
@@ -114,24 +114,103 @@ index c6d0942..4e9ec2c 100644
  
  [[package]]
  name = "platform-windows"
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  dependencies = [
   "anyhow",
   "async-trait",
 diff --git a/libs/cua-driver/rust/Cargo.toml b/libs/cua-driver/rust/Cargo.toml
-index 671fd9d..75dcf2c 100644
+index c5f29a1..e30f604 100644
 --- a/libs/cua-driver/rust/Cargo.toml
 +++ b/libs/cua-driver/rust/Cargo.toml
 @@ -17,7 +17,7 @@ members = [
  ]
  
  [workspace.package]
--version = "0.28.2+mako.26"
-+version = "0.28.2+mako.27"
+-version = "0.28.2+mako.28"
++version = "0.28.2+mako.29"
  edition = "2021"
  authors = ["trycua"]
  license = "MIT"
+diff --git a/libs/cua-driver/rust/Skills/cua-driver/README.md b/libs/cua-driver/rust/Skills/cua-driver/README.md
+index ca550f7..4a1d5a2 100644
+--- a/libs/cua-driver/rust/Skills/cua-driver/README.md
++++ b/libs/cua-driver/rust/Skills/cua-driver/README.md
+@@ -87,8 +87,8 @@ See `BROWSER.md` for the supported surface and exact recovery rules.
+ ## Recording
+ 
+ Session recording captures before/after state, screenshots, action metadata,
+-and optional MP4 video. macOS uses ScreenCaptureKit. Windows uses ffmpeg with
+-`gdigrab`. Linux uses compositor-specific capture or ffmpeg with `x11grab`.
++and optional MP4 video. macOS uses ScreenCaptureKit. Windows records one
++window through the host's video helper, with no ffmpeg. Linux uses compositor-specific capture or ffmpeg.
+ Availability is reported honestly when a host dependency or portal grant is
+ missing. See `RECORDING.md`.
+ 
+diff --git a/libs/cua-driver/rust/Skills/cua-driver/RECORDING.md b/libs/cua-driver/rust/Skills/cua-driver/RECORDING.md
+index c8a75ee..639420a 100644
+--- a/libs/cua-driver/rust/Skills/cua-driver/RECORDING.md
++++ b/libs/cua-driver/rust/Skills/cua-driver/RECORDING.md
+@@ -1,8 +1,8 @@
+ # Recording & replaying trajectories
+ 
+ > **Cross-platform.** Recording is available on macOS (native
+-> ScreenCaptureKit), Windows (ffmpeg + `gdigrab`), and Linux (ffmpeg +
+-> `x11grab`). Replay is cross-platform as long as the recorded artifacts
++> ScreenCaptureKit), Windows (one window, through the host's video
++> helper) and Linux (ffmpeg). Replay is cross-platform as long as the recorded artifacts
+ > are present.
+ 
+ Session-scoped capture of action sequences + pre/post state, suitable
+@@ -28,10 +28,16 @@ Screen Recording grant — no separate
+ subprocess prompt, no fast-fail, no second TCC dance. Requires macOS
+ 15.0+ (SCRecordingOutput introduced in macOS 15). No ffmpeg needed.
+ 
+-**Windows / Linux — ffmpeg subprocess.** Outside macOS the recorder
+-shells to ffmpeg with `gdigrab` (Windows) or `x11grab` (Linux). The
+-binary needs to be on PATH (`winget install Gyan.FFmpeg` /
+-`apt install ffmpeg`); when missing, the per-turn capture continues
++**Windows — the host's video helper.** One window (`window_target`) is
++captured with Windows Graphics Capture and encoded with Media
++Foundation by the helper the embedding host names by whole path in
++`CUA_DRIVER_VIDEO_HELPER`; the driver writes its H.264 as fragmented
++MP4. No ffmpeg is used or looked for, and whole-display video is
++refused. Without the helper the per-turn capture continues without
++video and `last_error` says why.
++
++**Linux — ffmpeg subprocess.** The recorder shells to ffmpeg. The
++binary needs to be on PATH (`apt install ffmpeg`); when missing, the per-turn capture continues
+ without video and `last_error` carries the install hint. ffmpeg
+ startup failures fast-fail with a stderr tail in the error.
+ 
+diff --git a/libs/cua-driver/rust/Skills/cua-driver/WINDOWS.md b/libs/cua-driver/rust/Skills/cua-driver/WINDOWS.md
+index 504b5f4..3cb0276 100644
+--- a/libs/cua-driver/rust/Skills/cua-driver/WINDOWS.md
++++ b/libs/cua-driver/rust/Skills/cua-driver/WINDOWS.md
+@@ -522,8 +522,9 @@ subcommands:
+   registers it (idempotent — replaces existing). `kick` runs it
+   immediately without waiting for a fresh logon.
+ - **`cua-driver recording start|stop|status`** — see `RECORDING.md`.
+-  Windows video uses ffmpeg with `gdigrab`; trajectory evidence continues
+-  without video when ffmpeg is unavailable.
++  Windows video is one window through the host's video helper
++  (`CUA_DRIVER_VIDEO_HELPER`); trajectory evidence continues without video
++  when the host gives none.
+ 
+ Over SSH, never use bare `cua-driver mcp`: the direct runtime rejects Session 0. Start the daemon in the interactive user session and run `cua-driver mcp
+ --socket \\.\pipe\cua-driver` from SSH.
+@@ -860,7 +861,8 @@ registered to auto-start at logon AND whether it's currently running:
+ 
+ ## Recording
+ 
+-Windows recording uses ffmpeg with `gdigrab` and writes the same trajectory
+-shape described in `RECORDING.md`. Install ffmpeg on `PATH` for MP4 capture.
+-When it is unavailable, per-turn state and screenshots continue and
++Windows recording writes the same trajectory shape described in
++`RECORDING.md`. Its MP4 is one window, captured and encoded by the video
++helper the host names by whole path in `CUA_DRIVER_VIDEO_HELPER`; no ffmpeg
++is used. When the host gives none, per-turn state and screenshots continue and
+ `last_error` reports the missing dependency.
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/Cargo.toml b/libs/cua-driver/rust/crates/cua-driver-core/Cargo.toml
 index 5e6a53e..40b259f 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/Cargo.toml
@@ -230,7 +309,7 @@ index 733be19..1bd63f5 100644
  
      let in_dur = probe_duration_ms(&traj.metadata.video_path).unwrap_or(0.0);
 diff --git a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
-index 7e27dec..ad1da70 100644
+index 7e27dec..178747b 100644
 --- a/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
 +++ b/libs/cua-driver/rust/crates/cua-driver-core/src/recording_tools.rs
 @@ -40,12 +40,25 @@ impl StartRecordingTool {
@@ -281,7 +360,27 @@ index 7e27dec..ad1da70 100644
              input_schema: json!({
                  "type": "object",
                  "required": ["output_dir"],
-@@ -167,7 +176,7 @@ impl Tool for StartRecordingTool {
+@@ -93,12 +102,18 @@ impl Tool for StartRecordingTool {
+                     },
+                     "record_video": {
+                         "type": "boolean",
+-                        "description": "Capture the main display to <output_dir>/recording.mp4. \
++                        "description": if cfg!(target_os = "windows") {
++                            "Default: false. Set to true to also record the window named by \
++                            window_target to recording.mp4, through the host's video helper \
++                            (no ffmpeg; whole-display video is refused)."
++                        } else {
++                            "Capture the main display to <output_dir>/recording.mp4. \
+                             Default: false. Set to true to also capture the main \
+                             display to recording.mp4 (otherwise only the per-turn \
+                             screenshots + JSON are recorded). On macOS this uses native \
+                             ScreenCaptureKit (no extra TCC prompt, macOS 15.0+); on \
+                             Windows + Linux it requires ffmpeg on PATH."
++                        }
+                     },
+                     "fps": {"type":"integer", "minimum":1, "maximum":crate::video::max_window_fps(), "description":"Requested exact-window source frame rate. Requires window_target; distinct frames depend on source updates."},
+                     "window_target": { "type":"object", "properties": { "pid":{"type":"integer","minimum":1}, "window_id":{"type":"integer","minimum":1}}, "required":["pid","window_id"], "additionalProperties":false },
+@@ -167,7 +182,7 @@ impl Tool for StartRecordingTool {
                      " (video → recording.mp4)".to_string()
                  } else if video_failed {
                      let err = state.last_error.clone().unwrap_or_else(|| "unknown".into());
@@ -290,7 +389,37 @@ index 7e27dec..ad1da70 100644
                          "\n\nffmpeg was not found. Call install_ffmpeg (then again with \
                           confirm=true) to install it, then restart recording."
                      } else {
-@@ -604,6 +613,15 @@ impl Tool for InstallFfmpegTool {
+@@ -209,7 +224,7 @@ impl Tool for StopRecordingTool {
+         STOP_REC_DEF.get_or_init(|| ToolDef {
+             name: "stop_recording".into(),
+             description: "Stop trajectory recording. Disables further per-turn capture \
+-                and, when video was enabled, gracefully terminates the ffmpeg subprocess \
++                and, when video was enabled, ends its capture (on Linux, the ffmpeg subprocess) \
+                 so the mp4's moov atom is finalized (the file is playable). Calling \
+                 stop on an already-stopped session is a no-op. The response carries \
+                 `last_video_path` pointing at the finalized mp4 (when video was on).\n\n\
+@@ -587,13 +602,18 @@ impl Tool for InstallFfmpegTool {
+     fn def(&self) -> &ToolDef {
+         INSTALL_FFMPEG_DEF.get_or_init(|| ToolDef {
+             name: "install_ffmpeg".into(),
+-            description: "Install the ffmpeg binary used by start_recording's video \
++            description: if cfg!(target_os = "windows") {
++                "Not used on Windows: this build records windows through the host's video \
++                helper and runs no ffmpeg. The call is refused."
++            } else {
++                "Install the ffmpeg binary used by start_recording's video \
+                 capture (Linux/Windows; macOS records natively and needs no ffmpeg). \
+                 Two-step and confirmed: called without `confirm` it only REPORTS the \
+                 exact install command for this platform's package manager; pass \
+                 `confirm: true` to actually run it. No-op if ffmpeg is already on PATH. \
+                 ffmpeg is run as a separate process, never linked into the driver."
+-                .into(),
++            }
++            .into(),
+             input_schema: json!({"type":"object","properties":{
+                 "confirm":{"type":"boolean","description":"Run the install command. Without it, only the planned command is reported."}
+             },"additionalProperties":false}),
+@@ -604,6 +624,15 @@ impl Tool for InstallFfmpegTool {
          })
      }
  
@@ -868,6 +997,43 @@ index 46584ae..9e71535 100644
  fn diagnose_tcc_db_section() -> String {
      let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
      let db = format!("{home}/Library/Application Support/com.apple.TCC/TCC.db");
+diff --git a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+index 093f5a4..bb45812 100644
+--- a/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
++++ b/libs/cua-driver/rust/crates/cua-driver/src/serve.rs
+@@ -1703,9 +1703,16 @@ fn named_pipe_host_pid_is_authorized(expected: Option<u32>, actual: Option<u32>)
+ /// connected client's process token before request parsing.
+ #[cfg(target_os = "windows")]
+ unsafe fn build_pipe_security_attrs(
+-    _embedded: bool,
++    embedded: bool,
+ ) -> Option<(SecurityAttributesRaw, *mut std::ffi::c_void)> {
+     let sid = current_user_sid_string()?;
++    // An embedded daemon's only clients are the host that started it and that host's children, at the daemon's own
++    // integrity level: its pipe carries no low mandatory label, so it keeps the daemon's own level with no-write-up
++    // and a low-integrity process of the same user (a sandboxed browser renderer) cannot open it at all. The
++    // standalone service keeps the low label for hosts that run below it.
++    if embedded {
++        return security_attrs_from_sddl(&format!("D:P(A;;GA;;;{sid})"));
++    }
+     security_attrs_from_sddl(&format!("D:P(A;;GA;;;{sid})S:(ML;;NW;;;LW)"))
+ }
+ 
+@@ -1825,6 +1832,14 @@ pub async fn run_serve(
+                         expected_host_process_id,
+                         client_process_id,
+                     );
++                // An embedded daemon told who its host is serves that process alone: every caller of Mako's driver
++                // goes through the host's broker, so a connection from any other process, this user's included, is
++                // closed before a request is read. (Without the variable, the user check above is the whole gate.)
++                if embedded && expected_host_process_id.is_some() && !trusted_host_connection {
++                    tracing::warn!("embedded named-pipe connection from a process other than the host rejected");
++                    let _ = server.disconnect();
++                    continue;
++                }
+                 let history_cli_executable_path =
+                     client_process_id.and_then(platform_windows::history::process_executable_path);
+ 
 diff --git a/libs/cua-driver/rust/crates/cua-driver/src/skills.rs b/libs/cua-driver/rust/crates/cua-driver/src/skills.rs
 index 69cea0a..fc7d533 100644
 --- a/libs/cua-driver/rust/crates/cua-driver/src/skills.rs

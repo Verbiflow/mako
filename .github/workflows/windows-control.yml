@@ -20,6 +20,8 @@ on:
       - scripts/fixtures/win-control-fixture.ps1
       - native/video-windows/**
       - scripts/build-video-helper.mjs
+      - scripts/windows-host/prove-computer-use.mjs
+      - scripts/windows-host/computer-stand-in.mjs
       - package-lock.json
 
 permissions:
@@ -95,6 +97,13 @@ jobs:
       - name: The driver and the control runtime against a fixture, Notepad and Calculator
         shell: bash
         run: npx tsx scripts/test-control-driver-windows.ts --driver "$MAKO_DRIVER_PACKAGE/cua-driver.exe" --video-helper build/mako-video.exe --json evidence/windows-control.json
+      # The host itself: it finds the driver through its trusted lookup, starts it and takes an Appshot; then a Thread on a
+      # stand-in harness observes a window, sets its field, clicks and takes an Appshot through its control session.
+      - name: Computer use on a Windows host, from a Thread
+        shell: bash
+        run: |
+          node scripts/build-windows-helper.mjs --require
+          node scripts/windows-host/prove-computer-use.mjs --driver "$MAKO_DRIVER_PACKAGE/cua-driver.exe" --video-helper build/mako-video.exe --thread --evidence evidence
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

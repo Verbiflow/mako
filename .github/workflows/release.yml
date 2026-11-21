@@ -23,9 +23,10 @@ jobs:
 
       - uses: ./.github/actions/install-dependencies
       - run: npm run lint
-      - run: npm run typecheck:all
+      # `typecheck:all` and `backend:test` went with packages/backend (9a4208f00): `typecheck` is the whole typecheck
+      # now, as main's gate (checks.yml) runs it, and there's no backend left to test.
+      - run: npm run typecheck
       - run: npm test --workspace @mako/sessions
-      - run: npm run backend:test
 
       - name: Configure signing and notarization
         env:

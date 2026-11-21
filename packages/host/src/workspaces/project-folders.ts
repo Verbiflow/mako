@@ -8,8 +8,9 @@ import { mapLimit } from "@mako/protocol/map-limit"
 import { closeHostChild, hostCommand, hostSpawn } from "../base/host-command.js"
 import { findExecutable } from "../base/executable.js"
 import { hostLog } from "../base/host-log.js"
-import { onMac } from "../base/platform.js"
+import { onMac, onWindows } from "../base/platform.js"
 import type { MethodTable } from "../base/methods.js"
+import { windowsDevicePath, windowsSharePath } from "../contracts/local-folder.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import {
   CloneRequestSchema,
@@ -71,11 +72,37 @@ interface RunningClone {
   cancelled: boolean
 }
 
+/**
+ * Whether `typed` is a whole path, which is all a new project or a chat's may be: from home (`~/`) or the root (`/`);
+ * on Windows also `~\`, a drive (`C:\` or `C:/`) or a share (`\\server\share`).
+ */
+export function typedWholePath(typed: string, windows = onWindows()): boolean {
+  if (typed.startsWith("/") || typed.startsWith("~/")) return windows ? !windowsDevicePath(typed) : true
+  // `\\?\` and `\\.\` name devices and raw paths past Windows' own checks: never a project's.
+  if (windows && windowsDevicePath(typed)) return false
+  return windows && (typed.startsWith("~\\") || /^[a-zA-Z]:[\\/]/.test(typed) || /^\\\\[^\\]+\\[^\\]+/.test(typed))
+}
+
+// Which Windows paths are devices and shares: one rule, shared with the desktop's links (`contracts/local-folder.ts`).
+export { windowsDevicePath, windowsSharePath }
+
+/** What to write when a path isn't whole, in the platform's own words. */
+export function wholePathAdvice(windows = onWindows()): string {
+  return windows ? "starting with ~\\ or a drive such as C:\\" : "starting with ~/ or /"
+}
+
+/** A typed path without the slashes it ends in; on Windows its backslashes too, though never a drive's own (`C:\`). */
+export function trimmedPath(typed: string, windows = onWindows()): string {
+  if (!windows) return typed.replace(/\/+$/, "")
+  const trimmed = typed.replace(/[\\/]+$/, "")
+  return /^[a-zA-Z]:$/.test(trimmed) ? `${trimmed}\\` : trimmed
+}
+
 /** Expands `~` and resolves `./` and `../` from `base`; any other path is taken as written. */
 export function expandPath(text: string, home: string, base?: string): string {
   const trimmed = text.trim()
   if (trimmed === "~") return home
-  if (trimmed.startsWith("~/")) return resolve(home, trimmed.slice(2))
+  if (trimmed.startsWith("~/") || (onWindows() && trimmed.startsWith("~\\"))) return resolve(home, trimmed.slice(2))
   if (isAbsolute(trimmed)) return resolve(trimmed)
   return resolve(base && isAbsolute(base) ? base : home, trimmed)
 }
@@ -90,12 +117,12 @@ export interface BrowseTarget {
 /** What a typed path lists: after a slash, everything in the path itself. */
 export function browseTarget(text: string, home: string, base?: string): BrowseTarget {
   const trimmed = text.trim()
-  if (trimmed.endsWith("/") || trimmed === "~" || trimmed === "." || trimmed === "..") {
+  if (trimmed.endsWith("/") || (onWindows() && trimmed.endsWith("\\")) || trimmed === "~" || trimmed === "." || trimmed === "..") {
     const path = expandPath(trimmed, home, base)
     return { folder: path, prefix: "", path }
   }
   // The last part as typed: a resolved path would drop a lone "." someone typed to see dotfolders.
-  const cut = trimmed.lastIndexOf("/")
+  const cut = onWindows() ? Math.max(trimmed.lastIndexOf("/"), trimmed.lastIndexOf("\\")) : trimmed.lastIndexOf("/")
   const prefix = trimmed.slice(cut + 1)
   const folder = expandPath(cut < 0 ? "." : trimmed.slice(0, cut + 1), home, base)
   return { folder, prefix, path: join(folder, prefix) }
@@ -148,6 +175,8 @@ export class ProjectFolders {
     let listed = true
     let names: Dirent[] = []
     try {
+      // Typing isn't asking: a share's folders aren't listed as its path is typed, which would sign in to its server.
+      if (onWindows() && (windowsSharePath(target.folder) || windowsDevicePath(target.folder))) throw new Error("not listed")
       names = await readdir(target.folder, { withFileTypes: true })
     } catch {
       listed = false
@@ -351,8 +380,8 @@ export class ProjectFolders {
     const parsed = CreateProjectRequestSchema.parse(request)
     const typed = parsed.path.trim()
     if (typed.split(/[\\/]/).some((part) => part === ".." || part === ".")) throw new Error("Write the new project's whole path, without . or .. in it.")
-    const path = expandPath(typed.replace(/\/+$/, ""), this.#home)
-    if (!typed.startsWith("/") && !typed.startsWith("~/")) throw new Error("Write the new project's whole path, starting with ~/ or /.")
+    const path = expandPath(trimmedPath(typed), this.#home)
+    if (!typedWholePath(typed)) throw new Error(`Write the new project's whole path, ${wholePathAdvice()}.`)
     const missing: string[] = []
     let existing = path
     while (!(await lstat(existing).then(() => true, () => false))) {

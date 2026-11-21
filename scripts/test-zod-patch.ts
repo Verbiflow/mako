@@ -6,11 +6,15 @@ import { z } from "zod"
 
 /**
  * `scripts/patch-zod.mjs`: zod's methods bound on first use, as its builder methods already were, so a schema holds
- * none of its own until one is asked for. This holds the patch applied to the zod installed here, every method it
- * moved behaving as zod's own (detached too), and a schema small.
+ * none of its own until one is asked for; and its lazy properties, `description` and `~standard` on prototypes, so
+ * every schema keeps a shared shape rather than becoming a dictionary. This holds the patch applied to the zod
+ * installed here, every method it moved behaving as zod's own (detached too), every lazy property reading as zod's
+ * own, and a schema small and fast. Run with `--allow-natives-syntax` to check the shapes.
  */
 const root = dirname(createRequire(import.meta.url).resolve("zod/package.json"))
 assert.ok(readFileSync(join(root, "v4/classic/schemas.js"), "utf8").startsWith("/* mako: methods bound on first use"), "patch-zod.mjs has patched the zod installed here: run it, or port it to this version")
+for (const file of ["v4/classic/schemas.js", "v4/core/util.js", "v4/core/core.js", "v4/core/schemas.js"])
+  assert.ok(readFileSync(join(root, file), "utf8").includes("/* mako: lazy properties on prototypes (scripts/patch-zod.mjs) */"), `patch-zod.mjs has put zod's lazy properties on prototypes in ${file}`)
 
 // A schema owns no method until one is asked for.
 const fresh = z.string()
@@ -100,7 +104,63 @@ const frozen = Object.freeze(z.string())
 assert.throws(() => Object.assign(frozen, { safeParse: () => "theirs" }), TypeError, "a frozen schema refuses one")
 assert.equal(frozen.safeParse("x").success, true)
 
-// A schema is small: 7.5 KB each before (2026-11-07), measured here over many.
+// Lazy properties read as zod's own: computed once on first read, each schema its own, a getter's undefined read again.
+const kinds = z.enum(["a", "b"])
+assert.deepEqual([...kinds._zod.values], ["a", "b"], "an enum's values")
+assert.equal(z.string().optional()._zod.optin, "optional", "an optional's optin")
+assert.equal(z.string()._zod.optin, undefined, "a plain string has none")
+assert.equal(z.literal("x")._zod.values?.has("x"), true, "a literal's values")
+const either = z.discriminatedUnion("type", [z.object({ type: z.literal("a"), n: z.number() }), z.object({ type: z.literal("b"), s: z.string() })])
+assert.deepEqual(either.parse({ type: "b", s: "x" }), { type: "b", s: "x" }, "a discriminated union finds its option by its values")
+assert.equal(either.safeParse({ type: "c" }).success, false)
+const profile = z.object({ a: z.string(), b: z.number().optional() })
+assert.deepEqual(Object.keys(profile["shape"]), ["a", "b"], "an object's fields, a lazy property of its own")
+assert.equal(profile["shape"], profile["shape"], "read once")
+assert.deepEqual(profile.extend({ c: z.boolean() }).parse({ a: "x", c: true }), { a: "x", c: true })
+const one = z.enum(["x"]), other = z.enum(["y"])
+assert.notEqual(one._zod.values, other._zod.values, "each schema its own")
+const described = z.string().describe("a word")
+assert.equal(described.description, "a word", "description, as zod's registry has it")
+assert.equal(z.string().description, undefined)
+assert.equal(z.string().meta({ description: "meta" }).description, "meta")
+const lockedEnum = Object.freeze(z.enum(["q"]))
+assert.equal(lockedEnum._zod.values.has("q"), true, "a frozen schema reads its lazy properties")
+assert.equal(Object.freeze(z.string().describe("cold")).description, "cold")
+// `~standard` carries its JSON schema methods, made with it on first read, for a frozen schema too.
+const coldStandard = Object.freeze(z.object({ id: z.string() }))["~standard"]
+assert.deepEqual(coldStandard.jsonSchema.output({ target: "draft-2020-12" }).required, ["id"])
+
+// Every schema keeps a shared shape, its `_zod` too: V8 made each a dictionary while each had accessors of its own.
+/** V8's own answer, where Node runs with `--allow-natives-syntax`: whether a schema, or its internals, has fast properties. */
+interface LayoutCheck {
+  (value: z.ZodType | z.ZodType["_zod"]): boolean
+}
+const fastPropertiesCheck = ((): LayoutCheck | undefined => {
+  try {
+    const check = new Function("value", "return %HasFastProperties(value) === true")
+    return (value) => check(value) === true
+  } catch {
+    console.log("zod patch: object layouts not checked; run with --allow-natives-syntax")
+    return undefined
+  }
+})()
+if (fastPropertiesCheck) {
+  const made: [string, () => z.ZodType][] = [
+    ["string", () => z.string()], ["number", () => z.number().int()], ["object", () => z.object({ a: z.string() })],
+    ["optional", () => z.string().optional()], ["enum", () => z.enum(["a"])], ["array", () => z.array(z.string())],
+    ["union", () => z.union([z.string(), z.number()])], ["discriminated", () => either], ["checked", () => z.string().min(1).max(3)],
+    ["record", () => z.record(z.string(), z.number())], ["literal", () => z.literal(1)], ["described", () => z.string().describe("d")],
+  ]
+  for (const [kind, make] of made) {
+    const schema = make()
+    void schema["~standard"]
+    void schema._zod.optin
+    assert.equal(fastPropertiesCheck(schema), true, `a ${kind} schema keeps fast properties`)
+    assert.equal(fastPropertiesCheck(schema._zod), true, `and its _zod`)
+  }
+}
+
+// A schema is small: 7.5 KB each before (2026-11-07), 2.0 KB with its methods on prototypes, measured here over many.
 const gc = globalThis.gc
 if (gc) {
   const used = () => { gc(); gc(); return process.memoryUsage().heapUsed }
@@ -108,8 +168,8 @@ if (gc) {
   const before = used()
   const kept = Array.from({ length: count }, () => z.string())
   const each = (used() - before) / count
-  assert.ok(each < 3_000, `a z.string() holds ${each.toFixed(0)} bytes, under 3 KB`)
+  assert.ok(each < 1_600, `a z.string() holds ${each.toFixed(0)} bytes, under 1.6 KB`)
   void kept.length
   console.log(`zod patch: a z.string() holds ${each.toFixed(0)} bytes`)
 }
-console.log("zod patch: methods bound on first use, each behaving as zod's own, detached too")
+console.log("zod patch: methods bound on first use, lazy properties on prototypes, each behaving as zod's own, every schema a shared shape")

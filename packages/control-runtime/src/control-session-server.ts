@@ -9,6 +9,8 @@ import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { createControlDirectory, createPrivateControlSocket } from "./private-socket.js"
+import { requireProof, restrictPipes } from "@mako/lazy/private-pipe"
+import { onWindows } from "./platform.js"
 import {
   controlClient,
   controlFaultData,
@@ -65,7 +67,7 @@ export async function serveControlSession(
   const build = await (options.build ?? controlSessionBuild())
   const directory = options.directory ?? await createControlDirectory("mako-control-")
   if (options.directory) await mkdir(directory, { mode: 0o700 })
-  await chmod(directory, 0o700)
+  if (!onWindows()) await chmod(directory, 0o700)
   const endpoint = await createPrivateControlSocket(directory, "session.sock")
   const socket = endpoint.path
   const file = join(directory, "session.json")
@@ -75,6 +77,7 @@ export async function serveControlSession(
     session: randomUUID(),
     socket,
     pid: process.pid,
+    ...(endpoint.proof && { proof: endpoint.proof }),
   }
   const transport = controlSessionTransport(session, descriptor, () => {
     void close().then(() => options.onStop?.())
@@ -96,9 +99,12 @@ export async function serveControlSession(
   try {
     await new Promise<void>((resolve, reject) => {
       transport.server.once("error", reject)
+      // Windows: a pipe, every connection proving itself first; it has no mode.
+      if (endpoint.proof) requireProof(transport.server, () => endpoint.proof)
       transport.server.listen(socket, resolve)
     })
-    await chmod(socket, 0o600)
+    if (!endpoint.proof) await chmod(socket, 0o600)
+    else void restrictPipes([socket])
     await writeFile(file, JSON.stringify(descriptor) + "\n", {
       mode: 0o600,
       flag: "wx",

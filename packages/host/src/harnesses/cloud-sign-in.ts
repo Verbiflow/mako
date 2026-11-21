@@ -1,3 +1,5 @@
+import { onWindows } from "../base/platform.js"
+import { exclusiveFileLock } from "@mako/sessions/private-pipe"
 import { hostSpawn } from "../base/host-command.js"
 import { createHash } from "node:crypto"
 import { lstat, mkdir, readFile, readlink, rm, stat, symlink, utimes } from "node:fs/promises"
@@ -132,6 +134,8 @@ print "held
 
 export async function withFlock<T>(path: string, work: () => Promise<T>, waitMs = 2_000): Promise<T | undefined> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 })
+  // Windows: a file this process opens with no sharing is the lock (`exclusiveFileLock`), held until the work ends.
+  if (onWindows()) return withWindowsLock(path, work, waitMs)
   const holder = hostSpawn("/usr/bin/perl", ["-e", FLOCK_HOLDER, path, String(waitMs / 1000)], { stdio: ["pipe", "pipe", "ignore"] })
   const held = await new Promise<boolean>((resolve) => {
     holder.stdout.once("data", (chunk: Buffer) => resolve(chunk.toString().startsWith("held")))
@@ -160,7 +164,7 @@ export async function replaceFile(path: string, text: string): Promise<void> {
 export const WITHHELD = ""
 
 /** A JSON object as a harness wrote it, every field kept. */
-export const JsonObjectSchema = z.record(z.string(), z.json())
+export const JsonObjectSchema = z.lazy(() => z.record(z.string(), z.json()))
 
 const JwtExpirySchema = z.object({ exp: z.number() })
 const InstantSchema = z.union([z.number(), z.string().transform((text) => Date.parse(text))])
@@ -243,4 +247,19 @@ export function objectValue(value: JsonValue | undefined): Record<string, JsonVa
 /** The record without the fields that must not leave this Mac. */
 export function without(record: Record<string, JsonValue>, ...fields: string[]): Record<string, JsonValue> {
   return Object.fromEntries(Object.entries(record).filter(([field]) => !fields.includes(field)))
+}
+
+async function withWindowsLock<T>(path: string, work: () => Promise<T>, waitMs: number): Promise<T | undefined> {
+  const until = Date.now() + waitMs
+  let lock = exclusiveFileLock(path)
+  while (!lock && Date.now() < until) {
+    await new Promise((resolve) => setTimeout(resolve, 50))
+    lock = exclusiveFileLock(path)
+  }
+  if (!lock) return undefined
+  try {
+    return await work()
+  } finally {
+    lock.release()
+  }
 }

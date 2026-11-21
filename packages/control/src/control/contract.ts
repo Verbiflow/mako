@@ -10,7 +10,7 @@ import {
   type VerificationKind,
 } from "../computer/control-contract.js"
 
-export const PageTargetSchema = z
+export const PageTargetSchema = z.lazy(() => z
   .object({
     kind: z.literal("page"),
     browser: z.string().min(1),
@@ -18,7 +18,7 @@ export const PageTargetSchema = z
     generation: z.string().min(1),
     lease: z.string().min(1),
   })
-  .strict()
+  .strict())
 export type PageTarget = z.infer<typeof PageTargetSchema>
 
 export const WindowControlTargetSchema = WindowTargetSchema.extend({
@@ -26,20 +26,20 @@ export const WindowControlTargetSchema = WindowTargetSchema.extend({
 }).strict()
 export type WindowControlTarget = z.infer<typeof WindowControlTargetSchema>
 
-export const ControlTargetSchema = z.discriminatedUnion("kind", [
+export const ControlTargetSchema = z.lazy(() => z.discriminatedUnion("kind", [
   PageTargetSchema,
   WindowControlTargetSchema,
-])
+]))
 export type ControlTarget = z.infer<typeof ControlTargetSchema>
 
-export const NativeScreenshotOptionsSchema = z
+export const NativeScreenshotOptionsSchema = z.lazy(() => z
   .object({
     format: z.enum(["png", "jpeg"]).optional(),
     quality: z.number().int().min(1).max(100).optional(),
     maxSide: z.number().int().min(256).max(4096).optional(),
     screenshot_out_file: z.string().min(1).optional(),
   })
-  .strict()
+  .strict())
 export type NativeScreenshotOptions = z.infer<
   typeof NativeScreenshotOptionsSchema
 >
@@ -113,7 +113,7 @@ const commandOperationSchema = z
   })
   .strict()
 
-export const ControlOperationSchema = z.discriminatedUnion("kind", [
+export const ControlOperationSchema = z.lazy(() => z.discriminatedUnion("kind", [
   setTextOperationSchema,
   activateOperationSchema,
   pressKeyOperationSchema,
@@ -121,7 +121,7 @@ export const ControlOperationSchema = z.discriminatedUnion("kind", [
   scrollOperationSchema,
   selectOptionOperationSchema,
   commandOperationSchema,
-])
+]))
 export type ControlOperation = z.infer<typeof ControlOperationSchema>
 
 /** The SDK call that dispatches each operation kind; `click(ref)` activates. */
@@ -154,7 +154,7 @@ export function operationLabel(operation: z.input<typeof ControlOperationSchema>
   return [OPERATION_METHODS[operation.kind], subject, key, button, count].filter(Boolean).join(" ")
 }
 
-export const ControlTargetsRequestSchema = z.discriminatedUnion("kind", [
+export const ControlTargetsRequestSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("apps"), all: z.boolean().default(false) }).strict(),
   z
     .object({ kind: z.literal("windows"), pid: z.number().int().positive() })
@@ -163,10 +163,10 @@ export const ControlTargetsRequestSchema = z.discriminatedUnion("kind", [
   z
     .object({ kind: z.literal("pages"), browser: z.string().min(1), all: z.boolean().default(false) })
     .strict(),
-])
+]))
 export type ControlTargetsRequest = z.infer<typeof ControlTargetsRequestSchema>
 
-export const ControlObserveRequestSchema = z
+export const ControlObserveRequestSchema = z.lazy(() => z
   .object({
     // oxlint-disable-next-line anti-slop/no-shape-in-symbol-names -- Zod schema composition API.
     ...ControlReadScopeSchema.shape,
@@ -183,41 +183,41 @@ export const ControlObserveRequestSchema = z
       context.addIssue({ code: "custom", path: ["maxDepth"], message: "maxDepth is a native window read limit; browser observations use within/match scopes." })
     if (request.offset !== undefined && request.target.kind !== "page")
       context.addIssue({ code: "custom", path: ["offset"], message: "offset pages through a browser observation; native windows use maxDepth or within." })
-  })
+  }))
 export type ControlObserveRequest = z.infer<typeof ControlObserveRequestSchema>
 
-export const ControlDispatchRequestSchema = z
+export const ControlDispatchRequestSchema = z.lazy(() => z
   .object({
     target: ControlTargetSchema.optional(),
     operation: ControlOperationSchema,
   })
-  .strict()
+  .strict())
 export type ControlDispatchRequest = z.infer<
   typeof ControlDispatchRequestSchema
 >
 
-export const ControlEventsRequestSchema = z
+export const ControlEventsRequestSchema = z.lazy(() => z
   .object({
     target: ControlTargetSchema,
     after: z.number().int().nonnegative().default(0),
     limit: z.number().int().min(1).max(128).default(32),
   })
-  .strict()
+  .strict())
 export type ControlEventsRequest = z.infer<typeof ControlEventsRequestSchema>
 
-export const ControlRawRequestSchema = z
+export const ControlRawRequestSchema = z.lazy(() => z
   .object({
     backend: z.enum(["native", "page"]),
     name: z.string().min(1),
     args: z.record(z.string(), z.json()),
   })
-  .strict()
+  .strict())
 export type ControlRawRequest = z.infer<typeof ControlRawRequestSchema>
 
 export const TopologyRiskSchema = z.enum(["none", "bounded", "surface"])
 export type TopologyRisk = z.infer<typeof TopologyRiskSchema>
 
-export const ControlPlanSchema = z.discriminatedUnion("status", [
+export const ControlPlanSchema = z.lazy(() => z.discriminatedUnion("status", [
   z
     .object({
       status: z.literal("selected"),
@@ -239,7 +239,7 @@ export const ControlPlanSchema = z.discriminatedUnion("status", [
       reasons: z.array(z.string()),
     })
     .strict(),
-])
+]))
 export type ControlPlan = z.infer<typeof ControlPlanSchema>
 
 const operationPolicy = {

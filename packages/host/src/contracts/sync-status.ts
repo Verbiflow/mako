@@ -34,7 +34,7 @@ export const SyncFailureKindSchema = z.enum(["refused", "unreachable", "conflict
  * A Session not synced: its pushes have failed for a while and been tried again since (the sync daemon's rule,
  * `LASTING_MS`), so a failure the next try heals is never one. It stays until the Session goes.
  */
-export const SyncFailureViewSchema = z.object({
+export const SyncFailureViewSchema = z.lazy(() => z.object({
   at: z.number(),
   harness: z.string(),
   nativeId: z.string(),
@@ -46,7 +46,7 @@ export const SyncFailureViewSchema = z.object({
   kind: SyncFailureKindSchema.optional(),
   /** When the Session began failing, in a row; `at` is its newest try. */
   since: z.number().optional(),
-})
+}))
 export type SyncFailureView = z.infer<typeof SyncFailureViewSchema>
 
 /** What a person reads of a Session not synced: what happened, in a few words, and what Mako does about it. */
@@ -72,9 +72,9 @@ export function syncFailureWords(kind: SyncFailureKind | undefined): SyncFailure
 }
 
 /** The record store's backfill as its last pass wrote it beside the store: how far it has taken this Mac's sessions. */
-export const SyncBackfillSchema = z.object({ sessions: z.number().int().nonnegative(), done: z.number().int().nonnegative(), startedAt: z.number(), endedAt: z.number().optional() })
+export const SyncBackfillSchema = z.lazy(() => z.object({ sessions: z.number().int().nonnegative(), done: z.number().int().nonnegative(), startedAt: z.number(), endedAt: z.number().optional() }))
 
-export const SyncStatusSchema = z.discriminatedUnion("state", [
+export const SyncStatusSchema = z.lazy(() => z.discriminatedUnion("state", [
   /** Nothing leaves this Mac: signed out, or the account's plan has no cloud. */
   z.object({ state: z.literal("off"), reason: z.enum(["signed-out", "no-cloud"]) }),
   /** Signed in with the cloud, and the catalog hasn't said yet. */
@@ -105,7 +105,7 @@ export const SyncStatusSchema = z.discriminatedUnion("state", [
     unreachableSince: z.number().optional(),
     backfill: SyncBackfillSchema.optional(),
   }),
-])
+]))
 export type SyncStatus = z.infer<typeof SyncStatusSchema>
 
 /**

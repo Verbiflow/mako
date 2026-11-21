@@ -7,14 +7,14 @@ import { z } from "zod"
  * client adds what it answers itself, as the desktop app answers the folder
  * chooser with its own dialog.
  */
-export const MachineOfferSchema = z.object({
+export const MachineOfferSchema = z.lazy(() => z.object({
   /** The file manager that shows a path, named for its label; `null` when this host can't show one. */
   fileManager: z.enum(["finder", "file-manager"]).nullable(),
   /** Whether a person can pick a folder through this client. */
   chooseFolder: z.boolean(),
   /** Why something is missing, as a sentence; absent when the machine offers everything. */
   missing: z.string().optional(),
-})
+}))
 
 export type MachineOffer = z.infer<typeof MachineOfferSchema>
 

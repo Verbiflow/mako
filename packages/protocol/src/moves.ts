@@ -39,10 +39,10 @@ export type MoveCheckpoint = z.infer<typeof MoveCheckpointSchema>
  * (`history.json`) and the bytes of each file outside its folder (`outside/<absolute path>`). Apart from the
  * checkout's bundle, which is staged ahead and proven unchanged at the hand-over.
  */
-export const MoveCarryRefSchema = z.object({
+export const MoveCarryRefSchema = z.lazy(() => z.object({
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   bytes: z.number().int().positive().max(MOVE_CHECKPOINT_MAX_BYTES),
-}).strict()
+}).strict())
 export type MoveCarryRef = z.infer<typeof MoveCarryRefSchema>
 
 /** The most bytes a carry takes from outside the Thread's folder: one file, and every one. */
@@ -52,34 +52,34 @@ export const MOVE_OUTSIDE_BYTES = 64 * 1024 * 1024
 export const CarriedPathSchema = z.string().min(2).max(4_096).regex(/^\/(?!.*(^|\/)\.\.?(\/|$))[^\0]*[^/]$/, "an absolute path")
 
 /** A repository of the Thread's checkout: where it is, what its remote is, and its checkout as the move took it. */
-export const MoveCarryRepositorySchema = z.object({
+export const MoveCarryRepositorySchema = z.lazy(() => z.object({
   path: CarriedPathSchema,
   /** Its GitHub repository, which a machine clones it from: absent for the first, which the cloud Thread names. */
   url: z.string().max(200).optional(),
   branch: z.string().min(1).max(250).optional(),
   checkpoint: MoveCheckpointSchema,
-}).strict()
+}).strict())
 export type MoveCarryRepository = z.infer<typeof MoveCarryRepositorySchema>
 
 /** A file outside the Thread's folder, as the carry holds it: its bytes are `outside/<path>` in the carry's tree. */
-export const MoveOutsideFileSchema = z.object({
+export const MoveOutsideFileSchema = z.lazy(() => z.object({
   path: CarriedPathSchema,
   kind: z.enum(["file", "executable", "symlink"]),
   sha256: z.string().regex(/^[0-9a-f]{64}$/),
   bytes: z.number().int().nonnegative().max(MOVE_OUTSIDE_FILE_BYTES),
   /** How the Thread used it: wrote it, or only read it. */
   access: z.enum(["read", "write"]),
-}).strict()
+}).strict())
 export type MoveOutsideFile = z.infer<typeof MoveOutsideFileSchema>
 
 /**
  * Why a path the Thread used didn't come: a secret's; past the size a move carries; somewhere the other side can't hold
  * it at the same path; unreadable; or the cloud's machines are older than carries.
  */
-export const MoveLeftSchema = z.object({
+export const MoveLeftSchema = z.lazy(() => z.object({
   path: CarriedPathSchema,
   why: z.enum(["secret", "too-large", "elsewhere", "unreadable", "folder", "older-cloud"]),
-}).strict()
+}).strict())
 export type MoveLeft = z.infer<typeof MoveLeftSchema>
 
 /**
@@ -87,7 +87,7 @@ export type MoveLeft = z.infer<typeof MoveLeftSchema>
  * one the move's own checkpoint names), every file outside its folder, what was left and why, and whether its file
  * history came. `gone`: files outside it the Thread had carried in and removed, which the way back removes too.
  */
-export const MoveCarrySchema = z.object({
+export const MoveCarrySchema = z.lazy(() => z.object({
   version: z.literal(1),
   folder: CarriedPathSchema,
   repositories: z.array(MoveCarryRepositorySchema).min(1).max(32),
@@ -95,7 +95,7 @@ export const MoveCarrySchema = z.object({
   gone: z.array(CarriedPathSchema).max(10_000).default([]),
   left: z.array(MoveLeftSchema).max(10_000).default([]),
   history: z.boolean(),
-}).strict()
+}).strict())
 export type MoveCarry = z.infer<typeof MoveCarrySchema>
 
 /** The most operations one hand-over carries: an arrival, and a start, a continued turn and a few waiting messages per Session. */
@@ -105,13 +105,13 @@ export const MOVE_HANDOVER_OPERATIONS = 1_024
 export const MOVE_HANDOFF_BYTES = 64 * 1024
 
 /** A device's ask that the cloud take the Thread it released: the Sessions it carries, at the generations released. */
-export const MoveClaimRequestSchema = z.object({
+export const MoveClaimRequestSchema = z.lazy(() => z.object({
   /** The device's own Thread, by the id its store gave it. */
   thread: z.uuid(),
   sessions: z.array(z.object({ id: z.uuid(), generation: z.number().int().positive() }).strict()).min(1).max(256),
   /** The device's handoff whole, kept as it was sent and given back on the way home. */
   handoff: z.json(),
-}).strict()
+}).strict())
 export type MoveClaimRequest = z.infer<typeof MoveClaimRequestSchema>
 
 /**
@@ -123,10 +123,10 @@ export type MoveClaimRequest = z.infer<typeof MoveClaimRequestSchema>
  * until its machine answers. Every operation is the device's, encoded as it would have sent it (`encodeOperation`),
  * under an id of the move's, so a repeat reaches the same end. Posted again, the first stands.
  */
-export const MoveHandOverRequestSchema = z.object({
+export const MoveHandOverRequestSchema = z.lazy(() => z.object({
   claim: MoveClaimRequestSchema,
   operations: z.array(z.string().min(1)).min(1).max(MOVE_HANDOVER_OPERATIONS),
-}).strict()
+}).strict())
 export type MoveHandOverRequest = z.infer<typeof MoveHandOverRequestSchema>
 
 /** What a hand-over's operations may be: the arrival first, then the starts, the turns continued and the messages that waited. */
@@ -139,7 +139,7 @@ export const MOVE_HANDOVER_OPS: readonly string[] = [MOVE_ARRIVAL_OP, "host.live
  * move was refused and the device takes it back), or `failed` (claimed, but an operation after the arrival kept
  * failing: the Thread is the cloud's, and the person's next call starts it again). `step` is the operation now.
  */
-export const MoveHandOverStateSchema = z.object({
+export const MoveHandOverStateSchema = z.lazy(() => z.object({
   move: z.uuid(),
   phase: z.enum(["arriving", "running", "done", "refused", "failed"]),
   step: z.number().int().nonnegative(),
@@ -148,7 +148,7 @@ export const MoveHandOverStateSchema = z.object({
   attempt: z.number().int().nonnegative(),
   lastError: z.string().optional(),
   endedAt: z.number().optional(),
-}).strict()
+}).strict())
 export type MoveHandOverState = z.infer<typeof MoveHandOverStateSchema>
 
 /** How long a device's ask for a move's answer is held open for it at most, in ms. */
@@ -157,10 +157,10 @@ export const MOVE_ANSWER_WAIT_MS = 25_000
 /** The longest reason a refusal, a cancel or a give-back carries: a sentence, not a stack. */
 export const MOVE_REASON_MAX = 2_000
 
-export const MoveRefuseRequestSchema = z.object({ reason: z.string().min(1).max(MOVE_REASON_MAX) }).strict()
+export const MoveRefuseRequestSchema = z.lazy(() => z.object({ reason: z.string().min(1).max(MOVE_REASON_MAX) }).strict())
 
 /** What the gateway recorded for a move: the claim, each Session one generation on, or the refusal. */
-export const MoveAnswerSchema = z.discriminatedUnion("kind", [
+export const MoveAnswerSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("claimed"),
     move: z.uuid(),
@@ -168,7 +168,7 @@ export const MoveAnswerSchema = z.discriminatedUnion("kind", [
     sessions: z.array(z.object({ id: z.uuid(), generation: z.number().int().positive() }).strict()),
   }).strict(),
   z.object({ kind: z.literal("refused"), move: z.uuid(), at: z.number(), reason: z.string() }).strict(),
-])
+]))
 export type MoveAnswer = z.infer<typeof MoveAnswerSchema>
 
 /**
@@ -195,15 +195,15 @@ export type MoveAnswer = z.infer<typeof MoveAnswerSchema>
 export const RETURN_DEPARTURE_OP = "host.move-depart"
 
 /** Each unit of a session's records by its key, at the version its sender holds: what the taker must hold at least. */
-export const ReturnHoldingsSchema = z.record(z.string().min(1).max(4_096), z.number().int().min(-1))
+export const ReturnHoldingsSchema = z.lazy(() => z.record(z.string().min(1).max(4_096), z.number().int().min(-1)))
 
 /** What a machine packed for the way back: its checkout and, per Session, what it sent of its records. */
-export const ReturnDepartureSchema = z.object({
+export const ReturnDepartureSchema = z.lazy(() => z.object({
   checkpoint: MoveCheckpointSchema,
   sessions: z.array(z.object({ harness: z.string().min(1).max(64), nativeId: z.string().min(1).max(256), holdings: ReturnHoldingsSchema }).strict()).min(1).max(256),
   /** What else it packed (`MoveCarryRefSchema`): its other repositories, the files outside its folder, its file history. */
   carry: MoveCarryRefSchema.optional(),
-}).strict()
+}).strict())
 export type ReturnDeparture = z.infer<typeof ReturnDepartureSchema>
 
 /**
@@ -212,7 +212,7 @@ export type ReturnDeparture = z.infer<typeof ReturnDepartureSchema>
  */
 const ArchiveMarkSchema = { to: z.literal("archive").optional(), by: z.uuid().optional() }
 
-export const ReturnStateSchema = z.discriminatedUnion("phase", [
+export const ReturnStateSchema = z.lazy(() => z.discriminatedUnion("phase", [
   z.object({ phase: z.literal("returning"), move: z.uuid(), at: z.number(), ...ArchiveMarkSchema }).strict(),
   z.object({ phase: z.literal("cancelled"), move: z.uuid(), at: z.number(), reason: z.string(), ...ArchiveMarkSchema }).strict(),
   z.object({ phase: z.literal("released"), move: z.uuid(), at: z.number(), departure: ReturnDepartureSchema, ...ArchiveMarkSchema }).strict(),
@@ -223,12 +223,12 @@ export const ReturnStateSchema = z.discriminatedUnion("phase", [
    */
   z.object({ phase: z.literal("archived"), move: z.uuid(), at: z.number(), departure: ReturnDepartureSchema.optional(), to: z.literal("archive"), by: z.uuid().optional() }).strict(),
   z.object({ phase: z.literal("returned"), move: z.uuid(), at: z.number(), departure: ReturnDepartureSchema, ...ArchiveMarkSchema }).strict(),
-])
+]))
 export type ReturnState = z.infer<typeof ReturnStateSchema>
 
 /** A return's beginning: to its device (the default), or to the archive. */
-export const ReturnBeginRequestSchema = z.object({ to: z.literal("archive").optional() }).strict()
+export const ReturnBeginRequestSchema = z.lazy(() => z.object({ to: z.literal("archive").optional() }).strict())
 export type ReturnBeginRequest = z.infer<typeof ReturnBeginRequestSchema>
 
-export const ReturnReleaseRequestSchema = z.object({ departure: ReturnDepartureSchema }).strict()
-export const ReturnReasonRequestSchema = z.object({ reason: z.string().min(1).max(MOVE_REASON_MAX) }).strict()
+export const ReturnReleaseRequestSchema = z.lazy(() => z.object({ departure: ReturnDepartureSchema }).strict())
+export const ReturnReasonRequestSchema = z.lazy(() => z.object({ reason: z.string().min(1).max(MOVE_REASON_MAX) }).strict())

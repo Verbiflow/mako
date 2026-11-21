@@ -18,16 +18,18 @@ contract needs (`0005-windows-driver.patch`, described in the
 - The host's `CuaEmbedded` starts it as on a Mac (`serve --embedded
   --no-overlay`), on a named pipe `\\.\pipe\mako-cua-<host pid>-<random>`
   instead of a Unix socket. The daemon creates the pipe with a current-user
-  ACL and reserves the name; it trusts the host's connections by the pid it is
-  given (`CUA_DRIVER_EMBEDDED_HOST_PID`), since a pipe has no peer credentials
-  to read a parent from. It exits when the host's end of its stdin closes, so a
+  ACL and reserves the name, and serves only the host's own process, by the
+  pid it is given (`CUA_DRIVER_EMBEDDED_HOST_PID`), since a pipe has no peer
+  credentials to read a parent from (see "The driver's own pipe"). It exits when the host's end of its stdin closes, so a
   host that is killed leaves no driver; the host stops it the same way and
   terminates it two seconds later if it is still there.
-- The `DriverBroker` gives tasks their grants on a named pipe too
-  (`\\.\pipe\mako-driver-<pid>-<random>`); a lease still needs its grant's token.
-- The host finds `cua-driver.exe` on `PATH` or in `~\.local\bin`, as it finds
-  `cua-driver` elsewhere. Packaging has to put it in one of those, or the host
-  has to be told where it is. The driver runs with its own folder as its
+- The `DriverBroker` gives tasks their grants on the host's proven pipe (the
+  handshake in `@mako/lazy/private-pipe`); a lease still needs its grant's token.
+- The host finds `cua-driver.exe` through its trusted lookup (`base/executable.ts`):
+  in `PATH`'s whole-path folders or `~\.local\bin`, and only where no other
+  account could have put it; never by a bare name. Packaging has to put it in
+  such a folder. The host never runs upstream's updater over Mako's build
+  (a `+mako.` version is refused). The driver runs with its own folder as its
   current folder, so nothing it names without a folder is found in the folder
   the host started in.
 - Windows asks no permission to capture windows or drive UI Automation, so the
@@ -58,6 +60,66 @@ element through UI Automation's `SetFocus`, which brought the window forward in
 some runs on the runner. Typing into a background window works when its focused control is
 the target (a posted click puts the caret there first), but the runtime cannot
 yet promise that. Menus stay unavailable until `invoke_menu` is verified.
+
+## The driver's own pipe
+
+For a reviewer: who can reach the embedded driver on Windows, and why. Line
+numbers are in `libs/cua-driver/rust/crates/cua-driver/src/serve.rs` of the
+pinned upstream source with `vendor/cua-driver/release.patch` applied (the
+Windows `run_serve`); the two changes Mako makes are in
+`vendor/cua-driver/0005-windows-driver.patch` (its `serve.rs` hunks).
+
+- **Name.** The host draws `\\.\pipe\mako-cua-<host pid>-<128 random bits>`
+  and passes it as `--socket` (`packages/host/src/control/cua-embedded.ts`,
+  `daemonEndpoint`). The name is not a secret: Windows lists pipe names, and
+  the daemon's command line shows it. Nothing below depends on it being one.
+- **Who holds the name.** The embedded daemon creates its first instance with
+  `FILE_FLAG_FIRST_PIPE_INSTANCE` (line 1792, `first_pipe_instance`). If
+  another process made the name first, creation fails, the daemon exits, and
+  the host reports the driver as not started.
+- **ACL.** Every instance is created with an explicit security descriptor
+  (line 1802; a daemon that cannot build one refuses to start, line 1748). For
+  an embedded daemon it is `D:P(A;;GA;;;<this user's SID>)`
+  (`build_pipe_security_attrs`, line 1705): a protected DACL with one entry,
+  so no other account is granted access (an administrator can take ownership
+  of it, as of any object). It carries no mandatory label of its own, so the pipe has
+  the daemon's integrity level with no-write-up: a low-integrity process of
+  the same user cannot open it. Upstream labelled it Low (`S:(ML;;NW;;;LW)`),
+  which let a sandboxed process of the same user in; Mako's patch removes that
+  for the embedded daemon and leaves the standalone service as it was.
+  Tokio's `ServerOptions` rejects remote clients by default
+  (`PIPE_REJECT_REMOTE_CLIENTS`, tokio 1.52.1 `named_pipe.rs`).
+- **Each connection, before a byte is read.** The client's process id comes
+  from the kernel (`GetNamedPipeClientProcessId`, line 1586). Its token's user
+  SID (`named_pipe_client_sid`, line 1600) must equal the daemon's own
+  (`current_user_sid_string`, line 1506; the comparison at line 1817), or the
+  instance is disconnected.
+- **The host's pid.** The host starts the daemon with
+  `CUA_DRIVER_EMBEDDED_HOST_PID=<its pid>` (`cua-embedded.ts`). Upstream used
+  the match (`trusted_host_connection`, line 1830) only to allow trusted
+  service sessions; any process of the same user could still send `call`.
+  Mako's patch closes every connection from another process (line 1838), so
+  the daemon serves the host's process and nothing else. Every caller of the
+  driver, the person's Appshots and each task's worker, goes through the
+  host's `DriverBroker`, which is behind its own proven pipe. A pid is only
+  reused after its process ends, and the daemon ends with the host: it reads
+  the host's end of its stdin and exits when that closes (line 1771,
+  `wait_for_parent_stdin_eof`, line 724; `CUA_DRIVER_PARENT_LIVENESS_STDIN`).
+- **What this does not cover.** The boundary is the user account at the
+  host's integrity level. A process of the same user that can write the
+  host's memory can act as the host. One that takes the pipe's name between
+  the host choosing it and the daemon creating it stops the driver from
+  starting; the host's start then fails, but the host does not itself check
+  which process answers on the name before its first request (Node has no
+  call for a pipe's server pid), so a racing process of the same user could
+  answer the host's requests in the driver's place until the daemon's exit is
+  seen. It would learn what an agent asks of the driver; it gains nothing
+  over reading the screen and sending input itself, which that user can do.
+  A handshake like the broker's would close it and needs the daemon's side.
+
+`scripts/test-control-driver-windows.ts` checks, against the running daemon:
+the host's process is answered, another process of the same user is closed
+on unanswered, and a low-integrity one cannot open the pipe.
 
 ## Elevated windows (UIPI)
 

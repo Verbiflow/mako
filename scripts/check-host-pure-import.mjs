@@ -35,6 +35,7 @@ const PROGRAMS = new Map([
   ["harnesses/codex/question-worker.ts", "Codex's question reader (harnesses/codex/question-reader.ts)"],
   ["harnesses/claude/approval-settings-worker.ts", "Claude's settings worker (harnesses/claude/approval-settings.ts)"],
   ["harnesses/cursor/sdk/child.ts", "the Cursor SDK's child process (harnesses/cursor/sdk/client.ts)"],
+  ["harnesses/cursor/sdk/installed-sdk.ts", "the Cursor SDK child's loader for an SDK Settings installed (harnesses/cursor/sdk/client.ts)"],
   ["harnesses/cursor/sdk/checkpoint-collector-worker.ts", "the Cursor checkpoint collector's worker (harnesses/cursor/sdk/checkpoint-collector.ts)"],
 ])
 

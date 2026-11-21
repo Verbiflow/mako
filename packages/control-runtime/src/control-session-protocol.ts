@@ -8,15 +8,20 @@ import {
 } from "@mako/control/control"
 
 export const CONTROL_SESSION_PROTOCOL = 1
-export const SessionDescriptorSchema = z
+export const SessionDescriptorSchema = z.lazy(() => z
   .object({
     protocol: z.literal(CONTROL_SESSION_PROTOCOL),
     build: z.string().regex(/^[a-f0-9]{64}$/),
     session: z.string().uuid(),
     socket: z.string().min(1),
     pid: z.number().int().positive(),
+    /**
+     * On Windows, where the socket is a named pipe: the secret both ends of every connection prove they know before a
+     * request crosses it (`@mako/lazy/private-pipe`). It lives only in the session file, which only its user reads.
+     */
+    proof: z.string().regex(/^[0-9a-f]{64}$/).optional(),
   })
-  .strict()
+  .strict())
 export type SessionDescriptor = z.infer<typeof SessionDescriptorSchema>
 export const ControlJsInputSchema = z.object({
   code: z.string().min(1).max(100_000).describe("JavaScript with top-level await; normal bindings persist between calls."),
@@ -65,7 +70,7 @@ const locatorOperationSchema = z.discriminatedUnion("kind", [
       { message: "Pass exactly one of value or label" }
     ),
 ])
-export const SessionOperationSchema = z.discriminatedUnion("method", [
+export const SessionOperationSchema = z.lazy(() => z.discriminatedUnion("method", [
   z.object({ method: z.literal("status") }).strict(),
   ControlJsInputSchema.extend({ method: z.literal("js") }),
   z.object({ method: z.literal("js-reset") }).strict(),
@@ -130,9 +135,9 @@ export const SessionOperationSchema = z.discriminatedUnion("method", [
     })
     .strict(),
   z.object({ method: z.literal("close"), target: ControlTargetSchema }).strict(),
-])
+]))
 export type SessionOperation = z.infer<typeof SessionOperationSchema>
-export const SessionRequestSchema = z
+export const SessionRequestSchema = z.lazy(() => z
   .object({
     protocol: z.literal(CONTROL_SESSION_PROTOCOL),
     build: z.string(),
@@ -142,8 +147,8 @@ export const SessionRequestSchema = z
     /** Answer as NDJSON: a js call's steps (`{ steps }`) as they change, then the reply as the last line. */
     steps: z.literal(true).optional(),
   })
-  .strict()
-export const SessionReplySchema = z.discriminatedUnion("ok", [
+  .strict())
+export const SessionReplySchema = z.lazy(() => z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), requestId: z.string(), value: z.json() }),
   z.object({
     ok: z.literal(false),
@@ -158,7 +163,7 @@ export const SessionReplySchema = z.discriminatedUnion("ok", [
     /** State-changing calls the failed program made, as programErrorText names them. */
     ran: z.array(z.string()).optional(),
   }),
-])
+]))
 
 /**
  * The engine's exact code identity, independent of task arguments or

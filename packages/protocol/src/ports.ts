@@ -22,10 +22,10 @@ export const PORT_BODY_LIMIT = 512 * 1024
 const HeaderSchema = z.tuple([z.string().min(1).max(256), z.string().max(8_192)])
 
 /** What a port request is for: an app's port on the runtime's loopback, or the runtime's own signed files. */
-export const PortTargetSchema = z.discriminatedUnion("kind", [
+export const PortTargetSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("port"), port: z.number().int().min(1).max(65_535) }).strict(),
   z.object({ kind: z.literal("files") }).strict(),
-])
+]))
 export type PortTarget = z.infer<typeof PortTargetSchema>
 
 export const PortRequestSchema = z
@@ -42,7 +42,7 @@ export const PortRequestSchema = z
 export type PortRequest = z.infer<typeof PortRequestSchema>
 
 /** The first message of a port request's stream: the answer's status and headers. */
-export const PortHeadSchema = z.object({ status: z.number().int().min(100).max(599), headers: z.array(HeaderSchema).max(200) }).strict()
+export const PortHeadSchema = z.lazy(() => z.object({ status: z.number().int().min(100).max(599), headers: z.array(HeaderSchema).max(200) }).strict())
 export type PortHead = z.infer<typeof PortHeadSchema>
 
 export function encodePortHead(head: PortHead): Uint8Array {

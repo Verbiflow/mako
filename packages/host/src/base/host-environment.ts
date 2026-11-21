@@ -76,14 +76,17 @@ export function appDataFor(platform: NodeJS.Platform, home: string, env: NodeJS.
   return env.XDG_CONFIG_HOME ?? join(home, ".config")
 }
 
-/** A bundle keeps the app in `Contents/Resources/app.asar`, or `app` when unpacked. */
-function bundled(appRoot: string): boolean {
-  return basename(dirname(appRoot)) === "Resources" && /^app(\.asar)?$/.test(basename(appRoot))
+/**
+ * A packaged app keeps itself in `app.asar`, or `app` when unpacked: a Mac bundle's in `Contents/Resources`, a Windows
+ * install's in `resources` beside `Mako.exe`.
+ */
+function bundled(appRoot: string, platform: NodeJS.Platform): boolean {
+  return basename(dirname(appRoot)) === (platform === "win32" ? "resources" : "Resources") && /^app(\.asar)?$/.test(basename(appRoot))
 }
 
 export function resolveHostEnvironment({ env, appRoot, platform, home }: HostEnvironmentInput): HostEnvironment {
   const { name, productName, version, ...build } = ManifestSchema.parse(JSON.parse(readFileSync(join(appRoot, "package.json"), "utf8")))
-  const packaged = bundled(appRoot)
+  const packaged = bundled(appRoot, platform)
   const development = !packaged && !env.MAKO_PROD
   const profile = env.MAKO_PROFILE ? ProfileSchema.parse(env.MAKO_PROFILE) : development ? "dev" : ""
   const appData = appDataFor(platform, home, env)

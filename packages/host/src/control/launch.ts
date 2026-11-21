@@ -1,5 +1,6 @@
 import { delimiter } from "node:path"
 import type { ControlLaunch } from "@mako/control-runtime/session"
+import { onWindows } from "../base/platform.js"
 
 /** Provider shell configuration only. Contains no browser/driver credentials. */
 export function applyControlEnvironment(
@@ -10,7 +11,9 @@ export function applyControlEnvironment(
   delete env.MAKO_CONTROL_TOKEN
   delete env.MAKO_CONTROL_SESSION_FILE
   if (!control) return
-  env.PATH = `${control.bin}${delimiter}${env.PATH ?? ""}`
+  // Under the name the environment already has it by: Windows' `Path`, which a second `PATH` would shadow or lose to.
+  const key = onWindows() ? (Object.keys(env).find((name) => name.toUpperCase() === "PATH") ?? "PATH") : "PATH"
+  env[key] = `${control.bin}${delimiter}${env[key] ?? ""}`
   env.MAKO_CONTROL_SESSION_FILE = control.sessionFile
 }
 

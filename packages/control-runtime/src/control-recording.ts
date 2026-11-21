@@ -1,13 +1,9 @@
 import { z } from "zod"
-import { Mp4Writer, readMp4, retimeMp4 } from "./mp4.js"
-import { resolveExecutable } from "./executable.js"
+import { Mp4Writer, mp4Units, readMp4, retimeMp4 } from "./mp4.js"
 import { onLinux, onMac } from "./platform.js"
 import { VideoHelper } from "./video-helper.js"
 import { RecordingEncoder } from "./recording-encoder.js"
 import { recordingEncoder, recordingVideoEncoding } from "./recording-encoder-process.js"
-import { spawn } from "./processes.js"
-import { Readable } from "node:stream"
-import { pipeline } from "node:stream/promises"
 import {
   mkdir,
   mkdtemp,
@@ -149,6 +145,7 @@ export class ControlRecording {
   private captureStopped: Promise<void | string> | undefined
   private timer: ReturnType<typeof setTimeout> | undefined
   private sourceVideo: string | undefined
+  private pointerBounds: { x: number; y: number; width: number; height: number } | undefined
   private sourceFrames: number | undefined
   private video: string | undefined
   private timeline: string | undefined
@@ -245,6 +242,13 @@ export class ControlRecording {
     if (this.error) receipt.error = this.error
     return receipt
   }
+  /**
+   * The window's place in the video, in its pixels: a recording of the whole monitor (a Wayland desktop's portal) puts
+   * the driver's window-relative pointer points there.
+   */
+  pointersWithin(bounds: { x: number; y: number; width: number; height: number }) {
+    this.pointerBounds = bounds
+  }
   markStarted() {
     this.startedAt = Date.now()
     this.start = performance.now()
@@ -290,8 +294,8 @@ export class ControlRecording {
           if (point.at_ms <= this.endedAt)
             this.pointers.push({
               at: point.at_ms,
-              x: point.x * width,
-              y: point.y * height,
+              x: this.pointerBounds ? this.pointerBounds.x + point.x * this.pointerBounds.width : point.x * width,
+              y: this.pointerBounds ? this.pointerBounds.y + point.y * this.pointerBounds.height : point.y * height,
               pressed: point.pressed,
             })
           if (this.pointers.length > 20_000)
@@ -952,13 +956,12 @@ export class ControlRecording {
     )
     const output = join(this.directory, "recording.mp4")
     const frames = this.renderNativeOverlayFrames({ ...frame, file: frame.file }, width, height)
-    // Windows never uses FFmpeg: its native video comes from the video helper, and a pointer stays in the timeline.
-    const ffmpeg = onLinux() ? resolveExecutable("ffmpeg") : undefined
+    // The pointer is drawn in the video helper, never by FFmpeg: on a Mac its own decoder reads the native video, on
+    // Linux the video's units are handed to it (`composite`), decoded with OpenH264 and drawn under the pictures.
     if (onMac()) await this.overlayWithHelper(this.sourceVideo, output, frames, width, height)
-    else if (ffmpeg) await this.overlayWithFfmpeg(ffmpeg, this.sourceVideo, output, frames, width, height)
+    else if (onLinux()) await this.overlayWithComposite(this.sourceVideo, output, frames, width, height)
     else {
-      // Nothing here decodes the video (a Linux machine without an FFmpeg on PATH, or Windows, which runs none), so
-      // it is kept as it is and the pointer stays in the timeline.
+      // No helper draws over a video here yet: it is kept as it is and the pointer stays in the timeline.
       await rename(this.sourceVideo, output)
       const video = await readMp4(output)
       this.dimensions = { width: video?.width ?? width, height: video?.height ?? height }
@@ -1007,51 +1010,53 @@ export class ControlRecording {
     }
   }
 
-  /** The native video under the pointer pictures, through an FFmpeg already on PATH (a Linux driver records with it). */
-  private async overlayWithFfmpeg(ffmpeg: string, source: string, output: string, frames: AsyncGenerator<Buffer>, width: number, height: number) {
-    const child = spawn(
-      ffmpeg,
-      [
-        "-hide_banner", "-loglevel", "error", "-n",
-        "-filter_threads", "1", "-filter_complex_threads", "1",
-        "-i", source,
-        "-f", "rawvideo", "-pixel_format", "rgba", "-video_size", `${width}x${height}`, "-framerate", String(this.options.fps), "-i", "pipe:0",
-        "-filter_complex",
-        // A native video holds its last frame until stop, but a filter graph
-        // ends that stream where the frame starts; the overlay frames set the length.
-        `[0:v]scale=${width}:${height}:force_original_aspect_ratio=decrease,pad=${width}:${height}:(ow-iw)/2:(oh-ih)/2,tpad=stop=-1:stop_mode=clone[base];[base][1:v]overlay=shortest=1,fps=${this.options.fps}`,
-        "-c:v", "libx264", "-preset", "fast", "-tune", "zerolatency", "-crf", "18",
-        "-pix_fmt", "yuv420p", "-movflags", "+faststart", output,
-      ],
-      { cwd: this.directory, stdio: ["pipe", "ignore", "pipe"] }
-    )
-    let tail = ""
-    child.stderr.on("data", (data: Buffer) => {
-      tail = (tail + data.toString()).slice(-4096)
+  /**
+   * The native video under the pointer pictures on Linux: its units go to the video helper's `composite` mode in time
+   * order, each picture after every unit at or before its time, and the helper encodes what it draws.
+   */
+  private async overlayWithComposite(source: string, output: string, frames: AsyncGenerator<Buffer>, width: number, height: number) {
+    const writer = new Mp4Writer(output, 1000 / this.options.fps)
+    let failure: string | undefined
+    let writing: Promise<void> = Promise.resolve()
+    const helper = new VideoHelper(recordingEncoder(), { kind: "composite" }, { fps: this.options.fps, keyint: this.options.fps, quality: 85 }, {
+      unit: (packet) => {
+        writing = writing.then(() => writer.add(packet, packet.capturedAt)).catch((error: Error) => void (failure ??= error.message))
+      },
+      ended: (reason) => void (failure ??= `Video encoding failed: ${reason}`),
     })
-    const encoding = new Promise<void>((resolve, reject) => {
-      child.on("error", reject)
-      child.on("close", (code) => {
-        if (code === 0) resolve()
-        else reject(new Error(`Video encoding failed: ${tail}`))
-      })
-    })
-    const controller = new AbortController()
     const timeout = setTimeout(() => {
-      controller.abort(new Error("Video encoding timed out"))
-      child.kill("SIGKILL")
+      failure ??= "Video encoding timed out"
+      helper.close()
     }, 120_000)
-    // pipeline bounds queued buffers and waits for stdin backpressure. No rendered
-    // images accumulate on disk, even for a dense full-resolution recording.
-    const streaming = pipeline(Readable.from(frames, { objectMode: false, highWaterMark: 1 }), child.stdin, { signal: controller.signal })
+    const sent = (send: (taken: (error?: Error) => void) => void) =>
+      new Promise<void>((resolve, reject) => send((error) => (error ? reject(error) : resolve())))
     try {
-      await Promise.all([streaming, encoding])
+      const units = mp4Units(source)
+      let next = await units.next()
+      let decoded = false
+      let index = 0
+      for await (const picture of frames) {
+        if (failure) break
+        const at = (index * 1000) / this.options.fps
+        // Every unit shown by this picture's time, and the first always: the picture is drawn over the newest of them.
+        while (!next.done && (!decoded || next.value.timestamp * 1000 <= at)) {
+          const unit = next.value
+          await sent((taken) => helper.video(unit.data, unit.description, taken))
+          decoded = true
+          next = await units.next()
+        }
+        await sent((taken) => helper.picture("rgba", index++, at, picture, { width, height }, taken))
+      }
+      await units.return(undefined)
+      helper.close()
+      await helper.exited
+      await writing
+      if (failure) throw new Error(failure)
+      await writer.finish()
     } catch (error) {
-      const failure = controller.signal.aborted ? controller.signal.reason : error
-      controller.abort()
-      child.kill("SIGKILL")
-      await Promise.allSettled([streaming, encoding])
-      throw failure
+      helper.close()
+      await writer.cancel()
+      throw error
     } finally {
       clearTimeout(timeout)
     }

@@ -2,6 +2,7 @@ import { AsyncLocalStorage } from "node:async_hooks"
 import { withControlProcesses } from "@mako/control-runtime/processes"
 import { withSessionProcesses } from "@mako/sessions/processes"
 import { hostSpawn, hostFork, hostCommand } from "./host-command.js"
+import type { ExecutableTrust } from "./executable-trust.js"
 
 /** What a stop says of work it ended that has no words of its own for it. */
 export const HOST_STOPPING_WORDS = "Mako's host is stopping. This request was not completed."
@@ -38,6 +39,17 @@ export interface HostProbes {
   run(file: string, args: readonly string[], options: ProbeOptions): Promise<{ stdout: string; stderr: string }>
   /** When `pid` started, as `ps -o lstart` says; every pid asked about in one turn is read by one `ps`. */
   startedAt(pid: number, signal?: AbortSignal): Promise<number>
+  /**
+   * Every running process's command name, as `lsof -c` matches it, read once for every probe that asks within a beat;
+   * undefined where it isn't read this way (only Linux reads it, from /proc, with no process started).
+   */
+  commands?(): Promise<RunningCommand[] | undefined>
+}
+
+/** A running process as `HostProbes.commands` reads it: its command name (`comm`) and the start of its command line. */
+export interface RunningCommand {
+  comm: string
+  args: string
 }
 
 /**
@@ -55,6 +67,8 @@ export class HostStopping {
    * composition gives it one: a liveness check of the host's own child reads it here, with no process listing.
    */
   spawnedAt: ((pid: number) => number | undefined) | undefined
+  /** On Windows, the verdicts on programs this host's launches found (`executable-trust.ts`), once composition makes them. */
+  trust: ExecutableTrust | undefined
 
   get signal(): AbortSignal { return this.controller.signal }
 

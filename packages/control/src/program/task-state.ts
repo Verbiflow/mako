@@ -21,23 +21,23 @@ const factsSchema = z
   })
 const itemsSchema = z.array(z.string().min(1).max(500)).max(MAX_ITEMS)
 
-export const TaskMemorySchema = z.object({
+export const TaskMemorySchema = z.lazy(() => z.object({
   revision: z.number().int().nonnegative(),
   objective: z.string().min(1).max(4_000).optional(),
   location: z.string().min(1).max(1_000).optional(),
   facts: factsSchema,
   completed: itemsSchema,
   pending: itemsSchema,
-})
+}))
 export type TaskMemory = z.infer<typeof TaskMemorySchema>
 
-export const TaskCheckpointSchema = z.object({
+export const TaskCheckpointSchema = z.lazy(() => z.object({
   objective: z.string().min(1).max(4_000).optional(),
   location: z.string().min(1).max(1_000).optional(),
   remember: factsSchema.optional(),
   completed: itemsSchema.optional(),
   pending: itemsSchema.optional(),
-})
+}))
 export type TaskCheckpoint = z.infer<typeof TaskCheckpointSchema>
 
 const emptyMemory = (): TaskMemory => ({

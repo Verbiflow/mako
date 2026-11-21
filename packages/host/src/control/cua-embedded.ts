@@ -1,18 +1,16 @@
 import { hostSpawn } from "../base/host-command.js"
 import { endChildInput } from "@mako/sessions/child-input"
 import type { ChildProcess } from "node:child_process"
-import { randomUUID } from "node:crypto"
+import { randomBytes } from "node:crypto"
 import { access, chmod, mkdir, readdir, unlink } from "node:fs/promises"
 import { createConnection } from "node:net"
 import { homedir } from "node:os"
 import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { hostLog } from "../base/host-log.js"
 import { trackProviderChild, untrackProviderPid } from "../base/provider-children.js"
-import { createPrivateControlSocket, videoHelperExecutable } from "@mako/control-runtime/desktop"
+import { createPrivateControlSocket, linuxDesktop, videoHelperExecutable } from "@mako/control-runtime/desktop"
+import { findExecutable } from "../base/executable.js"
 import { onMac, onWindows } from "../base/platform.js"
-
-/** The driver's executable: Windows finds a program by its extension. */
-export const CUA_DRIVER_COMMAND = onWindows() ? "cua-driver.exe" : "cua-driver"
 
 /**
  * The embedded native driver, one per host (`CuaEmbedded`).
@@ -25,6 +23,13 @@ export const CUA_DRIVER_COMMAND = onWindows() ? "cua-driver.exe" : "cua-driver"
  * 2026-09-14 observed only the user's original frontmost pid during startup.
  * The host therefore keeps a real child handle, inherits Mako's grants, and
  * tears the exact process down without pgrep.
+ *
+ * On a Linux desktop the same daemon drives the session it was started in:
+ * X11 directly (XTest, XComposite, EWMH, AT-SPI), and Wayland through what
+ * the compositor offers (portals and libei on GNOME and KDE, wlroots'
+ * protocols on Sway and its kin), which the driver enables only when asked
+ * (`CUA_DRIVER_RS_ENABLE_WAYLAND`). A Linux machine with no display has no
+ * desktop to drive and starts none.
  */
 interface Daemon {
   pid: number
@@ -43,10 +48,12 @@ interface Endpoint {
 }
 
 async function daemonEndpoint(stateDir: string): Promise<Endpoint> {
-  // A pipe is no file: it goes when the daemon does, so there is nothing to sweep or unlink. The random part keeps
-  // another process from taking the name first; the daemon then fails to create it and exits, and the host sees that.
+  // A pipe is no file: it goes when the daemon does, so there is nothing to sweep or unlink. The 128 random bits keep
+  // another process from guessing the name; one that takes it first makes the daemon fail to create it (it asks for
+  // the first instance) and exit, which the host sees. The daemon's ACL admits this user only, and told this host's
+  // pid it serves no other process (`docs/local-control-windows.md`, "The driver's own pipe").
   if (onWindows())
-    return { path: `\\\\.\\pipe\\mako-cua-${process.pid}-${randomUUID().slice(0, 8)}`, close: () => Promise.resolve() }
+    return { path: `\\\\.\\pipe\\mako-cua-${process.pid}-${randomBytes(16).toString("hex")}`, close: () => Promise.resolve() }
   const endpoint = await createPrivateControlSocket(stateDir, `embedded-${process.pid}.sock`)
   await unlink(endpoint.path).catch(() => undefined)
   return endpoint
@@ -85,6 +92,9 @@ async function executable(
   command: string,
   env: NodeJS.ProcessEnv
 ): Promise<string | null> {
+  // On Windows the host's own resolver finds it: by PATHEXT's extensions, in PATH's whole-path folders and the user's
+  // own, and only where no other account could have put it (`executable-trust.ts`). Never a bare name.
+  if (onWindows()) return findExecutable(command, env)
   const candidates = isAbsolute(command)
     ? [command]
     : [
@@ -176,7 +186,7 @@ export class CuaEmbedded {
     hostBundleId: string,
     env: NodeJS.ProcessEnv = process.env
   ): Promise<string | null> {
-    if (!onMac() && !onWindows()) return Promise.resolve(null)
+    if (!onMac() && !onWindows() && !linuxDesktop(env)) return Promise.resolve(null)
     const daemon = this.#daemon
     if (daemon && daemon.child.exitCode === null) return Promise.resolve(daemon.socket)
     if (daemon) this.#forget(daemon)
@@ -272,7 +282,7 @@ export class CuaEmbedded {
     hostBundleId: string,
     env: NodeJS.ProcessEnv
   ): Promise<string | null> {
-    const command = await executable(CUA_DRIVER_COMMAND, env)
+    const command = await executable("cua-driver", env)
     if (!command) return null
     await mkdir(stateDir, { recursive: true, mode: 0o700 })
     await chmod(stateDir, 0o700)
@@ -289,6 +299,7 @@ export class CuaEmbedded {
       // third party; the user's own CLI keeps its own preference.
       CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
       CUA_DRIVER_REQUIRE_FOCUSED_TARGET: "1",
+      ...(linuxDesktop(env)?.session === "wayland" && { CUA_DRIVER_RS_ENABLE_WAYLAND: "1" }),
       // A Windows pipe has no peer credentials to read the parent from: the daemon trusts this host's connections by
       // the pid it is given. And the daemon ends when this host's end of its stdin closes, so a host that is killed
       // leaves no driver behind; there is no process group to take it with the host.

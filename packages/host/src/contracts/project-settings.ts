@@ -8,9 +8,9 @@ import { z } from "zod"
  * (`main`, `origin/main`). Null keeps Mako's own rule (`WorktreeStarts.point`): the project folder's branch, or its
  * upstream when that is ahead.
  */
-export const ProjectSettingsChangeSchema = z.object({
+export const ProjectSettingsChangeSchema = z.lazy(() => z.object({
   baseBranch: z.string().trim().min(1).max(255).regex(/^[^\s~^:?*[\\]+$/, "That isn't a branch name").nullable(),
-}).strict()
+}).strict())
 export type ProjectSettingsChange = z.infer<typeof ProjectSettingsChangeSchema>
 
 /** One project's settings as Settings › Projects shows them. */

@@ -8,14 +8,14 @@ import type { RuntimeUpdateOffer } from "./restore-plan.js"
  * against what a machine will run, never against its own idea of it: this Mako's `tested` can be older or newer than
  * the image's.
  */
-export const CloudHarnessesSchema = z.object({
+export const CloudHarnessesSchema = z.lazy(() => z.object({
   /** The image new machines start from. */
   image: z.string(),
   /** The Mako revision it was built from. */
   revision: z.string(),
   /** Each harness's version there: the version its sessions are written with, and the one a restore there weighs. */
   harnesses: z.record(z.string(), z.string()),
-})
+}))
 export type CloudHarnesses = z.infer<typeof CloudHarnessesSchema>
 
 /**

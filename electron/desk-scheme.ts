@@ -38,6 +38,16 @@ export const DESK_BACKGROUND = "#140f0d"
 export const DESK_TRAFFIC_LIGHTS = { x: 14, y: 13 } as const
 
 /**
+ * Windows's caption buttons over a desk window's title strip (`titleBarOverlay`), where macOS has its traffic lights:
+ * as tall as the strip, on its `--shell`, drawn in its `--muted-foreground`, for each theme. The renderer keeps the
+ * strip's ends clear with `env(titlebar-area-*)` (`.window-inset` and `.window-controls-end` in `src/index.css`).
+ */
+export const DESK_TITLE_BAR_OVERLAY = {
+  dark: { color: DESK_BACKGROUND, symbolColor: "#a9a4a0", height: 38 },
+  light: { color: "#ebeaea", symbolColor: "#535252", height: 38 },
+} as const
+
+/**
  * Every scheme Mako's renderers reach, for `protocol.registerSchemesAsPrivileged`.
  * Electron accepts that call once per process, before `app` is ready, so the
  * host and the client each register this whole list.

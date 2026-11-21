@@ -8,8 +8,9 @@ import {
   MachineBrowser,
   MachineTabVideo,
   helperCapture,
-  helperCaptures,
   helperLiveEncoder,
+  helperWindowSource,
+  linuxDesktop,
   localBrowsers,
   publishDeskBrowserRegistration,
   videoHelperExecutable,
@@ -36,7 +37,7 @@ import { ControlSessions } from "./sessions.js"
 import { startControlService } from "./service.js"
 import { resolveExecutable } from "../base/executable.js"
 import { trackProviderPid, untrackProviderPid } from "../base/provider-children.js"
-import { CUA_DRIVER_COMMAND, CuaEmbedded } from "./cua-embedded.js"
+import { CuaEmbedded } from "./cua-embedded.js"
 import { CuaDriverVersions } from "./cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "../application/index.js"
 import { computerPermissions } from "./computer-permissions.js"
@@ -162,7 +163,7 @@ export function openControl(
   const installedBrowsers = new InstalledBrowsers()
   const ensureLocalControl = () => cua.ensure(join(environment.dataRoot, "computer-use", "cua"), MAKO_BUNDLE_ID)
   const driver = new DriverBroker({
-    socket: async () => (resolveExecutable(CUA_DRIVER_COMMAND) ? ensureLocalControl() : null),
+    socket: async () => (resolveExecutable("cua-driver") ? ensureLocalControl() : null),
     // Mako's own window is what the warm-up pictures, never one of the person's.
     own: () => {
       const attached = desktop.attached()
@@ -187,7 +188,7 @@ export function openControl(
       return desktop.deskPage(previewId)
     },
   })
-  const unknownPermissions = () => computerPermissions(environment, undefined)
+  const unknownPermissions = () => computerPermissions(environment, undefined, linuxDesktop())
   const readComputerPermissions = async (): Promise<MakoComputerPermissions> =>
     desktop.answers("computer-permissions") ? desktop.ask("computer-permissions", {}).catch(unknownPermissions) : unknownPermissions()
   let defaultBrowserApplication: Promise<string | undefined> | undefined
@@ -250,8 +251,8 @@ export function openControl(
     {
       preferencePath: join(environment.dataRoot, "browser-preference.json"),
       defaultApplication: preferredBrowserApplication,
-      // Agents' tabs open in it until someone chooses only where nobody sits at the machine: on a desktop the person's
-      // own browser is theirs to pick, and the machine's is one choice among them.
+      // Agents' tabs open in it until someone chooses only where nobody sits at the machine (a Linux server or cloud
+      // machine): on a desktop the person's own browser is theirs to pick, and the machine's is one choice among them.
       defaultBrowser: machine.kind === "absent" && onLinux() ? machineBrowser?.definition.id : undefined,
     }
   )
@@ -304,14 +305,20 @@ export function openControl(
     capture: {
       tab: (target) => (machineVideo && target.browser === MACHINE_BROWSER_ID ? machineVideo.source(target.tab) : desktopCapture.tab(target)),
       // Without the desktop app, a window is captured by the video helper: ScreenCaptureKit on a Mac, Windows Graphics
-      // Capture on Windows, an X display's on Linux.
-      window: (target) => desktopCapture.window(target) ?? (videoHelper && helperCaptures() ? helperCapture(videoHelper, { kind: "window", windowId: target.windowId }) : undefined),
+      // Capture on Windows, an X display's on Linux, or on Wayland the monitor the person shares through the portal.
+      window: (target) => {
+        const desktop = desktopCapture.window(target)
+        if (desktop) return desktop
+        const source = videoHelper && helperWindowSource(target.windowId, linuxDesktop())
+        return source ? helperCapture(videoHelper, source) : undefined
+      },
     },
   })
   const elementPicks = new ElementPicks(browser, previews, onMac() ? "mac" : "other")
   const sessions = new ControlSessions(
-    // A task's computer use goes through the embedded driver where Mako runs one: a Mac's or a Windows desktop's.
-    async (bindingId) => (resolveExecutable(CUA_DRIVER_COMMAND) && (onMac() || onWindows()) ? driver.grant(`agent ${bindingId}`) : undefined),
+    // A task's computer use goes through the embedded driver where Mako runs one: a Mac's, a Windows desktop's or a
+    // Linux desktop's.
+    async (bindingId) => (resolveExecutable("cua-driver") && (onMac() || onWindows() || linuxDesktop()) ? driver.grant(`agent ${bindingId}`) : undefined),
     undefined,
     undefined,
     (bindingId) => driver.revoke(`agent ${bindingId}`)
@@ -360,18 +367,18 @@ export function openControl(
     /** An agent is using the desk browser, which holds a profile host up (`DeskBrowser.busy`). */
     deskBrowsing: () => deskBrowser.busy(),
     ensureLocalControl,
-    driverStatus: () => driverVersions.status(resolveExecutable(CUA_DRIVER_COMMAND)),
+    driverStatus: () => driverVersions.status(resolveExecutable("cua-driver")),
     driverConnections: async () => ({ ...driver.status(), host: process.pid, workers: await sessions.processes() }),
     // The driver's updater replaces the app bundle and stops running daemons,
     // so the embedded driver is restarted from the new binary afterwards. Tasks
     // mid-session receive a fresh driver session on their next call.
     async updateDriver() {
-      const found = resolveExecutable(CUA_DRIVER_COMMAND)
+      const found = resolveExecutable("cua-driver")
       if (!found) throw new Error("CUA Driver is not installed")
       await driverVersions.update(found)
       cua.stop()
       await ensureLocalControl().catch(() => null)
-      return driverVersions.status(resolveExecutable(CUA_DRIVER_COMMAND))
+      return driverVersions.status(resolveExecutable("cua-driver"))
     },
     computerPermissions: readComputerPermissions,
     async startService(authorize) {

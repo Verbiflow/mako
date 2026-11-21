@@ -1,6 +1,7 @@
 import { rm } from "node:fs/promises"
 import { dirname } from "node:path"
-import { Server, Socket } from "node:net"
+import { createServer, Server, Socket } from "node:net"
+import { requireProof, restrictPipes } from "@mako/lazy/private-pipe"
 import { createControlSession } from "./control-session.js"
 import { serveHandedControlSession } from "./control-session-server.js"
 import { controlSessionBuild, type SessionDescriptor } from "./control-session-protocol.js"
@@ -9,6 +10,7 @@ import {
   DesktopSessionMessageSchema,
   type DesktopSessionConfig,
 } from "./desktop-session-config.js"
+import { linuxDesktop } from "./platform.js"
 
 let ownedDirectory: string | undefined
 let transport: ReturnType<typeof serveHandedControlSession> | undefined
@@ -34,6 +36,8 @@ function bind(config: DesktopSessionConfig, descriptor: SessionDescriptor, direc
         ? browserControlClient(environment)
         : undefined,
       previewEnvironment: environment,
+      // On a person's Linux desktop the video helper records the task's windows.
+      recordingDesktop: linuxDesktop(),
     }
   )
   transport = serveHandedControlSession(session, {
@@ -77,7 +81,31 @@ process.on("message", (raw, handle) => {
     if (handle instanceof Socket) transport?.accept(handle)
     return
   }
-  if (transport || stopping || !(handle instanceof Server)) return
+  if (transport || stopping) return
+  if (data.relay) {
+    // Windows: no listener can be handed here, so this worker listens on a pipe of its own that only the host, which
+    // drew its secret, connects to, relaying each connection it accepted.
+    const relay = data.relay
+    const own = createServer({ pauseOnConnect: true })
+    requireProof(own, () => relay.proof)
+    own.once("error", () => {
+      if (process.connected) process.send?.({ kind: "failed" }, () => {})
+      process.exitCode = 1
+      void stop()
+    })
+    own.listen(relay.pipe, () => {
+      void restrictPipes([relay.pipe])
+      try {
+        bind(data.config, data.descriptor, data.directory, own)
+      } catch {
+        if (process.connected) process.send?.({ kind: "failed" }, () => {})
+        process.exitCode = 1
+        void stop()
+      }
+    })
+    return
+  }
+  if (!(handle instanceof Server)) return
   try {
     bind(data.config, data.descriptor, data.directory, handle)
   } catch {

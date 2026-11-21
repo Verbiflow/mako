@@ -24,16 +24,16 @@ export const PREFERENCE_VALUE_BYTES = 16 * 1024
 const BoundedJsonSchema = z.json().refine((value) => new TextEncoder().encode(JSON.stringify(value)).byteLength <= PREFERENCE_VALUE_BYTES, `A preference's value is at most ${PREFERENCE_VALUE_BYTES} bytes of JSON`)
 
 /** One preference as the account keeps it: its value, when it was edited, and the edit. */
-export const PreferenceEntrySchema = z.object({
+export const PreferenceEntrySchema = z.lazy(() => z.object({
   value: BoundedJsonSchema.nullable(),
   at: z.number().int().nonnegative(),
   op: z.string().min(1).max(64),
-})
+}))
 export type PreferenceEntry = z.infer<typeof PreferenceEntrySchema>
 
-export const PreferencesSchema = z
+export const PreferencesSchema = z.lazy(() => z
   .record(PreferenceKeySchema, PreferenceEntrySchema)
-  .refine((preferences) => Object.keys(preferences).length <= PREFERENCES_MAX, `At most ${PREFERENCES_MAX} preferences`)
+  .refine((preferences) => Object.keys(preferences).length <= PREFERENCES_MAX, `At most ${PREFERENCES_MAX} preferences`))
 export type Preferences = z.infer<typeof PreferencesSchema>
 
 /** Where they're read and changed: `GET` answers them all, `PATCH` writes those it names and answers them all. */
@@ -44,11 +44,11 @@ export const PREFERENCES_PATH = "/v1/preferences"
  * change raises by one. A device keeps the highest revision it heard: an answer or an event older than that changes
  * nothing.
  */
-export const PreferencesAnswerSchema = z.object({ preferences: PreferencesSchema, revision: z.number().int().nonnegative() })
+export const PreferencesAnswerSchema = z.lazy(() => z.object({ preferences: PreferencesSchema, revision: z.number().int().nonnegative() }))
 export type PreferencesAnswer = z.infer<typeof PreferencesAnswerSchema>
 
 /** `PATCH /v1/preferences`: each edit named is kept where it's newer than the account's, the rest left as they are. */
-export const PreferenceWritesSchema = z.object({ preferences: PreferencesSchema }).strict()
+export const PreferenceWritesSchema = z.lazy(() => z.object({ preferences: PreferencesSchema }).strict())
 export type PreferenceWrites = z.infer<typeof PreferenceWritesSchema>
 
 /**

@@ -465,7 +465,7 @@ export class ControlObservation {
 }
 
 /** Quiet notifications are timing information, not action verification. */
-export const NativeSettlingSchema = z
+export const NativeSettlingSchema = z.lazy(() => z
   .object({
     status: z.enum(["events_quiet", "deadline", "unavailable"]),
     scope: z.literal("process_notifications"),
@@ -473,21 +473,21 @@ export const NativeSettlingSchema = z
     events: z.number().int().nonnegative(),
     subscriptions: z.number().int().nonnegative(),
   })
-  .strict()
+  .strict())
 export type NativeSettling = z.infer<typeof NativeSettlingSchema>
 
 /** A bounded native observation, not a guarantee of continuous focus isolation. */
-export const NativeFocusChangeSchema = z
+export const NativeFocusChangeSchema = z.lazy(() => z
   .object({
     previous_pid: z.number().int().positive(),
     current_pid: z.number().int().positive().nullable(),
     restoration_attempted: z.boolean(),
     input_activity_observed: z.boolean(),
   })
-  .strict()
+  .strict())
 export type NativeFocusChange = z.infer<typeof NativeFocusChangeSchema>
 
-export const ExecutionReceiptSchema = z.object({
+export const ExecutionReceiptSchema = z.lazy(() => z.object({
   status: z.literal("dispatched"),
   actionId: z.string(),
   route: z.string(),
@@ -497,7 +497,7 @@ export const ExecutionReceiptSchema = z.object({
   focus_change: NativeFocusChangeSchema.optional(),
   guard: z.record(z.string(), z.json()),
   result: z.json().optional(),
-})
+}))
 export type ExecutionReceipt = z.infer<typeof ExecutionReceiptSchema>
 
 /** What was sent and how; the rest of the receipt prints only when unusual. */

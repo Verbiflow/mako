@@ -102,13 +102,13 @@ import {
   ControlImageSchema,
   type ControlImage,
 } from "./contracts/control-preview.js"
-import { NativeRecordings, nativeRecordingRate } from "./native-recording.js"
+import { HELPER_RECORDING_MAX_FPS, NativeRecordings, nativeRecordingRate } from "./native-recording.js"
 import { RecordingOptionsSchema } from "@mako/control/control"
 import { randomUUID } from "node:crypto"
 import { readFile, stat, writeFile } from "node:fs/promises"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
-import { nodePlatform } from "./platform.js"
+import { nodePlatform, type LinuxDesktop } from "./platform.js"
 
 export { BACKGROUND_INPUT_LADDER }
 
@@ -167,7 +167,7 @@ export const COMPUTER_TOOL_INPUTS = {
     })
     .strict(),
 }
-export const controlHelpInputSchema = z
+export const controlHelpInputSchema = z.lazy(() => z
   .object({
     syntax: z.enum(["script", "repl"]).optional(),
     topic: z
@@ -190,7 +190,7 @@ export const controlHelpInputSchema = z
   .refine((value) => value.method === undefined || value.domain !== undefined, {
     message: "method requires domain",
   })
-  .strict()
+  .strict())
 const computerArgumentsSchema = z.record(z.string(), z.json())
 type ComputerArguments = z.infer<typeof computerArgumentsSchema>
 const programImageSchema = z.object({
@@ -293,6 +293,13 @@ export interface ControlSessionOptions {
   browserCall?: BrowserCall
   /** A standalone job may end its private desktop when a tool request is cancelled. */
   onProgramCancelled?: () => void
+  /**
+   * The display this session's windows are on, where Mako's video helper records them: a person's Linux desktop
+   * (`linuxDesktop()`, which a task's worker names) or a standalone job's own X server, which its supervisor started.
+   * Whoever starts the session says so; none is read from the environment here, so a session over a scripted driver
+   * (a test under `xvfb-run`) never starts a capture of a display that happens to be set.
+   */
+  recordingDesktop?: LinuxDesktop
 }
 
 /** Read a capture the agent asked the driver to write to disk, for the preview only. */
@@ -772,7 +779,8 @@ export function createControlSession(
   const unified = options.surface !== "driver"
   const namespace = unified ? "control" : "computer"
   const observations = new ComputerObservationClient(options.previewEnvironment)
-  const nativeRecordings = new NativeRecordings()
+  const recordingDesktop = options.recordingDesktop
+  const nativeRecordings = new NativeRecordings(recordingDesktop)
   const protocol = new ProtocolReference()
   const artifacts = options.artifacts ?? controlArtifactsDirectory(namespace, taskId)
   let client: ComputerDriverClient | undefined
@@ -1658,16 +1666,26 @@ export function createControlSession(
         element: false,
         maxSide: { min: 256, max: 4096, enlarges: false },
       },
-      recording: {
-        state: recording?.inputSchema.properties?.window_target
-          ? "preflight-required"
-          : "driver-update-required",
-        scope: "exact-window",
-        maxFps: nativeRecordingRate(recording).maxFps,
-        cursor: "dispatched-pointer",
-        requires: ["mako-video", "supported native window capture"],
-        completion: "record().stop() then recording.status()",
-      },
+      recording: recordingDesktop
+        ? {
+            // Mako records it with the video helper: the window on X11, the monitor the person shares on Wayland.
+            state: "preflight-required",
+            scope: recordingDesktop.session === "x11" ? "exact-window" : "display",
+            maxFps: HELPER_RECORDING_MAX_FPS,
+            cursor: "dispatched-pointer",
+            requires: recordingDesktop.session === "x11" ? ["mako-video"] : ["mako-video with ScreenCast portal capture", "the person's consent to share the screen, asked once"],
+            completion: "record().stop() then recording.status()",
+          }
+        : {
+            state: recording?.inputSchema.properties?.window_target
+              ? "preflight-required"
+              : "driver-update-required",
+            scope: "exact-window",
+            maxFps: nativeRecordingRate(recording).maxFps,
+            cursor: "dispatched-pointer",
+            requires: ["mako-video", "supported native window capture"],
+            completion: "record().stop() then recording.status()",
+          },
     }
   }
   const controlTargets = async (

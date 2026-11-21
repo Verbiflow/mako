@@ -1,13 +1,14 @@
 import assert from "node:assert/strict"
 import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { basename, delimiter, join } from "node:path"
+import { delimiter, join } from "node:path"
 import { resolveExecutable } from "../packages/control-runtime/src/executable.js"
 import { onWindows } from "../packages/control-runtime/src/platform.js"
 
 /**
- * How the control runtime finds `mako-video`, `ffmpeg` and the like on PATH. Windows' rules (`PATHEXT`, no execute
- * bit, `Path` in any case) are asked for by name, so every system checks them; the execute bit only where there is one.
+ * How the control runtime finds `mako-video`, `ffmpeg` and the like. Windows' rules are asked for by name, so every
+ * system checks them: no PATH search at all, PATHEXT for an absolute command, no folder taken for a program. The
+ * execute bit and PATH search only where they apply.
  */
 const root = await mkdtemp(join(tmpdir(), "mako-control-executable-"))
 try {
@@ -20,31 +21,32 @@ try {
     await chmod(path, mode)
   }
 
-  // npm writes a shell script beside each `.cmd`; Windows can't start it, so the `.cmd` is the tool.
+  // On Windows nothing is searched for: a PATH folder there may be one another account can write, and the control
+  // runtime can't ask who may. Its tools come by whole path from the host; an absolute command still takes PATHEXT.
   await file(join(first, "tool"))
   await file(join(first, "tool.cmd"))
   await file(join(second, "tool.exe"))
   const windows = (env: NodeJS.ProcessEnv, command = "tool") => resolveExecutable(command, env, "win32")
-  assert.equal(windows({ PATH: [first, second].join(delimiter) }), join(first, "tool.cmd"), "an earlier folder wins over a later extension")
-  assert.equal(windows({ PATH: [second, first].join(delimiter) }), join(second, "tool.exe"))
-  assert.equal(windows({ Path: [second, first].join(delimiter) }), join(second, "tool.exe"), "Windows' usual `Path`")
-  assert.equal(windows({ PATH: first, PATHEXT: ".EXE" }), undefined, "only PATHEXT's extensions run")
-  assert.equal(windows({ PATH: first, PathExt: ".Exe;.CMD" }), join(first, "tool.cmd"))
+  assert.equal(windows({ PATH: [first, second].join(delimiter) }), undefined, "a bare name is never searched for")
+  assert.equal(windows({ Path: [second, first].join(delimiter), PATHEXT: ".EXE" }), undefined, "nor with Windows' usual `Path`")
+  assert.equal(windows({ PATH: first }, "tool.cmd"), undefined, "nor with its extension")
+  assert.equal(windows({}, join(first, "tool")), join(first, "tool.cmd"), "an absolute command takes PATHEXT's extensions")
+  assert.equal(windows({ PathExt: ".Exe;.CMD" }, join(second, "tool")), join(second, "tool.exe"), "in any case")
   await file(join(first, "tool.exe"))
-  assert.equal(windows({ PATH: first, PATHEXT: ".EXE;.CMD" }), join(first, "tool.exe"), "PATHEXT's order within a folder")
-  assert.equal(windows({ PATH: first }), join(first, "tool.exe"), "the default PATHEXT puts .EXE before .CMD")
-  assert.equal(windows({ PATH: [second, first].join(delimiter) }, "tool.cmd"), join(first, "tool.cmd"), "a command with its extension is looked for as it is")
-  assert.equal(windows({}, join(first, "tool")), join(first, "tool.exe"), "an absolute command takes an extension too")
-  assert.equal(windows({}, join(first, "tool.cmd")), join(first, "tool.cmd"))
+  assert.equal(windows({ PATHEXT: ".EXE;.CMD" }, join(first, "tool")), join(first, "tool.exe"), "PATHEXT's order")
+  assert.equal(windows({}, join(first, "tool")), join(first, "tool.exe"), "the default PATHEXT puts .EXE before .CMD")
+  assert.equal(windows({}, join(first, "tool.cmd")), join(first, "tool.cmd"), "a command with its extension is taken as named")
+  assert.equal(windows({ PATHEXT: ".EXE" }, join(first, "tool.cmd")), undefined, "only PATHEXT's extensions run")
   await mkdir(join(root, "folder.exe"))
-  assert.equal(windows({ PATH: root }, "folder"), undefined, "a folder is not a program")
-  assert.equal(windows({ PATH: first }, "absent"), undefined)
+  assert.equal(windows({}, join(root, "folder")), undefined, "a folder is not a program")
+  assert.equal(windows({}, join(first, "absent")), undefined)
 
   if (onWindows()) {
-    // The runner's own Node, as Windows names it, through the real environment.
-    const node = resolveExecutable("node")
-    assert.ok(node, "node is on PATH")
-    assert.equal(basename(node).toLowerCase(), "node.exe")
+    // The runner's own Node is on PATH, and still isn't searched for.
+    assert.equal(resolveExecutable("node"), undefined, "Windows searches no PATH")
+    assert.ok(resolveExecutable(process.execPath), "an absolute program is taken")
+    assert.equal(resolveExecutable(process.execPath.slice(2)), undefined, "a path with no drive is no program")
+    assert.equal(resolveExecutable(process.execPath.slice(2).replaceAll("\\", "/")), undefined)
   } else {
     await file(join(second, "plain"), 0o644)
     await file(join(first, "plain"))
@@ -57,7 +59,7 @@ try {
     assert.equal(resolveExecutable(join(first, "tool"), {}, "darwin"), join(first, "tool"))
     assert.ok(resolveExecutable("node"), "node is on PATH")
   }
-  console.log("control executables: PATHEXT, Path, execute bits and folders")
+  console.log("control executables: no Windows PATH search, PATHEXT, execute bits and folders")
 } finally {
   await rm(root, { recursive: true, force: true })
 }

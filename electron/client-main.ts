@@ -1,8 +1,8 @@
-import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, powerMonitor, protocol, shell, type IpcMainInvokeEvent } from "electron"
+import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, powerMonitor, protocol, shell, type IpcMainEvent, type IpcMainInvokeEvent } from "electron"
 import { WindowShutdown } from "@mako/host/application/window-shutdown"
 import { SHUTDOWN_HOLD_MS } from "@mako/host/contracts/cloud-threads"
 import { createHash, randomUUID } from "node:crypto"
-import { cp, mkdir, access, mkdtemp, rename, rm, stat } from "node:fs/promises"
+import { cp, mkdir, access, lstat, mkdtemp, rename, rm, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -25,7 +25,8 @@ import { invokeWithRecovery } from "@mako/host/contracts/host-call-recovery"
 import { HostLiveness, type HostProbe } from "@mako/host/contracts/host-liveness"
 import { HOST_OUTAGE_MESSAGE } from "@mako/host/contracts/host-connection"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
-import { DESK_BACKGROUND, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from "./desk-scheme.js"
+import { DESK_BACKGROUND, DESK_TITLE_BAR_OVERLAY, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from "./desk-scheme.js"
+import { DEEP_LINK_SCHEME, deepLinkInArgv, openProjectLink, parseDeepLink, type DeepLink } from "./desktop-deep-link.js"
 import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 import { installCrashReporting } from "@mako/host/base/crash"
@@ -100,6 +101,16 @@ type AppCommand = "app.quit" | "app.updates" | "workspace.open"
 let pendingCommand: AppCommand | null = null
 /** A folder the app was handed before a window could take it: the next window to boot opens it as a project. */
 let pendingProject: string | null = null
+/** A Thread a `mako://thread/` link asked for before a window could take it: the next window to boot opens it. */
+let pendingSubject: string | null = null
+/** What the preload reports of the renderer's theme, for the caption buttons (`mako:window-theme`). */
+const WindowThemeSchema = z.tuple([z.enum(["light", "dark"])])
+/** Windows: the caption buttons are drawn by the system over the title strip, not by macOS beside it. */
+const windowsChrome = process.platform === "win32"
+/** Started by Windows at sign-in (the login item): the host starts, the first window stays hidden until asked for. */
+const startedAtLogin = windowsChrome && app.commandLine.hasSwitch("at-login")
+/** A window of the person's has opened: until one has, no window closing is theirs. */
+let personWindowOpened = false
 let shutdownAction: "quit" | "install" | "restart" | null = null
 const draftShutdown = new WindowShutdown()
 let closingLocally = false
@@ -172,6 +183,64 @@ if (role === "desktop")
   app.on("open-file", (event, path) => {
     event.preventDefault()
     void stat(path).then((info) => { if (info.isDirectory()) requestOpenProject(path) }, () => undefined)
+  })
+
+/** A `mako:` link: from Windows's launch or second launch, or macOS's `open-url`. */
+function openDeepLink(link: DeepLink): void {
+  if (link.kind === "refused") {
+    hostWarn("desktop", "a link's folder was refused", { reason: link.reason })
+    return
+  }
+  if (link.kind === "open-project") {
+    // A web page or a document can send this link: the folder must be a real one on this computer's drives, and the
+    // person says Open, in this app's own dialog, before any window hears of it.
+    void openProjectLink(link.path, {
+      windows: windowsChrome,
+      reader: { lstat },
+      confirm: confirmLinkedProject,
+      open: (path) => {
+        hostLog("desktop", "a linked folder opens as a project, as the person agreed")
+        requestOpenProject(path)
+      },
+      refused: (_path, reason) => hostWarn("desktop", "a link's folder was refused", { reason }),
+    }).catch((error) => hostWarn("desktop", "a link's folder couldn't be opened", { reason: error instanceof Error ? error.message : String(error) }))
+    return
+  }
+  const window = app.isReady() ? (BrowserWindow.getFocusedWindow() ?? personWindows()[0]) : undefined
+  if (window && !window.webContents.isLoadingMainFrame()) {
+    surfaceWindow(window)
+    // The same way in as a notification's click: the window opens the Thread it names.
+    if (link.kind === "open-thread") sendEvent(window.webContents, { type: "notification-activated", id: randomUUID(), subject: link.subject })
+    return
+  }
+  if (link.kind === "open-thread") pendingSubject = link.subject
+  if (window) surfaceWindow(window)
+  else if (app.isReady() && runtime) void openWindow().catch((error) => dialog.showErrorBox("Mako could not open", error instanceof Error ? error.message : "Try opening Mako again."))
+}
+
+/** Asks whether to open a linked folder as a project; Cancel is the default and Escape's answer. */
+async function confirmLinkedProject(path: string): Promise<boolean> {
+  await app.whenReady()
+  const parent = BrowserWindow.getFocusedWindow() ?? personWindows()[0]
+  const options: Electron.MessageBoxOptions = {
+    type: "question",
+    title: "Mako",
+    message: `Open ${path} as a project in Mako?`,
+    detail: "A link asked Mako to open this folder. Open it only if you expected this: an agent can read and change what's in it.",
+    buttons: ["Open", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  }
+  const { response } = parent && !parent.isDestroyed() && parent.isVisible() ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+  return response === 0
+}
+
+if (role === "desktop")
+  app.on("open-url", (event, url) => {
+    event.preventDefault()
+    const link = parseDeepLink(url)
+    if (link) openDeepLink(link)
   })
 
 function requestCommand(command: AppCommand): void {
@@ -345,7 +414,11 @@ async function openWindow(options: { preview?: boolean; agentView?: string; id?:
       title: isDev ? "Mako Dev" : "Mako", width: 1440, height: 960, minWidth: 640, minHeight: 540,
       // Painted before the renderer is: a resize or the first frame never flashes white.
       backgroundColor: DESK_BACKGROUND,
-      show: false, titleBarStyle: "hiddenInset", trafficLightPosition: { ...DESK_TRAFFIC_LIGHTS },
+      show: false,
+      // The same frameless strip on both: macOS's traffic lights inset into it, Windows's caption buttons over its end.
+      ...(windowsChrome
+        ? { titleBarStyle: "hidden" as const, titleBarOverlay: { ...DESK_TITLE_BAR_OVERLAY.dark } }
+        : { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { ...DESK_TRAFFIC_LIGHTS } }),
       webPreferences,
     })
   if (agentView) {
@@ -359,8 +432,11 @@ async function openWindow(options: { preview?: boolean; agentView?: string; id?:
   // `did-finish-load`, which can precede the first frame, and `--background`
   // keeps test windows hidden until something activates them explicitly.
   let shown = false
+  // The window a sign-in launch opens stays hidden; a second launch, a link or the taskbar brings it (`surfaceWindow`).
+  if (!agentView) personWindowOpened = true
+  const hidden = startedAtLogin && personWindows().length === 1
   const reveal = () => {
-    if (agentView || shown || window.isDestroyed() || app.commandLine.hasSwitch("background")) return
+    if (agentView || shown || hidden || window.isDestroyed() || app.commandLine.hasSwitch("background")) return
     shown = true
     window.show()
     window.maximize()
@@ -452,9 +528,40 @@ function focusForPermission(): void {
 }
 
 async function start() {
-  if (!app.requestSingleInstanceLock()) { app.exit(0); return }
+  if (!app.requestSingleInstanceLock()) {
+    hostLog("desktop", "another desktop has this profile; handed over to it", { pid: process.pid })
+    await log.flush()
+    app.exit(0)
+    return
+  }
   if (role === "agent-views") return startAgentViews()
-  app.on("second-instance", () => { if (runtime) void openWindow() })
+  app.on("second-instance", (_event, argv) => {
+    const link = deepLinkInArgv(argv)
+    if (link) openDeepLink(link)
+    // Windows: launching Mako again (its Start menu entry, its taskbar button) brings back the window it has.
+    else if (windowsChrome && personWindows()[0]) surfaceWindow(personWindows()[0]!)
+    else if (runtime) void openWindow()
+  })
+  if (windowsChrome) {
+    // Toasts are attributed to the Start menu entry the installer made, which carries the app's id.
+    app.setAppUserModelId("dev.mako.app")
+    if (app.isPackaged) {
+      // `mako:` links open here; the uninstaller removes the registration (`build/installer.nsh`).
+      // `"Mako.exe" "--" "%1"`: after `--` Chromium reads no switch, so a link can't pass one.
+      app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME, process.execPath, ["--"])
+      // Mako starts at sign-in, its window hidden, so its host is there for agents and Fins; Windows's Startup apps turns it off.
+      app.setLoginItemSettings({ openAtLogin: true, name: "Mako", args: ["--at-login"] })
+    }
+    // The caption buttons follow the renderer's theme, which the preload reports (`electron/preload.ts`).
+    ipcMain.on("mako:window-theme", (event: IpcMainEvent, ...raw: unknown[]) => {
+      const window = BrowserWindow.fromWebContents(event.sender)
+      const theme = WindowThemeSchema.safeParse(raw)
+      if (window && !window.isDestroyed() && theme.success) window.setTitleBarOverlay({ ...DESK_TITLE_BAR_OVERLAY[theme.data[0]] })
+    })
+    // The link Windows started this launch with.
+    const link = deepLinkInArgv(process.argv)
+    if (link) openDeepLink(link)
+  }
   app.on("browser-window-focus", (_event, window) => { if (!agentViews.has(window.webContents.id)) lastPersonWindow = window.webContents.id })
   // The host starts now and the first window opens while it does: Chromium's start and the renderer's load overlap
   // the host's start rather than follow it. Its failure is `start`'s, awaited below.
@@ -487,7 +594,7 @@ async function start() {
   opening.catch(() => undefined)
   runtime = await attaching
   // Before any window reads a secret: the host runs as Node and has no `safeStorage` of its own.
-  secretKeys = new SecretKeyLink(runtime.socket, dataKeyPath(userRootFor({ dataRoot, appData: app.getPath("appData"), home: homedir() })), electronSecretEncryption())
+  secretKeys = new SecretKeyLink(() => runtime.socket, dataKeyPath(userRootFor({ dataRoot, appData: app.getPath("appData"), home: homedir() })), electronSecretEncryption())
   await secretKeys.attached()
   attachHost()
   bootEarly(first)
@@ -654,6 +761,7 @@ async function serveWindows() {
       if (channel === "mako:boot") {
         if (pendingCommand) { sendEvent(event.sender, { type: "app-command", command: pendingCommand }); pendingCommand = null }
         if (pendingProject) { sendEvent(event.sender, { type: "app-open-project", path: pendingProject }); pendingProject = null }
+        if (pendingSubject) { sendEvent(event.sender, { type: "notification-activated", id: randomUUID(), subject: pendingSubject }); pendingSubject = null }
         const boot = z.looseObject({ machine: MachineOfferSchema.optional() }).parse(decodeRuntimeValue(encoded))
         // This app answers the folder chooser with its own dialog, whatever the host's machine offers.
         const machine: MachineOffer = { ...(boot.machine ?? UNSTATED_MACHINE_OFFER), chooseFolder: true }
@@ -679,7 +787,15 @@ app.on("before-quit", (event) => {
   desktopLink?.dispose()
   for (const client of clients.values()) client.dispose()
 })
-app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit() })
+app.on("window-all-closed", () => {
+  if (windowsChrome) {
+    // Closing the person's last window closes this client the way "Quit and keep agents running" does; the host
+    // stays. Only theirs: the storage bridge's page (`renderer-storage.ts`) closes before the first window opens.
+    if (role !== "desktop" || !personWindowOpened || shuttingDown || closingLocally || shutdownAction) return
+    hostLog("desktop", "the last window closed; closing", { pid: process.pid })
+    void closeClient().catch(() => app.exit(0))
+  } else if (process.platform !== "darwin") app.quit()
+})
 app.on("will-quit", () => {
   hostLog("desktop", "quitting", { pid: process.pid, action: shutdownAction ?? "client" })
   void log.flush()

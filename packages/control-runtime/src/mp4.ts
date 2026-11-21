@@ -126,11 +126,11 @@ export class Mp4Writer {
     if (held) await this.#write(held.packet, held.at, Math.max(1, at - held.at))
   }
 
-  /** Writes the last unit and closes the file. */
-  async finish(): Promise<void> {
+  /** Writes the last unit, shown until `end` (milliseconds into the video) when that is later than one frame, and closes the file. */
+  async finish(end?: number): Promise<void> {
     const held = this.#held
     this.#held = undefined
-    if (held) await this.#write(held.packet, held.at, this.#frameMs)
+    if (held) await this.#write(held.packet, held.at, Math.max(this.#frameMs, (end ?? 0) - held.at))
     await this.#file?.close()
     this.#file = undefined
   }
@@ -191,6 +191,32 @@ export async function readMp4(path: string, limit = 100_000): Promise<Mp4Video |
   } catch (error) {
     if (error instanceof Error && /packets/.test(error.message)) throw error
     return undefined
+  } finally {
+    input.dispose()
+  }
+}
+
+/** One unit of a file's video track: its presentation time in seconds, its bytes and, on a key unit, the avcC. */
+export interface Mp4Unit {
+  timestamp: number
+  key: boolean
+  data: Uint8Array
+  description?: Uint8Array
+}
+
+/** A file's video units in decode order, with their bytes, as Mediabunny reads them: for a decoder to draw over. */
+export async function* mp4Units(path: string): AsyncGenerator<Mp4Unit, void, undefined> {
+  const { Input, FilePathSource, MP4, EncodedPacketSink } = await heavy.mediabunny.load("reading a video")
+  const input = new Input({ source: new FilePathSource(path), formats: [MP4] })
+  try {
+    const track = await input.getPrimaryVideoTrack()
+    if (!track) throw new Error("The video has no video track")
+    const config = await track.getDecoderConfig()
+    const description = config?.description ? new Uint8Array(ArrayBuffer.isView(config.description) ? config.description.buffer.slice(config.description.byteOffset, config.description.byteOffset + config.description.byteLength) : config.description) : undefined
+    for await (const packet of new EncodedPacketSink(track).packets()) {
+      const key = packet.type === "key"
+      yield { timestamp: packet.timestamp, key, data: packet.data, ...(key && description && { description }) }
+    }
   } finally {
     input.dispose()
   }

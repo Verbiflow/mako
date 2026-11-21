@@ -1,4 +1,5 @@
 import { createConnection, type Socket } from "node:net"
+import { connectProven } from "@mako/lazy/private-pipe"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 import { z } from "zod"
 import {
@@ -19,6 +20,11 @@ import type { JsonObject } from "./json.js"
 export interface BrokeredDriverEndpoint {
   broker: string
   token: string
+  /**
+   * On Windows, where the broker listens on a named pipe: the secret both ends of every connection prove they know
+   * before a request crosses it (`@mako/lazy/private-pipe`). The token then names the task, as on a socket.
+   */
+  proof?: string
 }
 
 /**
@@ -30,7 +36,7 @@ export interface BrokeredDriverEndpoint {
  * which is the daemon's own reply line, relayed unread; a fault the broker
  * answers itself carries `broker`.
  */
-export const BrokerRequestSchema = z.discriminatedUnion("method", [
+export const BrokerRequestSchema = z.lazy(() => z.discriminatedUnion("method", [
   z.object({ method: z.literal("lease"), token: z.string().min(1), parallel: z.boolean().optional() }).strict(),
   z
     .object({
@@ -40,15 +46,15 @@ export const BrokerRequestSchema = z.discriminatedUnion("method", [
       args: z.record(z.string(), z.json()),
     })
     .strict(),
-])
+]))
 export type BrokerRequest = z.infer<typeof BrokerRequestSchema>
 
 /** Why the broker answered a call itself. Only `closed` means the call reached the daemon. */
-export const BrokerFaultSchema = z.object({
+export const BrokerFaultSchema = z.lazy(() => z.object({
   ok: z.literal(false),
   broker: z.enum(["unavailable", "ended", "closed", "invalid"]),
   error: z.string(),
-})
+}))
 export type BrokerFault = z.infer<typeof BrokerFaultSchema>
 
 const LeaseReplySchema = z.union([
@@ -107,7 +113,9 @@ export async function waitFor<T>(work: Promise<T>, name: string, options: Comput
   }
 }
 
-function connect(path: string): Promise<Socket> {
+function connect(path: string, proof?: string): Promise<Socket> {
+  // Windows: only a broker that proves it knows the pipe's secret is sent a grant's token.
+  if (proof) return connectProven(path, proof).catch(() => { throw new DriverNotDispatchedError("Mako's driver broker isn't reachable; nothing was dispatched. The next call connects again.") })
   return new Promise((resolve, reject) => {
     const socket = createConnection(path)
     socket.once("connect", () => {
@@ -172,7 +180,7 @@ class RemoteBrokeredDriver implements ComputerDriverClient {
 
   async callTool(name: string, args: JsonObject, options: ComputerDriverCallOptions = {}): Promise<ComputerDriverResult> {
     if (this.ended) throw new DriverNotDispatchedError("This driver lease has ended; nothing was dispatched. The next call connects again.")
-    const socket = await connect(this.endpoint.broker)
+    const socket = await connect(this.endpoint.broker, this.endpoint.proof)
     this.calls++
     this.inFlight++
     socket.write(`${JSON.stringify({ method: "call", lease: this.lease, name, args } satisfies BrokerRequest)}\n`)
@@ -226,7 +234,7 @@ class RemoteBrokeredDriver implements ComputerDriverClient {
  * it they run one after another, as a task's calls always have.
  */
 export async function connectBrokeredDriver(endpoint: BrokeredDriverEndpoint, options: { parallel?: boolean } = {}): Promise<ComputerDriverClient> {
-  const control = await connect(endpoint.broker)
+  const control = await connect(endpoint.broker, endpoint.proof)
   try {
     control.write(`${JSON.stringify({ method: "lease", token: endpoint.token, parallel: options.parallel } satisfies BrokerRequest)}\n`)
     const reply = LeaseReplySchema.parse(JSON.parse((await readLine(control)).toString("utf8")))

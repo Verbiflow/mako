@@ -6,6 +6,7 @@ import { join } from "node:path"
 import type { ComputerDriverClient } from "@mako/control-runtime/host"
 import { Appshots, type WindowCapturer } from "@mako/host/control/appshots"
 import { computerPermissions } from "@mako/host/control/computer-permissions"
+import { linuxDesktop } from "@mako/control-runtime/desktop"
 import { fileResponse, localFile } from "@mako/host/workspaces/file-response"
 import { onMac, onWindows } from "@mako/host/base/platform"
 import { hostCommand } from "@mako/host/transport/service"
@@ -60,7 +61,7 @@ try {
   channel.close()
 
   // Without a desktop to read macOS's privacy settings, nothing is granted and nothing is claimed.
-  const unknown = computerPermissions({ packaged: false, appRoot: process.cwd() }, undefined)
+  const unknown = computerPermissions({ packaged: false, appRoot: process.cwd() }, undefined, undefined)
   // Windows has no grant to read: the driver works from the start.
   if (onWindows()) assert.deepEqual(unknown, { supported: false, persistentAcrossUpdates: true, accessibility: true, screenRecording: "granted" })
   else {
@@ -68,8 +69,17 @@ try {
     assert.equal(unknown.accessibility, false)
     assert.equal(unknown.screenRecording, "unknown")
   }
-  const read = computerPermissions({ packaged: false, appRoot: process.cwd() }, { accessibility: () => true, screen: () => "granted" })
+  const read = computerPermissions({ packaged: false, appRoot: process.cwd() }, { accessibility: () => true, screen: () => "granted" }, undefined)
   if (onMac()) assert.deepEqual([read.accessibility, read.screenRecording], [true, "granted"])
+  // A display alone (a CI job's xvfb-run, a container's Xvfb) is no person's desktop: computer use there stays
+  // unsupported. A session the person logged into, or one that opts in, is.
+  assert.equal(linuxDesktop({ DISPLAY: ":99" }, "linux"), undefined, "a bare display drives nothing")
+  const desktop = linuxDesktop({ DISPLAY: ":0", XDG_SESSION_TYPE: "x11", XDG_CURRENT_DESKTOP: "XFCE" }, "linux")
+  assert.deepEqual(desktop, { session: "x11", compositor: "other", xwayland: false })
+  assert.deepEqual(linuxDesktop({ DISPLAY: ":0", MAKO_DESKTOP_CONTROL: "1" }, "linux")?.session, "x11", "startx's session opts in")
+  if (!onMac()) {
+    assert.deepEqual(computerPermissions({ packaged: false, appRoot: process.cwd() }, undefined, desktop), { supported: true, persistentAcrossUpdates: true, accessibility: true, screenRecording: "granted" })
+  }
 
   // App shots list windows from the driver; pictures and live sources come from a capturer when there is one.
   const driver: ComputerDriverClient = {

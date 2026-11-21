@@ -161,8 +161,8 @@ export function SettingsDialog({
           )}
         >
           <DialogPrimitive.Title className="sr-only">Settings</DialogPrimitive.Title>
-          <header className="drag-region flex h-[38px] shrink-0 items-center">
-            <div className="flex h-full w-64 shrink-0 items-center border-r pr-2 pl-[86px]">
+          <header className="drag-region window-controls-clear flex h-[38px] shrink-0 items-center">
+            <div className="window-inset flex h-full w-64 shrink-0 items-center border-r pr-2">
               <DialogPrimitive.Close className="pressable no-drag flex h-7 items-center gap-1.5 px-2 text-ui text-muted-foreground transition-colors duration-100 hover:bg-fill-hover hover:text-foreground">
                 <ArrowLeftIcon className="size-3.5" />
                 Back

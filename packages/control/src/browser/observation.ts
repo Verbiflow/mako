@@ -8,7 +8,7 @@ const pageNodeValueSchema = z.union([
   z.null(),
 ])
 
-export const PageObservationNodeSchema = z
+export const PageObservationNodeSchema = z.lazy(() => z
   .object({
     ref: z.string().optional(),
     depth: z.number().int().nonnegative(),
@@ -18,17 +18,17 @@ export const PageObservationNodeSchema = z
     /** A control's shown label, present only when it differs from `name`. */
     visibleText: z.string().optional(),
   })
-  .catchall(pageNodeValueSchema)
+  .catchall(pageNodeValueSchema))
 export type PageObservationNode = z.infer<typeof PageObservationNodeSchema>
 
-export const PageObservationSchema = z
+export const PageObservationSchema = z.lazy(() => z
   .object({
     nodes: z.array(PageObservationNodeSchema),
   })
-  .catchall(z.json())
+  .catchall(z.json()))
 export type PageObservation = z.infer<typeof PageObservationSchema>
 
-export const PageNodeSelectorSchema = z
+export const PageNodeSelectorSchema = z.lazy(() => z
   .object({
     role: z.string().min(1).max(100).optional(),
     name: z.string().max(500).optional(),
@@ -41,7 +41,7 @@ export const PageNodeSelectorSchema = z
     includeAncestors: z.boolean().default(true),
     max: z.number().int().min(1).max(1000).default(100),
   })
-  .strict()
+  .strict())
 export type PageNodeSelector = z.input<typeof PageNodeSelectorSchema>
 type ParsedPageNodeSelector = z.output<typeof PageNodeSelectorSchema>
 

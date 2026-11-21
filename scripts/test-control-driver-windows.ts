@@ -11,12 +11,13 @@ import { execFile, spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
 import { copyFile, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { delimiter, dirname, join, resolve } from "node:path"
+import { delimiter, join, resolve } from "node:path"
 import { promisify } from "node:util"
 import { parseArgs } from "node:util"
 import { z } from "zod"
 import { CuaEmbedded } from "../packages/host/src/control/cua-embedded.js"
 import { computerPermissions } from "../packages/host/src/control/computer-permissions.js"
+import { CuaDriverVersions } from "../packages/host/src/control/cua-driver-version.js"
 import { Appshots } from "../packages/host/src/control/appshots.js"
 import { DriverBroker } from "../packages/control-runtime/src/driver-broker.js"
 import { exchange, parseReply } from "../packages/control-runtime/src/driver-daemon.js"
@@ -29,14 +30,19 @@ const run = promisify(execFile)
 const { values } = parseArgs({ options: { driver: { type: "string" }, "video-helper": { type: "string" }, json: { type: "string" } } })
 assert.equal(process.platform, "win32", "This checks the Windows driver on Windows")
 assert.ok(values.driver, "--driver <path to cua-driver.exe>")
-const driverPath = resolve(values.driver)
-// The host finds the driver the way it finds any executable: on PATH.
-process.env.PATH = `${dirname(driverPath)}${delimiter}${process.env.PATH ?? ""}`
+// The host finds the driver the way it finds any program on Windows: on PATH or in the user's own folders, and only
+// where no other account could have put it. A folder in this user's profile is one; the build's folder on the runner's
+// work drive is not, so the driver is copied to the profile's temporary folder and found there.
+const driverFolder = await realpath(await mkdtemp(join(tmpdir(), "mako-win-driver-")))
+const driverPath = join(driverFolder, "cua-driver.exe")
+await copyFile(resolve(values.driver), driverPath)
+const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH") ?? "PATH"
+process.env[pathKey] = `${driverFolder}${delimiter}${process.env[pathKey] ?? ""}`
 // Video comes from Mako's video helper, by its whole path (the host sets MAKO_VIDEO_HELPER for a packaged app), and
 // never from FFmpeg: no folder on PATH holds one while this runs, so nothing here or in the driver can reach it.
 assert.ok(values["video-helper"], "--video-helper <path to mako-video.exe>")
 process.env.MAKO_VIDEO_HELPER = resolve(values["video-helper"])
-process.env.PATH = (process.env.PATH ?? "").split(delimiter).filter((folder) => folder && !existsSync(join(folder, "ffmpeg.exe")) && !existsSync(join(folder, "ffmpeg"))).join(delimiter)
+process.env[pathKey] = (process.env[pathKey] ?? "").split(delimiter).filter((folder) => folder && !existsSync(join(folder, "ffmpeg.exe")) && !existsSync(join(folder, "ffmpeg"))).join(delimiter)
 
 const root = await mkdtemp(join(tmpdir(), "mako-win-control-"))
 interface CheckOutcome {
@@ -162,9 +168,18 @@ let exitCode = 0
 try {
   // The host's permission readout on Windows: nothing to grant.
   await check("permissions need no grant", async () => {
-    const permissions = computerPermissions({ packaged: false, appRoot: process.cwd() }, undefined)
+    const permissions = computerPermissions({ packaged: false, appRoot: process.cwd() }, undefined, undefined)
     assert.deepEqual(permissions, { supported: false, persistentAcrossUpdates: true, accessibility: true, screenRecording: "granted" })
     return permissions
+  })
+
+  // Mako's driver is its own build: the host never runs upstream's updater over it.
+  await check("the host refuses to run upstream's updater over Mako's driver", async () => {
+    const versions = new CuaDriverVersions()
+    const status = await versions.status(driverPath)
+    assert.match(status.version ?? "", /\+mako\./, `Mako's build: ${status.detail}`)
+    await assert.rejects(versions.update(driverPath), /signed Mako driver package/)
+    return { version: status.version }
   })
 
   const holder = await startFixture("Mako foreground holder", true)
@@ -180,7 +195,8 @@ try {
   let since = performance.now()
   const socket = await cua.ensure(join(root, "cua"), "dev.mako.windows-control-test")
   results.latency.daemonStartMs = ms(since)
-  assert.ok(socket?.startsWith("\\\\.\\pipe\\"), `the driver listens on a named pipe: ${socket}`)
+  assert.ok(socket, "the driver started")
+  assert.ok(socket.startsWith("\\\\.\\pipe\\"), `the driver listens on a named pipe: ${socket}`)
   const daemonPid = cua.pid()
   assert.ok(daemonPid)
   broker = new DriverBroker({ socket: async () => socket, own: () => [] })
@@ -599,7 +615,7 @@ try {
   await check("no FFmpeg is reachable while recording", async () => {
     const found = await run("where.exe", ["ffmpeg"]).then((result) => result.stdout.trim(), () => "")
     assert.equal(found, "", `ffmpeg resolves to ${found}`)
-    return { path: process.env.PATH?.split(delimiter).length }
+    return { folders: process.env[pathKey]?.split(delimiter).length }
   })
 
   await check("start_recording records the window through the video helper; Mediabunny reads the MP4", async () => {
@@ -650,6 +666,22 @@ try {
       await session.close()
       broker!.revoke("agent windows-recording")
     }
+  })
+
+  // The daemon's pipe: this host's process only. Another process of this user is closed on before a request is read,
+  // and one below the daemon's integrity level cannot open the pipe at all.
+  await check("only the host's own process is served on the driver's pipe", async () => {
+    const script = "const s=require('net').connect(process.argv[1]);let said='';s.on('connect',()=>s.write(JSON.stringify({method:'metadata'})+'\\n'));s.on('data',d=>{said+=d});s.on('error',e=>{console.log('refused '+e.code);process.exit(0)});s.on('close',()=>{console.log(said?'answered':'closed unanswered');process.exit(0)});setTimeout(()=>{console.log(said?'answered':'silent');process.exit(0)},5000)"
+    const own = parseReply(await exchange(socket, { method: "metadata" }, 10_000))
+    assert.equal(own.ok, true, "the host's own process is answered")
+    const other = (await run(process.execPath, ["-e", script, socket], { timeout: 30_000 })).stdout.trim()
+    assert.match(other, /^(closed unanswered|refused \w+)$/, `another process of this user gets no answer: ${other}`)
+    const low = join(root, "node-low.exe")
+    await copyFile(process.execPath, low)
+    await run("icacls", [low, "/setintegritylevel", "Low"])
+    const below = (await run(low, ["-e", script, socket], { timeout: 30_000 })).stdout.trim()
+    assert.match(below, /^refused (EPERM|EACCES)$/, `a low-integrity process cannot open it: ${below}`)
+    return { other, below }
   })
 
   // Latency, warm, against the fixture in the background.
@@ -716,5 +748,6 @@ try {
   console.log(failed.length ? `${failed.length} failed: ${failed.join("; ")}` : `all ${Object.keys(results.checks).length} checks passed`)
   if (values.json) await writeFile(values.json, JSON.stringify(results, null, 2))
   await rm(root, { recursive: true, force: true }).catch(() => undefined)
+  await rm(driverFolder, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 }).catch(() => undefined)
   process.exit(exitCode)
 }

@@ -311,7 +311,7 @@ async function check() {
 
     assert.equal(hostLockName("/data", "darwin"), "/data/host.lock")
     assert.match(hostLockName("/data", "linux"), /^\0mako-host-[0-9a-f]{32}$/)
-    assert.match(hostLockName("/data", "win32"), /^\\\\\.\\pipe\\mako-host-[0-9a-f]{32}$/)
+    assert.match(hostLockName("/data", "win32"), /host\.lock$/, "Windows locks a file in the data root, never a pipe's name")
     assert.equal(hostLockName("/data/../data", "linux"), hostLockName("/data", "linux"), "One data root, one name")
     console.log(`Host lock (${process.platform}): one holder per data root, the holder named, free on release and on a kill, not inherited by agents`)
   } finally {

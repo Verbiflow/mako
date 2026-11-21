@@ -131,13 +131,13 @@ export const DEVIN_QUESTION_TOOLS = devinToolsOf("question")
  * more reading that restates its last call beside the turn's totals
  * (`cognition.ai/responseDimensions`, `totalCreditCost`).
  */
-export const DevinUsageMeta = z.object({
+export const DevinUsageMeta = z.lazy(() => z.object({
   "cognition.ai/inputTokens": tokenCount,
   "cognition.ai/outputTokens": tokenCount,
   "cognition.ai/cachedReadTokens": tokenCount,
   "cognition.ai/cachedWriteTokens": tokenCount,
   "cognition.ai/subagent_context": z.object({ parentAgentId: z.string().min(1) }).nullish().catch(undefined),
-})
+}))
 
 /** What one live usage reading counts: a repeat counts nothing; a call without both counts has no tokens. */
 export type DevinUsageReading = { of: "repeat" } | { of: "agent" | "subagent"; tokens?: HarnessTokens }
@@ -177,21 +177,21 @@ export function devinUsageReading(meta: z.input<typeof DevinUsageMeta> | undefin
  * a copy in each chain plan mode rebuilds), all with the call's
  * `metadata.request_id`.
  */
-export const DevinCallMetrics = z.object({
+export const DevinCallMetrics = z.lazy(() => z.object({
   input_tokens: tokenCount,
   output_tokens: tokenCount,
   cache_read_tokens: tokenCount,
   cache_creation_tokens: tokenCount,
-})
+}))
 export type DevinCallMetrics = z.infer<typeof DevinCallMetrics>
 
 /** What a stored call's `metadata` says about its spend: the call, when it was written, the model that answered (`compactor` for a compaction), and its metrics. */
-export const DevinStoredCall = z.object({
+export const DevinStoredCall = z.lazy(() => z.object({
   request_id: z.string().min(1).nullish().catch(undefined),
   created_at: z.string().nullish().catch(undefined),
   generation_model: z.string().min(1).nullish().catch(undefined),
   metrics: DevinCallMetrics,
-})
+}))
 
 export function devinStoredTokens(metrics: DevinCallMetrics): HarnessTokens {
   return exclusiveTokens({
@@ -248,9 +248,9 @@ const McpCallMeta = z.object({
  * update and no call; its CLI store keeps the call, and `session/load` (so
  * the IDE journal too) replays the call and no plan.
  */
-export const DevinTodoWrite = z.looseObject({
+export const DevinTodoWrite = z.lazy(() => z.looseObject({
   todos: z.array(z.looseObject({ content: z.string(), status: z.enum(["pending", "in_progress", "completed"]) })),
-})
+}))
 
 /**
  * A question's picks as Devin's client shows them for the call's result

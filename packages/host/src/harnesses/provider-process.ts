@@ -1,8 +1,10 @@
 import { HostFailureError } from "../contracts/provider-failure.js"
-import { hostSpawn, closeHostChild, endHostChildWithParent } from "../base/host-command.js"
+import { hostSpawnTree, closeHostChild, endHostChildWithParent } from "../base/host-command.js"
 import type { ChildProcess, ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process"
 import { statSync } from "node:fs"
 import { hostWarn } from "../base/host-log.js"
+import { onWindows } from "../base/platform.js"
+import { signalProcessTree } from "../base/process-tree.js"
 import { trackProviderPid, untrackProviderPid } from "../base/provider-children.js"
 import { endChildInput } from "@mako/sessions/child-input"
 
@@ -43,7 +45,8 @@ export function spawnProviderProcess(
 ): ChildProcessWithoutNullStreams {
   if (options.cwd !== undefined && !workingDirectoryExists(options.cwd))
     throw new MissingWorkingDirectoryError(options.cwd)
-  const child = hostSpawn(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] })
+  // Its whole tree is the host's: on Windows in a job that ends with it, or with a host that is killed.
+  const child = hostSpawnTree(command, args, { ...options, stdio: ["pipe", "pipe", "pipe"] })
   endHostChildWithParent(child)
   const pid = child.pid
   if (tracked && pid) trackProviderPid({ pid, executable: child.spawnfile, ...tracked })
@@ -100,7 +103,11 @@ export function endProviderProcess(child: ChildProcess, first: "input" | "SIGTER
     child.once("exit", exited)
     child.on("error", failed)
     const signal = (name: NodeJS.Signals) => {
-      if (!providerProcessGone(child)) child.kill(name)
+      if (providerProcessGone(child)) return
+      // Windows ends only the process Node holds: a `.cmd` launcher's shell, leaving the program it ran. Its tree ends
+      // here while the process is still there to find it by (Node holds its handle, so its pid is no other's).
+      if (onWindows() && child.pid) signalProcessTree(child.pid, name)
+      else child.kill(name)
     }
     if (first === "input") endChildInput(child)
     else signal("SIGTERM")

@@ -25,10 +25,10 @@ export const DISK_LOW_BYTES = 2 * 1024 ** 3
 /** And with less than this, full: its Thread moves to a fresh machine at its next turn boundary. */
 export const DISK_FULL_BYTES = 256 * 1024 ** 2
 
-export const DiskSchema = z.object({
+export const DiskSchema = z.lazy(() => z.object({
   freeBytes: z.number().int().nonnegative(),
   totalBytes: z.number().int().positive(),
-}).strict()
+}).strict())
 export type Disk = z.infer<typeof DiskSchema>
 
 export type DiskLevel = "ok" | "low" | "full"
@@ -38,7 +38,7 @@ export function diskLevel(disk: Disk): DiskLevel {
 }
 
 /** One conversation of the Thread as a new machine opens it again: its harness's session, under its mode and settings. */
-export const SavedConversationSchema = z.object({
+export const SavedConversationSchema = z.lazy(() => z.object({
   conversationId: z.uuid(),
   harness: z.string().min(1).max(64),
   nativeId: z.string().min(1).max(512),
@@ -47,21 +47,21 @@ export const SavedConversationSchema = z.object({
   tuning: z.json().optional(),
   /** The turn that was running when the save was taken: the request it answers, and the call it was in, in a line. */
   turn: z.object({ requestId: z.string().min(1).max(200), running: z.string().min(1).max(200).optional() }).strict().optional(),
-}).strict()
+}).strict())
 export type SavedConversation = z.infer<typeof SavedConversationSchema>
 
 /** Why a save holds an older checkout than the machine's: the newest couldn't be captured, and the person is told. */
 /** Why a save couldn't take the newest changes: too large to carry, a merge in progress, or anything else. */
 export const SaveProblemKindSchema = z.enum(["too-large", "conflicts", "failed"])
 
-export const SaveProblemSchema = z.object({
+export const SaveProblemSchema = z.lazy(() => z.object({
   kind: SaveProblemKindSchema,
   message: z.string().min(1).max(2_000),
   at: z.number(),
-}).strict()
+}).strict())
 export type SaveProblem = z.infer<typeof SaveProblemSchema>
 
-export const MachineSaveSchema = z.object({
+export const MachineSaveSchema = z.lazy(() => z.object({
   version: z.literal(1),
   /** When its checkout was captured, by the machine's clock. */
   at: z.number(),
@@ -85,17 +85,17 @@ export const MachineSaveSchema = z.object({
   problem: SaveProblemSchema.optional(),
   /** The first save of a machine that restored a lost one's: what it restored, and how long that took. */
   restored: z.object({ from: z.number().int().positive(), ms: z.number().int().nonnegative(), conversations: z.number().int().nonnegative() }).strict().optional(),
-}).strict()
+}).strict())
 export type MachineSave = z.infer<typeof MachineSaveSchema>
 
 /** The most a save's record takes, as JSON: a handoff of a long Thread fits. */
 export const MACHINE_SAVE_MAX_BYTES = 256 * 1024
 
 /** `GET /v1/machines/<m>/save`: the Thread's newest save and the generation that took it, or none yet. */
-export const KeptSaveSchema = z.object({
+export const KeptSaveSchema = z.lazy(() => z.object({
   save: MachineSaveSchema.nullable(),
   generation: z.number().int().positive().optional(),
-}).strict()
+}).strict())
 export type KeptSave = z.infer<typeof KeptSaveSchema>
 
 /**
@@ -110,13 +110,13 @@ export type KeptSave = z.infer<typeof KeptSaveSchema>
  *   again.
  * The newest stands.
  */
-export const ThreadMachineNoticeSchema = z.object({
+export const ThreadMachineNoticeSchema = z.lazy(() => z.object({
   type: z.literal("machine"),
   at: z.number(),
   state: z.enum(["changes-lost", "failed"]),
   savedAt: z.number().optional(),
   reason: SaveProblemKindSchema.optional(),
-}).strict()
+}).strict())
 export type ThreadMachineNotice = z.infer<typeof ThreadMachineNoticeSchema>
 
 /**

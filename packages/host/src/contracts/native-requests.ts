@@ -5,15 +5,15 @@ import {
   ProviderSelectionSchema,
 } from "./conversation-control.js"
 
-export const NativeRequestInputSchema = z.object({
+export const NativeRequestInputSchema = z.lazy(() => z.object({
   id: z.string().uuid(),
   path: z.string().min(1),
   text: z.string().max(1_000_000),
   attachments: z.array(PromptAttachmentSchema).max(100),
   tuning: ProviderSelectionSchema.optional(),
-})
+}))
 export type NativeRequestInput = z.infer<typeof NativeRequestInputSchema>
-export const NativeRequestSchema = z.object({
+export const NativeRequestSchema = z.lazy(() => z.object({
   input: NativeRequestInputSchema,
   ref: ThreadRefSchema,
   status: z.enum([
@@ -26,5 +26,5 @@ export const NativeRequestSchema = z.object({
     "dismissed",
   ]),
   error: z.string().optional(),
-})
+}))
 export type NativeRequest = z.infer<typeof NativeRequestSchema>

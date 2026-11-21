@@ -503,7 +503,10 @@ function explain(read, files, patch) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const root = join(dirname(createRequire(import.meta.url).resolve("@cursor/sdk")), "..", "..")
+  // `--root=<the @cursor/sdk package>` patches a copy installed elsewhere: the one Settings installs on a host made
+  // without Cursor (`harnesses/cursor/sdk/installed.ts`); otherwise the one this checkout or app installed.
+  const named = process.argv.find((argument) => argument.startsWith("--root="))?.slice("--root=".length)
+  const root = named ? resolve(named) : join(dirname(createRequire(import.meta.url).resolve("@cursor/sdk")), "..", "..")
   if (process.argv.includes("--check")) assertCursorSdkPatched((target) => readFileSync(join(root, target), "utf8"), folderFiles(root))
   else patchCursorSdk(root)
 }

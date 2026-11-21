@@ -1,0 +1,55 @@
+# Test-only Linux desktops for desktop-probe.mjs (run-desktop.sh builds and runs them): Ubuntu 24.04 with X11
+# (Xvfb, Openbox), Sway with XWayland, its ScreenCast portal and PipeWire, and GNOME Shell 46 headless with its portal
+# backend, and KDE's KWin. Nothing here enters a shipped image. Targets: `desktop` (X11 and Sway), `gnome` and `kde`.
+FROM ubuntu:24.04 AS xdpw
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates curl meson ninja-build gcc libc6-dev pkg-config \
+      libpipewire-0.3-dev libwayland-dev wayland-protocols libinih-dev libgbm-dev libdrm-dev libsystemd-dev
+# xdg-desktop-portal-wlr 0.7.1, Ubuntu's, refuses a compositor without DMA-BUF screencopy, which headless Sway on the
+# pixman renderer (no GPU: a container, a CI runner) is. This build of the same release accepts shared memory.
+RUN curl -fsSL https://github.com/emersion/xdg-desktop-portal-wlr/archive/refs/tags/v0.7.1.tar.gz | tar -xz -C /tmp \
+    && cd /tmp/xdg-desktop-portal-wlr-0.7.1 \
+    && sed -i 's/(cast->ctx->state->screencast_version >= 3 \&\&/(0 \&\&/' src/screencast/screencast.c \
+    && grep -q "(0 &&" src/screencast/screencast.c \
+    && meson setup build -Dwerror=false -Dman-pages=disabled -Dsystemd=disabled --prefix=/usr && ninja -C build \
+    && install -m 755 build/xdg-desktop-portal-wlr /xdpw
+
+FROM ubuntu:24.04 AS desktop
+ENV DEBIAN_FRONTEND=noninteractive
+# On wlroots the driver types through wtype, and xdg-desktop-portal-wlr's Screenshot runs grim; its access check needs
+# the GTK backend beside it, as a Sway desktop has.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      sway xwayland xdg-desktop-portal xdg-desktop-portal-wlr xdg-desktop-portal-gtk pipewire wireplumber dbus dbus-x11 at-spi2-core \
+      python3-gi gir1.2-gtk-3.0 foot xterm xvfb openbox x11-utils fonts-dejavu-core ca-certificates procps \
+      gcc libc6-dev pkg-config libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcomposite-dev libopenh264-dev libyuv-dev \
+      libturbojpeg0-dev libglib2.0-dev libgdk-pixbuf-2.0-dev libpipewire-0.3-dev libxkbcommon0 libxi6 libxtst6 wtype grim \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+COPY --from=xdpw /xdpw /usr/libexec/xdg-desktop-portal-wlr
+RUN useradd --create-home --uid 1001 person
+
+FROM desktop AS gnome
+RUN apt-get update && apt-get install -y --no-install-recommends gnome-shell xdg-desktop-portal-gnome gir1.2-atspi-2.0 \
+      dbus-user-session libgl1-mesa-dri \
+    && rm -rf /var/lib/apt/lists/*
+
+# KDE Plasma 5.27's KWin, as Kubuntu 24.04 ships it, headless (its virtual backend), with its portal backend.
+FROM desktop AS kde
+RUN apt-get update && apt-get install -y --no-install-recommends kwin-wayland xdg-desktop-portal-kde gir1.2-atspi-2.0 \
+      qtwayland5 libgl1-mesa-dri libcap2-bin \
+    && setcap -r /usr/bin/kwin_wayland \
+    && rm -rf /var/lib/apt/lists/*
+
+# KDE Plasma 6's KWin (6.3, Debian 13), headless, with its portal backend.
+FROM debian:trixie AS kde6
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      kwin-wayland xwayland xdg-desktop-portal xdg-desktop-portal-kde pipewire wireplumber dbus dbus-x11 at-spi2-core \
+      python3-gi gir1.2-gtk-3.0 gir1.2-atspi-2.0 foot xterm fonts-dejavu-core ca-certificates procps libcap2-bin \
+      gcc libc6-dev pkg-config libx11-dev libxext-dev libxdamage-dev libxfixes-dev libxcomposite-dev libopenh264-dev libyuv-dev \
+      libturbojpeg0-dev libglib2.0-dev libgdk-pixbuf-2.0-dev libpipewire-0.3-dev libxkbcommon0 libxi6 libxtst6 libgl1-mesa-dri \
+      qt6-wayland libxcb-cursor0 \
+    && setcap -r /usr/bin/kwin_wayland \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=node:24-bookworm-slim /usr/local/bin/node /usr/local/bin/node
+RUN useradd --create-home --uid 1001 person

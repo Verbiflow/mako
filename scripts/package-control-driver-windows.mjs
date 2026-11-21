@@ -106,6 +106,13 @@ assert.equal(machine, 0x8664, "The executable is not x64")
 // Linked statically, the C runtime is not an import: a machine without the Visual C++ redistributable runs it.
 const runtime = dlls.filter((dll) => /^(vcruntime|msvcp|ucrtbase|api-ms-win-crt-)/.test(dll))
 assert.deepEqual(runtime, [], `The executable imports the C runtime: ${runtime.join(", ")}`)
+// No FFmpeg in the Windows build: none of its capture or encoder names, its Windows package or its executable's name is
+// in the binary. The word itself stays only in text (the `install_ffmpeg` tool that refuses, and messages that say
+// none is used); each place is recorded for review.
+const text = binary.toString("latin1")
+const forbidden = ["gdigrab", "x11grab", "libx264", "Gyan.FFmpeg", "ffmpeg.exe", "ffprobe"].filter((word) => text.includes(word))
+assert.deepEqual(forbidden, [], `FFmpeg's names are in the Windows executable: ${forbidden.join(", ")}`)
+const ffmpegMentions = [...text.matchAll(/[\x20-\x7e]{0,40}ffmpeg[\x20-\x7e]{0,40}/g)].map((match) => match[0])
 const linked = await licenses()
 const output = resolve("release/control-driver", manifest.version, "windows-x64")
 await rm(output, { recursive: true, force: true })
@@ -126,6 +133,7 @@ await writeFile(
       binarySha256: hash(binary),
       bytes: binary.length,
       imports: dlls,
+      ffmpegMentions,
       licenses: Object.entries(Object.groupBy(linked, ({ license }) => license)).map(([license, crates]) => ({ license, crates: crates.map(({ name, version }) => `${name} ${version}`) })),
       builtAt: new Date().toISOString(),
     },

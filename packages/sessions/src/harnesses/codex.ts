@@ -147,7 +147,7 @@ export interface CodexTokenUsage {
 }
 
 /** `TokenUsageBreakdown` on the app-server wire (`thread/tokenUsage/updated`'s `last` and `total`). */
-export const CodexWireUsage = z.object({
+export const CodexWireUsage = z.lazy(() => z.object({
   inputTokens: tokenCount,
   cachedInputTokens: tokenCount,
   cacheWriteInputTokens: tokenCount,
@@ -161,10 +161,10 @@ export const CodexWireUsage = z.object({
   output: usage.outputTokens ?? 0,
   reasoning: usage.reasoningOutputTokens ?? 0,
   total: usage.totalTokens ?? undefined,
-}))
+})))
 
 /** A rollout `token_count` event's `info.last_token_usage` and `info.total_token_usage`. */
-export const CodexRolloutUsage = z.object({
+export const CodexRolloutUsage = z.lazy(() => z.object({
   input_tokens: tokenCount,
   cached_input_tokens: tokenCount,
   cache_write_input_tokens: tokenCount,
@@ -178,7 +178,7 @@ export const CodexRolloutUsage = z.object({
   output: usage.output_tokens ?? 0,
   reasoning: usage.reasoning_output_tokens ?? 0,
   total: usage.total_tokens ?? undefined,
-}))
+})))
 
 export function codexTokens(usage: CodexTokenUsage): HarnessTokens {
   return inclusiveTokens({

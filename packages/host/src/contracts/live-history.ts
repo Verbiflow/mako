@@ -3,20 +3,20 @@ import type { ThreadPage } from "@mako/sessions"
 import type { LiveSnapshot } from "./live-conversations.js"
 import type { Entry } from "@mako/sessions/entries"
 
-export const LiveHistoryCursorSchema = z.object({
+export const LiveHistoryCursorSchema = z.lazy(() => z.object({
   blocks: z.number().int().nonnegative(),
   base: z.number().int().nonnegative(),
-})
+}))
 export type LiveHistoryCursor = z.infer<typeof LiveHistoryCursorSchema>
 
-export const LiveHistoryAddressSchema = z.discriminatedUnion("kind", [
+export const LiveHistoryAddressSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("live"), index: z.number().int().nonnegative() }),
   /** A saved entry of the capture's native base, by its id. */
   z.object({ kind: z.literal("base"), id: z.string() }),
-])
+]))
 export type LiveHistoryAddress = z.infer<typeof LiveHistoryAddressSchema>
 
-export const LiveHistoryReadSchema = z.discriminatedUnion("kind", [
+export const LiveHistoryReadSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("snapshot"), from: LiveHistoryCursorSchema.optional(), epoch: z.string().optional(),
     ifCurrent: z.object({ token: z.string().uuid(), revision: z.number().int().nonnegative() }).optional() }),
   z.object({ kind: z.literal("earlier"), token: z.string().uuid(), before: LiveHistoryCursorSchema }),
@@ -25,7 +25,7 @@ export const LiveHistoryReadSchema = z.discriminatedUnion("kind", [
   /** The bytes an entry of the view was read from (`EntryOriginal`): its record's, and the stream lines it names. */
   z.object({ kind: z.literal("original"), token: z.string().uuid(), at: LiveHistoryAddressSchema }),
   z.object({ kind: z.literal("part"), record: z.string().uuid(), offset: z.number().int().nonnegative() }),
-])
+]))
 export type LiveHistoryRead = z.infer<typeof LiveHistoryReadSchema>
 export type LiveHistorySnapshot = LiveSnapshot | { kind: "unchanged"; token: string; revision: number; epoch: string } | null
 

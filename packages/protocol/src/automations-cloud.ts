@@ -40,7 +40,7 @@ export const EVENT_SOURCES = ["github", "slack", "linear", "sentry", "webhook"] 
 export type EventSource = (typeof EVENT_SOURCES)[number]
 
 /** The triggers the account holds, each as the project's file writes it. */
-export const CloudTriggerSchema = z.discriminatedUnion("kind", [
+export const CloudTriggerSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("schedule"), cron: z.string().trim().min(1).max(120), timezone: z.string().min(1).max(64).default("UTC"), runWhen: RunWhenSchema.optional() }),
   z.object({ kind: z.literal("github"), event: z.enum(GITHUB_EVENTS), repo: z.string().regex(/^[\w.-]+\/[\w.-]+$/), filters: FiltersSchema.optional(), runWhen: RunWhenSchema.optional() }),
   z.object({ kind: z.literal("slack"), event: z.enum(SLACK_EVENTS), channels: z.array(z.string().min(1).max(120)).max(40).default([]), filters: FiltersSchema.optional(), runWhen: RunWhenSchema.optional() }),
@@ -55,18 +55,18 @@ export const CloudTriggerSchema = z.discriminatedUnion("kind", [
     /** Deliveries within this window become one occurrence. */
     coalesce: z.object({ windowS: z.number().int().min(1).max(3600) }).optional(),
   }),
-])
+]))
 export type CloudTrigger = z.infer<typeof CloudTriggerSchema>
 
 /** A rule's target: the harness it names and the settings it gives it, as the person's Mac holds their rule. */
-export const RuleTargetSchema = z.object({
+export const RuleTargetSchema = z.lazy(() => z.object({
   harness: z.string().min(1).max(64),
   /** A harness's session settings: its model, and options each a word or a switch. */
   settings: z.object({ model: z.string().min(1).max(200).optional(), options: z.record(z.string().max(80), z.union([z.string().max(200), z.boolean()])).optional() }).optional(),
-})
+}))
 
 /** One automation as a Mac registers it with the account. */
-export const CloudAutomationSchema = z.object({
+export const CloudAutomationSchema = z.lazy(() => z.object({
   /**
    * The project's stable key: its GitHub repository and the folder in it (`github.com/<owner>/<name>[/<folder>]`),
    * never a path on one Mac, so two Macs with the same project register one automation. Echoed back on each run.
@@ -97,11 +97,11 @@ export const CloudAutomationSchema = z.object({
   limits: z.object({ overlap: z.enum(["skip", "queue"]).default("skip"), maxRunsPerDay: z.number().int().min(1).max(96).optional(), timeoutMin: z.number().int().min(1).max(1440).default(60) }).default({ overlap: "skip", timeoutMin: 60 }),
   /** When the person turned it on: no catch-up reaches behind it. */
   enabledAt: z.number().int().nonnegative(),
-})
+}))
 export type CloudAutomation = z.infer<typeof CloudAutomationSchema>
 
 /** What started an account-held run: its schedule's slot, or an outside event. */
-export const CloudCauseSchema = z.discriminatedUnion("kind", [
+export const CloudCauseSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("schedule"), at: z.number(), catchUp: z.literal(true).optional() }),
   z.object({
     kind: z.literal("event"),
@@ -113,7 +113,7 @@ export const CloudCauseSchema = z.discriminatedUnion("kind", [
     url: z.string().max(400).optional(),
     batch: z.number().int().min(1).max(500).optional(),
   }),
-])
+]))
 export type CloudCause = z.infer<typeof CloudCauseSchema>
 
 /**
@@ -126,7 +126,7 @@ export const OccurrenceStatusSchema = z.enum(["offered", "device", "queued", "st
 export type OccurrenceStatus = z.infer<typeof OccurrenceStatusSchema>
 
 /** One occurrence as the account keeps it and a Mac reads it (`GET /runs`). Read leniently: a newer field is passed over. */
-export const CloudRunSchema = z.object({
+export const CloudRunSchema = z.lazy(() => z.object({
   /** The account's sequence: a Mac reads on from the last it took. */
   seq: z.number().int().positive(),
   project: z.string(),
@@ -156,25 +156,25 @@ export const CloudRunSchema = z.object({
    * `untrustedEventText`'s fence, never as the brief's own words.
    */
   event: z.unknown().optional(),
-}).loose()
+}).loose())
 export type CloudRun = z.infer<typeof CloudRunSchema>
 
 /** `GET /runs`'s answer. */
-export const CloudRunsSchema = z.object({ runs: z.array(CloudRunSchema), next: z.number().int().nonnegative() })
+export const CloudRunsSchema = z.lazy(() => z.object({ runs: z.array(CloudRunSchema), next: z.number().int().nonnegative() }))
 
 /** `POST /claim`'s answer: 200 the device's, 409 the run that holds it. */
-export const CloudClaimSchema = z.discriminatedUnion("ok", [
+export const CloudClaimSchema = z.lazy(() => z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), run: CloudRunSchema }),
   z.object({ ok: z.literal(false), run: CloudRunSchema, why: z.string() }),
-])
+]))
 export type CloudClaim = z.infer<typeof CloudClaimSchema>
 
 /** `POST /hooks`'s answer: the hook, its secret this once, and the address it takes deliveries at. */
-export const CloudHookSchema = z.object({
+export const CloudHookSchema = z.lazy(() => z.object({
   hook: z.object({ name: z.string(), id: z.string(), provider: z.enum(["webhook", "linear", "sentry"]), at: z.number(), rotatedAt: z.number().optional(), previousUntil: z.number().optional() }).loose(),
   secret: z.string().optional(),
   url: z.string(),
-})
+}))
 export type CloudHook = z.infer<typeof CloudHookSchema>
 
 /**
@@ -183,7 +183,7 @@ export type CloudHook = z.infer<typeof CloudHookSchema>
  * `access` exactly as a run on the person's Mac, and refuses (the run fails, saying why) what it can't apply; it never
  * starts a looser mode. Repeated, the same conversation: started once.
  */
-export const CloudRunStartSchema = z.object({
+export const CloudRunStartSchema = z.lazy(() => z.object({
   cwd: z.string().min(1).max(4096),
   harness: z.string().min(1).max(40).optional(),
   model: z.string().min(1).max(200).optional(),
@@ -197,7 +197,7 @@ export const CloudRunStartSchema = z.object({
   text: z.string().min(1).max(400_000),
   title: z.string().min(1).max(200),
   tokenBudget: z.number().int().positive().optional(),
-})
+}))
 export type CloudRunStart = z.infer<typeof CloudRunStartSchema>
 
 /** The client key every repeat of one occurrence starts under. */
@@ -286,4 +286,4 @@ function randomMarker(): string {
 }
 
 /** The account's word that its automations' runs changed, up to `seq`. */
-export const AutomationsChangedEventSchema = z.object({ type: z.literal("automations-changed"), seq: z.number().int().positive() })
+export const AutomationsChangedEventSchema = z.lazy(() => z.object({ type: z.literal("automations-changed"), seq: z.number().int().positive() }))

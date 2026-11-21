@@ -52,7 +52,7 @@ async function serve(socket: string, handover?: SecretKeyHandover) {
   return host
 }
 function link(socket: string, encryption: SecretEncryption) {
-  const made = new SecretKeyLink(socket, keyPath, encryption)
+  const made = new SecretKeyLink(() => socket, keyPath, encryption)
   links.push(made)
   return made
 }

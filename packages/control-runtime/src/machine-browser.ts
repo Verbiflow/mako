@@ -3,7 +3,7 @@ import type { ChildProcess } from "node:child_process"
 import { statfsSync } from "node:fs"
 import { get } from "node:http"
 import { mkdir, rm } from "node:fs/promises"
-import { join } from "node:path"
+import { join, win32 } from "node:path"
 import { Readable, Writable } from "node:stream"
 import { z } from "zod"
 import type { LocalBrowser } from "./browser-discovery.js"
@@ -212,7 +212,9 @@ async function loadOverPipe(child: ChildProcess, directory: string, id: string, 
  */
 function end(child: ChildProcess, signal: NodeJS.Signals): void {
   if (onWindows() && child.pid !== undefined && child.exitCode === null && child.signalCode === null) {
-    void command("taskkill", ["/PID", String(child.pid), "/T", "/F"], { timeout: 10_000, windowsHide: true }).catch(() => child.kill(signal))
+    // By its whole path: a bare name is looked for in the working folder first on Windows.
+    const taskkill = win32.join(process.env.SystemRoot || "C:\\Windows", "System32", "taskkill.exe")
+    void command(taskkill, ["/PID", String(child.pid), "/T", "/F"], { timeout: 10_000, windowsHide: true }).catch(() => child.kill(signal))
     return
   }
   child.kill(signal)
