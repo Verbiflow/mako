@@ -1,0 +1,50 @@
+name: Cross-platform checks
+
+# What behaves differently on Windows and Linux, checked on both: executable lookup (PATHEXT), a build step's process
+# tree stopped, and folders compared across drives. None needs a display or Electron.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/cross-platform.yml
+      - packages/control-runtime/src/executable.ts
+      - packages/host/src/application/process-group.ts
+      - packages/host/src/workspaces/snapshots.ts
+      - scripts/test-control-executable.ts
+      - scripts/test-folders-overlap.ts
+      - scripts/test-process-group-tree.ts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cross-platform-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+        with:
+          electron: "false"
+      - shell: bash
+        run: npm run typecheck
+      - shell: bash
+        run: |
+          npx tsx scripts/test-control-executable.ts
+          npx tsx scripts/test-process-group-tree.ts
+          npx tsx scripts/test-folders-overlap.ts

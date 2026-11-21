@@ -1401,7 +1401,10 @@ export class SessionCatalog {
   }
 
   private refreshWatchRoots(): void {
-    const polls = new Set(this.providers.flatMap(provider => provider.pollFiles?.() ?? []))
+    // Only a store whose folder is there: a poll stats its file every second, and on a machine a harness hasn't run on
+    // yet, every one of them was missing. Discovery runs this again every 30 s, and a store's folder that appears is
+    // polled from then on; what it already holds by then, discovery's own scan reads.
+    const polls = new Set(this.providers.flatMap(provider => provider.pollFiles?.() ?? []).filter(file => existsSync(dirname(file))))
     for (const [file, changed] of this.polls) {
       if (polls.has(file)) continue
       unwatchFile(file, changed)

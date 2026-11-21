@@ -9,7 +9,7 @@ export { CONTEXT_COMPACTED } from "@mako/sessions/events"
  * for a check of its own. Harnesses report it from their own events; one
  * that reports none still reads as working, then quiet.
  */
-export const NativeActivityObservationSchema = z.discriminatedUnion("kind", [
+export const NativeActivityObservationSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("compacting") }),
   z.object({
     kind: z.literal("retrying"),
@@ -21,7 +21,7 @@ export const NativeActivityObservationSchema = z.discriminatedUnion("kind", [
   }),
   /** The provider holds the turn for its own check; `label` says which ("Reviewing the approval"). */
   z.object({ kind: z.literal("waiting"), label: z.string() }),
-])
+]))
 export type NativeActivityObservation = z.infer<typeof NativeActivityObservationSchema>
 
 /**

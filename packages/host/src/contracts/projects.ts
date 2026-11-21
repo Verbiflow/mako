@@ -104,23 +104,23 @@ export interface CreateProjectRequest {
   git: boolean
 }
 
-export const FolderBrowseRequestSchema = z.object({
+export const FolderBrowseRequestSchema = z.lazy(() => z.object({
   partialPath: z.string().min(1).max(1024).refine((text) => !text.includes("\0"), "expected a path"),
   base: z.string().max(1024).optional(),
-}).strict()
+}).strict())
 
-export const FoundCheckoutsRequestSchema = z.object({ within: z.array(z.string().max(1024)).max(8) }).strict()
+export const FoundCheckoutsRequestSchema = z.lazy(() => z.object({ within: z.array(z.string().max(1024)).max(8) }).strict())
 
-export const CloneRequestSchema = z.object({
+export const CloneRequestSchema = z.lazy(() => z.object({
   id: z.string().regex(/^[A-Za-z0-9-]{1,64}$/, "expected an id"),
   repository: z.string().min(1).max(300),
   into: z.string().min(1).max(1024).refine((text) => !text.includes("\0"), "expected a folder"),
-}).strict()
+}).strict())
 
-export const CreateProjectRequestSchema = z.object({
+export const CreateProjectRequestSchema = z.lazy(() => z.object({
   path: z.string().min(1).max(1024).refine((text) => !text.includes("\0"), "expected a path"),
   git: z.boolean(),
-}).strict()
+}).strict())
 
 /** A GitHub repository as a person types or pastes it. */
 export interface GitHubRepository {

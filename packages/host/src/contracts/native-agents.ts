@@ -12,22 +12,22 @@ export const AFTER_LIMIT = 20
  */
 export const NativeWorkSchema = z.enum(["agent", "workflow", "command", "monitor", "task"])
 export type NativeWork = z.infer<typeof NativeWorkSchema>
-export const NativeAgentStateSchema = z.discriminatedUnion("kind", [
+export const NativeAgentStateSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("working"), activity: note.optional() }),
   z.object({ kind: z.literal("waiting"), reason: note.optional() }),
   z.object({ kind: z.literal("completed"), summary: note.optional() }),
   z.object({ kind: z.literal("failed"), error: note }),
   z.object({ kind: z.literal("canceled") }),
   z.object({ kind: z.literal("unknown"), reason: note }),
-])
+]))
 
 /** The most answers one question offers. */
 export const ASK_OPTIONS = 12
 /** One answer a Fin's question offers: what's picked, and what picking it does. */
-export const AskOptionSchema = z.object({
+export const AskOptionSchema = z.lazy(() => z.object({
   label: z.string().min(1).max(200),
   detail: z.string().max(600).optional(),
-})
+}))
 export type AskOption = z.infer<typeof AskOptionSchema>
 
 /**
@@ -36,7 +36,7 @@ export type AskOption = z.infer<typeof AskOptionSchema>
  * question or approval. `id` names the ask, so an answer says which one it
  * answers and a second answer to the same one is refused, not sent twice.
  */
-export const FinAskSchema = z.object({
+export const FinAskSchema = z.lazy(() => z.object({
   kind: z.enum(["report", "question", "approval"]),
   id: z.string().min(1).max(600),
   options: z.array(AskOptionSchema).max(ASK_OPTIONS).optional(),
@@ -54,7 +54,7 @@ export const FinAskSchema = z.object({
    * this ask. Its options only decline; a surface offers a way to the change, or says where it is.
    */
   review: z.object({ project: z.string().max(4096), automation: z.string().max(200), proposal: z.string().max(200) }).optional(),
-})
+}))
 export type FinAsk = z.infer<typeof FinAskSchema>
 
 /**
@@ -63,7 +63,7 @@ export type FinAsk = z.infer<typeof FinAskSchema>
  * (`lead`) or the person's, and the ask that answers it, which only its
  * owner has: a row's Fin on another device says the question alone.
  */
-export const FinDecisionSchema = z.object({ question: note, on: z.enum(["lead", "person"]), ask: FinAskSchema.optional() })
+export const FinDecisionSchema = z.lazy(() => z.object({ question: note, on: z.enum(["lead", "person"]), ask: FinAskSchema.optional() }))
 export type FinDecision = z.infer<typeof FinDecisionSchema>
 
 /**
@@ -71,7 +71,7 @@ export type FinDecision = z.infer<typeof FinDecisionSchema>
  * merge, whose outcome Mako wakes it with (`contracts/pull-waits.ts`); the person, for what they do ("merge"); or
  * anything else in a few words (`other`). Person and other waits record intent only; they register no automatic wake.
  */
-export const WaitingOnSchema = z.union([
+export const WaitingOnSchema = z.lazy(() => z.union([
   z.object({
     kind: z.literal("pull-request"),
     /** As the report named it: its URL, `owner/name#412` or `#412`. */
@@ -83,14 +83,14 @@ export const WaitingOnSchema = z.union([
   }),
   z.object({ kind: z.literal("person"), what: z.string().min(1).max(200) }),
   z.object({ kind: z.literal("other"), text: z.string().min(1).max(200) }),
-])
+]))
 export type WaitingOn = z.infer<typeof WaitingOnSchema>
 /** The most a report names. */
 export const WAITING_ON_LIMIT = 8
 const waitingOn = z.array(WaitingOnSchema).max(WAITING_ON_LIMIT)
 
 /** Who answered a Fin's question, and with what, while it works on the answer. */
-export const FinAnsweredSchema = z.object({ by: z.enum(["lead", "person"]), answer: z.string().max(400) })
+export const FinAnsweredSchema = z.lazy(() => z.object({ by: z.enum(["lead", "person"]), answer: z.string().max(400) }))
 export type FinAnswered = z.infer<typeof FinAnsweredSchema>
 
 /**
@@ -98,7 +98,7 @@ export type FinAnswered = z.infer<typeof FinAnsweredSchema>
  * on its entry so every surface (the rail's badge, the strip, the panel, the
  * phone) reads that one computation and never infers it from `state`'s words.
  */
-export const ChildStateSchema = z.discriminatedUnion("kind", [
+export const ChildStateSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal("queued"),
     reason: z.enum(["tree-running", "place-full", "device-offline"]),
@@ -119,7 +119,7 @@ export const ChildStateSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("idle"), waitingOn: waitingOn.optional(), since: z.number().optional() }),
   z.object({ kind: z.literal("blocked"), question: note, on: z.enum(["lead", "person", "approval"]), ask: FinAskSchema.optional(), waitingOn: waitingOn.optional() }),
   z.object({ kind: z.literal("ended"), outcome: z.enum(["done", "failed", "stopped"]), reason: note.optional(), unfinished: z.literal(true).optional(), decision: FinDecisionSchema.optional(), waitingOn: waitingOn.optional() }),
-])
+]))
 export type ChildStateReading = z.infer<typeof ChildStateSchema>
 export const NativeAgentObservationSchema = z.object({
   nativeId: z.string().min(1).max(512),
@@ -229,10 +229,10 @@ export const NativeAgentSchema = NativeAgentObservationSchema.extend({
   settledAt: z.number().optional(),
 })
 export type NativeAgent = z.infer<typeof NativeAgentSchema>
-export const NativeAgentRosterSchema = z.object({
+export const NativeAgentRosterSchema = z.lazy(() => z.object({
   agents: z.array(NativeAgentSchema).max(NATIVE_AGENT_LIMIT),
   limited: z.boolean(),
-})
+}))
 export type NativeAgentRoster = z.infer<typeof NativeAgentRosterSchema>
 
 export function observeNativeAgent(

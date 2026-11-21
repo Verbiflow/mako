@@ -10,7 +10,7 @@ import {
   processIdentityMatches,
   observeProcessIdentity,
   processStartMatches, START_READING_TOLERANCE_MS } from "./process-liveness.js"
-import { onWindows } from "./platform.js"
+import { signalProcessTree } from "./process-tree.js"
 import { topic } from "./topic.js"
 
 
@@ -340,24 +340,12 @@ export class ProviderChildren {
 }
 
 /**
- * Signals a child this host spawned, with its process group: a provider spawned in a group of its own leaves its
- * children (the native binary under a wrapper, a tool's shell) there. A child sharing the host's group has no group of
- * its own pid, so only it is signalled.
+ * Signals a child this host spawned, with its tree: a provider spawned in a group of its own leaves its children (the
+ * native binary under a wrapper, a tool's shell) there. A child sharing the host's group has no group of its own pid,
+ * so only it is signalled. On Windows the tree under it ends (`signalProcessTree`).
  */
 function signalChild(pid: number, signal: NodeJS.Signals): void {
-  if (!onWindows()) {
-    try {
-      process.kill(-pid, signal)
-      return
-    } catch {
-      // No group led by this pid: the child shares another's.
-    }
-  }
-  try {
-    process.kill(pid, signal)
-  } catch {
-    // Gone already: its exit is on its way to `untrackPid`.
-  }
+  signalProcessTree(pid, signal)
 }
 
 function childRecordId(entry: ProviderChildRecord): string {

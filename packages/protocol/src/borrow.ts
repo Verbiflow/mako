@@ -71,11 +71,11 @@ const Ref = z.string().min(1).max(1024)
 const Ms = z.number().int().nonnegative()
 
 /** Who did something: the person (from a device of theirs), an agent's Thread, or Mako itself (an expiry, a Thread's end). */
-export const ActorSchema = z.discriminatedUnion("kind", [
+export const ActorSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("person"), account: Id, device: Id.optional() }).strict(),
   z.object({ kind: z.literal("thread"), account: Id, thread: Id }).strict(),
   z.object({ kind: z.literal("mako") }).strict(),
-])
+]))
 export type Actor = z.infer<typeof ActorSchema>
 
 /** Where a borrower runs: one of the account's devices, or a cloud machine. */
@@ -86,18 +86,18 @@ export const PlaceSchema = z.discriminatedUnion("kind", [
 export type Place = z.infer<typeof PlaceSchema>
 
 /** A Thread at a place, as the account, its project (the repository it writes, `owner/name`) and its ID name it. */
-export const BorrowerSchema = z.object({ account: Id, repository: Ref, thread: Id, place: PlaceSchema }).strict()
+export const BorrowerSchema = z.lazy(() => z.object({ account: Id, repository: Ref, thread: Id, place: PlaceSchema }).strict())
 export type Borrower = z.infer<typeof BorrowerSchema>
 
 /**
  * Who a grant reaches. The narrowest grant matching a need wins it: a Thread's over its project's, a project's over the
  * account's. Teams come later as one more level, between project and account.
  */
-export const ScopeSchema = z.discriminatedUnion("level", [
+export const ScopeSchema = z.lazy(() => z.discriminatedUnion("level", [
   z.object({ level: z.literal("thread"), account: Id, thread: Id }).strict(),
   z.object({ level: z.literal("project"), account: Id, repository: Ref }).strict(),
   z.object({ level: z.literal("account"), account: Id }).strict(),
-])
+]))
 export type Scope = z.infer<typeof ScopeSchema>
 const SCOPE_RANK = { thread: 0, project: 1, account: 2 } as const satisfies Record<Scope["level"], number>
 
@@ -109,28 +109,28 @@ const SCOPE_RANK = { thread: 0, project: 1, account: 2 } as const satisfies Reco
  */
 const CapabilityName = z.string().regex(/^[a-z][a-z0-9-]{0,47}$/)
 const Attribute = z.string().min(1).max(128)
-export const CapabilitySchema = z
+export const CapabilitySchema = z.lazy(() => z
   .object({ capability: CapabilityName, version: z.string().min(1).max(64).optional(), attributes: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), Attribute).optional() })
-  .strict()
+  .strict())
 export type Capability = z.infer<typeof CapabilitySchema>
 
 /** What a need or grant requires of a device: a capability, and its version and attributes, each a value or a pattern with `*`. */
-export const CapabilityQuerySchema = z
+export const CapabilityQuerySchema = z.lazy(() => z
   .object({ capability: CapabilityName, version: z.string().min(1).max(64).optional(), where: z.record(z.string().regex(/^[a-z][a-z0-9-]{0,31}$/), Attribute).optional() })
-  .strict()
+  .strict())
 export type CapabilityQuery = z.infer<typeof CapabilityQuerySchema>
 
 /** A device's slots: what its own work holds (its Fins), out of what it runs at once. Borrowed operations take the rest. */
-export const SlotsSchema = z.object({ used: z.number().int().nonnegative(), of: z.number().int().nonnegative() }).strict()
+export const SlotsSchema = z.lazy(() => z.object({ used: z.number().int().nonnegative(), of: z.number().int().nonnegative() }).strict())
 export type Slots = z.infer<typeof SlotsSchema>
 
-export const SourceRefSchema = z.discriminatedUnion("kind", [
+export const SourceRefSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("device"), device: Id }).strict(),
   z.object({ kind: z.literal("vault") }).strict(),
   z.object({ kind: z.literal("mint"), service: Id }).strict(),
   /** Whichever of the account's devices (or of those listed) advertise every requirement: the broker picks one. */
   z.object({ kind: z.literal("capable"), requires: z.array(CapabilityQuerySchema).min(1).max(8), devices: z.array(Id).max(32).optional() }).strict(),
-])
+]))
 export type SourceRef = z.infer<typeof SourceRefSchema>
 
 /**
@@ -139,22 +139,22 @@ export type SourceRef = z.infer<typeof SourceRefSchema>
  * `command`, an argv pattern of space-separated words, where `*` is one word and a final `**` the rest. For `env`,
  * `credential` and `port`, the name (`DATABASE_URL`, `github-app`, `db.internal:5432`), with `*` allowed.
  */
-export const ResourceSelectorSchema = z.object({ kind: KindSchema, ref: Ref }).strict()
+export const ResourceSelectorSchema = z.lazy(() => z.object({ kind: KindSchema, ref: Ref }).strict())
 export type ResourceSelector = z.infer<typeof ResourceSelectorSchema>
 
-export const LifetimeSchema = z.discriminatedUnion("until", [
+export const LifetimeSchema = z.lazy(() => z.discriminatedUnion("until", [
   z.object({ until: z.literal("revoked") }).strict(),
   z.object({ until: z.literal("expires"), at: Ms }).strict(),
   z.object({ until: z.literal("thread-ends") }).strict(),
   z.object({ until: z.literal("once") }).strict(),
-])
+]))
 export type Lifetime = z.infer<typeof LifetimeSchema>
 
 /** Whether the source's person is asked when a lease is taken. Only a device asks; the vault and a mint never do. */
 export const AskSchema = z.enum(["never", "first-use", "each-use"])
 export type Ask = z.infer<typeof AskSchema>
 
-export const GrantSchema = z
+export const GrantSchema = z.lazy(() => z
   .object({
     id: Id,
     resource: ResourceSelectorSchema,
@@ -201,7 +201,7 @@ export const GrantSchema = z
     if (grant.within && grant.devices) context.addIssue({ code: "custom", message: "A grant that keeps to its device names no other devices" })
     if (grant.scope.account !== accountOf(grant.grantedBy, grant.scope.account))
       context.addIssue({ code: "custom", message: "A grant is given within its own account" })
-  })
+  }))
 export type Grant = z.infer<typeof GrantSchema>
 
 function accountOf(actor: Actor, fallback: string): string {
@@ -209,14 +209,14 @@ function accountOf(actor: Actor, fallback: string): string {
 }
 
 /** A copy the borrower holds already: its version (the content's SHA-256) and when it took it. */
-export const HoldingSchema = z.object({ version: ChunkHashSchema, at: Ms }).strict()
+export const HoldingSchema = z.lazy(() => z.object({ version: ChunkHashSchema, at: Ms }).strict())
 export type Holding = z.infer<typeof HoldingSchema>
 
 /**
  * What a borrower asks for: one resource, exactly named, and why, in the agent's words (shown to the person when it
  * asks them). The correlation ID makes it one need however often it's sent.
  */
-export const NeedSchema = z
+export const NeedSchema = z.lazy(() => z
   .object({
     kind: KindSchema,
     ref: Ref,
@@ -231,7 +231,7 @@ export const NeedSchema = z
     /** The mode the borrower needs, when it needs one (a link where it would otherwise get a copy); a grant in another mode doesn't answer it. */
     mode: ModeSchema.optional(),
   })
-  .strict()
+  .strict())
 export type Need = z.infer<typeof NeedSchema>
 
 /** How a lease's value gets to the borrower: nothing to send (it holds this version, or the mode moves nothing), inline on the link, or as chunks. */
@@ -242,7 +242,7 @@ export const BORROW_INLINE_BYTES = 64 * 1024
 /** The largest copy a lease carries. */
 export const BORROW_COPY_MAX_BYTES = 1024 * 1024 * 1024
 
-export const DeliverySchema = z
+export const DeliverySchema = z.lazy(() => z
   .object({
     transfer: TransferSchema,
     /** Lands only in memory-backed files at the borrower. */
@@ -250,16 +250,16 @@ export const DeliverySchema = z
     /** The copy's size, when it's a copy. */
     size: z.number().int().nonnegative().optional(),
   })
-  .strict()
+  .strict())
 export type Delivery = z.infer<typeof DeliverySchema>
 
 /** What an operation's device says of its progress: a phase and how far, never its output's words. */
 export const PROGRESS_PHASES = ["preparing", "booting", "building", "testing", "running", "uploading", "stopping"] as const
-export const ProgressSchema = z.object({ phase: z.enum(PROGRESS_PHASES), percent: z.number().min(0).max(100).optional() }).strict()
+export const ProgressSchema = z.lazy(() => z.object({ phase: z.enum(PROGRESS_PHASES), percent: z.number().min(0).max(100).optional() }).strict())
 export type Progress = z.infer<typeof ProgressSchema>
 
 /** A stream a session serves its borrower alone (a simulator's screen as video, a build's log as text), by name. */
-export const StreamSchema = z.object({ name: Id, kind: z.enum(["video", "text"]) }).strict()
+export const StreamSchema = z.lazy(() => z.object({ name: Id, kind: z.enum(["video", "text"]) }).strict())
 export type Stream = z.infer<typeof StreamSchema>
 
 /** A file name, never a path or contents: one segment, no slash, backslash or NUL, and not `.` or `..`. */
@@ -270,13 +270,13 @@ export const ArtifactNameSchema = z
   .regex(/^[^/\\\0]+$/)
   .refine((name) => name !== "." && name !== "..", "An artifact's name is a file's name")
 /** A file a session made (a build, test results, a recording), as its lease lists it: by name, hash and size, never its contents. */
-export const ArtifactSchema = z.object({ name: ArtifactNameSchema, hash: ChunkHashSchema, size: z.number().int().nonnegative() }).strict()
+export const ArtifactSchema = z.lazy(() => z.object({ name: ArtifactNameSchema, hash: ChunkHashSchema, size: z.number().int().nonnegative() }).strict())
 export type Artifact = z.infer<typeof ArtifactSchema>
 /** The most streams and artifacts one session lists. */
 export const SESSION_STREAMS_MAX = 8
 export const SESSION_ARTIFACTS_MAX = 64
 
-export const SessionSchema = z
+export const SessionSchema = z.lazy(() => z
   .object({
     state: z.enum(["starting", "running"]),
     heartbeatMs: z.number().int().positive(),
@@ -287,10 +287,10 @@ export const SessionSchema = z
     /** What it made, as its device gave each, while the lease lives: an ended lease lists none. */
     artifacts: z.array(ArtifactSchema).max(SESSION_ARTIFACTS_MAX).optional(),
   })
-  .strict()
+  .strict())
 export type Session = z.infer<typeof SessionSchema>
 
-export const LeaseSchema = z
+export const LeaseSchema = z.lazy(() => z
   .object({
     id: Id,
     grant: Id,
@@ -312,11 +312,11 @@ export const LeaseSchema = z
     /** An operation's session: starting until its device says it runs, kept by heartbeats. */
     session: SessionSchema.optional(),
   })
-  .strict()
+  .strict())
 export type Lease = z.infer<typeof LeaseSchema>
 
 /** What the person would be asked to grant, when nothing grants a need yet: it lands in Needs you and the Inbox. */
-export const AskOfferSchema = z
+export const AskOfferSchema = z.lazy(() => z
   .object({
     resource: ResourceSelectorSchema,
     borrower: BorrowerSchema,
@@ -325,7 +325,7 @@ export const AskOfferSchema = z
     scope: ScopeSchema,
     mode: ModeSchema,
   })
-  .strict()
+  .strict())
 export type AskOffer = z.infer<typeof AskOfferSchema>
 
 /**
@@ -339,7 +339,7 @@ export type UnavailableReason = (typeof UNAVAILABLE_REASONS)[number]
 export const WAIT_REASONS = ["none-capable", "no-device-online", "all-busy"] as const
 export type WaitReason = (typeof WAIT_REASONS)[number]
 
-export const RefusalSchema = z.discriminatedUnion("refused", [
+export const RefusalSchema = z.lazy(() => z.discriminatedUnion("refused", [
   z.object({ refused: z.literal("no-grant"), ask: AskOfferSchema }).strict(),
   z.object({ refused: z.literal("out-of-scope") }).strict(),
   z.object({ refused: z.literal("revoked") }).strict(),
@@ -359,22 +359,22 @@ export const RefusalSchema = z.discriminatedUnion("refused", [
   z.object({ refused: z.literal("thread-ended") }).strict(),
   /** A need waited for a capable device until its deadline: how long, and why none could take it. */
   z.object({ refused: z.literal("no-capable-device"), why: z.enum(WAIT_REASONS), waited: Ms }).strict(),
-])
+]))
 export type Refusal = z.infer<typeof RefusalSchema>
 
 /** A need its source is still deciding: the device was asked (`ask`); the answer is pushed, and the same need asked again answers it. */
-export const PendingSchema = z.union([
+export const PendingSchema = z.lazy(() => z.union([
   z.object({ pending: z.literal("source"), ask: Id, source: SourceRefSchema }).strict(),
   /** Waiting for a capable device with a slot: why, its place in line, since when, and until when. */
   z.object({ pending: z.literal("capacity"), why: z.enum(WAIT_REASONS), position: z.number().int().positive(), since: Ms, deadline: Ms }).strict(),
-])
+]))
 export type Pending = z.infer<typeof PendingSchema>
 
-export const BorrowAnswerSchema = z.union([
+export const BorrowAnswerSchema = z.lazy(() => z.union([
   z.object({ lease: LeaseSchema }).strict(),
   z.object({ refusal: RefusalSchema }).strict(),
   PendingSchema,
-])
+]))
 export type BorrowAnswer = z.infer<typeof BorrowAnswerSchema>
 
 export const LEASE_EVENT_KINDS = ["granted", "renewed", "refused", "revoked", "expired", "released", "asked", "queued", "cancelled", "lost"] as const
@@ -382,7 +382,7 @@ export const LEASE_EVENT_KINDS = ["granted", "renewed", "refused", "revoked", "e
  * One line of the lease log: who, what (the resource's name and version), from where, and why, never a value. The
  * same for every kind, in the cloud's log and a device's own.
  */
-export const LeaseEventSchema = z
+export const LeaseEventSchema = z.lazy(() => z
   .object({
     event: z.enum(LEASE_EVENT_KINDS),
     at: Ms,
@@ -396,7 +396,7 @@ export const LeaseEventSchema = z
     by: ActorSchema.optional(),
     correlationId: Id,
   })
-  .strict()
+  .strict())
 export type LeaseEvent = z.infer<typeof LeaseEventSchema>
 
 /**
@@ -408,15 +408,15 @@ export type LeaseEvent = z.infer<typeof LeaseEventSchema>
 export const LEASE_ENDS = ["revoked", "expired", "released", "cancelled", "lost"] as const
 export type LeaseEnd = (typeof LEASE_ENDS)[number]
 
-export const BorrowPushSchema = z.discriminatedUnion("push", [
+export const BorrowPushSchema = z.lazy(() => z.discriminatedUnion("push", [
   z.object({ push: z.literal("decided"), correlationId: Id, answer: BorrowAnswerSchema }).strict(),
   z.object({ push: z.literal("ended"), lease: Id, why: z.enum(LEASE_ENDS) }).strict(),
   z.object({ push: z.literal("version"), lease: Id, version: z.string().max(80), grantVersion: z.number().int().positive() }).strict(),
-])
+]))
 export type BorrowPush = z.infer<typeof BorrowPushSchema>
 
 /** What the broker asks a source device: may this borrower have this, and what version is it now. */
-export const SourceAskSchema = z
+export const SourceAskSchema = z.lazy(() => z
   .object({
     ask: Id,
     grant: Id,
@@ -428,14 +428,14 @@ export const SourceAskSchema = z
     /** Whether the device asks its person (`first-use` not yet answered for this borrower, or `each-use`), or answers itself. */
     askPerson: z.boolean(),
   })
-  .strict()
+  .strict())
 export type SourceAsk = z.infer<typeof SourceAskSchema>
 
-export const SourceAnswerSchema = z.discriminatedUnion("answer", [
+export const SourceAnswerSchema = z.lazy(() => z.discriminatedUnion("answer", [
   z.object({ answer: z.literal("yes"), version: z.string().min(1).max(80), size: z.number().int().nonnegative().optional() }).strict(),
   z.object({ answer: z.literal("no"), by: ActorSchema }).strict(),
   z.object({ answer: z.literal("unavailable"), reason: z.enum(UNAVAILABLE_REASONS) }).strict(),
-])
+]))
 export type SourceAnswer = z.infer<typeof SourceAnswerSchema>
 
 /**

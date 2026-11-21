@@ -14,35 +14,35 @@ import { ControlVideoBoxSchema } from "./control-video.js"
  *
  * Every unit reaches the host as one encoded `ControlVideoPacket`, and every key unit carries its `avcC`.
  */
-export const LiveVideoSourceSchema = z.discriminatedUnion("kind", [
+export const LiveVideoSourceSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("frames") }).strict(),
   z.object({ kind: z.literal("page"), page: z.string().min(1).max(100) }).strict(),
   z.object({ kind: z.literal("window"), windowId: z.number().int().positive() }).strict(),
   z.object({ kind: z.literal("display"), displayId: z.string().min(1).max(100) }).strict(),
-])
+]))
 export type LiveVideoSource = z.infer<typeof LiveVideoSourceSchema>
 
 export const LiveVideoSessionSchema = z.string().min(1).max(100)
 
-export const LiveVideoOpenSchema = z.object({
+export const LiveVideoOpenSchema = z.lazy(() => z.object({
   session: LiveVideoSessionSchema,
   source: LiveVideoSourceSchema,
   fps: z.number().int().min(1).max(120),
   /** The largest picture its viewers draw; none for the source's own size. */
   box: ControlVideoBoxSchema.nullable(),
-}).strict()
+}).strict())
 export type LiveVideoOpen = z.infer<typeof LiveVideoOpenSchema>
 
 /** One picture of a `frames` session: a JPEG, base64, and its place in the capture. */
-export const LiveVideoFrameSchema = z.object({
+export const LiveVideoFrameSchema = z.lazy(() => z.object({
   session: LiveVideoSessionSchema,
   data: z.string().max(16 * 1024 * 1024),
   sequence: z.number().int().min(0).max(0xffffffff),
   capturedAt: z.number(),
-}).strict()
+}).strict())
 
 /** What the session encodes with: hardware or software, and the codec Chromium took. */
-export const LiveVideoOpenedSchema = z.object({ encoder: z.string().max(200) }).strict()
+export const LiveVideoOpenedSchema = z.lazy(() => z.object({ encoder: z.string().max(200) }).strict())
 
 /** Desktop to host, unasked: a session's unit (an encoded `ControlVideoPacket`, base64), a frame it dropped, or its end. */
 export const LiveVideoFrameEventSchema = z.union([
@@ -68,14 +68,14 @@ export type LiveVideoPageSource =
   | { kind: "frames" }
   | { kind: "capture"; media: "tab" | "desktop"; id: string; gate: boolean }
 
-export const LiveVideoPageEventSchema = z.discriminatedUnion("type", [
+export const LiveVideoPageEventSchema = z.lazy(() => z.discriminatedUnion("type", [
   z.object({ type: z.literal("opened"), session: LiveVideoSessionSchema, encoder: z.string().max(200) }).strict(),
   z.object({ type: z.literal("unit"), session: LiveVideoSessionSchema, packet: z.instanceof(Uint8Array) }).strict(),
   /** A `frames` picture is in the encoder, or held for it: the host may send the next. */
   z.object({ type: z.literal("accepted"), session: LiveVideoSessionSchema, sequence: z.number().int() }).strict(),
   z.object({ type: z.literal("dropped"), session: LiveVideoSessionSchema, sequence: z.number().int() }).strict(),
   z.object({ type: z.literal("ended"), session: LiveVideoSessionSchema, reason: z.string().max(4000) }).strict(),
-])
+]))
 export type LiveVideoPageEvent = z.infer<typeof LiveVideoPageEventSchema>
 
 /** The IPC channel both directions use. */

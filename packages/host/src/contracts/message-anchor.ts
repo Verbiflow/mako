@@ -15,14 +15,14 @@ import { z } from "zod"
  * answer is anchored by its last entry, so what ends at it is the whole
  * answer.
  */
-export const MessageAnchorSchema = z.object({
+export const MessageAnchorSchema = z.lazy(() => z.object({
   /** The entry's index in the history when the anchor was taken. */
   index: z.number().int().nonnegative(),
   /** The entry's id. */
   id: z.string().optional(),
   /** The entry's time in epoch milliseconds, when its record gives one. */
   at: z.number().optional(),
-})
+}))
 export type MessageAnchor = z.infer<typeof MessageAnchorSchema>
 
 interface Anchored {

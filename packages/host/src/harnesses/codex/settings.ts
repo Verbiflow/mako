@@ -5,13 +5,13 @@ import type { HarnessModelCatalog } from "@mako/sessions/model-catalog"
 import type { TurnStartParams } from "./generated/v2/TurnStartParams.js"
 
 /** Deliberately project only non-secret configuration fields. */
-export const CodexConfigSchema = z.object({
+export const CodexConfigSchema = z.lazy(() => z.object({
   config: z.object({
     model: z.string().nullish(),
     model_reasoning_effort: z.string().nullish(),
     service_tier: z.string().nullish(),
   }),
-})
+}))
 
 export function codexConfiguredSettings(
   catalog: HarnessModelCatalog,

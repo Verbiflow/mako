@@ -5,6 +5,7 @@ import { mkdtemp, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
+import { PerformanceObserver, constants as perf } from "node:perf_hooks"
 import { Worker } from "node:worker_threads"
 import { CursorProvider } from "../dist/providers/cursor.js"
 import { NativeStores } from "../dist/read-only-sqlite.js"
@@ -40,16 +41,27 @@ const TURNS_THROUGH_WAIT = 20
 const LOCK_HANG_MS = 30_000
 
 /**
+ * The heap's full collections, as V8 reports them: each one's start and how long it held this thread. A collection of
+ * the heap the fixtures fill (a 25 MB chat, a 120,000-message yardstick) took 23 to 30 ms, and when it landed between
+ * two slices of a step it read as the step's hold (40 ms where the step's own slices hold 18; 2026-11-21, 4 of 12 runs).
+ */
+const fullCollections = []
+new PerformanceObserver((list) => {
+  for (const entry of list.getEntries()) if (entry.detail?.kind === perf.NODE_PERFORMANCE_GC_MAJOR) fullCollections.push({ start: entry.startTime, ms: entry.duration })
+}).observe({ entryTypes: ["gc"] })
+
+/**
  * The longest the loop went without a turn while `work` ran, in this thread's own CPU time: a runner that takes the
- * CPU away mid-slice stretches the slice's wall time (117 ms once on CI, unchanged code), not the work it held.
+ * CPU away mid-slice stretches the slice's wall time (117 ms once on CI, unchanged code), not the work it held. A full
+ * collection of the heap inside it is the heap's, not the step's: it's taken out of the hold, and said beside it
+ * (`collectedMs`), so a step that held the loop itself still fails however the collections fell.
  */
 async function longestHold(work, onTurn = () => {}) {
   const cpu = () => {
     const { user, system } = process.threadCpuUsage()
     return (user + system) / 1000
   }
-  let longest = 0
-  let longestWall = 0
+  const holds = []
   let turns = 0
   let last = cpu()
   const began = performance.now()
@@ -57,8 +69,7 @@ async function longestHold(work, onTurn = () => {}) {
   const turn = () => {
     const now = cpu()
     const wall = performance.now()
-    longest = Math.max(longest, now - last)
-    longestWall = Math.max(longestWall, wall - lastWall)
+    holds.push({ from: lastWall, to: wall, ms: now - last })
     last = now
     lastWall = wall
     turns++
@@ -68,15 +79,22 @@ async function longestHold(work, onTurn = () => {}) {
   try {
     const result = await work()
     turn()
-    return { result, ms: longest, wallMs: longestWall, turns, tookMs: performance.now() - began }
+    // The collections' entries come a turn after they end.
+    await new Promise((resolve) => setImmediate(resolve))
+    let longest = { ms: 0, wallMs: 0, collectedMs: 0 }
+    for (const { from, to, ms } of holds) {
+      const collectedMs = fullCollections.filter(({ start, ms: took }) => start >= from && start + took <= to).reduce((sum, { ms: took }) => sum + took, 0)
+      if (ms - collectedMs > longest.ms) longest = { ms: ms - collectedMs, wallMs: to - from, collectedMs }
+    }
+    return { result, ...longest, turns, tookMs: performance.now() - began }
   } finally {
     clearInterval(timer)
   }
 }
 
 const measured = []
-function held(what, { ms, wallMs }) {
-  measured.push(`${what}: ${Math.round(ms)} ms (${Math.round(wallMs)} ms on the clock)`)
+function held(what, { ms, wallMs, collectedMs }) {
+  measured.push(`${what}: ${Math.round(ms)} ms (${Math.round(wallMs)} ms on the clock${collectedMs ? `, ${Math.round(collectedMs)} ms of it collecting the heap` : ""})`)
   assert.ok(ms <= HOLD_MS, `${what} held the loop ${Math.round(ms)} ms of its CPU (at most ${HOLD_MS}; ${Math.round(wallMs)} ms on the clock)`)
 }
 

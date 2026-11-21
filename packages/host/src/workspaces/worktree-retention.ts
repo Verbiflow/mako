@@ -10,11 +10,11 @@ import { PROJECT_CHECKOUT_FILE, worktreeCheckout } from "../contracts/thread-wor
 export const WORKTREE_RETENTION_MS = 60 * 60_000
 export const MIN_RETIREMENT_PASS_MS = 10 * 60_000
 type FetchPass = Map<string, Promise<void>>
-export const WorktreeRetentionSettingsSchema = z.object({
+export const WorktreeRetentionSettingsSchema = z.lazy(() => z.object({
   mode: z.enum(["preview", "packages", "checkout"]),
   days: z.number().int().min(0).max(3650),
   kept: z.array(z.string().min(1)).max(10_000),
-}).strict()
+}).strict())
 export const DEFAULT_WORKTREE_RETENTION: WorktreeRetentionSettings = { mode: "preview", days: 7, kept: [] }
 /**
  * Whether the worktrees of Fins closed as finished are kept, in a file of its own beside the settings: a build from

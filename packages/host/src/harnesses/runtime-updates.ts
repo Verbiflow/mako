@@ -1,5 +1,5 @@
 import { spawnProviderProcess } from "./provider-process.js"
-import { readFile, realpath, stat } from "node:fs/promises"
+import { readFile, realpath, rm, stat } from "node:fs/promises"
 import { basename } from "node:path"
 import { z } from "zod"
 import {
@@ -1026,6 +1026,8 @@ export class RuntimeUpdates {
           .slice(-600)
         throw new UpdaterOutput(tail || `${plan.command} exited with ${ended.code ?? "a signal"}`)
       }
+      await this.sources().find((entry) => entry.key === provider)?.completeInstall?.(env)
+      await this.dropUnusedBuilds(provider, env)
       return null
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
@@ -1035,6 +1037,16 @@ export class RuntimeUpdates {
     } finally {
       release()
     }
+  }
+
+  /** What the installer left beside the executable that it never runs (`RuntimeUpdateSource.unusedBuilds`); the read after it checks what stays. */
+  private async dropUnusedBuilds(provider: string, env: NodeJS.ProcessEnv): Promise<void> {
+    const source = this.sources().find((entry) => entry.key === provider)
+    const executable = source?.unusedBuilds ? await source.binary(env) : null
+    if (!source?.unusedBuilds || !executable) return
+    const folders = source.unusedBuilds(executable)
+    for (const folder of folders) await rm(folder, { recursive: true, force: true })
+    if (folders.length) hostLog("runtime", "unused builds removed", { provider, builds: folders.length })
   }
 
   private async acquire(key: string): Promise<() => void> {

@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { lstat, realpath, rename, stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { basename, dirname, join } from "node:path"
+import { basename, dirname, join, sep } from "node:path"
 import { z } from "zod"
 import { chatsRoot } from "../base/chats.js"
 import { findExecutable } from "../base/executable.js"
@@ -9,13 +9,18 @@ import { hostCommand } from "../base/host-command.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { chatFolderOf } from "../contracts/chat-folders.js"
 import type { WorkspaceConversations } from "./conversations.js"
-import { expandPath } from "./project-folders.js"
+import { onWindows } from "../base/platform.js"
+import { expandPath, trimmedPath, typedWholePath, wholePathAdvice } from "./project-folders.js"
 
 /** A chat to turn into a project: its folder under `~/Mako/Chats`, and where the project goes (`~/…` or `/…`). */
-export const ChatProjectRequestSchema = z.object({ folder: z.string().min(1).max(4096), to: z.string().min(1).max(4096) }).strict()
+export const ChatProjectRequestSchema = z.lazy(() => z.object({ folder: z.string().min(1).max(4096), to: z.string().min(1).max(4096) }).strict())
 export type ChatProjectRequest = z.infer<typeof ChatProjectRequestSchema>
 
-const holds = (folder: string, path: string) => path === folder || path.startsWith(`${folder}/`)
+/** Whether `path` is `folder` or inside it; on Windows in any case, as its file system names them. */
+function holds(folder: string, path: string): boolean {
+  const [outer, inner] = onWindows() ? [folder.toLowerCase(), path.toLowerCase()] : [folder, path]
+  return inner === outer || inner.startsWith(`${outer}${sep}`) || inner.startsWith(`${outer}/`)
+}
 
 /**
  * Turns a chat (a Thread started without a project, in a folder of its own under `~/Mako/Chats`) into a project: its
@@ -35,15 +40,17 @@ export async function makeChatProject(
   if (!(await stat(chat).then((found) => found.isDirectory(), () => false))) throw new Error("The chat's folder isn't there anymore.")
 
   const typed = to.trim()
-  if (!typed.startsWith("/") && !typed.startsWith("~/")) throw new Error("Write the project's whole path, starting with ~/ or /.")
+  if (!typedWholePath(typed)) throw new Error(`Write the project's whole path, ${wholePathAdvice()}.`)
   if (typed.split(/[\\/]/).some((part) => part === ".." || part === ".")) throw new Error("Write the project's whole path, without . or .. in it.")
-  const path = expandPath(typed.replace(/\/+$/, ""), home)
+  const path = expandPath(trimmedPath(typed), home)
   if (basename(path).startsWith(".")) throw new Error("A project's folder name can't start with a dot.")
   if (holds(root, path)) throw new Error("A project goes outside the Chats folder.")
   if (await lstat(path).then(() => true, () => false)) throw new Error(`${path} already exists. Pick another name.`)
   const parent = await realpath(dirname(path)).catch(() => undefined)
   if (!parent || !(await stat(parent).then((found) => found.isDirectory(), () => false))) throw new Error(`${dirname(path)} isn't a folder on this Mac.`)
   const target = join(parent, basename(path))
+  // Compared again where both really are: a link or another case of a name can't put the project inside the Chats.
+  if (holds(await realpath(root).catch(() => root), target)) throw new Error("A project goes outside the Chats folder.")
 
   // Every conversation working in the chat's folder goes with it, or nothing moves.
   const sessions = live.summaries().map(({ session }) => session).filter((session) => holds(chat, session.cwd))

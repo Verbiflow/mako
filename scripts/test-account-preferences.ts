@@ -58,6 +58,8 @@ function account(now = () => Date.now()) {
     /** Another device's edit, kept by the account, and the event it sends. */
     elsewhere(name: string, value: JsonValue, at: number) {
       const applied = applyPreferenceWrites(held, { [name]: { value, at, op: `elsewhere-${at}` } }, now())
+      // Said here, not where its value is missed: an edit the account passes over was stamped no later than the one held.
+      assert.ok(applied.changed[name], `${name}'s edit elsewhere at ${at} is later than the one the account holds (${held[name]?.at})`)
       held = applied.preferences
       revision += 1
       return { account: "ana", preferences: applied.changed, revision }
@@ -112,11 +114,15 @@ test("the account's events are taken in order; a skipped one has them read whole
   const cloud = account()
   const host = store(scratch(), cloud)
   await host.sync()
-  host.heard(cloud.elsewhere("theme", "dark", Date.now()), false)
+  // The other device's edits a millisecond apart, as a device stamps one it makes after seeing another
+  // (`PreferenceStore.set`). Each read the clock for itself, and on a runner that made both theme edits within one
+  // millisecond they were the same edit, time and ID, so the second changed nothing and "dark" stood (2026-11-20).
+  const t = Date.now()
+  host.heard(cloud.elsewhere("theme", "dark", t), false)
   assert.equal(host.value("theme"), "dark")
   // One event the stream never brought: the next is past it, and the whole set is read.
-  cloud.elsewhere("harnessOrder", ["codex", "claude"], Date.now())
-  const skipped = cloud.elsewhere("theme", "light", Date.now())
+  cloud.elsewhere("harnessOrder", ["codex", "claude"], t + 1)
+  const skipped = cloud.elsewhere("theme", "light", t + 2)
   host.heard(skipped, false)
   await host.sync()
   assert.equal(host.value("theme"), "light")

@@ -7,6 +7,7 @@ import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { markedProcesses, processesHolding, processFolders, type MarkedProcess } from "../base/marked-processes.js"
 import { processIdentityMatches, processStartedAt } from "../base/process-liveness.js"
+import { processTreeAlive, signalProcessTree } from "../base/process-tree.js"
 import { errorMessage } from "../base/error-message.js"
 import type { AgentRefused, ChildOrigin, ChildRole, ChildThread, FollowedRun, ThreadParent } from "../contracts/agents.js"
 import { internalDiscoveredRun } from "../contracts/agents.js"
@@ -405,11 +406,11 @@ export class AgentRuns {
       if (identity === "other" && (signalable(process.pid) || !groupRuns(process.pid))) break
       const now = this.now()
       if (identity === "same") {
-        if (!termed) signalGroup(process.pid, "SIGTERM")
+        if (!termed) signalGroup(process.pid, "SIGTERM", startedMs(process.startedAt))
         termed = true
         if (!killed && now >= killAt) {
           killed = true
-          signalGroup(process.pid, "SIGKILL")
+          signalGroup(process.pid, "SIGKILL", startedMs(process.startedAt))
         }
       }
       if (unconfirmed !== (identity === "unknown")) {
@@ -1001,27 +1002,22 @@ function signalable(pid: number): boolean {
   }
 }
 
-/** Whether any process of the group `pid` leads still runs; false for one that leads none. */
-function groupRuns(pid: number): boolean {
-  try {
-    process.kill(-pid, 0)
-    return true
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM"
-  }
+/** Whether any process of the tree `pid` leads still runs; false for one that leads none. */
+/** A run's recorded start as milliseconds, however it was recorded. */
+function startedMs(startedAt: number | string | undefined): number | undefined {
+  if (startedAt === undefined) return undefined
+  const ms = Number.isFinite(Number(startedAt)) ? Number(startedAt) : Date.parse(String(startedAt))
+  return Number.isFinite(ms) ? (ms < 1_000_000_000_000 ? ms * 1_000 : ms) : undefined
 }
 
-/** Its process group when it leads one, else the process alone. */
-function signalGroup(pid: number, signal: NodeJS.Signals): void {
-  try {
-    process.kill(-pid, signal)
-    return
-  } catch {
-    // Not a group leader: a run its own shell started.
-  }
-  try {
-    process.kill(pid, signal)
-  } catch {
-    // Already gone.
-  }
+function groupRuns(pid: number): boolean {
+  return processTreeAlive(pid)
+}
+
+/**
+ * Its process group when it leads one, else the process alone; on Windows the tree under it, once its start is read
+ * again as the one recorded: a run isn't this host's child, so its pid may be another's by then.
+ */
+function signalGroup(pid: number, signal: NodeJS.Signals, startedAt: number | undefined): void {
+  signalProcessTree(pid, signal, { held: false, ...(startedAt !== undefined && { startedAt }) })
 }

@@ -1,5 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { spawnProviderProcess } from "./provider-process.js"
+import { signalProcessTree } from "../base/process-tree.js"
 import { basename } from "node:path"
 import { environmentForExecutable, Executables } from "../base/executable.js"
 import { onWindows } from "../base/platform.js"
@@ -191,6 +192,11 @@ export class DiscoveryProcesses {
         const abort = () => reject(options.signal?.reason)
         options.signal?.addEventListener("abort", abort, { once: true })
         const terminate = (signal: NodeJS.Signals) => {
+          // Windows has no groups: the tree under the child ends while the child is still there to find it by.
+          if (!grouped && child.pid && child.exitCode === null && child.signalCode === null) {
+            signalProcessTree(child.pid, signal)
+            return
+          }
           if (grouped && child.pid) {
             try {
               process.kill(-child.pid, signal)

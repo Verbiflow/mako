@@ -6,6 +6,8 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { ensurePrivateDirectory } from "../base/private-directory.js"
+import { drawKeptPipe, publishKeptPipe, readKeptPipe } from "../base/kept-pipe.js"
+import { connectProven } from "../base/pipe-handshake.js"
 import type { TerminalCreateOptions, TerminalEvent, TerminalSession, TerminalSnapshot } from "../contracts/terminal.js"
 import {
   JsonLineDecoder,
@@ -36,14 +38,20 @@ const SOCKET_PATH_BYTES = 104
  */
 export function terminalEndpoint(stateDir: string) {
   const owner = createHash("sha256").update(stateDir).digest("hex")
-  if (onWindows()) return `\\\\.\\pipe\\mako-terminal-${owner.slice(0, 20)}`
+  // On Windows the pipe each daemon start drew, published in the profile, which only its user can read: a name derived
+  // from the folder's path is one another account could take first (`base/kept-pipe.ts`). Nothing, before any.
+  if (onWindows()) return readKeptPipe(terminalPipeFile(stateDir), TERMINAL_PIPE)?.pipe ?? `\\\\.\\pipe\\${TERMINAL_PIPE}-${owner.slice(0, 20)}-${"0".repeat(32)}`
   const local = join(stateDir, "daemon.sock")
   if (Buffer.byteLength(local) <= SOCKET_PATH_BYTES) return local
   return join(tmpdir(), `mako-terminal-${owner.slice(0, 16)}`, "daemon.sock")
 }
 
+/** Where a Windows terminal daemon's pipe and secret are published, in its state folder. */
+export const terminalPipeFile = (stateDir: string): string => join(stateDir, "pipe.json")
+export const TERMINAL_PIPE = "mako-terminal"
+
 export class TerminalDaemonClient {
-  readonly #endpoint: string
+  #endpoint: string
   readonly #pending = new Map<number, PendingRequest>()
   #socket: Socket | null = null
   #decoder = new JsonLineDecoder()
@@ -265,6 +273,14 @@ export class TerminalDaemonClient {
   }
 
   #tryOpen() {
+    // Windows: only the daemon this profile published, once it has proved it knows the secret drawn with its pipe;
+    // a program holding a name it saw listed is never sent a request, let alone a keystroke (`base/pipe-handshake.ts`).
+    if (onWindows()) {
+      const kept = readKeptPipe(terminalPipeFile(this.#stateDir), TERMINAL_PIPE)
+      if (!kept) return Promise.resolve(null)
+      this.#endpoint = kept.pipe
+      return connectProven(kept.pipe, kept.proof).then((socket) => socket, () => null)
+    }
     return new Promise<Socket | null>((resolve) => {
       const socket = createConnection(this.#endpoint)
       socket.once("connect", () => resolve(socket))
@@ -276,6 +292,12 @@ export class TerminalDaemonClient {
   }
 
   #spawnDaemon() {
+    // Windows: every daemon start listens on a name and secret of its own, published before it starts.
+    if (onWindows()) {
+      const drawn = drawKeptPipe(`${TERMINAL_PIPE}-${createHash("sha256").update(this.#stateDir).digest("hex").slice(0, 20)}`)
+      publishKeptPipe(terminalPipeFile(this.#stateDir), drawn)
+      this.#endpoint = drawn.pipe
+    }
     const arguments_ = [this.#daemonEntry, "--endpoint", this.#endpoint, "--state-dir", this.#stateDir]
     if (this.#build !== undefined) arguments_.push("--build", this.#build)
     const child = spawn(
@@ -284,6 +306,8 @@ export class TerminalDaemonClient {
       {
         detached: true,
         stdio: "ignore",
+        // Windows gives a detached child a console window of its own; the daemon shows none.
+        windowsHide: true,
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       }
     )

@@ -1,10 +1,10 @@
 import { z } from "zod"
 import type { NativeQuestion, NativeQuestionAnswer } from "../../contracts/live-questions.js"
 
-export const CodexAsyncQuestionsSchema = z.array(z.object({
+export const CodexAsyncQuestionsSchema = z.lazy(() => z.array(z.object({
   title: z.string().min(1),
   options: z.array(z.string().min(1)).min(1).nullish(),
-})).min(1).max(100)
+})).min(1).max(100))
 export type CodexAsyncQuestion = z.infer<typeof CodexAsyncQuestionsSchema>[number]
 
 export function codexAsyncQuestion(sessionId: string, turnId: string, itemId: string, questions: CodexAsyncQuestion[]): NativeQuestion {

@@ -1,9 +1,9 @@
 import { z } from "zod"
 
-export const SnapshotBudgetSettingsSchema = z.object({
+export const SnapshotBudgetSettingsSchema = z.lazy(() => z.object({
   mode: z.enum(["preview", "evict"]),
   maxBytes: z.number().int().min(1024 ** 2).max(1024 ** 5),
-}).strict()
+}).strict())
 export type SnapshotBudgetSettings = z.infer<typeof SnapshotBudgetSettingsSchema>
 /** Evidence read from the owning conversation journals, not file age. */
 export interface SnapshotSettlement {

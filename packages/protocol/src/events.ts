@@ -9,7 +9,7 @@ export const StreamIdSchema = z
   .regex(/^(?:thread|account|session):[A-Za-z0-9._:-]{1,160}$/)
 
 /** What every hop reads of a stream's event; the event crosses after it, as its runtime encoded it (`wire.ts`). */
-export const EventFrameEnvelopeSchema = z
+export const EventFrameEnvelopeSchema = z.lazy(() => z
   .object({
     v: z.literal(PROTOCOL_VERSION),
     stream: StreamIdSchema,
@@ -19,25 +19,25 @@ export const EventFrameEnvelopeSchema = z
     generation: GenerationSchema.optional(),
     correlationId: CorrelationIdSchema.optional(),
   })
-  .strict()
+  .strict())
 
 /**
  * What every hop reads of a stream's passing state (`ephemeral`, `EPHEMERAL_LIVE_VERSION`): an event without a place in
  * the stream, so no `seq`. Nothing keeps it, and a reader that missed it reads the next one or none.
  */
-export const EphemeralFrameEnvelopeSchema = z
+export const EphemeralFrameEnvelopeSchema = z.lazy(() => z
   .object({
     v: z.literal(PROTOCOL_VERSION),
     stream: StreamIdSchema,
     at: z.iso.datetime(),
     correlationId: CorrelationIdSchema.optional(),
   })
-  .strict()
+  .strict())
 
 /** Asks for every event after `after` (0 for all), then the live ones, in order. */
-export const SubscribeSchema = z
+export const SubscribeSchema = z.lazy(() => z
   .object({ stream: StreamIdSchema, after: z.number().int().nonnegative() })
-  .strict()
+  .strict())
 
 export type StreamId = z.infer<typeof StreamIdSchema>
 export type EventFrameEnvelope = z.infer<typeof EventFrameEnvelopeSchema>

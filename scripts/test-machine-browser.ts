@@ -110,7 +110,25 @@ assert.equal(await readFile(join(capture, "capture.js"), "utf8"), "/* page */")
 assert.deepEqual(manifest.permissions.sort(), ["debugger", "offscreen", "tabCapture"])
 capturing.close()
 
+// Over the DevTools pipe, as on Windows, where Google Chrome ignores --load-extension: the extension is loaded with
+// Extensions.loadUnpacked before the endpoint is handed out, and allowlisted by its flag.
+process.env.FAKE_CHROMIUM_PIPE_LOG = join(root, "pipe.jsonl")
+const piped = new MachineBrowser({
+  executable,
+  profile: join(root, "piped"),
+  extensionLoading: "pipe",
+  captureExtension: () => writeMachineCaptureExtension(capture, "/* page */"),
+})
+await piped.definition.endpoint()
+const pipedFlags = (await launches()).at(-1)!.args
+for (const flag of ["--remote-debugging-pipe", "--enable-unsafe-extension-debugging", `--allowlisted-extension-id=${id}`])
+  assert.ok(pipedFlags.includes(flag), `the piped launch has ${flag}: ${pipedFlags.join(" ")}`)
+assert.ok(!pipedFlags.some((flag) => flag.startsWith("--load-extension")), "the piped launch doesn't name the extension by flag")
+assert.deepEqual(JSON.parse(await readFile(join(root, "pipe.jsonl"), "utf8")), { id: 1, method: "Extensions.loadUnpacked", params: { path: capture } })
+piped.close()
+delete process.env.FAKE_CHROMIUM_PIPE_LOG
+
 await rm(root, { recursive: true, force: true })
 console.log(
-  "Machine browser: nothing runs until a connect, one launch for concurrent connects, stale port file ignored, relaunch after exit, a refused endpoint started again, a refused sandbox explained and retried, preferred by default, closing stops it, the capture extension loaded and allowlisted passed"
+  "Machine browser: nothing runs until a connect, one launch for concurrent connects, stale port file ignored, relaunch after exit, a refused endpoint started again, a refused sandbox explained and retried, preferred by default, closing stops it, the capture extension loaded and allowlisted by flag and over the DevTools pipe passed"
 )

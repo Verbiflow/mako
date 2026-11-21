@@ -155,7 +155,7 @@ type PlanSession = z.infer<typeof PlanSessionSchema>
 const PhaseSchema = z.enum(["preparing", "released", "handed", "claimed", "started", "kept-here"])
 
 /** A move's plan as it's kept on disk: the way back reads a moved Thread's from it. */
-export const MovePlanSchema = z.object({
+export const MovePlanSchema = z.lazy(() => z.object({
   move: MoveIdSchema,
   thread: ThreadIdSchema,
   /** The conversation the move was asked from, whose window hears its steps. */
@@ -206,7 +206,7 @@ export const MovePlanSchema = z.object({
   branch: z.string().optional(),
   began: z.number(),
   timings: z.record(z.string(), z.number()).default({}),
-})
+}))
 const PlanSchema = MovePlanSchema
 type Plan = z.infer<typeof PlanSchema>
 /** A Thread weighed for a move before its checkout is: what a Thread in the main checkout has before its own branch. */

@@ -52,17 +52,17 @@ const foregroundRouteSchema = z.object({
   status: z.literal("foreground-required"),
   reason: z.string(),
 })
-export const RouteCapabilitySchema = z.discriminatedUnion("status", [
+export const RouteCapabilitySchema = z.lazy(() => z.discriminatedUnion("status", [
   availableRouteSchema,
   unavailableRouteSchema,
   foregroundRouteSchema,
-])
+]))
 export type RouteCapability = z.infer<typeof RouteCapabilitySchema>
 
-export const ControlCapabilitiesSchema = z.object({
+export const ControlCapabilitiesSchema = z.lazy(() => z.object({
   target: WindowTargetSchema,
   routes: z.array(RouteCapabilitySchema),
-})
+}))
 export type ControlCapabilities = z.infer<typeof ControlCapabilitiesSchema>
 
 export const ControlIntentSchema = z.enum([
@@ -250,7 +250,7 @@ export const ActionOutcomeSchema = z.enum([
 ])
 export type ActionOutcome = z.infer<typeof ActionOutcomeSchema>
 
-export const ActionReceiptSchema = z.object({
+export const ActionReceiptSchema = z.lazy(() => z.object({
   action: z.string().min(1),
   target: WindowTargetSchema.optional(),
   route: ControlRouteSchema,
@@ -269,7 +269,7 @@ export const ActionReceiptSchema = z.object({
       ms: z.number().nonnegative(),
     })
     .optional(),
-})
+}))
 export type ActionReceipt = z.infer<typeof ActionReceiptSchema>
 
 export function withReceiptVerification(

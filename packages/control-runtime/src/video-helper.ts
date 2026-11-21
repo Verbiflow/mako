@@ -1,23 +1,30 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process"
 import { existsSync } from "node:fs"
-import { isAbsolute } from "node:path"
+import { isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import type { CaptureSize } from "./browser-capture.js"
 import type { VideoSource, LiveEncoderFactory } from "./browser-video.js"
 import { CONTROL_VIDEO_DATA_LIMIT, decodeControlVideo, type ControlVideoPacket } from "./contracts/control-video.js"
 import { resolveExecutable } from "./executable.js"
-import { onLinux } from "./platform.js"
+import { onMac, onWindows, type LinuxDesktop } from "./platform.js"
 import { spawn } from "./processes.js"
 
 /**
  * Mako's video helper: a small native program that captures and encodes H.264 without FFmpeg
- * (`native/video-linux/mako-video.c` on Linux: XDamage, XShm and XComposite, OpenH264, libyuv, libjpeg-turbo). It
- * captures a display or one window only when its pixels change, or encodes the pictures it's sent. Its units come
- * out as `ControlVideoPacket`s, so nothing here parses H.264.
+ * (`native/video-linux/mako-video.c` on Linux: XDamage, XShm and XComposite, OpenH264, libyuv, libjpeg-turbo, and on
+ * Wayland the ScreenCast portal and PipeWire; `native/video-macos/main.swift`: ScreenCaptureKit and VideoToolbox;
+ * `native/video-windows/mako-video.cpp`: Windows Graphics Capture and Media Foundation). It captures a display or one
+ * window only when its pixels change, or encodes the pictures it's sent. Its units come out as `ControlVideoPacket`s,
+ * so nothing here parses H.264.
  */
 export type VideoHelperSource =
   | { kind: "display" }
   | { kind: "window"; windowId: number }
+  /**
+   * What the person shares through the ScreenCast portal (Wayland): a window, or a monitor where the portal shares no
+   * windows. The portal asks once; `restore` is the file its restore token is kept in, so it doesn't ask again.
+   */
+  | { kind: "portal"; types: "monitor" | "window"; restore: string }
   | { kind: "frames" }
   /** A video's frames under the transparent pictures sent for their times (a recording's pointer); Mac only. */
   | { kind: "overlay"; video: string }
@@ -40,22 +47,36 @@ export interface VideoHelperEvents {
   ended(reason: string): void
 }
 
-/** A checkout's build of it (`scripts/build-video-helper.mjs`), beside this package's `src` and `dist`. */
-const CHECKOUT_BUILD = fileURLToPath(new URL("../../../build/mako-video", import.meta.url))
+/** The helper's file name here: an `.exe` on Windows. */
+export function videoHelperName(): string {
+  return onWindows() ? "mako-video.exe" : "mako-video"
+}
 
 /**
- * Where the helper is: `MAKO_VIDEO_HELPER` (the host sets it to a packaged app's), else `mako-video` on PATH (a Linux
- * machine's), else a checkout's build. None where it isn't installed.
+ * Where the helper is: `MAKO_VIDEO_HELPER` (the host sets it to a packaged app's), else the helper on PATH (a Linux
+ * machine's), else a checkout's build (`scripts/build-video-helper.mjs`, beside this package's `src` and `dist`). None
+ * where it isn't installed.
  */
 export function videoHelperExecutable(): string | undefined {
   const configured = process.env.MAKO_VIDEO_HELPER
   if (configured) return isAbsolute(configured) && existsSync(configured) ? configured : undefined
-  return resolveExecutable("mako-video") ?? (existsSync(CHECKOUT_BUILD) ? CHECKOUT_BUILD : undefined)
+  const checkout = fileURLToPath(new URL(`../../../build/${videoHelperName()}`, import.meta.url))
+  return resolveExecutable(videoHelperName()) ?? (existsSync(checkout) ? checkout : undefined)
 }
 
-/** Whether this machine has an X display the helper can capture (a Wayland session is captured another way). */
-export function x11Display(): boolean {
-  return onLinux() && Boolean(process.env.DISPLAY?.trim())
+/**
+ * How the helper shows a window the driver named, where it can: by its id on a Mac, on Windows and wherever X draws it. On
+ * Wayland no outside process may read a window by id, so it shows the monitor the person shares through the portal
+ * (asked once, then restored from the token kept in `folder`), with the window where it is on that monitor.
+ */
+export function helperWindowSource(
+  windowId: number,
+  folder: string,
+  desktop: LinuxDesktop | undefined
+): Extract<VideoHelperSource, { kind: "window" | "portal" }> | undefined {
+  if (onMac() || onWindows() || desktop?.session === "x11") return { kind: "window", windowId }
+  if (desktop?.session === "wayland") return { kind: "portal", types: "monitor", restore: join(folder, "portal-monitor.token") }
+  return undefined
 }
 
 const PICTURE = { jpeg: 0, rgb: 1, rgba: 2 } as const
@@ -79,7 +100,13 @@ export class VideoHelper {
     this.#events = events
     this.exited = new Promise((resolve) => (this.#exit = resolve))
     const args = [
-      ...(source.kind === "window" ? ["window", String(source.windowId)] : source.kind === "overlay" ? ["overlay", source.video] : [source.kind]),
+      ...(source.kind === "window"
+        ? ["window", String(source.windowId)]
+        : source.kind === "overlay"
+          ? ["overlay", source.video]
+          : source.kind === "portal"
+            ? ["portal", "--types", source.types, "--restore", source.restore]
+            : [source.kind]),
       "--fps", String(options.fps),
       ...(options.bitrate ? ["--bitrate", String(Math.round(options.bitrate))] : []),
       ...(options.box ? ["--box", `${options.box.width}x${options.box.height}`] : []),
@@ -87,7 +114,10 @@ export class VideoHelper {
       ...(options.quality ? ["--quality", String(options.quality)] : []),
       ...(options.content ? ["--content", options.content] : []),
     ]
-    this.#child = spawn(executable, args, { stdio: ["pipe", "pipe", "pipe"] })
+    // A helper written in JavaScript (a test's stand-in) runs under this Node: Windows runs no script by its shebang.
+    const [file, prefix] = /\.[cm]?js$/.test(executable) ? [process.execPath, [executable]] : [executable, []]
+    // A console program under a windowless app opens a console window on Windows unless told not to.
+    this.#child = spawn(file, [...prefix, ...args], { stdio: ["pipe", "pipe", "pipe"], windowsHide: true })
     this.#child.stdout.on("data", (chunk: Buffer) => this.#read(chunk))
     this.#child.stderr.on("data", (chunk: Buffer) => {
       this.#tail = (this.#tail + chunk.toString()).slice(-4096)
@@ -203,7 +233,7 @@ export class VideoHelper {
 }
 
 /** A display or one window, captured and encoded by the helper, as a live video's source. */
-export function helperCapture(executable: string, source: Extract<VideoHelperSource, { kind: "display" | "window" }>): VideoSource {
+export function helperCapture(executable: string, source: Extract<VideoHelperSource, { kind: "display" | "window" | "portal" }>): VideoSource {
   return async (consumer) => {
     // Open once its first unit comes (a capture starts with the picture as it is), or a moment passes with none (a
     // window that isn't on screen sends nothing until it is); a helper that can't capture ends before either.
@@ -235,7 +265,8 @@ export function helperCapture(executable: string, source: Extract<VideoHelperSou
 }
 
 /**
- * The screencast's JPEGs encoded by the helper's `frames` mode (VideoToolbox on a Mac, OpenH264 on Linux): one
+ * The screencast's JPEGs encoded by the helper's `frames` mode (VideoToolbox on a Mac, OpenH264 on Linux, Media
+ * Foundation on Windows): one
  * process per encoder, a unit back for each picture with its sequence and capture time.
  */
 export function helperLiveEncoder(executable: string): LiveEncoderFactory {

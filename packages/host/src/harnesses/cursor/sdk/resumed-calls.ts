@@ -22,13 +22,13 @@ export interface ResumeAnswer {
 }
 
 /** A `tool_call` message of the run's stream, as far as the account reads it. */
-export const StreamedCallSchema = z.object({
+export const StreamedCallSchema = z.lazy(() => z.object({
   call_id: z.string(),
   name: z.string(),
   status: z.string(),
   args: z.unknown().optional(),
   result: z.unknown().optional(),
-})
+}))
 export type StreamedCall = z.infer<typeof StreamedCallSchema>
 
 /** Arguments named by one field are told by it: a command, a path, a pattern. */

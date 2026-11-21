@@ -3,6 +3,8 @@ import { hostSpawn, closeHostChild, endHostChildWithParent } from "../base/host-
 import type { ChildProcess, ChildProcessWithoutNullStreams, SpawnOptions } from "node:child_process"
 import { statSync } from "node:fs"
 import { hostWarn } from "../base/host-log.js"
+import { onWindows } from "../base/platform.js"
+import { signalProcessTree } from "../base/process-tree.js"
 import { trackProviderPid, untrackProviderPid } from "../base/provider-children.js"
 import { endChildInput } from "@mako/sessions/child-input"
 
@@ -100,7 +102,11 @@ export function endProviderProcess(child: ChildProcess, first: "input" | "SIGTER
     child.once("exit", exited)
     child.on("error", failed)
     const signal = (name: NodeJS.Signals) => {
-      if (!providerProcessGone(child)) child.kill(name)
+      if (providerProcessGone(child)) return
+      // Windows ends only the process Node holds: a `.cmd` launcher's shell, leaving the program it ran. Its tree ends
+      // here while the process is still there to find it by (Node holds its handle, so its pid is no other's).
+      if (onWindows() && child.pid) signalProcessTree(child.pid, name)
+      else child.kill(name)
     }
     if (first === "input") endChildInput(child)
     else signal("SIGTERM")

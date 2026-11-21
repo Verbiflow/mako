@@ -30,7 +30,7 @@ import { ARRIVED_CARRY } from "./move-arrival.js"
  * failure after the release takes the Thread back here before it answers, so a refused departure leaves the Thread
  * running here as it was.
  */
-export const MoveDepartureInputSchema = z.object({
+export const MoveDepartureInputSchema = z.lazy(() => z.object({
   move: z.uuid(),
   folder: z.string().min(1),
   /** The conversations going back, under the ids they had on the device and kept here. */
@@ -39,7 +39,7 @@ export const MoveDepartureInputSchema = z.object({
   device: z.uuid(),
   /** The device takes a carry back (`MoveCarry`): its other repositories, its files outside its folder, its file history. */
   carry: z.literal(true).optional(),
-}).strict()
+}).strict())
 export type MoveDepartureInput = z.infer<typeof MoveDepartureInputSchema>
 
 export type MoveDepartureDeps = {
@@ -114,7 +114,7 @@ async function releaseHere(deps: MoveDepartureDeps, input: MoveDepartureInput, t
   }
 }
 
-export const MoveFollowInputSchema = z.object({ folder: z.string().min(1) }).strict()
+export const MoveFollowInputSchema = z.lazy(() => z.object({ folder: z.string().min(1) }).strict())
 export type MoveFollowInput = z.infer<typeof MoveFollowInputSchema>
 /** Each repository of the Thread's checkout on this machine as it stands, its checkpoint kept beside the Thread's records. */
 export type MoveFollow = { repositories: Array<{ path: string; checkpoint: ReturnDeparture["checkpoint"] }> }
@@ -147,7 +147,7 @@ export async function followMove(deps: Pick<MoveDepartureDeps, "git" | "records"
   }
 }
 
-export const MoveStayInputSchema = z.object({ move: z.uuid(), device: z.uuid(), reason: z.string().min(1).max(2_000) }).strict()
+export const MoveStayInputSchema = z.lazy(() => z.object({ move: z.uuid(), device: z.uuid(), reason: z.string().min(1).max(2_000) }).strict())
 export type MoveStayInput = z.infer<typeof MoveStayInputSchema>
 /** Whether the machine took the Thread back now: false when nothing of it was released here, or it was already back. */
 export type MoveStay = { stayed: boolean }

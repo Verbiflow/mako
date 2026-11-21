@@ -10,23 +10,23 @@ import { AppKeySchema, type AppKey } from "./thread-environments.js"
 export type AppPhase = "stopped" | "preparing" | "starting" | "running" | "crashed" | "waiting"
 
 /** A connected window's latest sampling demand; a late call cannot undo a newer hide. */
-export const AppSamplingDemandSchema = z.object({
+export const AppSamplingDemandSchema = z.lazy(() => z.object({
   connection: z.string().uuid(),
   generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
   visible: z.boolean(),
   /** An omitted scope is the original apps-only demand. Output does not imply sampling apps. */
   apps: z.boolean().optional(),
   outputs: z.array(AppKeySchema).max(64).optional(),
-}).strict()
+}).strict())
 /** @wire z.object({ connection: z.string().uuid(), generation: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER), visible: z.boolean(), apps: z.boolean().optional(), outputs: z.array(z.string().regex(/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|folder-[0-9a-f]{16})$/).brand<"AppKey">()).max(64).optional() }).strict() */
 export type AppSamplingDemand = z.infer<typeof AppSamplingDemandSchema>
 
 /** Reading binds to the current stream; following accepts demand, never receipt of the sampled data. */
-export const AppSamplingReplySchema = z.discriminatedUnion("kind", [
+export const AppSamplingReplySchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("ready"), connection: z.string().uuid(), generation: z.number().int().nonnegative() }).strict(),
   z.object({ kind: z.literal("following"), outputs: z.boolean().optional() }).strict(),
   z.object({ kind: z.literal("unavailable") }).strict(),
-])
+]))
 export type AppSamplingReply = z.infer<typeof AppSamplingReplySchema>
 
 export interface AppProcessView {
@@ -259,13 +259,13 @@ export interface RoomView {
 /** One output the dock can show: the install step, a process, a check, or one step of a check. */
 export type AppOutputKey = "prepare" | `process:${string}` | `check:${"quick" | "full"}` | `check:${"quick" | "full"}:${string}`
 
-export const AppOutputKeySchema = z.union([
+export const AppOutputKeySchema = z.lazy(() => z.union([
   z.literal("prepare"),
   z.templateLiteral(["process:", z.string().regex(/^[a-z][a-z0-9-]*$/)]),
   z.literal("check:quick"),
   z.literal("check:full"),
   z.templateLiteral(["check:", z.enum(["quick", "full"]), ":", z.string().regex(/^[a-z][a-z0-9-]*$/)]),
-])
+]))
 
 /** Where a read of an output left off: the log file it read, and how far. */
 export interface AppOutputCursor {

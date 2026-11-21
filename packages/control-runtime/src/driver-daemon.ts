@@ -21,12 +21,12 @@ import type { JsonObject } from "./json.js"
  * the proxy turns into a `tool_invocation_failed` result (`daemonToolResult`).
  */
 
-export const DaemonReplySchema = z.looseObject({
+export const DaemonReplySchema = z.lazy(() => z.looseObject({
   ok: z.boolean(),
   result: z.json().optional(),
   error: z.string().optional(),
   exit_code: z.number().optional(),
-})
+}))
 export type DaemonReply = z.infer<typeof DaemonReplySchema>
 
 export interface DaemonRequest {

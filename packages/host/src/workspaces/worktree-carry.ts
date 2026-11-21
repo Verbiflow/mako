@@ -10,7 +10,7 @@ import type { SpareInstall } from "./spare-install.js"
 import { inputsDigest, type CarryEntry, type PrepareStep, type Recipe } from "./thread-recipe.js"
 import { discoverRepositories } from "../git/index.js"
 import type { Git } from "@mako/git"
-import { onLinux, onMac } from "../base/platform.js"
+import { onWindows, onLinux, onMac } from "../base/platform.js"
 import type { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { errorMessage } from "../base/error-message.js"
 import { hostWarn } from "../base/host-log.js"
@@ -943,6 +943,8 @@ export async function ownBytes(path: string, skipped: readonly string[] = []): P
 
 /** Deletes a tree in the background band; tens of thousands of files take seconds nobody should wait for. */
 export async function removeBelowAgents(path: string): Promise<void> {
+  // Windows has no /bin/rm (and would read the path from the drive's root): Node removes it.
+  if (onWindows()) return rm(path, { recursive: true, force: true, maxRetries: 5 })
   const [command, args] = belowAgents("/bin/rm", ["-rf", path])
   await execute(command, args).catch(() => rm(path, { recursive: true, force: true }))
 }

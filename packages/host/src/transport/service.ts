@@ -9,7 +9,8 @@ import { HOST_LOG_MAX_BYTES } from "../base/host-log.js"
 import { HOST_NODE_OPTIONS } from "../base/process-warnings.js"
 import { ensurePrivateDirectory } from "../base/private-directory.js"
 import { probeRuntime, settleRuntime } from "./connection.js"
-import { nodePlatform } from "../base/platform.js"
+import { nodePlatform, onWindows } from "../base/platform.js"
+import { publishedHostPipe, runtimeIdentity, windowsRuntimeDirectory } from "./pipe.js"
 
 /** A host that exits during launch may be losing a race to another launcher's host. */
 const EXITED_GRACE_MS = 5_000
@@ -55,11 +56,21 @@ export const AGENT_VIEWS_CLIENT = "agent-views"
 /** How long a host started has to answer on its socket before its start is a failure (`HostLaunchFailedError`). */
 export const HOST_START_WINDOW_MS = 30_000
 
+/**
+ * Where the host for `dataRoot` lives: a folder of its own, private to the user, and the socket its clients reach it
+ * on. On macOS and Linux that is `host.sock` in a folder of the temp directory; on Windows the named pipe its host
+ * published for this start in a folder of the user's local app data (`pipe.ts` says why), read each time it's asked.
+ */
 export function runtimeLocation(dataRoot: string) {
-  const identity = createHash("sha256").update(resolve(dataRoot)).digest("hex").slice(0, 16)
+  const identity = runtimeIdentity(dataRoot)
+  if (onWindows()) {
+    const directory = windowsRuntimeDirectory(identity)
+    return { directory, socket: publishedHostPipe(directory, identity) }
+  }
   const directory = join(tmpdir(), `mako-host-${identity}`)
   return { directory, socket: join(directory, "host.sock") }
 }
+
 
 /**
  * Where a detached host's stdout and stderr go. host.log only opens partway
@@ -132,7 +143,7 @@ export class HostLeavingError extends Error {}
 export class HostLaunchFailedError extends Error {}
 
 export async function ensureRuntime(input: RuntimeLaunch) {
-  const location = runtimeLocation(input.dataRoot)
+  let location = runtimeLocation(input.dataRoot)
   await ensurePrivateDirectory(location.directory, "Mako host")
   // A host that is quitting still holds the profile lock; wait for it to leave
   // rather than start a second host into it or report its farewell as a failure.
@@ -160,7 +171,9 @@ export async function ensureRuntime(input: RuntimeLaunch) {
   child.unref()
   const deadline = Date.now() + HOST_START_WINDOW_MS
   while (Date.now() < deadline && (exitedAt === undefined || Date.now() < exitedAt + EXITED_GRACE_MS)) {
-    // A socket that resets while the new host binds is "not ready yet", not a launch failure.
+    // A socket that resets while the new host binds is "not ready yet", not a launch failure. On Windows the host
+    // publishes a pipe of its own for this start once it listens: where it is is read again each time.
+    location = runtimeLocation(input.dataRoot)
     const probe = await probeRuntime(location.socket)
     if (probe.state === "ready") return { ...location, info: probe.info }
     if (launchError) throw launchError

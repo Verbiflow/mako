@@ -11,6 +11,7 @@ import { errorMessage } from "../base/error-message.js"
 import { headlessNodeExecutable } from "../base/headless-node.js"
 import { hostFork } from "../base/host-command.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { processTreeAlive, signalProcessTree } from "../base/process-tree.js"
 import { HelperSaysSchema, type HelperAsk, type HelperSays } from "./git-helper-protocol.js"
 
 type Runner = Pick<ProcessRunner, "spawn" | "close">
@@ -363,9 +364,7 @@ export class GitHelper {
     this.#lostWhy.set(helper, `it stopped answering: ${why}`)
     this.#down(`it stopped answering: ${why}`)
     // What it ran is settled when it has closed (its `close` above), once what it had said before is read.
-    if (helper.pid) {
-      try { process.kill(-helper.pid, "SIGKILL") } catch { /* gone already */ }
-    }
+    if (helper.pid) signalProcessTree(helper.pid, "SIGKILL", { orProcess: false, held: true })
     void this.#direct.close(helper, "SIGKILL").catch(() => {})
   }
 
@@ -432,18 +431,13 @@ export class GitHelper {
   }
 }
 
-/** Whether any process of group `pid` is left. */
+/** Whether any process of group `pid` is left (on Windows, of its tree). */
 function groupAlive(pid: number): boolean {
-  try {
-    process.kill(-pid, 0)
-    return true
-  } catch (error) {
-    return error instanceof Error && "code" in error && error.code === "EPERM"
-  }
+  return processTreeAlive(pid)
 }
 
 function signalGroup(pid: number, signal: NodeJS.Signals): void {
-  try { process.kill(-pid, signal) } catch { /* gone already */ }
+  signalProcessTree(pid, signal, { orProcess: false })
 }
 
 function defaultEntry(): string {

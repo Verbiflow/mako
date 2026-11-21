@@ -12,7 +12,7 @@ import { join } from "node:path"
  */
 const hostApproved = [
   ["application/process-group.ts", "runProcessGroup", "spawn", "combines the host stop signal; kills and reaps the whole build group"],
-  ["application/process-group.ts", "run", "execFile", "bounded ps diagnostic used while the cancelled group is being reaped"],
+  ["application/process-group.ts", "run", "execFile", "bounded ps diagnostic, and Windows' taskkill of the tree, while the cancelled group is being reaped"],
   ["threads/catalog-connection.ts", "connectOnDemandCatalog", "spawn", "shared reader daemon outlives this host; its client is cancelled separately"],
   ["terminals/client.ts", "#spawnDaemon", "spawn", "terminal daemon keeps the person's terminals through host restarts"],
   ["transport/service.ts", "ensureRuntime", "spawn", "launches the independent host this client is connecting to"],
@@ -25,6 +25,10 @@ const hostApproved = [
   ["harnesses/cursor/sdk/shell-folder.ts", "guardShellFolder", "spawn", "wraps the SDK child's original spawn without changing its owner"],
   ["harnesses/cursor/sdk/fork.ts", "cloneFile", "execFileSync", "synchronous APFS clone is finished before a stop can run"],
   ["terminals/process-groups.ts", "runPs", "execFileSync", "synchronous process-table read is bounded to one second"],
+  ["base/windows-helper.ts", "windowsHelperSync", "execFileSync", "the Windows helper's bounded synchronous answer (a folder's trust while a launch resolves its program)"],
+  ["base/windows-helper.ts", "windowsHelperLines", "execFile", "the Windows helper's bounded answer, run by whole path; a stop never needs to wait on it"],
+  ["base/windows-helper.ts", "windowsUserSid", "execFile", "Windows' whoami by whole path, bounded, where the helper is missing"],
+  ["base/process-tree.ts", "taskkillTree", "execFile", "Windows' bounded taskkill of a tree being stopped; a stop is when it runs, so it can't be in the stop scope"],
   ["workspaces/watcher-child-main.ts", "readTable", "execFile", "the watcher child's bounded ps for the host's app looks; it ends with the child, which the host's hostFork owns"],
   ["workspaces/watcher-child-main.ts", "runProbe", "execFile", "the host's probes (ps, lsof, sysctl: hostProbe) run in the probe child; each ends with the child, which the host's hostFork owns"],
 ]

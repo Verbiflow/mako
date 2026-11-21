@@ -603,6 +603,7 @@
   "tsx scripts/test-runtime-recovery.ts": 1,
   "tsx scripts/test-runtime-response.ts": 2,
   "tsx scripts/test-runtime-transport.ts": 1,
+  "tsx scripts/test-said-parts.ts": 2,
   "tsx scripts/test-send-discovery.ts": 2,
   "tsx scripts/test-send-race.ts": 22,
   "tsx scripts/test-send-recovery.ts": 1,

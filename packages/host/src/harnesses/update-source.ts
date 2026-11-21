@@ -71,6 +71,19 @@ export interface RuntimeUpdateSource {
    * fails the install. Empty where the machine has no such package.
    */
   npmCompanions?(version: string): string[]
+  /**
+   * What an install or update put beside `executable` that it never runs, removed once the installer exits cleanly,
+   * before the executable is read again: OpenCode's npm package downloads every build for the machine's OS and CPU
+   * (four on Linux x64, some 250 MB each), its postinstall links or copies the one it picks into its own `bin/`, and
+   * npm keeps them all, `--omit=optional` or not for a global install (npm 11.19, 2026-11-20).
+   */
+  unusedBuilds?(executable: string): string[]
+  /**
+   * What an install must also put in place, done once the installer exits cleanly and before the executable is read
+   * again; a failure is the install's. Cursor's sessions run on its SDK, which a host made without Cursor doesn't
+   * carry: its install adds the SDK beside the CLI its installer brings.
+   */
+  completeInstall?(env: NodeJS.ProcessEnv): Promise<void>
   githubRelease?: string
   acceptsLatest?(installed: string, latest: string): boolean
   /** The Homebrew formula or cask, when the CLI ships one. Without it a brew install is shown, never upgraded. */

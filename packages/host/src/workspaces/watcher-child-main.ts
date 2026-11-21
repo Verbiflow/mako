@@ -6,6 +6,7 @@ import { homedir, tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { watchGitMarkersHere } from "./git-marker-native.js"
 import { OTHER_APPS_DATA } from "../base/other-apps-data.js"
+import { onLinux } from "../base/platform.js"
 import { membersOnly, parseTable, PS_ARGS, type RunLeader } from "./process-table.js"
 import { CanaryTestSchema, HISTORY_SCRATCH, HistoryMarkSchema, MAX_EXCLUDED, WatcherRequestSchema, type CanaryTest, type DropReason, type HistoryMark, type WatcherReply, type WatcherRequest } from "../contracts/watcher-child.js"
 
@@ -28,8 +29,14 @@ function inTurn<Value>(work: () => Promise<Value>): Promise<Value> {
   parcelTurn = turn.catch(() => {})
   return turn
 }
-function subscribeInTurn(...args: Parameters<typeof parcel.subscribe>): Promise<AsyncSubscription> {
-  return inTurn(() => parcel.subscribe(...args)).then((subscription) => ({ unsubscribe: () => inTurn(() => subscription.unsubscribe()) }))
+/**
+ * On Linux, parcel's inotify backend by name. Left to choose, parcel first asks for watchman through `popen`, whose
+ * `sh` it never reaps when watchman isn't there: a zombie under this child for as long as it ran (2.6.0, every Linux
+ * machine). Where watchman is, its daemon watched instead, which no Mako test covers.
+ */
+const LINUX_BACKEND = onLinux() ? { backend: "inotify" as const } : {}
+function subscribeInTurn(folder: string, callback: Parameters<typeof parcel.subscribe>[1], options: Parameters<typeof parcel.subscribe>[2] = {}): Promise<AsyncSubscription> {
+  return inTurn(() => parcel.subscribe(folder, callback, { ...LINUX_BACKEND, ...options })).then((subscription) => ({ unsubscribe: () => inTurn(() => subscription.unsubscribe()) }))
 }
 
 const subscriptions = new Map<number, Promise<AsyncSubscription | undefined>>()

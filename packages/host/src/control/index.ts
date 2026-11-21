@@ -9,10 +9,13 @@ import {
   MachineTabVideo,
   helperCapture,
   helperLiveEncoder,
+  helperWindowSource,
+  linuxDesktop,
   localBrowsers,
   publishDeskBrowserRegistration,
   videoHelperExecutable,
-  x11Display,
+  videoHelperName,
+  windowsMachineChromium,
 } from "@mako/control-runtime/desktop"
 import type { MethodTable } from "../base/methods.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -39,7 +42,7 @@ import { CuaDriverVersions } from "./cua-driver-version.js"
 import { MAKO_BUNDLE_ID, desktopLaunchEnvironment } from "../application/index.js"
 import { computerPermissions } from "./computer-permissions.js"
 import type { MachineCapability } from "../base/machine.js"
-import { onLinux, onMac } from "../base/platform.js"
+import { onLinux, onMac, onWindows } from "../base/platform.js"
 import type { CuaDriverStatus, MakoComputerPermissions } from "../contracts/mcp-skills-integrations.js"
 import type { AppshotFrontRequest, AppshotTarget } from "@mako/control-runtime/contracts"
 import type { HostEvent } from "../contracts/host-events-boot.js"
@@ -185,7 +188,7 @@ export function openControl(
       return desktop.deskPage(previewId)
     },
   })
-  const unknownPermissions = () => computerPermissions(environment, undefined)
+  const unknownPermissions = () => computerPermissions(environment, undefined, linuxDesktop())
   const readComputerPermissions = async (): Promise<MakoComputerPermissions> =>
     desktop.answers("computer-permissions") ? desktop.ask("computer-permissions", {}).catch(unknownPermissions) : unknownPermissions()
   let defaultBrowserApplication: Promise<string | undefined> | undefined
@@ -193,14 +196,16 @@ export function openControl(
     return (defaultBrowserApplication ??= machine.kind === "present" ? machine.defaultBrowser() : Promise.resolve(undefined))
   }
   // The video helper (`mako-video`): a packaged Mac app's beside its executable, a checkout's where `build:electron`
-  // built it; a Linux machine's is on PATH. The application owns these paths; the reusable Node runtime and the child
-  // control servers read the same one from the environment.
+  // built it (`mako-video.exe` on Windows); a Linux machine's is on PATH. The application owns these paths; the
+  // reusable Node runtime and the child control servers read the same one from the environment.
   const bundledVideoHelper = environment.packaged
-    ? join(dirname(dirname(environment.appRoot)), "MacOS", "mako-video")
-    : join(environment.appRoot, "build", "mako-video")
+    ? join(dirname(dirname(environment.appRoot)), ...(onMac() ? ["MacOS"] : []), videoHelperName())
+    : join(environment.appRoot, "build", videoHelperName())
   if (existsSync(bundledVideoHelper)) process.env.MAKO_VIDEO_HELPER ??= bundledVideoHelper
-  // A Linux machine has no person's browser for Mako to connect to, so it runs its own.
-  const chromium = onLinux() ? resolveExecutable("chromium") : undefined
+  // The machine's own browser, headless in a profile of Mako's, which never becomes the person's: Chromium on Linux,
+  // where a server has no person's browser to connect to; on Windows the installed Chrome or Edge, whose capture
+  // extension loads over its DevTools pipe, since Chrome ignores --load-extension.
+  const chromium = onLinux() ? resolveExecutable("chromium") : onWindows() ? windowsMachineChromium() : undefined
   const machineBrowser = chromium
     ? new MachineBrowser({
         executable: chromium,
@@ -208,9 +213,11 @@ export function openControl(
         // Chromium refuses its sandbox to root, who owns the machine already.
         sandbox: process.getuid?.() !== 0,
         captureExtension: machineCaptureExtension(environment.dataRoot),
+        extensionLoading: onWindows() ? "pipe" : "flag",
         started(child) {
           const pid = child.pid
-          if (!pid) return
+          // The provider registry reads a process's executable from /proc; elsewhere it has no identity to check.
+          if (!pid || !onLinux()) return
           let executable: string
           try {
             // Debian's `chromium` is a script that execs the browser: the registry checks what the process runs now.
@@ -244,7 +251,9 @@ export function openControl(
     {
       preferencePath: join(environment.dataRoot, "browser-preference.json"),
       defaultApplication: preferredBrowserApplication,
-      defaultBrowser: machineBrowser?.definition.id,
+      // Agents' tabs open in it until someone chooses only where nobody sits at the machine (a Linux server or cloud
+      // machine): on a desktop the person's own browser is theirs to pick, and the machine's is one choice among them.
+      defaultBrowser: machine.kind === "absent" && onLinux() ? machineBrowser?.definition.id : undefined,
     }
   )
   let devRendererGeneration = 0
@@ -295,13 +304,19 @@ export function openControl(
         }),
     capture: {
       tab: (target) => (machineVideo && target.browser === MACHINE_BROWSER_ID ? machineVideo.source(target.tab) : desktopCapture.tab(target)),
-      // Without the desktop app, a window is captured by the video helper: ScreenCaptureKit on a Mac, an X display's.
-      window: (target) => desktopCapture.window(target) ?? (videoHelper && (onMac() || x11Display()) ? helperCapture(videoHelper, { kind: "window", windowId: target.windowId }) : undefined),
+      // Without the desktop app, a window is captured by the video helper: ScreenCaptureKit on a Mac, Windows Graphics
+      // Capture on Windows, an X display's on Linux, or on Wayland the monitor the person shares through the portal.
+      window: (target) => {
+        const desktop = desktopCapture.window(target)
+        if (desktop) return desktop
+        const source = videoHelper && helperWindowSource(target.windowId, join(environment.dataRoot, "computer-use"), linuxDesktop())
+        return source ? helperCapture(videoHelper, source) : undefined
+      },
     },
   })
   const elementPicks = new ElementPicks(browser, previews, onMac() ? "mac" : "other")
   const sessions = new ControlSessions(
-    async (bindingId) => (resolveExecutable("cua-driver") && onMac() ? driver.grant(`agent ${bindingId}`) : undefined),
+    async (bindingId) => (resolveExecutable("cua-driver") && (onMac() || linuxDesktop()) ? driver.grant(`agent ${bindingId}`) : undefined),
     undefined,
     undefined,
     (bindingId) => driver.revoke(`agent ${bindingId}`)

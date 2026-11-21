@@ -3,6 +3,7 @@ import { hostStopping } from "./host-stopping.js"
 import { readFile, readlink, realpath } from "node:fs/promises"
 import { basename, isAbsolute } from "node:path"
 import { onLinux, onMac, onWindows } from "./platform.js"
+import { windowsPowerShell } from "./system-tools.js"
 
 const run = hostCommand
 const START_TOLERANCE_MS = 30_000
@@ -36,6 +37,7 @@ export async function processStartedAt(
       throw new Error("Process start time is unreadable")
     return (bootSeconds + Math.floor(ticks / USER_HZ)) * 1_000
   }
+  if (onWindows()) return (await windowsProcess(pid, signal)).startedAt
   // Batched with every other pid asked about this turn, in the host's probe child.
   const probes = hostStopping()?.probes
   if (probes) return probes.startedAt(pid, signal)
@@ -66,11 +68,32 @@ async function processExecutables(
       .filter((line) => line.startsWith("n"))
       .map((line) => line.slice(1))
   }
+  if (onWindows()) return [(await windowsProcess(pid, signal)).executable]
   throw new Error("Process executable identity is unavailable on this platform")
+}
+
+/**
+ * A process's start and executable on Windows, which has no `/proc`, `ps` or `lsof`: read together, in one look, from
+ * CIM's `Win32_Process` through Windows PowerShell, which every Windows has. A start of 0 or no executable (another
+ * account's process, or a protected one) is unreadable.
+ */
+async function windowsProcess(pid: number, signal: AbortSignal): Promise<{ startedAt: number; executable: string }> {
+  const script = `$p = Get-CimInstance Win32_Process -Filter "ProcessId=${Math.trunc(pid)}"; if ($p) { [Console]::Out.Write([string]([DateTimeOffset]$p.CreationDate).ToUnixTimeMilliseconds() + "|" + $p.ExecutablePath) }`
+  const { stdout } = await run(windowsPowerShell(), ["-NoProfile", "-NonInteractive", "-Command", script], { maxBuffer: 16_384, timeout: 10_000, signal, windowsHide: true })
+  const cut = stdout.indexOf("|")
+  const startedAt = Number(stdout.slice(0, cut))
+  if (cut < 0 || !Number.isSafeInteger(startedAt) || startedAt <= 0) throw new Error("Process start time is unreadable")
+  return { startedAt, executable: stdout.slice(cut + 1).trim() }
 }
 
 /** Bracket the executable read so a recycled PID cannot acquire an old record. */
 export async function observeProcessIdentity(pid: number, signal: AbortSignal) {
+  if (onWindows()) {
+    // One look reads both, so no recycled pid can come between them.
+    const { startedAt, executable } = await windowsProcess(pid, signal)
+    if (!executable) throw new Error("Process executable identity is not ready")
+    return { startedAt, executable: await realpath(executable).catch(() => executable) }
+  }
   if (!onMac() && !onLinux())
     throw new Error(
       "Process executable identity is unavailable on this platform"
@@ -125,8 +148,6 @@ export async function processIdentityMatches({
     if (code !== "EPERM" || startedAt === undefined) throw error
   }
   if (startedAt === undefined) return true
-  if (onWindows())
-    throw new Error("Process start identity is unavailable on this platform")
   // The host's own running child: its pid can't have been reused while the host holds it, and its start was read
   // once as it was spawned. Most of the pids a harness's registry names on a busy Mac are these.
   const own = hostStopping()?.spawnedAt?.(pid)
@@ -157,6 +178,8 @@ function processExists(pid: number): boolean {
 }
 
 function executableMatches(expected: string, actual: string): boolean {
+  // Windows' paths name a file in any case.
+  if (onWindows()) [expected, actual] = [expected.toLowerCase(), actual.toLowerCase()]
   return isAbsolute(expected)
     ? actual === expected
     : basename(actual) === basename(expected)
@@ -177,7 +200,7 @@ export async function processExecutableMatches({
   signal: AbortSignal
 }): Promise<boolean> {
   const expected = await realpath(executable).catch(() => executable)
-  if (onLinux() || onMac()) {
+  if (onLinux() || onMac() || onWindows()) {
     try {
       return (await processExecutables(pid, signal)).some((executable) =>
         executableMatches(expected, executable)

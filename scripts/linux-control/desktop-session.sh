@@ -1,0 +1,118 @@
+#!/bin/sh
+# A private Linux desktop for desktop-probe.mjs: X11 (Xvfb and Openbox) or Wayland (headless Sway with XWayland, its
+# ScreenCast portal through xdg-desktop-portal-wlr, PipeWire and WirePlumber; GNOME Shell; KWin), each on its own
+# session bus. The portal's
+# chooser is set to the one output, so no dialog waits; a person's desktop shows its dialog once.
+#
+#   sh desktop-session.sh x11|sway|gnome|kde   (as an ordinary user; MAKO_DRIVER_DIR holds cua-driver, MAKO_EVIDENCE the results)
+set -eu
+kind=$1
+export MAKO_DESKTOP="$kind"
+here=$(cd "$(dirname "$0")" && pwd)
+export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/tmp/mako-desktop-runtime-$(id -u)}
+mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
+export PATH="$MAKO_DRIVER_DIR:$PATH" NO_AT_BRIDGE=0 GTK_MODULES=gail:atk-bridge CUA_DRIVER_RS_TELEMETRY_ENABLED=0
+# A blinking caret repaints for ever (GTK 3 fades it, at the display's rate): the idle screen is measured without it.
+mkdir -p "$HOME/.config/gtk-3.0"
+printf '[Settings]\ngtk-cursor-blink=false\n' >"$HOME/.config/gtk-3.0/settings.ini"
+case "$kind" in
+x11)
+  export DISPLAY=:93 XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=openbox
+  Xvfb "$DISPLAY" -screen 0 1280x800x24 -nolisten tcp >/tmp/xvfb.log 2>&1 &
+  for _ in $(seq 1 100); do [ -S /tmp/.X11-unix/X93 ] && break; sleep .1; done
+  exec dbus-run-session -- sh -c '
+    set -eu
+    openbox >/tmp/openbox.log 2>&1 &
+    sleep 1
+    exec node "$0/desktop-probe.mjs"
+  ' "$here"
+  ;;
+sway)
+  export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=sway WLR_BACKENDS=headless WLR_LIBINPUT_NO_DEVICES=1 WLR_RENDERER=pixman
+  mkdir -p "$HOME/.config/xdg-desktop-portal-wlr" "$HOME/.config/xdg-desktop-portal"
+  printf '[screencast]\nchooser_type=none\noutput_name=HEADLESS-1\n' >"$HOME/.config/xdg-desktop-portal-wlr/config"
+  printf '[preferred]\ndefault=wlr\n' >"$HOME/.config/xdg-desktop-portal/sway-portals.conf"
+  exec dbus-run-session -- sh -c '
+    set -eu
+    printf "%s\n" "output HEADLESS-1 resolution 1280x800" "seat seat0 fallback true" "xwayland enable" >/tmp/sway.conf
+    sway -c /tmp/sway.conf >/tmp/sway.log 2>&1 &
+    for _ in $(seq 1 100); do
+      for socket in "$XDG_RUNTIME_DIR"/wayland-*; do [ -S "$socket" ] && export WAYLAND_DISPLAY=${socket##*/}; done
+      [ -n "${WAYLAND_DISPLAY:-}" ] && break
+      sleep .1
+    done
+    for socket in "$XDG_RUNTIME_DIR"/sway-ipc*.sock; do [ ! -S "$socket" ] || export SWAYSOCK="$socket"; done
+    # Sway starts XWayland on the first X client; its socket is there from the start.
+    for _ in $(seq 1 50); do
+      for socket in /tmp/.X11-unix/X*; do [ -S "$socket" ] && export DISPLAY=:${socket##*/X}; done
+      [ -n "${DISPLAY:-}" ] && break
+      sleep .1
+    done
+    dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP SWAYSOCK DISPLAY XDG_SESSION_TYPE
+    pipewire >/tmp/pipewire.log 2>&1 &
+    sleep .5
+    wireplumber >/tmp/wireplumber.log 2>&1 &
+    /usr/libexec/xdg-desktop-portal-wlr >/tmp/xdpw.log 2>&1 &
+    /usr/libexec/xdg-desktop-portal >/tmp/xdp.log 2>&1 &
+    sleep 1
+    exec node "$0/desktop-probe.mjs"
+  ' "$here"
+  ;;
+gnome)
+  # GNOME Shell headless with XWayland, its portal backend and the driver's Shell helper. A person answers GNOME's
+  # consent dialogs; here portal-consent.py answers them through AT-SPI and logs each, so a restored session shows none.
+  export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=GNOME LIBGL_ALWAYS_SOFTWARE=1
+  extension="$HOME/.local/share/gnome-shell/extensions/winrects@cua"
+  mkdir -p "$extension" && cp "$MAKO_DRIVER_DIR"/wayland-helper/winrects@cua/* "$extension/"
+  exec dbus-run-session -- sh -c '
+    set -eu
+    gsettings set org.gnome.shell enabled-extensions "[\"winrects@cua\"]"
+    gsettings set org.gnome.shell disable-user-extensions false
+    gsettings set org.gnome.shell welcome-dialog-last-shown-version "46"
+    gsettings set org.gnome.desktop.interface enable-animations false
+    gsettings set org.gnome.desktop.interface toolkit-accessibility true
+    gsettings set org.gnome.desktop.interface cursor-blink false
+    pipewire >/tmp/pipewire.log 2>&1 &
+    sleep .5
+    wireplumber >/tmp/wireplumber.log 2>&1 &
+    gnome-shell --wayland --headless --virtual-monitor 1280x800 >/tmp/gnome-shell.log 2>&1 &
+    for _ in $(seq 1 150); do
+      for socket in "$XDG_RUNTIME_DIR"/wayland-*; do [ -S "$socket" ] && export WAYLAND_DISPLAY=${socket##*/}; done
+      [ -n "${WAYLAND_DISPLAY:-}" ] && gdbus call --session --dest org.cua.WinRects --object-path /org/cua/WinRects --method org.cua.WinRects.GetVersion >/dev/null 2>&1 && break
+      sleep .1
+    done
+    for socket in /tmp/.X11-unix/X*; do [ -S "$socket" ] && export DISPLAY=:${socket##*/X}; done
+    dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY XDG_SESSION_TYPE
+    python3 "$0/portal-consent.py" "$MAKO_EVIDENCE/gnome-consent.jsonl" >/tmp/consent.log 2>&1 &
+    exec node "$0/desktop-probe.mjs"
+  ' "$here"
+  ;;
+kde)
+  # KWin headless (its virtual backend) with XWayland and the KDE portal backend; portal-consent.py answers its dialogs.
+  export XDG_SESSION_TYPE=wayland XDG_CURRENT_DESKTOP=KDE KDE_FULL_SESSION=true KDE_SESSION_VERSION=5 \
+    QT_QUICK_BACKEND=software KWIN_COMPOSE=Q LIBGL_ALWAYS_SOFTWARE=1 QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1 QT_ACCESSIBILITY=1
+  exec dbus-run-session -- sh -c '
+    set -eu
+    pipewire >/tmp/pipewire.log 2>&1 &
+    sleep .5
+    wireplumber >/tmp/wireplumber.log 2>&1 &
+    kwin_wayland --virtual --xwayland --width 1280 --height 800 --socket wayland-mako --no-lockscreen --no-global-shortcuts \
+      >/tmp/kwin.log 2>&1 &
+    for _ in $(seq 1 150); do [ -S "$XDG_RUNTIME_DIR/wayland-mako" ] && break; sleep .1; done
+    export WAYLAND_DISPLAY=wayland-mako
+    for _ in $(seq 1 50); do
+      for socket in /tmp/.X11-unix/X*; do [ -S "$socket" ] && export DISPLAY=:${socket##*/X}; done
+      [ -n "${DISPLAY:-}" ] && break
+      sleep .1
+    done
+    dbus-update-activation-environment WAYLAND_DISPLAY XDG_CURRENT_DESKTOP DISPLAY XDG_SESSION_TYPE KDE_FULL_SESSION \
+      KDE_SESSION_VERSION QT_LINUX_ACCESSIBILITY_ALWAYS_ON QT_ACCESSIBILITY QT_QUICK_BACKEND
+    python3 "$0/portal-consent.py" "$MAKO_EVIDENCE/kde-consent.jsonl" >/tmp/consent.log 2>&1 &
+    exec node "$0/desktop-probe.mjs"
+  ' "$here"
+  ;;
+*)
+  echo "usage: desktop-session.sh x11|sway|gnome|kde" >&2
+  exit 64
+  ;;
+esac

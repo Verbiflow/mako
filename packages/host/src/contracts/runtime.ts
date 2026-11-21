@@ -11,16 +11,16 @@ import { FIXTURE_REFUSED_CODE, FixtureDeskRefusedError } from "./fixture-desk-po
  */
 const ParsedJson = z.custom<Json>()
 
-export const RuntimeArgsSchema = z.array(z.discriminatedUnion("kind", [
+export const RuntimeArgsSchema = z.lazy(() => z.array(z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("absent") }),
   z.object({ kind: z.literal("value"), value: ParsedJson }),
-])).max(32)
-export const RuntimeCallSchema = z.object({
+])).max(32))
+export const RuntimeCallSchema = z.lazy(() => z.object({
   channel: z.string().regex(/^mako:[a-z0-9-]+$/),
   args: RuntimeArgsSchema,
   /** 2 when a client re-issues a call the host dropped; the host records the replay. Absent on a first attempt. */
   attempt: z.number().int().min(1).max(8).optional(),
-}).strict()
+}).strict())
 export type RuntimeCall = z.infer<typeof RuntimeCallSchema>
 export const RUNTIME_PROTOCOL = 1
 /**
@@ -28,7 +28,7 @@ export const RUNTIME_PROTOCOL = 1
  * the socket listened, at start for `MAKO_HOST_LOAD=all`, or the first
  * method that needed it. Times are milliseconds since the process started.
  */
-export const HostDomainSchema = z.object({
+export const HostDomainSchema = z.lazy(() => z.object({
   name: z.string(),
   /** The domains of packages/host/src it builds. */
   covers: z.array(z.string()),
@@ -41,10 +41,10 @@ export const HostDomainSchema = z.object({
   modules: z.number().int().optional(),
   sourceBytes: z.number().int().optional(),
   error: z.string().optional(),
-})
+}))
 export type HostDomain = z.infer<typeof HostDomainSchema>
 /** One of the host's recurring jobs and how it has gone. */
-export const HostJobSchema = z.object({
+export const HostJobSchema = z.lazy(() => z.object({
   name: z.string(),
   everyMs: z.number(),
   runs: z.number().int(),
@@ -53,30 +53,30 @@ export const HostJobSchema = z.object({
   /** The demands it runs for; with none of them on, it's paused and holds no timer. */
   needs: z.array(z.string()).optional(),
   paused: z.boolean(),
-})
+}))
 export type HostJob = z.infer<typeof HostJobSchema>
 /** A stretch the event loop was held, and the work named as running then; `at` is milliseconds since the epoch. */
-export const LoopHoldSchema = z.object({
+export const LoopHoldSchema = z.lazy(() => z.object({
   at: z.number(),
   ms: z.number(),
   during: z.array(z.string()),
-})
+}))
 export type LoopHold = z.infer<typeof LoopHoldSchema>
 /**
  * The event loop, as the host watches it while it works: the delay of each
  * check (every `resolutionMs`), holds of `heldMs` or more, and how much of
  * the time since the process started it was busy.
  */
-export const EventLoopSchema = z.object({
+export const EventLoopSchema = z.lazy(() => z.object({
   watching: z.boolean(),
   resolutionMs: z.number(),
   heldMs: z.number(),
   delayMs: z.object({ checks: z.number().int(), p50: z.number(), p99: z.number(), max: z.number() }),
   utilization: z.number(),
   holds: z.object({ count: z.number().int(), longest: LoopHoldSchema.optional(), recent: z.array(LoopHoldSchema) }),
-})
+}))
 export type EventLoop = z.infer<typeof EventLoopSchema>
-export const RuntimeInfoSchema = z.object({
+export const RuntimeInfoSchema = z.lazy(() => z.object({
   protocol: z.literal(RUNTIME_PROTOCOL),
   instanceId: z.string().uuid(),
   /** Stable local host identity for browser pending-message storage. */
@@ -96,24 +96,24 @@ export const RuntimeInfoSchema = z.object({
   jobs: z.array(HostJobSchema).optional(),
   /** Its event loop, in `/health` only. */
   eventLoop: EventLoopSchema.optional(),
-})
+}))
 export type RuntimeInfo = z.infer<typeof RuntimeInfoSchema>
 /** `/packages`: each heavy package the host declares, as `@mako/lazy` records its load. */
-export const RuntimePackagesSchema = z.array(z.object({
+export const RuntimePackagesSchema = z.lazy(() => z.array(z.object({
   name: z.string(),
   state: z.enum(["unloaded", "loading", "ready", "failed"]),
   reason: z.string().optional(),
   ms: z.number().optional(),
   error: z.string().optional(),
-}))
+})))
 /** The first line on `/events`, which says what host this is. */
-export const RuntimeReadySchema = z.object({ channel: z.literal("ready"), runtime: RuntimeInfoSchema.optional() })
+export const RuntimeReadySchema = z.lazy(() => z.object({ channel: z.literal("ready"), runtime: RuntimeInfoSchema.optional() }))
 /** An event line's header (`splitRuntimeEventLine`); its payload is read by whoever the event is for. */
-export const RuntimeEventHeadSchema = z.object({
+export const RuntimeEventHeadSchema = z.lazy(() => z.object({
   channel: z.enum(["event", "terminal"]),
   type: z.string().optional(),
   conversation: z.string().optional(),
-})
+}))
 /** A packet on `/events`, its event's payload still as its producer encoded it. */
 export type RuntimePacket = z.infer<typeof RuntimeReadySchema> | (z.infer<typeof RuntimeEventHeadSchema> & { payload: string })
 const EventRoutingSchema = z.object({ type: z.string(), batch: z.object({ id: z.string() }).optional() })
@@ -129,12 +129,12 @@ export function runtimeEventRouting(event: RuntimeEvent): RuntimeEventRouting {
   if (!routing.success) return {}
   return { type: routing.data.type, conversation: routing.data.type === "live-batch" ? routing.data.batch?.id : undefined }
 }
-export const RuntimeFailureSchema = z.object({ ok: z.literal(false), error: z.string(), code: z.enum([HOST_RESTARTING_CODE, HOST_CLOSED_CODE, "owner-unavailable", FIXTURE_REFUSED_CODE]).optional(), unconfirmed: z.boolean().optional(), conversationId: z.string().optional() })
+export const RuntimeFailureSchema = z.lazy(() => z.object({ ok: z.literal(false), error: z.string(), code: z.enum([HOST_RESTARTING_CODE, HOST_CLOSED_CODE, "owner-unavailable", FIXTURE_REFUSED_CODE]).optional(), unconfirmed: z.boolean().optional(), conversationId: z.string().optional() }))
 /** A success's body is exactly `runtimeSuccessBody` (`runtime-value.ts`), so a reader can take its value without decoding it. */
-export const RuntimeReplySchema = z.discriminatedUnion("ok", [
+export const RuntimeReplySchema = z.lazy(() => z.discriminatedUnion("ok", [
   z.object({ ok: z.literal(true), value: ParsedJson.optional() }),
   RuntimeFailureSchema,
-])
+]))
 export type RuntimeReply = z.infer<typeof RuntimeReplySchema>
 export type RuntimeFailure = z.infer<typeof RuntimeFailureSchema>
 export type RuntimeValue = Extract<RuntimeReply, { ok: true }>["value"]

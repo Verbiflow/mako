@@ -8,7 +8,7 @@ import type { Container } from "./container-runtime.js"
 import { HistoryMarkSchema } from "../contracts/watcher-child.js"
 import { listed, toolText, when } from "../base/tool-text.js"
 import type { FileHistory } from "./watch-backend.js"
-import { onMac } from "../base/platform.js"
+import { onMac, onWindows } from "../base/platform.js"
 
 const run = hostCommand
 
@@ -900,6 +900,8 @@ async function saveTrace(folder: string, trace: Trace): Promise<void> {
 }
 
 async function lsof(args: string[]): Promise<string> {
+  // Windows has no lsof: no process is seen to listen or hold a file, as when lsof matches nothing.
+  if (onWindows()) return ""
   try {
     const { stdout } = await hostProbe("lsof", ["-nP", "-w", ...args], {
       env: { ...process.env, LC_ALL: "C", PATH: `${process.env.PATH ?? ""}:/usr/sbin:/usr/bin:/sbin:/bin` },
