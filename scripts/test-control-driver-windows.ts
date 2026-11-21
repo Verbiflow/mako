@@ -9,19 +9,22 @@
 import assert from "node:assert/strict"
 import { execFile, spawn, type ChildProcess } from "node:child_process"
 import { existsSync } from "node:fs"
-import { copyFile, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
+import { copyFile, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { delimiter, join, resolve } from "node:path"
 import { promisify } from "node:util"
 import { parseArgs } from "node:util"
 import { z } from "zod"
 import { CuaEmbedded } from "../packages/host/src/control/cua-embedded.js"
+import { findExecutable, resolveExecutable } from "../packages/host/src/base/executable.js"
 import { computerPermissions } from "../packages/host/src/control/computer-permissions.js"
 import { CuaDriverVersions } from "../packages/host/src/control/cua-driver-version.js"
 import { Appshots } from "../packages/host/src/control/appshots.js"
 import { DriverBroker } from "../packages/control-runtime/src/driver-broker.js"
 import { exchange, parseReply } from "../packages/control-runtime/src/driver-daemon.js"
+import { connect } from "node:net"
 import { readMp4 } from "../packages/control-runtime/src/mp4.js"
+import { driverPath as reportedPath } from "../packages/control-runtime/src/native-recording.js"
 import type { ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
 import type { JsonObject, JsonValue } from "../packages/control-runtime/src/json.js"
 import { controlSessionProbe } from "./lib/control-session-probe.js"
@@ -192,6 +195,10 @@ try {
   await new Promise((done) => setTimeout(done, 500))
   console.log("fixture", fixture.pid, fixture.hwnd, "holder", holder.pid, holder.hwnd, "foreground", await foreground())
 
+  // A person's own driver settings in the host's environment: none may reach Mako's daemon. These two would each open
+  // a loopback TCP listener beside its pipe.
+  const [mcpPort, envelopePort] = [47_811, 47_812]
+  Object.assign(process.env, { CUA_DRIVER_RS_MCP_HTTP_PORT: String(mcpPort), CUA_DRIVER_ENVELOPE_HTTP_PORT: String(envelopePort), CUA_DRIVER_RS_MCP_HTTP_TOKEN: "x".repeat(32), CUA_TELEMETRY_ENABLED: "1" })
   let since = performance.now()
   const socket = await cua.ensure(join(root, "cua"), "dev.mako.windows-control-test")
   results.latency.daemonStartMs = ms(since)
@@ -199,7 +206,8 @@ try {
   assert.ok(socket.startsWith("\\\\.\\pipe\\"), `the driver listens on a named pipe: ${socket}`)
   const daemonPid = cua.pid()
   assert.ok(daemonPid)
-  broker = new DriverBroker({ socket: async () => socket, own: () => [] })
+  // As the host wires it: the broker is given the daemon's endpoint, its key and its process's end.
+  broker = new DriverBroker({ socket: async () => socket, daemon: () => cua.address(), program: (name) => findExecutable(name), own: () => [] })
   client = await broker.connect({ kind: "appshots", label: "windows test" }, { parallel: true })
   const tools = (await client.listTools()).map((tool) => tool.name).sort()
   results.driver = { socket, pid: daemonPid, tools, started: await processSample(daemonPid) }
@@ -666,6 +674,54 @@ try {
       await session.close()
       broker!.revoke("agent windows-recording")
     }
+  })
+
+  await check("the daemon got none of the inherited driver settings and listens on no TCP port", async () => {
+    const listeners = (await run("powershell.exe", ["-NoProfile", "-Command", `@(Get-NetTCPConnection -State Listen -OwningProcess ${daemonPid} -ErrorAction SilentlyContinue).Count`])).stdout.trim()
+    assert.equal(listeners, "0", `the daemon's TCP listeners: ${listeners}`)
+    for (const port of [mcpPort, envelopePort]) {
+      const open = await new Promise<boolean>((done) => {
+        const probe = connect({ host: "127.0.0.1", port })
+        probe.once("connect", () => { probe.destroy(); done(true) })
+        probe.once("error", () => done(false))
+      })
+      assert.equal(open, false, `nothing listens on 127.0.0.1:${port}`)
+    }
+    return { listeners: Number(listeners) }
+  })
+
+  await check("launch_app by a bare name runs only an installed app or a program the host's lookup trusts", async () => {
+    const ran = async (marker: string) => { await new Promise((done) => setTimeout(done, 1500)); return existsSync(marker) }
+    const launch = (name: string) => call("launch_app", { name }).then((result) => `launched: ${result.text}`, (error: Error) => error.message)
+    // A program in this user's own folder on PATH, which the host's lookup trusts: found there and run by whole path.
+    const trustedMarker = join(root, "trusted-ran.txt")
+    await writeFile(join(driverFolder, "mako-trusted-app.cmd"), `@echo ran> "${trustedMarker}"\r\n`)
+    const trusted = await launch("mako-trusted-app")
+    assert.ok(await ran(trustedMarker), `the trusted program ran: ${trusted}`)
+    // A program of a name nothing trusted has, on PATH in a folder outside the profile: the host's lookup refuses the
+    // folder, and the name never reaches the driver, whose own search would have found it.
+    const outside = join(process.cwd(), "node_modules", ".tmp", `mako-untrusted-${process.pid}`)
+    const untrustedMarker = join(root, "untrusted-ran.txt")
+    await mkdir(outside, { recursive: true })
+    await writeFile(join(outside, "mako-planted-app.cmd"), `@echo ran> "${untrustedMarker}"\r\n`)
+    process.env[pathKey] = `${outside}${delimiter}${process.env[pathKey] ?? ""}`
+    try {
+      if (resolveExecutable("mako-planted-app")) return { trusted: trusted.slice(0, 120), untrusted: "this checkout is in a folder the lookup trusts; the refusal is not exercised here" }
+      const planted = await launch("mako-planted-app")
+      assert.match(planted, /no installed app is named/i, planted)
+      assert.equal(await ran(untrustedMarker), false, "the planted program did not run")
+      return { trusted: trusted.slice(0, 120), planted: planted.slice(0, 160) }
+    } finally {
+      process.env[pathKey] = (process.env[pathKey] ?? "").split(delimiter).filter((folder) => folder !== outside).join(delimiter)
+      await rm(outside, { recursive: true, force: true }).catch(() => undefined)
+    }
+  })
+
+  await check("a recording path from the driver is taken only on a local drive", async () => {
+    assert.equal(reportedPath.parse("\\\\?\\C:\\Users\\someone\\recording.mp4"), "C:\\Users\\someone\\recording.mp4")
+    assert.equal(reportedPath.parse("C:\\plain\\recording.mp4"), "C:\\plain\\recording.mp4")
+    assert.equal(reportedPath.safeParse("\\\\?\\UNC\\server\\share\\recording.mp4").success, false, "a verbatim network path is refused")
+    assert.equal(reportedPath.safeParse("\\\\?\\GLOBALROOT\\Device\\x").success, false, "a device path is refused")
   })
 
   // The daemon's pipe: this host's process only. Another process of this user is closed on before a request is read,

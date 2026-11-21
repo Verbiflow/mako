@@ -63,10 +63,23 @@ const REPLY_LIMIT = 64 * 1024 * 1024
 /** A socket error that means nothing listens there, so nothing was sent. */
 const unreachable = (error: NodeJS.ErrnoException) => ["ENOENT", "ECONNREFUSED", "ENOTSOCK"].includes(error.code ?? "")
 
+/**
+ * What a caller knows of the daemon it means to reach. `gone` aborts when the daemon's process has exited:
+ * connections to its endpoint are closed then, whoever answers on it, and a call in flight fails as the daemon having
+ * stopped.
+ */
+export interface DaemonPeer {
+  gone?: AbortSignal
+}
+
 /** A connection to the daemon's socket, or the reason there is none. */
-function connect(socket: string): Promise<Socket> {
+function connect(socket: string, peer: DaemonPeer = {}): Promise<Socket> {
+  if (peer.gone?.aborted) return Promise.reject(new DaemonUnavailableError())
   return new Promise((resolve, reject) => {
     const connection = createConnection(socket)
+    const gone = () => connection.destroy()
+    peer.gone?.addEventListener("abort", gone, { once: true })
+    connection.once("close", () => peer.gone?.removeEventListener("abort", gone))
     const failed = (error: NodeJS.ErrnoException) =>
       reject(unreachable(error) ? new DaemonUnavailableError({ cause: error }) : new DaemonClosedError({ cause: error }))
     connection.once("error", failed)
@@ -124,8 +137,8 @@ export function readLine(socket: Socket, limit = REPLY_LIMIT): Promise<Buffer> {
  * (the proxy drops MCP cancellations too), and its connection is how the
  * caller learns that it ended. A daemon silent past the deadline is stuck.
  */
-export async function exchange(socket: string, request: DaemonRequest, deadlineMs = DAEMON_CALL_DEADLINE_MS): Promise<Buffer> {
-  const connection = await connect(socket)
+export async function exchange(socket: string, request: DaemonRequest, deadlineMs = DAEMON_CALL_DEADLINE_MS, peer: DaemonPeer = {}): Promise<Buffer> {
+  const connection = await connect(socket, peer)
   const timer = setTimeout(() => connection.destroy(new Error(`no reply within ${deadlineMs / 1000} s`)), deadlineMs)
   try {
     connection.write(`${JSON.stringify(request)}\n`)
@@ -141,8 +154,8 @@ export function parseReply(line: Buffer): DaemonReply {
 }
 
 /** Ask the daemon one thing and read its answer; a refusal throws. */
-async function ask(socket: string, request: DaemonRequest): Promise<JsonObject> {
-  const reply = parseReply(await exchange(socket, request, 10_000))
+async function ask(socket: string, request: DaemonRequest, peer: DaemonPeer): Promise<JsonObject> {
+  const reply = parseReply(await exchange(socket, request, 10_000, peer))
   if (!reply.ok) throw new Error(`The native driver refused ${request.method}: ${reply.error ?? "no reason given"}`)
   return z.record(z.string(), z.json()).parse(reply.result ?? {})
 }
@@ -205,8 +218,8 @@ export function daemonMismatch(description: DaemonDescription): string | null {
 }
 
 /** The daemon's version and its tools in MCP's shape, the reshaping the proxy does once at its start. */
-export async function describeDaemon(socket: string): Promise<DaemonDescription> {
-  const [metadata, listed] = await Promise.all([ask(socket, { method: "metadata" }), ask(socket, { method: "list" })])
+export async function describeDaemon(socket: string, peer: DaemonPeer = {}): Promise<DaemonDescription> {
+  const [metadata, listed] = await Promise.all([ask(socket, { method: "metadata" }, peer), ask(socket, { method: "list" }, peer)])
   const tools = z.array(DaemonToolSchema).parse(listed.tools).map((entry): Tool => {
     const tool: Tool = {
       name: entry.name,
@@ -242,8 +255,8 @@ export function leaseIdentity(): string {
  * open. `ended` settles when the daemon closes it (it stopped) or `close`
  * does; the daemon then ends every session named under it.
  */
-export async function openDaemonLease(socket: string, identity: string): Promise<{ ended: Promise<void>; close(): void }> {
-  const connection = await connect(socket)
+export async function openDaemonLease(socket: string, identity: string, peer: DaemonPeer = {}): Promise<{ ended: Promise<void>; close(): void }> {
+  const connection = await connect(socket, peer)
   const timer = setTimeout(() => connection.destroy(new Error("session_begin was not acknowledged")), 4_000)
   try {
     connection.write(`${JSON.stringify({ method: "session_begin", session_id: identity } satisfies DaemonRequest)}\n`)
