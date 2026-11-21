@@ -4,7 +4,7 @@ import { randomBytes } from "node:crypto"
 import { recipesOverHttp } from "@mako/protocol/recipes-http"
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { z } from "zod"
-import { decodeRuntimeValue, encodeRuntimeValue, type RuntimeEvent } from "./contracts/runtime-value.js"
+import { decodeRuntimeValue, encodeRuntimeValue, type EncodedValue, type RuntimeEvent } from "./contracts/runtime-value.js"
 import { sessionAccessTier } from "./contracts/access.js"
 import { listedUnderApex } from "./contracts/agents.js"
 import type { LiveStartOptions } from "./contracts/live-conversations.js"
@@ -67,7 +67,7 @@ import type { KeepAwakeSettings } from "./contracts/keep-awake.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
 import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
 import type { Control, ControlService } from "./control/index.js"
-import type { SimulatorAgent } from "./contracts/simulators.js"
+import type { SimulatorAgent, SimulatorCaller, SimulatorsListed } from "./contracts/simulators.js"
 import { accountBorrowing, BorrowedSimulators, ControlResidency, ControlSessions, SimulatorTools, controlLine, controlLoad, controlVideoMedia } from "./control/load.js"
 import type { MediaHandler } from "@mako/protocol"
 import { workspaceWrites } from "./base/workspace-writes.js"
@@ -160,6 +160,8 @@ export interface Core {
   desktop: NonNullable<Parameters<typeof startWebHost>[7]>
   /** Builds browser and computer use and declares its methods: the control domain's load, once (`CoreShell.control`). */
   openControl(): Promise<Control>
+  /** A window's call to control whose answer is known before control loads (`HostMethodsOptions.knownUnloaded`). */
+  knownWithoutControl(channel: HostChannel, args: unknown[]): EncodedValue | undefined
   /** On a cloud machine: the sign-ins its agent was given, written where each harness reads them. */
   installCloudSignIns(signIns: readonly CloudSignIn[], place: CloudSignInPlace): Promise<CloudSignInInstall[]>
   /** On a cloud machine: loads what every start loads, before its image's snapshot; answers what it loaded. */
@@ -2710,6 +2712,16 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       })
     },
     openControl: openControlNow,
+    // Every window asks which simulators there are as it opens, to offer its Simulator panel or not. Only a Mac runs
+    // any, and only a cloud Thread's machine borrows one: anywhere else there are none for the person, which a window
+    // hears without control loading to say so. An agent's own asking, and another device's, go to control.
+    knownWithoutControl: (channel, args) => {
+      if (channel !== "mako:simulators-list" || onMac() || borrowedSimulators) return undefined
+      // SAFETY: the dispatcher parsed this call's arguments with `mako:simulators-list`'s schema before asking.
+      const [caller] = args as [SimulatorCaller]
+      if (caller.kind !== "person" || caller.via) return undefined
+      return encodeRuntimeValue({ hosts: [], simulators: [], consent: "allowed" } satisfies SimulatorsListed)
+    },
     /**
      * On a cloud machine, before it says it's ready: every heavy package a start loads, and each harness's version,
      * which runs its binary. A snapshot taken after, as the machine image's is, wakes with all of it loaded: modules

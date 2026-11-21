@@ -57,6 +57,7 @@ const SUITES = [
   "test:sync-status-ui",
   "test:tool-rows-ui",
   "test:composer-edges-ui",
+  "test:browser-settings-ui",
   "test:agent-ask-ui",
   "test:internal-review-ui",
   // Its hidden window's capture timed out on every mac-host gate run (GPU or software, hidden or shown), while the
