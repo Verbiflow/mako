@@ -120,7 +120,7 @@ test("read-back passes run one at a time with one waiting for every ask, each wi
   assert.deepEqual(opened.slice(1), ["/sessions/long", "/sessions/long/child-1", "/sessions/long/child-2", "/sessions/long/child-3"], "the next pass reads the session it cut short")
 })
 
-test("the tracker says once when changes are settled through a point", async () => {
+test("the tracker says once when changes are settled through a point", async (t) => {
   const storage = await mkdtemp(join(tmpdir(), "mako-settled-"))
   const clock = new FakeClock(), events = new FakeEventSource(), fs = new FakeFileSystem(clock, events)
   const said: number[] = []
@@ -140,7 +140,18 @@ test("the tracker says once when changes are settled through a point", async () 
     assert.deepEqual(said.filter((through) => through >= changedAt), [], "an open change is not yet settled")
     clock.advance(60_000)
     await tracker.settled()
-    tracker.sweep()
+    // The pass that settles it runs slow: every reading of the loop's clock 10 ms after the last, so its slice of the
+    // turn is spent on the one open change. It says so in that pass all the same, with nothing left to come back for.
+    // Said a turn later, this read 0 on a runner where that write took the slice (gate 26, 2026-11-21).
+    const real = performance.now.bind(performance)
+    let readings = 0
+    const slow = t.mock.method(performance, "now", () => real() + 10 * readings++)
+    try {
+      tracker.sweep()
+    } finally {
+      slow.mock.restore()
+    }
+    assert.ok(readings > 0, "the pass read the clock for its slice")
     assert.equal(tracker.changes(0).at(-1)!.settled, true)
     assert.equal(said.filter((through) => through >= changedAt).length, 1, "said once it is")
     tracker.sweep()
