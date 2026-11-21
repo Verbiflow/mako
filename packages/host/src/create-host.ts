@@ -7,7 +7,7 @@ import { lstat, mkdir, unlink } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import type { HostConfig } from "./host-config.js"
-import { HostMethods, publishHostPipe, runtimeInfo, startWebHost } from "./transport/index.js"
+import { HostMethods, publishHostPipe, retractHostPipe, runtimeIdentity, runtimeInfo, runtimeLocation, startWebHost } from "./transport/index.js"
 import { ensurePrivateDirectory } from "./base/private-directory.js"
 import { makoLocalFolder } from "./base/kept-pipe.js"
 import { HostJobs, type JobDemand } from "./base/host-jobs.js"
@@ -134,6 +134,8 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
   let machine: MachineRuntime | undefined
   let closing = false
   let socketClosed = false
+  /** Whether this start made the socket's folder, which is then its to remove once it's empty. */
+  let runtimeDirectoryMade = false
   let stopped: Promise<void> | undefined
 
   const stopping = new HostStopping()
@@ -242,10 +244,15 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     if (socketClosed) return
     socketClosed = true
     web?.close()
-    // The runtime directory is this host's; leaving it behind is how fifty of them piled up in the temp folder. Leases
-    // a live launcher holds stay for the profile's next host.
+    // What this host put in its runtime directory goes with it, and the directory when it is the host's own and
+    // empty: leaving them behind is how fifty piled up in the temp folder. Leases a live launcher holds stay for the
+    // profile's next host, and so does anything else in a folder the socket was merely named in.
     try {
-      removeRuntimeDirectory(config.runtimeDirectory)
+      if (config.pipe) retractHostPipe(config.runtimeDirectory, runtimeIdentity(config.environment.dataRoot), config.pipe)
+      removeRuntimeDirectory(config.runtimeDirectory, {
+        files: config.pipe ? [] : [config.socket],
+        own: runtimeDirectoryMade || config.runtimeDirectory === runtimeLocation(config.environment.dataRoot).directory,
+      })
     } catch {
       /* best effort */
     }
@@ -298,6 +305,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     }
     web = await listen(config, methods, fixtureDesk ? undefined : secrets.handover, { domains, jobs, subscribed, loop }, {
       outlet: machine && ((channel, event) => machine?.event(channel, event)),
+      madeDirectory: () => { runtimeDirectoryMade = true },
       file: async (request, client) => {
         const done = loop.begin("a file preview")
         try {
@@ -422,6 +430,8 @@ interface ListenHandlers {
   disconnected(client: string): void
   desktop: Parameters<typeof startWebHost>[7]
   outlet?: Parameters<typeof startWebHost>[10]
+  /** The socket's folder wasn't there and this start made it. */
+  madeDirectory(): void
 }
 
 interface ListenParts {
@@ -446,7 +456,7 @@ async function listen(config: HostConfig, methods: HostMethods, handover: Secret
     // Where each task's Local Control keeps its session file, with its pipe's secret.
     await ensurePrivateDirectory(join(makoLocalFolder(), "control"), "Local Control")
   }
-  else await mkdir(dirname(socket), { recursive: true, mode: 0o700 })
+  else if (await mkdir(dirname(socket), { recursive: true, mode: 0o700 })) handlers.madeDirectory()
   const stale = pipe ? null : await lstat(socket).catch((error: NodeJS.ErrnoException) => {
     if (error.code === "ENOENT") return null
     throw error

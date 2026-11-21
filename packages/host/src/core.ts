@@ -16,8 +16,8 @@ import { githubRepositoryUrl, type ThreadHandOff, type ThreadReturnOptions } fro
 import { watch, type FSWatcher } from "node:fs"
 import { stat, writeFile } from "node:fs/promises"
 import { controlArtifactsRoot, controlRecordingsRoot } from "@mako/control/program/artifacts"
-import { homedir } from "node:os"
-import { join } from "node:path"
+import { homedir, userInfo } from "node:os"
+import { join, resolve } from "node:path"
 import { hostLabel, type HostConfig } from "./host-config.js"
 import type { HostMethods, RoutedCall, startWebHost } from "./transport/index.js"
 import type { HostJobs, JobDemand } from "./base/host-jobs.js"
@@ -271,6 +271,15 @@ interface LateParts {
   /** The file system's history, for fseventsd's restart to end reads across it. */
   fileHistory?: FileHistory
   checkpointHistory?: FileHistory
+}
+
+/** Whether this process's home is the one its user's account has, not one a test or a proof made for it. */
+function inPersonsHome(): boolean {
+  try {
+    return resolve(homedir()) === resolve(userInfo().homedir)
+  } catch {
+    return true
+  }
 }
 
 export async function openCore(shell: CoreShell): Promise<Core> {
@@ -1139,8 +1148,11 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     fixture: fixtureDesk,
     signedIn: () => void telemetry.signedIn(),
     request: (call) => telemetry.cloudRequest(call),
+    // A host isolated from the person's Mako (a test's, a proof's) that still runs in their own home would read their
+    // harnesses' sign-ins, the Keychain's among them, to send to an account that isn't theirs: it shares none. One in
+    // a home of its own (`scratchHostHome`) reads only that home's.
     harnessSignIns:
-      fixtureDesk || config.machineAgentFd !== undefined
+      fixtureDesk || config.machineAgentFd !== undefined || (environment.isolated && inPersonsHome())
         ? undefined
         : (options) => {
             const sync = new CloudSignInSync({

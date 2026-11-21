@@ -23,7 +23,7 @@ import { ProviderRegistry } from "@mako/host/harnesses/registry"
 import type { ProviderAccountCapability } from "@mako/host/harnesses/account-capability"
 import { chainFingerprint, type CloudSignInCapability, type CloudSignInExport, type CloudSignInPayload } from "@mako/host/harnesses/cloud-sign-in"
 import { CloudSignInSync, installCloudSignIns } from "@mako/host/harnesses/cloud-sign-ins"
-import { CloudSignInSchema, type CloudKeptSignIn, type CloudShareOutcome, type CloudSharedChain, type CloudSignIn, type CloudSignInChain, type CloudSignInHarness, type CloudSignInListing } from "@mako/host/contracts/cloud-sign-ins"
+import { CloudSignInSchema, type CloudKeptSignIn, type CloudShareOutcome, type CloudSharedChain, type CloudSignIn, type CloudSignInChain, type CloudSignInHarness, type CloudSignInListing, type CloudSignInsState } from "@mako/host/contracts/cloud-sign-ins"
 import type { JsonValue } from "@mako/host/contracts/json"
 import { ranOut } from "./lib/ran-out.ts"
 
@@ -101,6 +101,7 @@ try {
 const fs = require('node:fs'), security = require(${JSON.stringify(securityStandIn)}), args = security.command();
 const stores = JSON.parse(fs.readFileSync(${JSON.stringify(storePath)}, 'utf8'));
 const id = args[args.indexOf('-s')+1];
+fs.appendFileSync(${JSON.stringify(join(root, "security-runs"))}, args[0] + '\\n');
 if (args[0] === 'find-generic-password') { if (!stores[id]) process.exit(44); if (args.includes('-g')) process.stderr.write(security.report(stores[id])); else process.stdout.write(stores[id]); }
 else if (args[0] === 'add-generic-password') { if (fs.existsSync(${JSON.stringify(join(root, "refuse-writes"))})) process.exit(1); stores[id] = security.value(args); fs.writeFileSync(${JSON.stringify(storePath)}, JSON.stringify(stores)); }
 else process.exit(1);
@@ -669,6 +670,44 @@ else process.exit(1);
   assert.equal(JSON.parse(await readFile(choicePath, "utf8")).sharing, false, "the choice is kept")
   sync.stop()
   console.log("ok  turning sharing off takes back everything this Mac gave the cloud")
+
+  // Signed out of Mako, or with no cloud, there's nowhere to send a sign-in: a host that starts so reads no harness's
+  // store and holds no timer, where it read the Keychain (a `security` process) every minute. A person who opens
+  // Settings is shown them, read then; the account's change checks again, and with somewhere to send the timer runs.
+  {
+    const securityRuns = async () => (await readFile(join(root, "security-runs"), "utf8").catch(() => "")).split("\n").filter(Boolean).length
+    const quiet = async (ms: number) => {
+      const runs = await securityRuns()
+      await new Promise((resolve) => setTimeout(resolve, ms))
+      return (await securityRuns()) === runs
+    }
+    let blocked: "signed-out" | "no-cloud" | undefined = "signed-out"
+    const said: CloudSignInsState[] = []
+    const idle = new CloudSignInSync({ accounts: new HarnessAccounts(registry, accountRoot), capabilities: registry, store: { ...store, blocked: async () => blocked }, dataRoot: join(root, "idle"), checkMs: 40, onChange: (state) => said.push(state) })
+    const before = { runs: await securityRuns(), calls: calls.length }
+    idle.start()
+    while (!said.length) await new Promise((resolve) => setTimeout(resolve, 5))
+    assert.deepEqual({ blocked: said[0]?.blocked, harnesses: said[0]?.harnesses }, { blocked: "signed-out", harnesses: [] }, "a signed-out host says it is blocked, and of no harness")
+    assert.ok(await quiet(400), "and no timer reads on: ten of its periods pass with no Keychain item read")
+    idle.wake()
+    assert.ok(await quiet(200), "a wake reads none either")
+    assert.equal(await securityRuns(), before.runs, "so nothing has read the Keychain yet")
+    assert.equal(calls.length, before.calls, "nor asked the cloud anything")
+    const shown = await idle.state()
+    assert.ok(shown.harnesses.some((entry) => entry.harness === "claude" && entry.status === "waiting"), "a person who asks is shown the sign-ins waiting here")
+    assert.ok(await securityRuns() > before.runs, "read for them then")
+    assert.ok(await quiet(400), "and still no timer reads on")
+    blocked = undefined
+    await idle.check()
+    assert.equal(await quiet(400), false, "once the account has the cloud, its change checks and the timer reads on")
+    blocked = "no-cloud"
+    await idle.check()
+    await new Promise((resolve) => setTimeout(resolve, 100))
+    assert.ok(await quiet(400), "and stops when it hasn't")
+    idle.stop()
+    calls.length = 0
+    console.log("ok  with nowhere to send, no harness's store is read and no timer is held until a person or the account's change asks")
+  }
 } finally {
   runAs(platform)
   process.env = original
