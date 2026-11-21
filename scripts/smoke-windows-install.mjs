@@ -312,13 +312,19 @@ async function projectLinks() {
     const smbAfter = await smb()
     record("refused links connect to nothing", connections.length === 0 && smbAfter === smbBefore, { webDav: connections.length, webClient, smbBefore, smbAfter })
 
-    await send(folder)
+    // Written the long way round: the question shows the folder it really is.
+    await send(`${folder}\\..\\${token}\\.`)
     let question
     for (let tries = 0; tries < 50 && !question; tries++) {
       question = await linkDialog()
       if (!question) await delay(200)
     }
     record("a local folder is asked about", Boolean(question && /Open/.test(question) && /Cancel/.test(question)), question)
+    record("the question shows the resolved folder", Boolean(question?.includes(`Open ${folder} as a project`)) && !question.includes(".."), question)
+    // A second link while the question is open is dropped, not stacked.
+    await send(folder)
+    await delay(3_000)
+    record("a link during the question is dropped", /a link's folder was dropped/.test(await readFile(desktopLog, "utf8").catch(() => "")))
     const cancelled = await linkDialog("Cancel")
     await delay(3_000)
     record("Cancel opens nothing", cancelled?.endsWith("Cancel") && !(await linkDialog()) && !/a linked folder opens as a project/.test(await readFile(desktopLog, "utf8").catch(() => "")) && !(await inMakoData(token)))

@@ -17,13 +17,28 @@ export const windowsSharePath = (path: string): boolean => /^[\\/]{2}/.test(path
 /** A share or a device path: never a folder Mako opens for a link or a window. */
 export const windowsRemoteOrDevicePath = (path: string): boolean => windowsSharePath(path) || windowsDevicePath(path)
 
+/** The longest path a link may name: past this a dialog can't show it whole. */
+export const LINKED_FOLDER_MAX_LENGTH = 1000
+
 /**
- * A folder a `mako:` link may name: on Windows a drive-letter path (`C:\work`), with no second colon (an alternate
- * data stream) and no control character; elsewhere an absolute path that isn't `//`. A mapped network drive still
- * passes: the person chose its server.
+ * Whether a path holds a character that would show as something other than what it is: a control character (C0, DEL
+ * and C1), a zero-width one or a direction mark (U+200B to U+200F, U+FEFF), or a bidirectional control (U+202A to
+ * U+202E, U+2066 to U+2069), which can make a dialog show a path's parts in another order.
+ */
+export function misleadingPathText(path: string): boolean {
+  return [...path].some((character) => {
+    const code = character.codePointAt(0) ?? 0
+    return code < 0x20 || (code >= 0x7f && code <= 0x9f) || (code >= 0x200b && code <= 0x200f) || code === 0xfeff || (code >= 0x202a && code <= 0x202e) || (code >= 0x2066 && code <= 0x2069)
+  })
+}
+
+/**
+ * A folder a `mako:` link may name: at most `LINKED_FOLDER_MAX_LENGTH` characters, none of them misleading
+ * (`misleadingPathText`); on Windows a drive-letter path (`C:\work`) with no second colon (an alternate data
+ * stream); elsewhere an absolute path that isn't `//`.
  */
 export function linkableLocalFolder(path: string, windows: boolean): boolean {
-  if (!path || [...path].some((character) => character.charCodeAt(0) < 0x20)) return false
+  if (!path || path.length > LINKED_FOLDER_MAX_LENGTH || misleadingPathText(path)) return false
   if (windows) return /^[A-Za-z]:[\\/]/.test(path) && !path.slice(2).includes(":") && !windowsRemoteOrDevicePath(path)
   return path.startsWith("/") && !path.startsWith("//")
 }

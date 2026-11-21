@@ -32,12 +32,14 @@ export interface SessionMethodsDeps {
 }
 
 /**
- * Never a share or a device path on Windows: opening one makes Windows connect to its server with the person's
- * credentials, and Git there runs what the share's `.git/config` says. A link is checked before it reaches a window
- * (`electron/desktop-deep-link.ts`); this is the host's own refusal, whoever asks.
+ * Never a share or a device path on Windows, as written: opening one makes Windows connect to its server with the
+ * person's credentials, and Git there runs what the share's `.git/config` says. A drive letter the person mapped to
+ * a share still opens: they chose that server, and picking a project on it must keep working. A link is held to more
+ * before it reaches a window, refused by where its folder really leads (`electron/desktop-deep-link.ts`); this is the
+ * host's own refusal, whoever asks.
  */
-function refuseRemoteFolder(folder: string): void {
-  if (onWindows() && windowsRemoteOrDevicePath(folder))
+export function refuseRemoteFolder(folder: string, windows = onWindows()): void {
+  if (windows && windowsRemoteOrDevicePath(folder))
     throw new Error("Mako opens projects on this computer's drives, not on a network share or a device path.")
 }
 

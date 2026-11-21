@@ -2,7 +2,7 @@ import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, powerMonitor, pro
 import { WindowShutdown } from "@mako/host/application/window-shutdown"
 import { SHUTDOWN_HOLD_MS } from "@mako/host/contracts/cloud-threads"
 import { createHash, randomUUID } from "node:crypto"
-import { cp, mkdir, access, lstat, mkdtemp, rename, rm, stat } from "node:fs/promises"
+import { cp, mkdir, access, lstat, mkdtemp, realpath, rename, rm, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -26,7 +26,7 @@ import { HostLiveness, type HostProbe } from "@mako/host/contracts/host-liveness
 import { HOST_OUTAGE_MESSAGE } from "@mako/host/contracts/host-connection"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
 import { DESK_BACKGROUND, DESK_TITLE_BAR_OVERLAY, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from "./desk-scheme.js"
-import { DEEP_LINK_SCHEME, deepLinkInArgv, openProjectLink, parseDeepLink, type DeepLink } from "./desktop-deep-link.js"
+import { DEEP_LINK_SCHEME, deepLinkInArgv, parseDeepLink, projectLinkOpener, type DeepLink } from "./desktop-deep-link.js"
 import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 import { installCrashReporting } from "@mako/host/base/crash"
@@ -185,6 +185,19 @@ if (role === "desktop")
     void stat(path).then((info) => { if (info.isDirectory()) requestOpenProject(path) }, () => undefined)
   })
 
+/** A linked folder's way in: checked, resolved, asked about once at a time, and checked again before it opens. */
+const openLinkedProject = projectLinkOpener({
+  windows: windowsChrome,
+  reader: { lstat, realpath },
+  confirm: confirmLinkedProject,
+  open: (path) => {
+    hostLog("desktop", "a linked folder opens as a project, as the person agreed")
+    requestOpenProject(path)
+  },
+  refused: (_path, reason) => hostWarn("desktop", "a link's folder was refused", { reason }),
+  dropped: () => hostWarn("desktop", "a link's folder was dropped: another is being asked about"),
+})
+
 /** A `mako:` link: from Windows's launch or second launch, or macOS's `open-url`. */
 function openDeepLink(link: DeepLink): void {
   if (link.kind === "refused") {
@@ -194,16 +207,7 @@ function openDeepLink(link: DeepLink): void {
   if (link.kind === "open-project") {
     // A web page or a document can send this link: the folder must be a real one on this computer's drives, and the
     // person says Open, in this app's own dialog, before any window hears of it.
-    void openProjectLink(link.path, {
-      windows: windowsChrome,
-      reader: { lstat },
-      confirm: confirmLinkedProject,
-      open: (path) => {
-        hostLog("desktop", "a linked folder opens as a project, as the person agreed")
-        requestOpenProject(path)
-      },
-      refused: (_path, reason) => hostWarn("desktop", "a link's folder was refused", { reason }),
-    }).catch((error) => hostWarn("desktop", "a link's folder couldn't be opened", { reason: error instanceof Error ? error.message : String(error) }))
+    void openLinkedProject(link.path).catch((error) => hostWarn("desktop", "a link's folder couldn't be opened", { reason: error instanceof Error ? error.message : String(error) }))
     return
   }
   const window = app.isReady() ? (BrowserWindow.getFocusedWindow() ?? personWindows()[0]) : undefined
