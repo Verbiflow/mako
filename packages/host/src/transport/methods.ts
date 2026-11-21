@@ -38,6 +38,11 @@ export interface HostMethodsOptions {
    * A preview asked for then is another host's conversation's, answered there, or there is none; asking doesn't load it.
    */
   nothingShownHere?(): boolean
+  /**
+   * A call of this computer's own windows whose answer is known without the domain that declares it, while that
+   * domain hasn't loaded: answered so, and the domain stays unloaded. Undefined for every other call.
+   */
+  knownUnloaded?(channel: HostChannel, args: unknown[]): EncodedValue | undefined
   /** Each call is work by its channel while it runs, so a call that holds the event loop is named. */
   work: HostWork
 }
@@ -110,6 +115,10 @@ export class HostMethods implements MethodTable {
     // The gateway refuses these by name first (`fromHostOperation`); this is the table's own word, whatever the door.
     if (client.startsWith(GATEWAY_CLIENT) && !gatewayAllows(channel, client))
       throw new Error(GATEWAY_ALLOWED.has(channel) ? MACHINE_REFUSED : GATEWAY_REFUSED)
+    if (!this.calls.has(channel) && this.options.knownUnloaded && !client.startsWith(GATEWAY_CLIENT)) {
+      const known = this.options.knownUnloaded(channel, hostCallSchema(channel).parse(args))
+      if (known !== undefined) return known
+    }
     const call = await this.declared(channel)
     this.repeated.note(client, channel, args, correlationId)
     return withHostClient(client, () => call(args), history, correlationId)

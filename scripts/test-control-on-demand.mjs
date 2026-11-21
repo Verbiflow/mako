@@ -77,6 +77,15 @@ try {
     assert.equal(before.load, "on-demand", "a host without the desktop app loads control on demand")
     assert.equal(before.state, "unloaded", `nothing loads control on an idle host, but it loaded for ${before.reason}`)
   }
+  // What a window asks as it opens, and as `/` is typed in its composer (`test-control-unasked.ts`): the simulators
+  // there are for the person, none off a Mac, and the MCP servers.
+  if (!mac) {
+    const listed = JSON.parse((await call("/rpc", encodeRuntimeCall("mako:simulators-list", [{ kind: "person" }], 1))).body)
+    assert.deepEqual(listed.ok && listed.value, { hosts: [], simulators: [], consent: "allowed" }, "a window hears there are no simulators here")
+    const servers = JSON.parse((await call("/rpc", encodeRuntimeCall("mako:mcp-discover", [], 1))).body)
+    assert.equal(servers.ok, true, `the MCP servers are read: ${servers.error}`)
+    assert.equal((await domains()).control.state, "unloaded", "a window opening and its composer's menu load none of control")
+  }
   // An agent's launch: its session's folder and socket, its grant on Mako's servers, and a turn streamed.
   const conversationId = randomUUID()
   const started = JSON.parse((await call("/rpc", encodeRuntimeCall("mako:live-start", ["grok", project, { conversationId, title: "Launched", initialRequest: { id: randomUUID(), text: "stream", attachments: [] } }], 1))).body)

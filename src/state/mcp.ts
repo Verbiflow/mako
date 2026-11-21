@@ -42,7 +42,22 @@ export const mcp = {
     const state = mcpStore.get()
     if (state.status === "loading" || state.status === "syncing") return
     if (state.snapshot && (!cwd || state.snapshot.cwd === cwd)) return
-    void mcp.load()
+    void mcp.loadServers()
+  },
+
+  /**
+   * The servers alone, which is all the composer's menu lists. Settings reads the rest with `load`: the computer's
+   * grants, its browsers and its driver are browser and computer use's to say, and asking loads that into a host that
+   * hadn't needed it.
+   */
+  async loadServers() {
+    if (!hasBridge()) return
+    mcpStore.set({ status: "loading", error: undefined })
+    try {
+      mcpStore.set({ status: "ready", snapshot: await getMako().discoverMcp(), previews: {} })
+    } catch {
+      mcpStore.set({ status: "error", error: "MCP configuration could not be loaded" })
+    }
   },
 
   async prepareBrowser() {

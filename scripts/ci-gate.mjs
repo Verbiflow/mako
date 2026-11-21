@@ -29,6 +29,8 @@ export const STEPS = [
   [20, "node scripts/test-control-on-demand.mjs"],
   // An agent's `computer` server answers its handshake and tools/list from a manifest, byte for byte as Local Control's server does.
   [2, "npm run -s test:computer-manifest"],
+  // A window opening and `/` typed in its composer ask the host nothing that is a use of browser and computer use.
+  [2, "npm run -s test:control-unasked"],
   [19, "npx tsx scripts/test-host-lifecycle.ts"],
   [4, "npx tsx scripts/test-host-lock.ts holder-readiness"],
   [0, "npm run test:loop-profile"],

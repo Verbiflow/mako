@@ -54,9 +54,11 @@ async function checkWindow() {
     await until("matchMedia('(prefers-reduced-motion: reduce)').matches")
     await evaluate('new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(()=>r(true))))')
     await new Promise(r=>setTimeout(r,500))
-    const stillFrame=await evaluate("document.querySelector('.activity-orb').toDataURL()")
-    await new Promise(r=>setTimeout(r,100))
-    assert.equal(await evaluate("document.querySelector('.activity-orb').toDataURL()"),stillFrame)
+    // The orb draws on a canvas its worker holds, which the page can't read back: what it shows is what the window shows there.
+    const orbShown=async()=>{const box=await evaluate("(()=>{const b=document.querySelector('.activity-orb').getBoundingClientRect();return {x:Math.floor(b.x),y:Math.floor(b.y),width:Math.ceil(b.width),height:Math.ceil(b.height)}})()");assert.ok(box.width>0&&box.height>0,'the orb has a size');return (await page.capturePage(box)).toPNG().toString('base64')}
+    const stillFrame=await orbShown()
+    await new Promise(r=>setTimeout(r,300))
+    assert.equal(await orbShown(),stillFrame,'the orb is still under reduced motion')
     await capture('preparing.png')
     await page.debugger.sendCommand('Emulation.setEmulatedMedia',{features:[]})
     await evaluate("(async()=>{const {mcp}=await import('/src/state/mcp.ts');await mcp.connectBrowser('aside')})()")
