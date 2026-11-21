@@ -1,4 +1,5 @@
 import { request } from "node:http"
+import { runtimeConnection } from "@mako/host/transport/pipe"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { hostLog, hostWarn } from "@mako/host/base/host-log"
@@ -15,7 +16,8 @@ export type SecretKeyHandoverResult = "not-wanted" | "handed" | "unavailable"
 
 function keyRequest(socket: string, method: "GET" | "POST", path: string, options: { body?: string; signal?: AbortSignal; timeoutMs?: number } = {}): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = request({ socketPath: socket, path, method, signal: options.signal, headers: options.body ? { "content-type": "application/json" } : {} }, (response) => {
+    // On Windows a proven connection (`pipe.ts`): nothing, the data key least of all, goes to a program holding the name.
+    const req = request({ agent: false, ...runtimeConnection(socket), path, method, signal: options.signal, headers: options.body ? { "content-type": "application/json" } : {} }, (response) => {
       const chunks: Buffer[] = []
       response.on("data", (chunk: Buffer) => chunks.push(chunk))
       response.on("end", () => resolve({ status: response.statusCode ?? 0, body: Buffer.concat(chunks).toString("utf8") }))
@@ -65,7 +67,8 @@ export async function handOverSecretKey(socket: string, keyPath: string, encrypt
  * keychain refuses, it waits for the next window rather than asking again.
  */
 export class SecretKeyLink {
-  private readonly socket: string
+  /** Where the host is now: read at each request, so a host that started again on a new pipe is the one asked. */
+  private readonly socket: () => string
   private readonly keyPath: string
   private readonly encryption: SecretEncryption
   private readonly stop = new AbortController()
@@ -75,7 +78,7 @@ export class SecretKeyLink {
   private handing: Promise<SecretKeyHandoverResult | "failed"> | undefined
   private resume: (() => void) | undefined
 
-  constructor(socket: string, keyPath: string, encryption: SecretEncryption) {
+  constructor(socket: () => string, keyPath: string, encryption: SecretEncryption) {
     this.socket = socket
     this.keyPath = keyPath
     this.encryption = encryption
@@ -87,7 +90,7 @@ export class SecretKeyLink {
    * handover carries on behind it.
    */
   async attached(waitMs = ATTACH_WAIT_MS): Promise<SecretKeyHandoverResult | "failed" | "pending"> {
-    const handing = this.hand(() => handOverSecretKey(this.socket, this.keyPath, this.encryption)).then((result) => {
+    const handing = this.hand(() => handOverSecretKey(this.socket(), this.keyPath, this.encryption)).then((result) => {
       this.paused = result !== "handed" && result !== "not-wanted"
       if (!this.paused) this.resume?.()
       if (!this.watching && !this.stop.signal.aborted) {
@@ -138,7 +141,7 @@ export class SecretKeyLink {
       }
       let asked: boolean
       try {
-        asked = await wanted(this.socket, true, this.stop.signal)
+        asked = await wanted(this.socket(), true, this.stop.signal)
       } catch {
         await delay(retry, undefined, { signal: this.stop.signal }).catch(() => undefined)
         retry = Math.min(retry * 2, RETRY_LAST_MS)
@@ -146,7 +149,7 @@ export class SecretKeyLink {
       }
       retry = RETRY_FIRST_MS
       // Not asked: a host older than the handover answered at once. Asked and not handed: the keychain refused.
-      const result = asked ? await this.hand(() => offer(this.socket, this.keyPath, this.encryption)) : "not-wanted"
+      const result = asked ? await this.hand(() => offer(this.socket(), this.keyPath, this.encryption)) : "not-wanted"
       if (result !== "handed") this.paused = true
     }
   }

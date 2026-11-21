@@ -50,8 +50,8 @@ const code = (cause: unknown) => (cause instanceof Error && "code" in cause ? ca
 
 /** Windows can't open a folder as a file, and makes a rename durable without it. */
 const noFolderToOpen = (cause: unknown) => onWindows() && (code(cause) === "EISDIR" || code(cause) === "EPERM")
-/** A file system that can't sync a folder says so; the rename stands as it is. */
-const noFolderSync = (cause: unknown) => { const found = code(cause); return found === "EINVAL" || found === "ENOTSUP" || found === "EOPNOTSUPP" }
+/** A file system that can't sync a folder says so; the rename stands as it is. Windows opens a folder but refuses its sync. */
+const noFolderSync = (cause: unknown) => { const found = code(cause); return found === "EINVAL" || found === "ENOTSUP" || found === "EOPNOTSUPP" || noFolderToOpen(cause) }
 
 /**
  * Whether `name` is a staged file whose writer is gone. A process that exists, whoever's it is, keeps its file: a

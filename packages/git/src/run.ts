@@ -2,12 +2,12 @@ import type { spawn, ChildProcess } from "node:child_process"
 import { processRunner, type ProcessRunner } from "./process-runner.js"
 import { existsSync, readlinkSync } from "node:fs"
 import { availableParallelism } from "node:os"
-import { delimiter, join } from "node:path"
+import { delimiter, join, win32 } from "node:path"
 import { Readable } from "node:stream"
 import { forgetStartingRepository } from "./environment.js"
 import { GitError } from "./errors.js"
 import { Repositories } from "./open.js"
-import { onMac } from "./platform.js"
+import { onMac, onWindows } from "./platform.js"
 import type { Repository } from "./repository.js"
 import { commonDirOf, REF_LOCK_WAIT, subcommandOf, writesShared } from "./shared-writes.js"
 
@@ -31,6 +31,11 @@ export interface GitTrace {
 }
 
 export interface GitRuntime {
+  /**
+   * Where Git is, when the host knows better than PATH: on Windows only a Git in a folder no other account can write
+   * (the host's `resolveExecutable`). Throws when there is none.
+   */
+  resolveExecutable?: () => string
   /** The owner supplies process ownership; standalone Git uses its own group runner. */
   processes?: Pick<ProcessRunner, "spawn" | "close">
   /** The owner stopped: cancel running commands and refuse queued or new ones. */
@@ -181,7 +186,7 @@ export class Git {
    * them spawns nothing. A Git earlier on PATH (Homebrew's) is used as is.
    */
   get executable(): string {
-    this.#executable ??= resolveGit()
+    this.#executable ??= this.#runtime.resolveExecutable?.() ?? resolveGit()
     return this.#executable
   }
 
@@ -534,6 +539,14 @@ function trackProcesses(runner: Pick<ProcessRunner, "spawn" | "close">, signal: 
 }
 
 function resolveGit(): string {
+  // Windows looks for a bare name in the working folder first: a repository holding a `git.exe` would run it. Git is
+  // only ever the one on PATH, by its whole path, from PATH's whole-path folders.
+  if (onWindows()) {
+    const found = windowsGit()
+    // Never a bare `git`: Windows would look for it in the working folder first, a repository holding a `git.exe`.
+    if (!found) throw new Error("Git wasn't found on PATH. Install Git for Windows and start Mako again.")
+    return found
+  }
   if (!onMac()) return "git"
   const first = (process.env.PATH ?? "").split(delimiter).map((dir) => join(dir, "git")).find((path) => existsSync(path))
   if (first && first !== "/usr/bin/git") return first
@@ -546,4 +559,15 @@ function resolveGit(): string {
   })()
   const tools = join(developer, "usr", "bin", "git")
   return existsSync(tools) ? tools : first ?? "git"
+}
+
+function windowsGit(): string | undefined {
+  const pathKey = Object.keys(process.env).find((key) => key.toUpperCase() === "PATH")
+  const folders = (pathKey ? process.env[pathKey] ?? "" : "").split(delimiter).filter((dir) => win32.isAbsolute(dir))
+  for (const dir of folders)
+    for (const name of ["git.exe", "git.cmd"]) {
+      const path = win32.join(dir, name)
+      if (existsSync(path)) return path
+    }
+  return undefined
 }

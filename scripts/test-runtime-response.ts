@@ -12,7 +12,9 @@ import { RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
 import type { RuntimeTransfer } from "@mako/host/transport/response"
 
 const root = await mkdtemp(join(tmpdir(), "mako-runtime-response-"))
-const socket = join(root, "host.sock")
+// Windows has no Unix sockets in Node: each server there listens on a named pipe of its own.
+const endpoint = (name: string) => process.platform === "win32" ? `\\\\.\\pipe\\mako-runtime-response-${randomUUID()}-${name}` : join(root, name)
+const socket = endpoint("host.sock")
 const payload = {
   image: "0123456789-東京-🐟 ".repeat(10_000),
   empty: "",
@@ -83,7 +85,7 @@ try {
     "Telemetry cannot alter a successful read"
   )
 
-  const corruptSocket = join(root, "corrupt.sock")
+  const corruptSocket = endpoint("corrupt.sock")
   const bomb = brotliCompressSync(Buffer.alloc(33 * 1024 * 1024, 65))
   let replies = 0
   const bad = createServer((req, response) => {

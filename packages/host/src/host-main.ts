@@ -38,12 +38,12 @@ hostLog("host", "starting", {
 // running. Whatever answers on the socket is a host, refused at once, and a holder that stays is refused at the bound.
 const lock = await acquireSuccessorLock(environment.dataRoot, takePredecessor(), {
   log: (message, fields) => hostWarn("host", message, fields),
-  brief: { ms: CLI_HOLD_MS, listening: () => probeRuntime(config.socket, { timeoutMs: 1_000 }).then((probe) => probe.state === "ready", () => true) },
+  brief: { ms: CLI_HOLD_MS, listening: () => probeRuntime(config.answeredOn, { timeoutMs: 1_000 }).then((probe) => probe.state === "ready", () => true) },
 })
 // A host from before this lock holds only Electron's, and answers on the socket once it listens.
 // A socket that neither answers nor refuses counts as occupied.
 const olderHost = lock.kind === "held"
-  ? await settleRuntime(config.socket, { timeoutMs: 2_000 }).then((probe) => probe.state !== "absent", () => true)
+  ? await settleRuntime(config.answeredOn, { timeoutMs: 2_000 }).then((probe) => probe.state !== "absent", () => true)
   : false
 if (lock.kind === "taken" || olderHost) {
   hostWarn("host", "another host holds this data root", {
