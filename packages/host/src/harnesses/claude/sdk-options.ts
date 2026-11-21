@@ -1,4 +1,4 @@
-import { applyControlEnvironment } from "../../control/index.js"
+import { applyControlEnvironment } from "../../base/control-launch.js"
 import { applyThreadEnvironment } from "../../workspaces/index.js"
 import type { Options } from "@anthropic-ai/claude-agent-sdk"
 import type { ClaudeSdkConfiguration } from "./sdk-driver.js"

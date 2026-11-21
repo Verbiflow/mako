@@ -1,3 +1,5 @@
+import { iosAvailability } from "./offering.js"
+export { iosAvailability } from "./offering.js"
 import type { Json } from "@mako/protocol"
 import { mkdir, open as openFile } from "node:fs/promises"
 import { join } from "node:path"
@@ -5,7 +7,6 @@ import type { SimulatorSetup } from "../../contracts/simulator-setup.js"
 import { setupStep } from "../../contracts/simulator-setup.js"
 import type {
   SimulatorAction,
-  SimulatorAvailability,
   SimulatorHostSummary,
   SimulatorOrientation,
   SimulatorPoint,
@@ -540,13 +541,3 @@ export async function pngSize(path: string): Promise<{ width: number; height: nu
   }
 }
 
-/** Whether this Mac can run an iPhone simulator, and if not the first thing missing, from the setup line. */
-export function iosAvailability(setup: SimulatorSetup, canDrive = true): SimulatorAvailability {
-  if (setup.phase === "unavailable") return { ready: false, blocker: "not-macos", why: "iPhone and iPad simulators run on macOS alone." }
-  if (setupStep(setup, "xcode")?.state !== "done") return { ready: false, blocker: "no-xcode", why: "This Mac has no Xcode, so no iOS Simulator.", fix: "Settings › Simulators" }
-  if (setupStep(setup, "finish")?.state !== "done") return { ready: false, blocker: "no-xcode", why: "Xcode's first-run setup isn't finished.", fix: "Settings › Simulators" }
-  if (setupStep(setup, "runtime")?.state !== "done") return { ready: false, blocker: "no-runtime", why: "Xcode has no iOS simulator runtime yet.", fix: "Settings › Simulators" }
-  if (setupStep(setup, "tools")?.state !== "done") return { ready: false, blocker: "no-tools", why: "Mako's simulator tools aren't installed yet.", fix: "Settings › Simulators" }
-  if (!canDrive) return { ready: false, blocker: "not-built", why: "This copy of Mako can list simulators but has no way to drive them." }
-  return { ready: true }
-}

@@ -11,14 +11,14 @@ onPackageLoad((load) => {
 const own = {
   claudeAgentSdk: lazyPackage("@anthropic-ai/claude-agent-sdk", () => import("@anthropic-ai/claude-agent-sdk")),
   acpSdk: lazyPackage("@agentclientprotocol/sdk", () => import("@agentclientprotocol/sdk")),
-  /** MCP's server SDK and Local Control's server, for the agents' `mako` and `computer` servers. */
-  mcpServer: lazyPackage("@modelcontextprotocol/sdk server (@mako/control-runtime/mcp)", () =>
+  /** MCP's server SDK, for the agents' `mako` and `computer` servers. */
+  mcpServer: lazyPackage("@modelcontextprotocol/sdk server", () =>
     Promise.all([
       import("@modelcontextprotocol/sdk/server/mcp.js"),
       import("@modelcontextprotocol/sdk/server/streamableHttp.js"),
-      import("@mako/control-runtime/mcp"),
-    ]).then(([{ McpServer }, { StreamableHTTPServerTransport }, { createControlMcpServer }]) =>
-      ({ McpServer, StreamableHTTPServerTransport, createControlMcpServer }))),
+    ]).then(([{ McpServer }, { StreamableHTTPServerTransport }]) => ({ McpServer, StreamableHTTPServerTransport }))),
+  /** Local Control's server, for an agent's first call to its `computer` server: what it lists is answered without it (`tools/computer-manifest.ts`). */
+  controlMcp: lazyPackage("@mako/control-runtime/mcp", () => import("@mako/control-runtime/mcp")),
   /** MCP's server SDK on stdio, for `mako mcp`. */
   mcpStdio: lazyPackage("@modelcontextprotocol/sdk stdio server (mako mcp)", () =>
     Promise.all([import("@modelcontextprotocol/sdk/server/mcp.js"), import("@modelcontextprotocol/sdk/server/stdio.js")])
