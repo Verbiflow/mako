@@ -4,7 +4,7 @@ import { ProviderStartupWatch, type StartupWatchOptions } from "../../provider-s
 import { mkdirSync, readFileSync } from "node:fs"
 import { createRequire } from "node:module"
 import { dirname, join } from "node:path"
-import { fileURLToPath } from "node:url"
+import { fileURLToPath, pathToFileURL } from "node:url"
 import { LineAssembler } from "@mako/sessions"
 import { writeChildInput } from "@mako/sessions/child-input"
 import { hostLog, hostWarn } from "../../../base/host-log.js"
@@ -25,6 +25,7 @@ import {
   type SdkWireError,
 } from "./wire.js"
 import { z } from "zod"
+import { cursorSdkInstallRoot, installedCursorSdkRoot } from "./installed.js"
 
 /** Which line a refused one was, read without its content. */
 const LineEnvelopeSchema = z.object({
@@ -146,13 +147,21 @@ export function cursorSdkChildEntry(): string {
   return join(dirname(fileURLToPath(import.meta.url)), "child.js")
 }
 
+/** What the child loads first where the host carries no SDK of its own (`installed-sdk.ts`). */
+function installedSdkLoader(): string {
+  return pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "installed-sdk.js")).href
+}
+
 /** The SDK's child as its client spawns it; `CURSOR_SDK_CHILD` names another entry, as `CODEX_EXECUTABLE` does Codex's binary. */
 function cursorSdkChild(options: Pick<CursorSdkClientOptions, "env" | "entry" | "execPath" | "heapSnapshots">) {
   const env: NodeJS.ProcessEnv = { ...options.env, ELECTRON_RUN_AS_NODE: "1" }
   delete env.NODE_OPTIONS
+  // The SDK Settings installed, on a host made without Cursor: the child resolves it through a loader of its own.
+  const installed = installedCursorSdkRoot()
+  if (installed) env.MAKO_CURSOR_SDK_ROOT = installed
   return {
     command: headlessNodeExecutable(options.execPath),
-    args: [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), options.entry ?? (options.env.CURSOR_SDK_CHILD || cursorSdkChildEntry())],
+    args: [...CHILD_V8_FLAGS, ...heapSnapshotFlags(options.heapSnapshots), ...installed ? ["--import", installedSdkLoader()] : [], options.entry ?? (options.env.CURSOR_SDK_CHILD || cursorSdkChildEntry())],
     env,
   }
 }
@@ -175,7 +184,8 @@ export function cursorSdkPackages(): string[] {
     for (let depth = 0; depth < 6 && !isCursorSdk(directory); depth += 1) directory = dirname(directory)
     return isCursorSdk(directory) ? [dirname(directory)] : []
   } catch {
-    return []
+    // None with the host: the copy Settings installed, in the scope folder its packages share.
+    return installedCursorSdkRoot() ? [join(cursorSdkInstallRoot(), "node_modules", "@cursor")] : []
   }
 }
 
