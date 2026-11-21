@@ -4,7 +4,7 @@ import { mkdtemp } from "node:fs/promises"
 import { fileURLToPath } from "node:url"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { NativeRecordings, helperRecordingDesktop, nativeRecordingRate, type NativeDriverCall } from "../packages/control-runtime/src/native-recording.js"
+import { NativeRecordings, nativeRecordingRate, type NativeDriverCall } from "../packages/control-runtime/src/native-recording.js"
 import type { ComputerDriverClient } from "../packages/control-runtime/src/computer-driver-client.js"
 import type { Tool } from "@modelcontextprotocol/sdk/types.js"
 const target = { kind: "window" as const, pid: 42, window_id: 7 }
@@ -180,11 +180,6 @@ for (const maxFps of [5, 60]) {
 }
 console.log("Native recording source rate: 5/60 fps backend ceilings, negotiated defaults and refusal before dispatch passed")
 
-// Where the video helper records instead of the driver: a person's Linux desktop, and a job's own X display.
-assert.equal(helperRecordingDesktop({ DISPLAY: ":0", XDG_SESSION_TYPE: "x11" }, "darwin"), undefined, "a Mac's driver records")
-assert.equal(helperRecordingDesktop({}, "linux"), undefined, "no display, nothing to record")
-assert.equal(helperRecordingDesktop({ DISPLAY: ":99" }, "linux")?.session, "x11", "a job's Xvfb is recorded by window")
-assert.equal(helperRecordingDesktop({ WAYLAND_DISPLAY: "wayland-0", XDG_SESSION_TYPE: "wayland", SWAYSOCK: "/s" }, "linux")?.session, "wayland")
 {
   // On X11 the helper captures the window into the recording's MP4; the driver is asked for its action journal only
   // (no video of its own, so no FFmpeg), and stopping ends both.

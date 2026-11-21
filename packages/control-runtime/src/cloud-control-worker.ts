@@ -12,7 +12,7 @@ import {
 } from "node:fs/promises"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
-import { createControlSession } from "./control-session.js"
+import { createControlSession, type ControlSessionOptions } from "./control-session.js"
 import { serveControlSession } from "./control-session-server.js"
 import { controlSessionBuild } from "./control-session-protocol.js"
 import { BrowserService } from "./browser-service.js"
@@ -313,9 +313,11 @@ async function initialize(current: CloudControlConfig, directory: string) {
         }
       )
     : undefined
-  const options = {
+  const options: ControlSessionOptions = {
     browserCall,
     onProgramCancelled: () => { void shutdown("request-cancelled") },
+    // The job's own X server, started above for its driver: the video helper records its windows there.
+    ...(backend && { recordingDesktop: { session: "x11", compositor: "other", xwayland: false } }),
   }
   const engine = createControlSession(backend, owner, undefined, options)
   const transport = await serveControlSession(engine, {

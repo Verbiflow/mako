@@ -119,6 +119,6 @@ if (process.platform === "linux") {
   assert.deepEqual(helperWindowSource(77, undefined), { kind: "window", windowId: 77 })
 }
 const sway = session({ WAYLAND_DISPLAY: "wayland-1", SWAYSOCK: "/run/sway.sock" })!
-assert.deepEqual(portalMonitor(sway, { XDG_STATE_HOME: "/state" }), { kind: "portal", types: "monitor", restore: "/state/mako/portal-monitor.token", still: true })
+assert.deepEqual(portalMonitor(sway, { XDG_STATE_HOME: "/state" }), { kind: "portal", types: "monitor", restore: join("/state", "mako", "portal-monitor.token"), still: true })
 await rm(root, { recursive: true, force: true })
 console.log("Video helper protocol: arguments, framed pictures and commands, units back, opening on the first unit, key asks, the helper's own reason for ending, portal arguments and the Linux desktop's capture route passed")

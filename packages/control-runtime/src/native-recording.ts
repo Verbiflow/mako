@@ -11,25 +11,11 @@ import type { ComputerDriverResult } from "./computer-driver-client.js"
 import type { JsonObject } from "./json.js"
 import { ControlRecording } from "./control-recording.js"
 import { Mp4Writer } from "./mp4.js"
-import { linuxDesktop, nodePlatform, type LinuxDesktop } from "./platform.js"
+import type { LinuxDesktop } from "./platform.js"
 import { VideoHelper, helperWindowSource, videoHelperExecutable } from "./video-helper.js"
 
 /** A helper recording's top rate: what the helper encodes live. */
 export const HELPER_RECORDING_MAX_FPS = 30
-
-/**
- * Where Mako records a window itself with the video helper and never the driver's FFmpeg recorder: on Linux, the
- * window by its X id on X11 (XComposite), and on Wayland, where nothing outside the compositor may read a window by
- * id, the monitor the person shares through the ScreenCast portal. The driver keeps only its action journal, the
- * pointer the helper draws in afterwards. A person's desktop is one such place; so is a job's own X display (a cloud
- * machine's Xvfb), which is no desktop to drive but is what its driver's windows are on. None elsewhere: a Mac's and
- * Windows' drivers record without FFmpeg.
- */
-export function helperRecordingDesktop(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = nodePlatform()): LinuxDesktop | undefined {
-  const desktop = linuxDesktop(env, platform)
-  if (desktop || platform !== "linux") return desktop
-  return env.DISPLAY?.trim() ? { session: "x11", compositor: "other", xwayland: false } : undefined
-}
 
 const stateSchema = z.object({
   generation: z.number().int().positive(),
@@ -75,7 +61,12 @@ export type NativeDriverCall = (name: string, args: JsonObject, timeout: number)
 export class NativeRecordings {
   private closed = false
   private starting = false
-  /** Where the video helper records (`helperRecordingDesktop()`); none where the driver does. */
+  /**
+   * Where Mako records a window itself with the video helper and never the driver's FFmpeg recorder: the window by
+   * its X id on X11 (XComposite), and on Wayland, where nothing outside the compositor may read a window by id, the
+   * monitor the person shares through the ScreenCast portal. The session names it: a person's Linux desktop, or a
+   * standalone job's own X server. None where the driver records (a Mac, Windows).
+   */
   constructor(private readonly helperDesktop: LinuxDesktop | undefined) {}
   private readonly recordings = new Map<string, ControlRecording>()
   /** Recordings the video helper makes, whose video the driver knows nothing of. */
