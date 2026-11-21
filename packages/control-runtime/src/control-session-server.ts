@@ -142,30 +142,7 @@ export function serveHandedControlSession(
   return { accept, close }
 }
 
-/** Answer each request on a connection with a fault; nothing reaches an engine. */
-export function refuseControlConnection(connection: Socket, fault: { code: string; message: string }) {
-  const server = createServer((request, response) => {
-    const chunks: Buffer[] = []
-    let bytes = 0
-    request.on("data", (chunk: Buffer) => {
-      bytes += chunk.length
-      if (bytes > 1024 * 1024) request.destroy()
-      else chunks.push(chunk)
-    })
-    request.once("end", () => {
-      let requestId = "invalid"
-      try {
-        requestId = z.object({ requestId: z.string() }).parse(JSON.parse(Buffer.concat(chunks).toString("utf8"))).requestId
-      } catch { /* a malformed request still gets its refusal */ }
-      response
-        .writeHead(200, { "content-type": "application/json", connection: "close" })
-        .end(JSON.stringify({ ok: false, requestId, fault: { ...fault, outcome: "not-dispatched" } }))
-    })
-  })
-  connection.once("close", () => server.close())
-  server.emit("connection", connection)
-  connection.resume()
-}
+export { refuseControlConnection } from "./control-refusal.js"
 
 /** A js report without the cell's returned value, which can be page content. */
 const JsAuditSchema = z.object({

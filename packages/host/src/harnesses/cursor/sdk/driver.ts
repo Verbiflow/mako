@@ -1,7 +1,7 @@
 import { failureEvidenceOf, providerTextEvidence } from "../../../contracts/provider-failure.js"
 import type { NativeStores } from "@mako/sessions/read-only-sqlite"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../../contracts/native-prompt-identity.js"
-import { applyControlEnvironment } from "../../../control/index.js"
+import { applyControlEnvironment } from "../../../base/control-launch.js"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "../../../base/execution-context.js"
 import { NO_NATIVE_EXCLUSION } from "../../../contracts/execution-context.js"
 import { untilStopped } from "../../../contracts/live-side-questions.js"
