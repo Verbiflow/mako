@@ -80,6 +80,9 @@ await cp(
   join(root, "LICENSE.md"),
   join(app, "Contents/Resources/LICENSE-Cua.md")
 )
+// Every linked crate's licence and notices, beside Cua's own in the package and inside the app, before it is signed.
+await run(process.execPath, ["scripts/driver-third-party-notices.mjs", root, join(output, "THIRD-PARTY-NOTICES-cua-driver.txt"), "--target=aarch64-apple-darwin"], { maxBuffer: 8 * 1024 * 1024 })
+await cp(join(output, "THIRD-PARTY-NOTICES-cua-driver.txt"), join(app, "Contents/Resources/THIRD-PARTY-NOTICES-cua-driver.txt"))
 await cp(binary, join(app, "Contents/MacOS/cua-driver"))
 const plist = join(app, "Contents/Info.plist")
 for (const [key, value] of Object.entries({

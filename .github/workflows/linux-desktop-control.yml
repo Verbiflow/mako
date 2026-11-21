@@ -22,6 +22,9 @@ on:
       - scripts/linux-control/portal-consent.py
       - scripts/linux-control/run-desktop.sh
       - vendor/cua-driver/**
+      - vendor/spdx-licenses/**
+      - scripts/driver-third-party-notices.mjs
+      - scripts/package-control-driver-linux.mjs
 
 permissions:
   contents: read
