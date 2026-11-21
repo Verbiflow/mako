@@ -43,7 +43,7 @@ export const PROGRAM_TIME_LIMIT_MS = 60_000
 export const PROGRAM_YIELD_MS = 10_000
 const MAX_RETAINED_CELLS = 8
 
-export const ControlProgramRequestSchema = z
+export const ControlProgramRequestSchema = z.lazy(() => z
   .object({
     source: z
       .string()
@@ -63,7 +63,7 @@ export const ControlProgramRequestSchema = z
       (request.source === undefined) !== (request.cell === undefined),
     { message: "Pass exactly one of source or cell" }
   )
-  .strict()
+  .strict())
 /** Publish the XOR as well as enforcing it: Zod refinements are not JSON Schema. */
 export const ControlProgramInputSchema = {
   ...z.toJSONSchema(ControlProgramRequestSchema, { io: "input" }),

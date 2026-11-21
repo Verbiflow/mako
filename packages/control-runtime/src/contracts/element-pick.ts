@@ -5,7 +5,7 @@ import { z } from "zod"
  * composer: what the page said about it, what accessibility calls it, where
  * its component is written, and a crop of it as it looked.
  */
-export const PickedElementSchema = z.object({
+export const PickedElementSchema = z.lazy(() => z.object({
   tag: z.string().max(200),
   /** Matched exactly this element when it was picked; ` >>> ` steps into an open shadow root. */
   selector: z.string().max(4000).nullable(),
@@ -23,7 +23,7 @@ export const PickedElementSchema = z.object({
   image: z.object({ data: z.string(), mimeType: z.literal("image/png") }).optional(),
   /** An embedded frame: the pick stopped at it. */
   frame: z.boolean(),
-})
+}))
 export type PickedElement = z.infer<typeof PickedElementSchema>
 
 export interface ElementPick {

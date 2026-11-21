@@ -35,14 +35,14 @@ export function shiverWaitSeconds(step: number): number {
   return SHIVER_WAIT_S * 2 ** Math.min(Math.max(0, step), SHIVER_STEPS_MAX)
 }
 
-export const TurnWaitItemSchema = z.discriminatedUnion("kind", [
+export const TurnWaitItemSchema = z.lazy(() => z.discriminatedUnion("kind", [
   /** A Fin of this Thread: its next report, or its end. `fin` is its Thread, `name` how the note names it. */
   z.object({ kind: z.literal("fin"), fin: z.string().min(1).max(200), name: z.string().min(1).max(200) }),
   /** A pull request by its `pullKey`, until its checks settle, a review lands or it merges; merged or closed ends any. */
   z.object({ kind: z.literal("pull"), pull: z.string().min(1).max(300), until: z.enum(["checks", "review", "merge"]).optional() }),
   /** This Thread's app check of a tier: the run going now, or the next one. */
   z.object({ kind: z.literal("check"), tier: z.enum(["quick", "full"]), target: z.string().min(1).max(32).optional() }),
-])
+]))
 export type TurnWaitItem = z.infer<typeof TurnWaitItemSchema>
 
 /** An item's key in its wait: what `met` names it by. */
@@ -76,7 +76,7 @@ export const TurnWaitCancelSchema = z.enum([
 ])
 export type TurnWaitCancel = z.infer<typeof TurnWaitCancelSchema>
 
-export const TurnWaitSchema = z.object({
+export const TurnWaitSchema = z.lazy(() => z.object({
   /** `namedUuid(conversation, clientKey)`: the same call again finds it. */
   id: z.string().min(1).max(200),
   thread: z.string().min(1).max(200),
@@ -111,7 +111,7 @@ export const TurnWaitSchema = z.object({
    * its name from before the Shiver, kept so stored waits and older builds read the same.
    */
   crewStep: z.number().int().min(0).max(16).optional(),
-})
+}))
 export type TurnWait = z.infer<typeof TurnWaitSchema>
 
 /** What the person's waiting line says, or nothing once the wait isn't armed: it clears by itself. */

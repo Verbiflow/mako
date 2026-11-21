@@ -30,7 +30,7 @@ export interface BrokeredDriverEndpoint {
  * which is the daemon's own reply line, relayed unread; a fault the broker
  * answers itself carries `broker`.
  */
-export const BrokerRequestSchema = z.discriminatedUnion("method", [
+export const BrokerRequestSchema = z.lazy(() => z.discriminatedUnion("method", [
   z.object({ method: z.literal("lease"), token: z.string().min(1), parallel: z.boolean().optional() }).strict(),
   z
     .object({
@@ -40,15 +40,15 @@ export const BrokerRequestSchema = z.discriminatedUnion("method", [
       args: z.record(z.string(), z.json()),
     })
     .strict(),
-])
+]))
 export type BrokerRequest = z.infer<typeof BrokerRequestSchema>
 
 /** Why the broker answered a call itself. Only `closed` means the call reached the daemon. */
-export const BrokerFaultSchema = z.object({
+export const BrokerFaultSchema = z.lazy(() => z.object({
   ok: z.literal(false),
   broker: z.enum(["unavailable", "ended", "closed", "invalid"]),
   error: z.string(),
-})
+}))
 export type BrokerFault = z.infer<typeof BrokerFaultSchema>
 
 const LeaseReplySchema = z.union([

@@ -7,7 +7,7 @@ import { SessionIdSchema, ThreadIdSchema } from "./thread-identity.js"
  * tab order. A Thread with one Session has no group, because its row is
  * already the whole Thread.
  */
-export const ThreadGroupSchema = z.object({
+export const ThreadGroupSchema = z.lazy(() => z.object({
   id: ThreadIdSchema,
   sessions: z
     .array(
@@ -21,7 +21,7 @@ export const ThreadGroupSchema = z.object({
       })
     )
     .min(2),
-})
+}))
 export type ThreadGroup = z.infer<typeof ThreadGroupSchema>
 
 /** What changed about one Thread's grouping; `group` is null once it holds one Session. */

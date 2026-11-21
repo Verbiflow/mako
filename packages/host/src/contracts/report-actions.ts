@@ -2,10 +2,10 @@ import { z } from "zod"
 import { ThreadIdSchema } from "./thread-identity.js"
 
 /** An explicit immutable target, never inferred from report prose or delivery. */
-export const ReportActionTargetSchema = z.object({ ref: z.string().trim().min(1).max(600), version: z.string().trim().min(1).max(200) }).strict()
+export const ReportActionTargetSchema = z.lazy(() => z.object({ ref: z.string().trim().min(1).max(600), version: z.string().trim().min(1).max(200) }).strict())
 export type ReportActionTarget = z.infer<typeof ReportActionTargetSchema>
 
-export const ReportDispositionSchema = z.discriminatedUnion("kind", [
+export const ReportDispositionSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("resolve"), evidence: z.string().trim().min(1).max(600) }).strict(),
   z.object({ kind: z.literal("reclaim"), reason: z.string().trim().min(1).max(600) }).strict(),
   z.object({ kind: z.literal("dismiss"), reason: z.string().trim().min(1).max(600) }).strict(),
@@ -13,11 +13,11 @@ export const ReportDispositionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("supersede"), report: z.string().min(1).max(600), reason: z.string().trim().min(1).max(600) }).strict(),
   z.object({ kind: z.literal("dispatch"), to: z.string().min(1).max(200), request: z.string().min(1).max(200) }).strict(),
   z.object({ kind: z.literal("handoff"), to: z.string().min(1).max(200), request: z.string().min(1).max(200) }).strict(),
-])
+]))
 export type ReportDisposition = z.infer<typeof ReportDispositionSchema>
 
 /** Follow-through belongs to this report and target, independently of the report outbox. */
-export const ReportActionSchema = z.object({
+export const ReportActionSchema = z.lazy(() => z.object({
   report: z.string().min(1).max(600),
   child: ThreadIdSchema,
   parent: ThreadIdSchema,
@@ -30,7 +30,7 @@ export const ReportActionSchema = z.object({
   at: z.number(),
   updatedAt: z.number(),
   disposition: z.union([z.object({ kind: z.literal("pending") }), ReportDispositionSchema]),
-})
+}))
 export type ReportAction = z.infer<typeof ReportActionSchema>
 export interface ReportActionsPage { items: ReportAction[]; total: number; next?: string }
 

@@ -39,7 +39,7 @@ export const FileEventsStateSchema = z.enum(["healthy", "degraded", "unknown"])
 export type FileEventsState = z.infer<typeof FileEventsStateSchema>
 
 /** What Mako was doing around a sample, to line a degradation's start up with. */
-export const FileEventsContextSchema = z.object({
+export const FileEventsContextSchema = z.lazy(() => z.object({
   /** Folders Mako watches, and the FSEvents streams they take. */
   watched: z.number().int().nonnegative(),
   streams: z.number().int().nonnegative(),
@@ -50,11 +50,11 @@ export const FileEventsContextSchema = z.object({
   turnsRunning: z.number().int().nonnegative(),
   /** Wakes from sleep since the sample before. */
   wakes: z.number().int().nonnegative(),
-})
+}))
 export type FileEventsContext = z.infer<typeof FileEventsContextSchema>
 
 /** One sample of the rolling history, every `SAMPLE_EVERY_MS` and at each change of state or daemon, a line each in the host's file. */
-export const FileEventsSampleSchema = z.object({
+export const FileEventsSampleSchema = z.lazy(() => z.object({
   at: z.number(),
   /** The daemon's process id: a new one means it started over. */
   pid: z.number().int().positive().optional(),
@@ -66,7 +66,7 @@ export const FileEventsSampleSchema = z.object({
   /** Why this sample was taken out of turn: the state changed, or the daemon started over. */
   why: z.enum(["state", "restarted"]).optional(),
   context: FileEventsContextSchema.optional(),
-})
+}))
 export type FileEventsSample = z.infer<typeof FileEventsSampleSchema>
 
 /**

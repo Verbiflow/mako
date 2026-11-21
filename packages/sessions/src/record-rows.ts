@@ -18,7 +18,7 @@ export type SqlValue =
   | { type: "text"; value: string }
   | { type: "blob"; value: Uint8Array }
 
-export const SqlValueSchema = z.union([
+export const SqlValueSchema = z.lazy(() => z.union([
   z.null().transform((): SqlValue => ({ type: "null" })),
   z.bigint().transform((value): SqlValue => ({ type: "integer", value })),
   // SQLite keeps ±Infinity as REAL; zod's own number refuses it.
@@ -26,7 +26,7 @@ export const SqlValueSchema = z.union([
     .transform((value): SqlValue => ({ type: "real", value })),
   z.string().transform((value): SqlValue => ({ type: "text", value })),
   z.instanceof(Uint8Array).transform((value): SqlValue => ({ type: "blob", value })),
-])
+]))
 
 const sqlValue = (value: RecordValue | undefined): SqlValue => SqlValueSchema.parse(value ?? null)
 
@@ -228,14 +228,14 @@ export function keyLiteralSql(keys: readonly string[]): string {
 export const KEY_DIGESTS = "mako_key_digests"
 
 /** What `mako_key_digests(literal, below)` gives back. */
-export const KeyDigestsSchema = z.object({
+export const KeyDigestsSchema = z.lazy(() => z.object({
   /** Of every row's key, in the order SQLite read them. */
   all: z.string(),
   /** Of the keys of the rows `below`, in the same order. */
   below: z.string(),
   rows: z.number(),
   rowsBelow: z.number(),
-})
+}))
 export type KeyDigests = z.infer<typeof KeyDigestsSchema>
 
 /**

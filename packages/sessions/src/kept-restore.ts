@@ -6,7 +6,7 @@ import { OutdatedRuntimeSchema } from "./record-writers.js"
  * store came to (`SessionCatalog.restoreKept`), so its harness can resume
  * it as the same session.
  */
-export const KeptRestoreSchema = z.discriminatedUnion("kind", [
+export const KeptRestoreSchema = z.lazy(() => z.discriminatedUnion("kind", [
   /** Written back from Mako's records: the harness lists the session at `path` again. */
   z.object({ kind: z.literal("restored"), path: z.string(), files: z.number().int().nonnegative(), rows: z.number().int().nonnegative(), ms: z.number().nonnegative() }),
   /** The harness has the session already; nothing was written. */
@@ -24,5 +24,5 @@ export const KeptRestoreSchema = z.discriminatedUnion("kind", [
    */
   OutdatedRuntimeSchema.extend({ kind: z.literal("outdated") }),
   z.object({ kind: z.literal("refused"), reason: z.string() }),
-])
+]))
 export type KeptRestore = z.infer<typeof KeptRestoreSchema>

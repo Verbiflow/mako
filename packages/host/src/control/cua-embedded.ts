@@ -6,7 +6,7 @@ import { homedir } from "node:os"
 import { delimiter, isAbsolute, join } from "node:path"
 import { hostLog } from "../base/host-log.js"
 import { trackProviderChild, untrackProviderPid } from "../base/provider-children.js"
-import { createPrivateControlSocket } from "@mako/control-runtime/desktop"
+import { createPrivateControlSocket, linuxDesktop } from "@mako/control-runtime/desktop"
 import { onMac } from "../base/platform.js"
 
 /**
@@ -20,6 +20,13 @@ import { onMac } from "../base/platform.js"
  * 2026-09-14 observed only the user's original frontmost pid during startup.
  * The host therefore keeps a real child handle, inherits Mako's grants, and
  * tears the exact process down without pgrep.
+ *
+ * On a Linux desktop the same daemon drives the session it was started in:
+ * X11 directly (XTest, XComposite, EWMH, AT-SPI), and Wayland through what
+ * the compositor offers (portals and libei on GNOME and KDE, wlroots'
+ * protocols on Sway and its kin), which the driver enables only when asked
+ * (`CUA_DRIVER_RS_ENABLE_WAYLAND`). A Linux machine with no display has no
+ * desktop to drive and starts none.
  */
 interface Daemon {
   pid: number
@@ -131,7 +138,7 @@ export class CuaEmbedded {
     hostBundleId: string,
     env: NodeJS.ProcessEnv = process.env
   ): Promise<string | null> {
-    if (!onMac()) return Promise.resolve(null)
+    if (!onMac() && !linuxDesktop(env)) return Promise.resolve(null)
     const daemon = this.#daemon
     if (daemon && daemon.child.exitCode === null) return Promise.resolve(daemon.socket)
     if (daemon) this.#forget(daemon)
@@ -248,6 +255,7 @@ export class CuaEmbedded {
       // third party; the user's own CLI keeps its own preference.
       CUA_DRIVER_RS_TELEMETRY_ENABLED: "0",
       CUA_DRIVER_REQUIRE_FOCUSED_TARGET: "1",
+      ...(linuxDesktop(env)?.session === "wayland" && { CUA_DRIVER_RS_ENABLE_WAYLAND: "1" }),
     }
     // Cua's documented daemon API disables the overlay at construction. Hiding
     // a session cursor after startup still left the installed 0.28.0 build

@@ -8,14 +8,14 @@ import { z } from "zod"
  */
 
 /** One file as the account's store lists it: its path in the checkout, never its value. */
-export const CloudCarriedFileSchema = z.object({
+export const CloudCarriedFileSchema = z.lazy(() => z.object({
   path: z.string().min(1).max(300),
   version: z.string().min(1).max(100),
   bytes: z.number().int().nonnegative(),
   /** The variables it defines, read on this Mac: what a recipe's named secrets are checked against in the cloud. */
   names: z.array(z.string()).max(200),
   savedAt: z.string(),
-})
+}))
 export type CloudCarriedFile = z.infer<typeof CloudCarriedFileSchema>
 
 /** The person's word for a project: not asked yet, copy its files to the cloud, or keep them on this Mac. */

@@ -17,13 +17,13 @@ import { AttachmentContentSchema, ProposedPlanSchema, ToolDetailSchema, type Att
 import { DirectRouteSchema, NativeEventSourceSchema, RetriesSchema, TurnCauseSchema, UsageLimitSchema } from "./events.js"
 import { ToolEffectSchema } from "./tool-effects.js"
 
-export const TurnUsageSchema = z.object({
+export const TurnUsageSchema = z.lazy(() => z.object({
   input: z.number().optional(),
   output: z.number().optional(),
   cacheRead: z.number().optional(),
   cacheWrite: z.number().optional(),
   costUsd: z.number().optional(),
-})
+}))
 export type TurnUsage = z.infer<typeof TurnUsageSchema>
 
 const offset = z.number().int().nonnegative()
@@ -33,11 +33,11 @@ const offset = z.number().int().nonnegative()
  * oldest first, or database rows by table and primary key. `file` is the
  * session's own file (the part of its path before `#`) when unset.
  */
-export const RecordRefSchema = z.object({
+export const RecordRefSchema = z.lazy(() => z.object({
   file: z.string().optional(),
   ranges: z.array(z.tuple([offset, offset])).optional(),
   rows: z.array(z.object({ table: z.string(), key: z.record(z.string(), z.union([z.string(), z.number()])) })).optional(),
-})
+}))
 export type RecordRef = z.infer<typeof RecordRefSchema>
 
 /**
@@ -148,7 +148,7 @@ export const unfinished = z.literal(true).optional()
  * (`tool-effects.ts`), whole: a later update replaces the list. For
  * attribution; a row draws only a failed command's exit code from it.
  */
-export const effects = z.array(ToolEffectSchema).max(1024).optional()
+export const effects = z.lazy(() => z.array(ToolEffectSchema).max(1024).optional())
 /** `TranscriptEvent` from `@mako/sessions/events`. */
 export const transcriptEventFields = {
   source: NativeEventSourceSchema.optional(),
@@ -175,7 +175,7 @@ export const providerTurnFields = {
   tone: z.enum(["warning", "error"]).optional(),
 }
 
-export const EntrySchema = z.discriminatedUnion("type", [
+export const EntrySchema = z.lazy(() => z.discriminatedUnion("type", [
   ProposedPlanSchema.extend({
     /**
      * The harness's id for the plan, when an entry before it already took
@@ -267,7 +267,7 @@ export const EntrySchema = z.discriminatedUnion("type", [
     record,
     stream,
   }),
-])
+]))
 export type Entry = z.infer<typeof EntrySchema>
 export type EntryOf<Type extends Entry["type"]> = Extract<Entry, { type: Type }>
 export type ToolEntry = EntryOf<"tool">

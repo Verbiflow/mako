@@ -20,7 +20,7 @@ const relatedNodes = z
   .object({ relatedNodes: z.array(z.object({ backendDOMNodeId: z.number().optional() })).optional() })
   .optional()
 
-export const AccessibilityNodeSchema = z.object({
+export const AccessibilityNodeSchema = z.lazy(() => z.object({
   nodeId: z.string(),
   parentId: z.string().optional(),
   ignored: z.boolean(),
@@ -51,7 +51,7 @@ export const AccessibilityNodeSchema = z.object({
       })
     )
     .optional(),
-})
+}))
 type AccessibilityNode = z.infer<typeof AccessibilityNodeSchema>
 
 /** Filter a fresh synchronous snapshot when background rendering is throttled. */

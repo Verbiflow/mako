@@ -2,7 +2,7 @@ import { z } from "zod"
 import type { ConversationControl } from "./conversation-control.js"
 import type { LiveRequest } from "./live-conversations.js"
 
-export const LiveInputQuestionSchema = z.object({
+export const LiveInputQuestionSchema = z.lazy(() => z.object({
   id: z.string(),
   header: z.string(),
   question: z.string(),
@@ -21,7 +21,7 @@ export const LiveInputQuestionSchema = z.object({
   ),
   defaultValues: z.array(z.string()).optional(),
   when: z.array(z.object({ key: z.string(), op: z.enum(["eq", "neq"]), value: z.union([z.string(), z.number(), z.boolean()]) })).optional(),
-})
+}))
 export type LiveInputQuestion = z.infer<typeof LiveInputQuestionSchema>
 
 /** What a conversation waits on of the person, whole (`LiveConversations.pendingAsk`): the approval or question `waitingOn` names. */
@@ -70,14 +70,14 @@ export function activeInputQuestions(questions: readonly LiveInputQuestion[], an
 }
 
 /** Session-lived questions use native message identity, not a callback lifetime. */
-export const NativeQuestionSchema = z.object({
+export const NativeQuestionSchema = z.lazy(() => z.object({
   sessionId: z.string().min(1),
   turnId: z.string().min(1),
   itemId: z.string().min(1),
   questions: z.array(LiveInputQuestionSchema).min(1).max(100),
-}).refine(value => new Set(value.questions.map(question => question.id)).size === value.questions.length, "Question IDs must be unique")
+}).refine(value => new Set(value.questions.map(question => question.id)).size === value.questions.length, "Question IDs must be unique"))
 export type NativeQuestion = z.infer<typeof NativeQuestionSchema>
-export const LiveQuestionSchema = z.object({
+export const LiveQuestionSchema = z.lazy(() => z.object({
   id: z.string().uuid(),
   bindingId: z.string().uuid(),
   native: NativeQuestionSchema,
@@ -85,19 +85,19 @@ export const LiveQuestionSchema = z.object({
   /** No longer a current prompt after the user moved on; not native cancellation. */
   retired: z.literal(true).optional(),
   answered: z.array(z.string()).optional(),
-})
-export const NativeQuestionAnswerSchema = z.object({
+}))
+export const NativeQuestionAnswerSchema = z.lazy(() => z.object({
   sessionId: z.string().min(1), itemId: z.string().min(1), questionIds: z.array(z.string()).min(1),
-})
+}))
 export type NativeQuestionAnswer = z.infer<typeof NativeQuestionAnswerSchema>
 export type LiveQuestion = z.infer<typeof LiveQuestionSchema>
 
 /** Positive evidence after complete source catch-up; absence never retires a question. */
-export const NativeQuestionHistorySchema = z.array(z.object({
+export const NativeQuestionHistorySchema = z.lazy(() => z.array(z.object({
   question: NativeQuestionSchema,
   answered: z.array(z.string()),
   retired: z.literal(true).optional(),
-})).max(2000)
+})).max(2000))
 export type NativeQuestionHistory = z.infer<typeof NativeQuestionHistorySchema>
 
 function unanswered(question: LiveQuestion, bindingId: string): boolean {

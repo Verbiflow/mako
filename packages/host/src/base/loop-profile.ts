@@ -9,7 +9,7 @@ import { z } from "zod"
  * a process; this names the one on the thread.
  */
 
-export const CpuProfileSchema = z.object({
+export const CpuProfileSchema = z.lazy(() => z.object({
   nodes: z.array(z.object({
     id: z.number(),
     callFrame: z.object({ functionName: z.string(), url: z.string(), lineNumber: z.number() }),
@@ -18,7 +18,7 @@ export const CpuProfileSchema = z.object({
   startTime: z.number(),
   samples: z.array(z.number()).optional(),
   timeDeltas: z.array(z.number()).optional(),
-})
+}))
 export type CpuProfile = z.infer<typeof CpuProfileSchema>
 
 export interface LoopSlice {

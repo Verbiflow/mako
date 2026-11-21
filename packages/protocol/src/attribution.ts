@@ -44,7 +44,7 @@ export type SessionRef = z.infer<typeof SessionRefSchema>
 export type RootPath = z.infer<typeof RootPathSchema>
 
 /** What the tracker watches: a Thread's checkout (each repository of it) or a folder attached to a Thread. */
-export const TrackedRootSchema = z
+export const TrackedRootSchema = z.lazy(() => z
   .object({
     id: RootIdSchema,
     path: AbsolutePathSchema,
@@ -52,11 +52,11 @@ export const TrackedRootSchema = z
     /** Ignored files worth tracking anyway, as globs relative to the root (a recipe's `carry`). */
     carry: z.array(z.string().min(1).max(512)).max(256).optional(),
   })
-  .strict()
+  .strict())
 export type TrackedRoot = z.infer<typeof TrackedRootSchema>
 
 /** One Session of a Thread and, as far as known, the turn, tool call or background work inside it. */
-export const AuthorSchema = z
+export const AuthorSchema = z.lazy(() => z
   .object({
     thread: ThreadIdSchema,
     session: SessionRefSchema,
@@ -65,7 +65,7 @@ export const AuthorSchema = z
     /** Background work the Session started (a dev server, a watcher), by its id. */
     work: z.string().min(1).max(200).optional(),
   })
-  .strict()
+  .strict())
 export type Author = z.infer<typeof AuthorSchema>
 
 /**
@@ -89,7 +89,7 @@ export type Certainty = z.infer<typeof CertaintySchema>
  */
 export const NamingSchema = z.enum(["effect", "command", "target", "content"])
 
-export const AttributionSchema = z.discriminatedUnion("certainty", [
+export const AttributionSchema = z.lazy(() => z.discriminatedUnion("certainty", [
   z
     .object({
       certainty: z.literal("exact"),
@@ -149,7 +149,7 @@ export const AttributionSchema = z.discriminatedUnion("certainty", [
       operation: z.string().min(1).max(200),
     })
     .strict(),
-])
+]))
 export type Attribution = z.infer<typeof AttributionSchema>
 
 /** The thread an attribution puts the change on, when it puts it on one. */
@@ -173,7 +173,7 @@ export type ChangeKind = z.infer<typeof ChangeKindSchema>
 export const ObservedBySchema = z.enum(["event", "rescan", "history", "baseline", "reconciled"])
 export type ObservedBy = z.infer<typeof ObservedBySchema>
 
-export const JournalEntrySchema = z
+export const JournalEntrySchema = z.lazy(() => z
   .object({
     journal: JournalIdSchema,
     seq: JournalSeqSchema,
@@ -211,11 +211,11 @@ export const JournalEntrySchema = z
      */
     git: z.literal(true).optional(),
   })
-  .strict()
+  .strict())
 export type JournalEntry = z.infer<typeof JournalEntrySchema>
 
 /** A stretch where the tracker may have missed changes to a root, and why. */
-export const GapSchema = z
+export const GapSchema = z.lazy(() => z
   .object({
     id: z.number().int().positive(),
     root: RootIdSchema,
@@ -223,11 +223,11 @@ export const GapSchema = z
     to: InstantSchema,
     reason: z.enum(["dropped", "muted", "restart", "gone"]),
   })
-  .strict()
+  .strict())
 export type Gap = z.infer<typeof GapSchema>
 
 /** A turn, a tool call or background work starting or ending in a Session. */
-export const ActivityMarkSchema = z
+export const ActivityMarkSchema = z.lazy(() => z
   .object({
     kind: z.enum(["turn", "call", "background"]),
     /** The turn's, call's or work's id, unique within its Session. */
@@ -265,7 +265,7 @@ export const ActivityMarkSchema = z
     /** Background work that runs on its own for as long as it's left (a command, a monitor, a task): a change while it runs fits someone else's save as well. */
     standing: z.literal(true).optional(),
   })
-  .strict()
+  .strict())
 export type ActivityMark = z.infer<typeof ActivityMarkSchema>
 
 const Text = z.string().max(2_000_000)
@@ -273,7 +273,7 @@ const Text = z.string().max(2_000_000)
 const Seen = z.literal(true).optional()
 
 /** What a tool call said it did, as its harness reported it. */
-export const ReportedEffectSchema = z.discriminatedUnion("kind", [
+export const ReportedEffectSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("create"), path: AbsolutePathSchema, content: Text.optional(), seen: Seen }).strict(),
   /**
    * `patch`: a unified diff of the file without its header, when the tool stated the change with line numbers;
@@ -303,7 +303,7 @@ export const ReportedEffectSchema = z.discriminatedUnion("kind", [
       background: z.boolean().optional(),
     })
     .strict(),
-])
+]))
 export type ReportedEffect = z.infer<typeof ReportedEffectSchema>
 
 /**
@@ -315,7 +315,7 @@ export type ReportedEffect = z.infer<typeof ReportedEffectSchema>
  * patch says. `detached`: it left work running (a command sent to the
  * background), so its end bounds nothing.
  */
-export const ExactBoundsSchema = z
+export const ExactBoundsSchema = z.lazy(() => z
   .object({
     start: InstantSchema,
     end: InstantSchema,
@@ -325,11 +325,11 @@ export const ExactBoundsSchema = z
       .optional(),
     detached: z.literal(true).optional(),
   })
-  .strict()
+  .strict())
 export type ExactBounds = z.infer<typeof ExactBoundsSchema>
 
 /** One tool call's reported effects. */
-export const ReportedCallSchema = z
+export const ReportedCallSchema = z.lazy(() => z
   .object({
     thread: ThreadIdSchema,
     session: SessionRefSchema,
@@ -344,7 +344,7 @@ export const ReportedCallSchema = z
     checkout: AbsolutePathSchema.optional(),
     effects: z.array(ReportedEffectSchema).max(4096),
   })
-  .strict()
+  .strict())
 export type ReportedCall = z.infer<typeof ReportedCallSchema>
 
 /**
@@ -352,7 +352,7 @@ export type ReportedCall = z.infer<typeof ReportedCallSchema>
  * change is theirs; anything else (a Git command, a move, files carried into
  * a worktree) is Mako's.
  */
-export const MakoWriteSchema = z
+export const MakoWriteSchema = z.lazy(() => z
   .object({
     kind: z.enum(["editor", "git", "move", "carry"]),
     /** In a few words: `git stash push`. */
@@ -360,7 +360,7 @@ export const MakoWriteSchema = z
     /** Files or folders it may write; a folder covers everything in it. */
     paths: z.array(AbsolutePathSchema).min(1).max(4096),
   })
-  .strict()
+  .strict())
 export type MakoWrite = z.infer<typeof MakoWriteSchema>
 
 /**
@@ -382,7 +382,7 @@ export type FootprintBasis = z.infer<typeof FootprintBasisSchema>
  * only changed while the turn ran and no rule explains it away, so another
  * app or Thread could have written it.
  */
-export const FootprintEntrySchema = z
+export const FootprintEntrySchema = z.lazy(() => z
   .object({
     thread: ThreadIdSchema,
     session: SessionRefSchema,
@@ -398,11 +398,11 @@ export const FootprintEntrySchema = z
     /** The path looks like it holds secrets: never carried, never stored. */
     secret: z.boolean(),
   })
-  .strict()
+  .strict())
 export type FootprintEntry = z.infer<typeof FootprintEntrySchema>
 
 /** A run of consecutive lines of a file's current content by one entry; `entry` null is the base (committed) content. */
-export const LineRunSchema = z
+export const LineRunSchema = z.lazy(() => z
   .object({
     /** First line, from 0. */
     start: z.number().int().nonnegative(),
@@ -410,7 +410,7 @@ export const LineRunSchema = z
     entry: JournalSeqSchema.nullable(),
     author: AttributionSchema.nullable(),
   })
-  .strict()
+  .strict())
 export type LineRun = z.infer<typeof LineRunSchema>
 
 /*
@@ -431,16 +431,16 @@ export type LineRun = z.infer<typeof LineRunSchema>
  */
 
 /** A call's effects as a Thread's history keeps them. */
-export const CarriedEffectSchema = z.union([
+export const CarriedEffectSchema = z.lazy(() => z.union([
   z.object({ kind: z.enum(["create", "modify", "write", "delete", "read"]), path: AbsolutePathSchema }).strict(),
   z.object({ kind: z.literal("rename"), from: AbsolutePathSchema, to: AbsolutePathSchema }).strict(),
   /** A command: where it ran and the paths it named. */
   z.object({ kind: z.literal("command"), cwd: AbsolutePathSchema.optional(), named: z.array(AbsolutePathSchema).max(256).optional() }).strict(),
-])
+]))
 export type CarriedEffect = z.infer<typeof CarriedEffectSchema>
 
 /** A turn, call or background work of the Thread, as the journal that heard it kept it. */
-export const CarriedActivitySchema = z
+export const CarriedActivitySchema = z.lazy(() => z
   .object({
     session: SessionRefSchema,
     kind: z.enum(["turn", "call", "background"]),
@@ -452,11 +452,11 @@ export const CarriedActivitySchema = z
     named: z.array(AbsolutePathSchema).max(256),
     effects: z.array(CarriedEffectSchema).max(4096).optional(),
   })
-  .strict()
+  .strict())
 export type CarriedActivity = z.infer<typeof CarriedActivitySchema>
 
 /** A write the journal tied to one of the Thread's calls (certainty `exact` or `named`). */
-export const CarriedWriteSchema = z.object({ seq: JournalSeqSchema, at: InstantSchema, path: AbsolutePathSchema }).strict()
+export const CarriedWriteSchema = z.lazy(() => z.object({ seq: JournalSeqSchema, at: InstantSchema, path: AbsolutePathSchema }).strict())
 export type CarriedWrite = z.infer<typeof CarriedWriteSchema>
 
 /**
@@ -464,11 +464,11 @@ export type CarriedWrite = z.infer<typeof CarriedWriteSchema>
  * rename led one to: `to` when that entry renamed it away. What follows a
  * file through renames made by anyone, the Thread or not.
  */
-export const CarriedNameSchema = z.object({ seq: JournalSeqSchema, at: InstantSchema, path: AbsolutePathSchema, to: AbsolutePathSchema.optional() }).strict()
+export const CarriedNameSchema = z.lazy(() => z.object({ seq: JournalSeqSchema, at: InstantSchema, path: AbsolutePathSchema, to: AbsolutePathSchema.optional() }).strict())
 export type CarriedName = z.infer<typeof CarriedNameSchema>
 
 /** One journal's part of a Thread's file history. */
-export const ThreadHistoryPartSchema = z
+export const ThreadHistoryPartSchema = z.lazy(() => z
   .object({
     journal: JournalIdSchema,
     device: z.string().min(1).max(200),
@@ -482,14 +482,14 @@ export const ThreadHistoryPartSchema = z
     writes: z.array(CarriedWriteSchema).max(1_000_000),
     names: z.array(CarriedNameSchema).max(1_000_000),
   })
-  .strict()
+  .strict())
 export type ThreadHistoryPart = z.infer<typeof ThreadHistoryPartSchema>
 
 /** A file the person picked for a spelling among several in the Thread's answers. */
-export const CarriedChoiceSchema = z.object({ spelling: z.string().min(1).max(4096), path: AbsolutePathSchema, at: InstantSchema }).strict()
+export const CarriedChoiceSchema = z.lazy(() => z.object({ spelling: z.string().min(1).max(4096), path: AbsolutePathSchema, at: InstantSchema }).strict())
 export type CarriedChoice = z.infer<typeof CarriedChoiceSchema>
 
-export const ThreadFileHistorySchema = z
+export const ThreadFileHistorySchema = z.lazy(() => z
   .object({
     format: z.literal(1),
     thread: ThreadIdSchema,
@@ -499,11 +499,11 @@ export const ThreadFileHistorySchema = z
     choices: z.array(CarriedChoiceSchema).max(100_000),
   })
   .strict()
-  .refine((history) => new Set(history.parts.map((part) => part.journal)).size === history.parts.length, "one part a journal")
+  .refine((history) => new Set(history.parts.map((part) => part.journal)).size === history.parts.length, "one part a journal"))
 export type ThreadFileHistory = z.infer<typeof ThreadFileHistorySchema>
 
 /** Where the Thread's paths are on the machine it lands on, where they differ: the longest `from` a path is in wins. */
-export const PathMapSchema = z.array(z.object({ from: AbsolutePathSchema, to: AbsolutePathSchema }).strict()).max(64)
+export const PathMapSchema = z.lazy(() => z.array(z.object({ from: AbsolutePathSchema, to: AbsolutePathSchema }).strict()).max(64))
 export type PathMap = z.infer<typeof PathMapSchema>
 
 /* The tracker's ports: what it reads of the machine. A conformance run passes fakes. */

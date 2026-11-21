@@ -2,7 +2,7 @@ import { z } from "zod"
 import { ControlTargetSchema, type ControlTarget } from "./contract.js"
 import type { ControlCall } from "./client.js"
 
-export const RecordingOptionsSchema = z
+export const RecordingOptionsSchema = z.lazy(() => z
   .object({
     directory: z.string().min(1).optional(),
     name: z.string().min(1).max(80).default("Recording"),
@@ -15,11 +15,11 @@ export const RecordingOptionsSchema = z
      * recording in real time. */
     idle: z.enum(["trim", "keep"]).default("trim"),
   })
-  .strict()
+  .strict())
 /** How long a still stretch plays once idle time is trimmed. */
 export const RECORDING_IDLE_HOLD_MS = 1000
 export type RecordingOptions = z.input<typeof RecordingOptionsSchema>
-export const RecordingReceiptSchema = z.object({
+export const RecordingReceiptSchema = z.lazy(() => z.object({
   id: z.string().min(1),
   target: ControlTargetSchema,
   status: z.enum([
@@ -53,7 +53,7 @@ export const RecordingReceiptSchema = z.object({
   timeline: z.string().optional(),
   dimensions: z.object({ width: z.number().int().positive(), height: z.number().int().positive() }).optional(),
   error: z.string().optional(),
-})
+}))
 export type RecordingReceipt = z.infer<typeof RecordingReceiptSchema>
 
 export function recordingReceipt(

@@ -1,16 +1,16 @@
 import { z } from "zod"
 
-export const ThreadTargetSchema = z.discriminatedUnion("kind", [
+export const ThreadTargetSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("live"), id: z.string().uuid() }),
   z.object({ kind: z.literal("file"), path: z.string().min(1) }),
   z.object({ kind: z.literal("native"), provider: z.string().min(1), nativeId: z.string().min(1) }),
-])
+]))
 export type ThreadTarget = z.infer<typeof ThreadTargetSchema>
 /**
  * `anyway`: archive a cloud Thread whose machine can't start all the same. Its records are kept; its checkout's changes
  * since it last moved can't be, and it can't be restored.
  */
-export const ArchiveCommandSchema = z.object({ id: z.string().uuid(), target: ThreadTargetSchema, archived: z.boolean(), anyway: z.literal(true).optional() })
+export const ArchiveCommandSchema = z.lazy(() => z.object({ id: z.string().uuid(), target: ThreadTargetSchema, archived: z.boolean(), anyway: z.literal(true).optional() }))
 export type ArchiveCommand = z.infer<typeof ArchiveCommandSchema>
 /**
  * The keys of the Sessions archived, as this device shows them: those it archived of its own, and those of the cloud
@@ -33,10 +33,10 @@ export type ArchiveAnswer = ThreadArchiveSnapshot & { cloud?: CloudArchiveOutcom
  * machine ending, or its checkout and records arriving here.
  */
 export type CloudArchiveStep = { thread: string; kind: "packing" | "ending" | "bringing" }
-export const StopTargetSchema = z.discriminatedUnion("kind", [
+export const StopTargetSchema = z.lazy(() => z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("live"), id: z.string().uuid(), requestId: z.string().uuid() }),
   z.object({ kind: z.literal("native"), path: z.string(), token: z.string().uuid() }),
-])
+]))
 export type StopTarget = z.infer<typeof StopTargetSchema>
 export interface ThreadControls { archived: boolean; stop: StopTarget | null; external: boolean }
 export function threadArchiveKey(target: ThreadTarget): string {
