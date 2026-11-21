@@ -11,7 +11,7 @@ import { EncodedAnswer, decodeRuntimeValue, encodeRuntimeValue, type EncodedValu
 import { HostCallLifetime, stoppedCallError } from "./call-lifetime.js"
 import { RepeatedCalls } from "./repeated-calls.js"
 import { FailedCalls } from "./failed-calls.js"
-import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/preview-contracts"
+import { ControlPreviewSchema, type ControlPreview } from "@mako/control-runtime/contracts"
 import { z } from "zod"
 
 /** Whether another host answered a call, and its answer as that host encoded it. */
@@ -33,11 +33,6 @@ export interface HostMethodsOptions {
   breadcrumb(note: string): void
   /** Loads the domain that declares a method no domain has declared yet. */
   declaring(channel: HostChannel): Promise<void>
-  /**
-   * Nothing here has shown anything yet: browser and computer use, which keeps this host's previews, hasn't loaded.
-   * A preview asked for then is another host's conversation's, answered there, or there is none; asking doesn't load it.
-   */
-  nothingShownHere?(): boolean
   /** Each call is work by its channel while it runs, so a call that holds the event loop is named. */
   work: HostWork
 }
@@ -118,11 +113,6 @@ export class HostMethods implements MethodTable {
   /** The same validated handler and client authority, without serializing pixels. */
   async invokePreview(args: unknown[], client = "web"): Promise<ControlPreview | null> {
     this.refuseOutsideFixture("mako:control-preview")
-    if (!this.preview && this.options.nothingShownHere?.()) {
-      const parsed = hostCallSchema("mako:control-preview").parse(args)
-      const owner = await withHostClient(client, () => this.options.route("mako:control-preview", parsed), false)
-      return owner.handled ? ControlPreviewSchema.nullable().parse(decodeRuntimeValue(owner.value)) : null
-    }
     if (!this.preview) await this.options.declaring("mako:control-preview")
     const call = this.preview
     if (!call) throw new Error("Preview delivery is unavailable")

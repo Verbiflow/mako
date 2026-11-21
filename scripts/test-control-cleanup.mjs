@@ -116,10 +116,11 @@ async function fixture(options = {}) {
     "node:fs/promises": fs, "node:fs": { constants }, "node:os": { tmpdir: () => "/own" }, "node:path": path,
     "node:url": { fileURLToPath: (url) => url.pathname }, "node:crypto": { randomUUID: () => "fixture-session" },
     "node:net": net, "./processes.js": { fork: () => { throw new Error("fixture must not start a worker") } },
-    "@mako/control/control/fault": { ControlFault: Error },
+    "@mako/control/control": { ControlFault: Error },
     "./control-session-protocol.js": { controlSessionBuild: async () => "fixture-build", CONTROL_SESSION_PROTOCOL: 1 },
     "./desktop-session-config.js": { DesktopWorkerReplySchema: {} },
-    "./control-refusal.js": { refuseControlConnection: () => { throw new Error("fixture must not receive clients") } },
+    "./control-session-client.js": { invokeControlSession: () => { throw new Error("fixture must not dispatch") } },
+    "./control-session-server.js": { refuseControlConnection: () => { throw new Error("fixture must not receive clients") } },
     // The fixture is a Unix one: Windows' pipes are never drawn or proved in it.
     "./platform.js": { onWindows: () => false },
     "@mako/lazy/private-pipe": Object.fromEntries(["connectProven", "drawKeptPipe", "makoLocalFolder", "requireProof", "restrictPipes"].map((name) => [name, () => { throw new Error(`fixture must not reach ${name}`) }])),

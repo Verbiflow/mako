@@ -31,8 +31,6 @@ export const CONTROL_VIDEO_ENDINGS = {
   failed: { type: "failed", title: "The preview's video stopped" },
 } as const satisfies Record<string, { type: ProblemType; title: string }>
 export type ControlVideoEnding = keyof typeof CONTROL_VIDEO_ENDINGS
-/** Why a watch of a conversation with no preview ends `gone`: said the same before control has loaded, when none has one. */
-export const NOTHING_SHOWN = "Nothing is shown for this conversation"
 
 /** Which of the machine's endings a stream's end is; `lost` for any other, such as the link closing under it. */
 export function controlVideoEnding(problem: Problem | undefined): ControlVideoEnding | "lost" {

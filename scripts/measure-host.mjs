@@ -449,23 +449,6 @@ try {
     ...(loopBefore && loopAfter && { loopChecksPerSecond: Math.round(((loopAfter.delayMs.checks - loopBefore.delayMs.checks) / ((Date.now() - idleFrom) / 1000)) * 10) / 10 }),
   }
 
-  // Browser and computer use is a domain a host without the desktop app loads at its first use: an agent's launch, or
-  // a call like this one. What that first call waits, the load's own time, and what the host holds once it has it;
-  // the sessions started below then start as they did when it loaded with the core. `loadedFor` says what loaded it
-  // when something had before this asked (a Mac reads its simulators as it says what it can serve).
-  const controlDomain = async () => JSON.parse((await call("/health")).body).domains?.find((domain) => domain.name === "control")
-  const controlBefore = await controlDomain()
-  if (controlBefore) {
-    const first = await invoke("mako:browser-control-status", [])
-    const loaded = await controlDomain()
-    report.controlFirstUse = {
-      channel: "mako:browser-control-status",
-      ...(controlBefore.state === "unloaded" ? { callMs: Math.round(first.ms), loadMs: loaded.loadMs } : { loadedFor: controlBefore.reason, loadMs: controlBefore.loadMs }),
-      modules: loaded.modules,
-      collectedHeapMb: packaged ? undefined : await collectedHeapMb(),
-    }
-  }
-
   if (!packaged) await sampleTheLoop(true)
   for (let index = 0; index < 20; index++) await invoke("mako:threads", [])
   const readsFrom = Date.now()

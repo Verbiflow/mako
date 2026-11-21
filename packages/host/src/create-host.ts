@@ -24,7 +24,6 @@ import type { CrashReports } from "./base/crash.js"
 import { IdleShutdown, PROFILE_HOST_IDLE_MS, activeHostLeases, removeRuntimeDirectory } from "./base/host-idle.js"
 import type { TerminalClients } from "./terminals/index.js"
 import type { Core } from "./core.js"
-import type { Control } from "./control/index.js"
 import { runtimeBuild } from "./base/build-identity.js"
 import type { MachineRuntime } from "./usage/index.js"
 import { workspacesLoad } from "./workspaces/load.js"
@@ -59,7 +58,7 @@ export interface Host {
 }
 
 /** The domains of packages/host/src the core builds together; each window uses them first. */
-const CORE = ["threads", "conversations", "harnesses", "workspaces", "tools", "git", "usage", "application", "attribution", "media"]
+const CORE = ["threads", "conversations", "harnesses", "workspaces", "tools", "control", "git", "usage", "application", "attribution", "media"]
 
 /**
  * The core's modules in the order they build on each other, each step
@@ -77,6 +76,8 @@ const CORE_IMPORTS = [
   () => import("./git/index.js"),
   () => import("./usage/index.js"),
   () => import("@mako/sessions"),
+  () => import("@mako/control-runtime/browser"),
+  () => import("./control/index.js"),
   () => import("./tools/index.js"),
   () => import("./threads/index.js"),
   // The three largest domains a part at a time, as each lists its own (`<domain>/load.ts`): whole, with the compile
@@ -153,7 +154,6 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
     presentHistory: (value) => core.current()?.presentHistory(value) ?? value,
     breadcrumb: (note) => owner.crashes.breadcrumb(note),
     declaring: (channel) => declaring(channel),
-    nothingShownHere: () => core.current() !== undefined && control.started() === undefined,
     work: loop,
   })
   const terminals: Domain<TerminalClients> = domains.declare("terminals", {
@@ -182,7 +182,7 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       stillStarting()
       const { openCore } = await import("./core.js")
       const opened = await stopping.run(() => openCore({
-        config, owner, methods, jobs, foreground, subscribed, secrets, terminals, control, stopping,
+        config, owner, methods, jobs, foreground, subscribed, secrets, terminals, stopping,
         retryMachineWorkspace: () => machine?.retryWorkspace() ?? false,
         refreshMachineCarried: async () => {
           await machine?.refreshCarried()
@@ -197,15 +197,6 @@ export function createHost(config: HostConfig, owner: HostOwner): Host {
       }))
       return declared(opened, CORE)
     },
-  })
-  // Browser and computer use, built by the core from what it holds (`Core.openControl`). The desktop app uses it from
-  // its first window, so a host that has one loads it once the core has; a host without loads it at its first use,
-  // an agent's launch or a call to one of its methods, and holds none of it until then.
-  const control: Domain<Control> = domains.declare("control", {
-    load: config.desktopExecutable ? "after-listen" : "on-demand",
-    covers: ["control"],
-    needs: ["core"],
-    open: async (reason) => declared(await (await core.load(`control, for ${reason}`)).openControl(), ["control"]),
   })
   const uncovered = [...new Set(hostChannels.flatMap((channel) => {
     const folder = hostChannelDomain(channel)

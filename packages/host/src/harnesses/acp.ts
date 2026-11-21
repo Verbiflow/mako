@@ -1,7 +1,7 @@
 import { providerCall, failureEvidenceOf, ProviderFailureError, providerTextEvidence, HostFailureError, providerExitEvidence } from "../contracts/provider-failure.js"
 import type { WriteHolds } from "./write-holds.js"
 import { CALL_GATE_HOLD_MS } from "./call-gate.js"
-import { applyControlEnvironment } from "../base/control-launch.js"
+import { applyControlEnvironment } from "../control/index.js"
 import { applyThreadEnvironment } from "../workspaces/index.js"
 import type { ApprovalSubmission, NativeApprovalIdentity } from "../contracts/approval-response.js"
 import { handOff, preparePrompt, preparePromptAsync, TurnInProgressError, type PromptDispatch } from "./prompt-dispatch.js"

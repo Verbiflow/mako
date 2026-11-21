@@ -5,8 +5,6 @@ import { randomBytes } from "node:crypto"
 import { createServer, type IncomingMessage } from "node:http"
 import { z } from "zod"
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
-import type { ListToolsRequestSchema } from "@modelcontextprotocol/sdk/types.js"
-import { COMPUTER_MANIFEST } from "./computer-manifest.js"
 import { configuredListenPort } from "../base/listen-port.js"
 import { heavy } from "../base/heavy-packages.js"
 import { MAKO_SERVER_INSTRUCTIONS } from "../contracts/primer.js"
@@ -170,7 +168,7 @@ export async function startConversationMcp(
         response.writeHead(403).end()
         return
       }
-      const [{ McpServer, StreamableHTTPServerTransport }, { JSONRPCMessageSchema, ListToolsRequestSchema }] =
+      const [{ McpServer, StreamableHTTPServerTransport, createControlMcpServer }, { JSONRPCMessageSchema }] =
         await Promise.all([heavy.mcpServer.load("agent MCP request"), heavy.mcpTypes.load("agent MCP request")])
       const message = JSONRPCMessageSchema.parse(JSON.parse(await readBody(request, 1024 * 1024)))
       // HTTP requests use separate stateless MCP transports. Cancellation must
@@ -192,10 +190,8 @@ export async function startConversationMcp(
       })
       const disconnected = new AbortController()
       if (controlRequestId !== undefined) scope.controlRequests.set(controlRequestId, disconnected)
-      // Local Control's own server loads for a call to it. What it says of itself and lists is the same from the
-      // manifest written from it: an agent's handshake, and its reading of the tools, load none of it.
       const mcp = route === "computer"
-        ? controlRequestId === undefined ? listedComputerServer(McpServer, ListToolsRequestSchema) : (await heavy.controlMcp.load("an agent's computer call")).createControlMcpServer(async (operation, signal) => {
+        ? createControlMcpServer(async (operation, signal) => {
             authorized()
             const stepped = stepsOf && operation.method === "js" ? stepsOf : undefined
             try {
@@ -273,9 +269,9 @@ export async function startConversationMcp(
      * servers a request builds, answering nothing, and closes them.
      */
     async warm(): Promise<void> {
-      const [{ McpServer }, { ListToolsRequestSchema }] = await Promise.all([heavy.mcpServer.load("Mako's MCP servers, warmed"), heavy.mcpTypes.load("Mako's MCP servers, warmed")])
+      const [{ McpServer, createControlMcpServer }] = await Promise.all([heavy.mcpServer.load("Mako's MCP servers, warmed"), heavy.mcpTypes.load("Mako's MCP servers, warmed")])
       const unused = (): never => { throw new Error("A warmed server answers nothing") }
-      const servers = [listedComputerServer(McpServer, ListToolsRequestSchema)]
+      const servers = [createControlMcpServer(async () => unused())]
       if (serveMako) {
         const mako = new McpServer({ name: "mako", version: "1.0.0" }, { instructions: MAKO_INSTRUCTIONS })
         registerMako(mako, unused, undefined)
@@ -289,17 +285,6 @@ export async function startConversationMcp(
       server.close()
     },
   }
-}
-
-/**
- * The `computer` server for every request but a tool's call: itself and its tools as Local Control's server gives
- * them (`COMPUTER_MANIFEST`, held to it byte for byte by `test:computer-manifest`), with nothing of that server loaded.
- */
-export function listedComputerServer(Server: typeof McpServer, ListTools: typeof ListToolsRequestSchema): McpServer {
-  const server = new Server(COMPUTER_MANIFEST.server, COMPUTER_MANIFEST.instructions === null ? undefined : { instructions: COMPUTER_MANIFEST.instructions })
-  server.server.registerCapabilities(COMPUTER_MANIFEST.capabilities)
-  server.server.setRequestHandler(ListTools, () => ({ tools: COMPUTER_MANIFEST.tools }))
-  return server
 }
 
 /** The servers' listener, minting and revoking each agent's grant. */

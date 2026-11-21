@@ -4,7 +4,8 @@ import { z } from "zod"
 import { hostCallSchema } from "../../contracts/host-call-inputs.js"
 import { setupStep, type SimulatorSetup } from "../../contracts/simulator-setup.js"
 import { SIMULATOR_TOOLS, type SimulatorAgent, type SimulatorToolDefinition } from "../../contracts/simulators.js"
-import { consentFor, iosAvailability } from "./offering.js"
+import { iosAvailability } from "./local-host.js"
+import { consentFor } from "./simulators.js"
 
 /** What a Thread's `mako` server calls the host through, as a client would, and who it calls as. */
 export interface SimulatorToolDoor {

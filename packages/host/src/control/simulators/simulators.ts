@@ -1,5 +1,3 @@
-import { consentFor } from "./offering.js"
-export { consentFor } from "./offering.js"
 import { readFile } from "node:fs/promises"
 import { basename } from "node:path"
 import { encodeControlVideoBatch } from "@mako/control-runtime/contracts"
@@ -490,6 +488,13 @@ async function inlined(shot: SimulatorsShot): Promise<SimulatorsShot> {
   return { ...shot, inline: { type, data: bytes.toString("base64") } }
 }
 
+/** The person's answer for where an agent works: the nearest folder they answered for, then its worktree's project. */
+export function consentFor(consent: readonly SetupConsent[], agent: Pick<SimulatorAgent, "folder" | "project">): SimulatorConsent {
+  const answerFor = (folder: string) =>
+    consent.filter((entry) => folder === entry.folder || folder.startsWith(`${entry.folder}/`)).sort((left, right) => right.folder.length - left.folder.length)[0]
+  const answer = answerFor(agent.folder) ?? (agent.project ? answerFor(agent.project) : undefined)
+  return answer ? (answer.allowed ? "allowed" : "refused") : "unasked"
+}
 
 /** A host ID may hold colons (`mac:<device>`), so the pair is kept as JSON. */
 function key(host: string, simulator: string): string {

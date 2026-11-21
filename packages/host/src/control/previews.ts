@@ -15,7 +15,6 @@ import type {
 } from "@mako/control-runtime/contracts"
 import { heavy } from "../base/heavy-packages.js"
 import { PreviewVideo, type PreviewVideoSender, type VideoBox } from "./preview-video.js"
-import { NOTHING_SHOWN } from "../contracts/control-video.js"
 
 interface PreviewEntry {
   preview: ControlPreview
@@ -208,7 +207,7 @@ export class ControlPreviews {
     if (watching !== undefined && watching !== conversationId)
       return sender.end({ kind: "failed", reason: "This stream watches another conversation" })
     const entry = this.entries.get(conversationId)
-    if (!entry) return sender.end({ kind: "gone", reason: NOTHING_SHOWN })
+    if (!entry) return sender.end({ kind: "gone", reason: "Nothing is shown for this conversation" })
     if (entry.preview.activity.kind !== "browser" && !(entry.preview.activity.kind === "computer" && this.videoCapture))
       return sender.end({ kind: "failed", reason: "Only a browser tab's preview streams as video here; an app's window needs Mako's desktop app, or an X display" })
     const video = (entry.video ??= new PreviewVideo(() => this.paused(entry), this.videoOptions))

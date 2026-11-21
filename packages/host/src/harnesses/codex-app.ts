@@ -3,7 +3,7 @@ import type { ProviderFailureEvidence } from "../contracts/provider-failure-evid
 import { codexPersonCodeRuns } from "./codex/person-code.js"
 import { failureEvidenceOf, providerExitEvidence } from "../contracts/provider-failure.js"
 import { answersId, type PrefetchLaunch } from "./start-prefetch.js"
-import { applyControlEnvironment } from "../base/control-launch.js"
+import { applyControlEnvironment } from "../control/index.js"
 import { launchContext, observeNativeIdentity, reportedIdentity, reportedRuntime } from "../base/execution-context.js"
 import { CODEX_NATIVE_IDENTITY } from "./codex/live-driver.js"
 import { applyThreadEnvironment } from "../workspaces/index.js"

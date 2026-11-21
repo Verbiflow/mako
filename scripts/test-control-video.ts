@@ -86,7 +86,7 @@ const gateway = createFakeGateway()
 const threadId = "t-0123456789abcdef"
 const runtimeId = "m-0123456789abcdef.g1"
 const serve = async () => {
-  const served = await serveHostThroughGateway(await gateway.connectRuntime(), { runtimeId, build: "test", invoke: async () => "null", media: controlVideoMedia(() => previews) })
+  const served = await serveHostThroughGateway(await gateway.connectRuntime(), { runtimeId, build: "test", invoke: async () => "null", media: controlVideoMedia(previews) })
   await gateway.assign(threadId, runtimeId)
   return served
 }

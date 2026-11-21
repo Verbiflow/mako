@@ -11,11 +11,6 @@ interface Dependencies<Grant> {
   grants: () => { mint(bindingId: string, conversationId: string): Grant; revoke(bindingId: string, conversationId: string): void } | undefined
   /** Agents' browser access, once the conversations exist to authorize it. */
   browser: () => Pick<Awaited<ReturnType<typeof startControlService>>, "mint" | "revoke"> | undefined
-  /**
-   * Agents' browser access for a session that is starting to be used, where it isn't there from the launch: a host
-   * that loads control at its first use mints a binding's access then, not as its agent launches.
-   */
-  browserAtFirstUse?: () => Promise<Pick<Awaited<ReturnType<typeof startControlService>>, "mint">>
   /** The JSONL file that gets a line for each of the conversation's Local Control requests. */
   journal: (conversationId: string) => string
   /** A message for the person; each distinct one is told once per host. */
@@ -46,9 +41,7 @@ export class ControlResidency<Grant extends object> {
     this.wake(bindingId)
     const kept = sessions.get(bindingId)
     if (kept) return { ...minted, control: kept }
-    const atFirstUse = this.dependencies.browserAtFirstUse
-    const access = atFirstUse ? async () => (await atFirstUse()).mint(conversationId, bindingId) : browser()?.mint(conversationId, bindingId)
-    const started = await sessions.startOptional(bindingId, access, async (reason) => {
+    const started = await sessions.startOptional(bindingId, browser()?.mint(conversationId, bindingId), async (reason) => {
       await browser()?.revoke(conversationId, bindingId)
       if (reason === "failed") notice("Local Control stopped unexpectedly. Its browser access has ended; start a new task before continuing control.")
     }, this.dependencies.journal(conversationId))

@@ -6,7 +6,7 @@ import {
   PREVIEW_MEDIA_TYPE,
   collectPreviewMedia,
   decodeControlVideoBatch,
-} from "@mako/control-runtime/preview-contracts"
+} from "@mako/control-runtime/contracts"
 import { RuntimeReplySchema } from "../contracts/runtime.js"
 import {
   HOST_CLOSED_CODE,

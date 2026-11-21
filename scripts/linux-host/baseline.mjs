@@ -29,8 +29,6 @@ const METRICS = [
   ["Idle footprint with children", "MB", at("idle.memory.totalFootprintMb")],
   ["Idle heap", "MB", at("idle.heapMb")],
   ["Idle heap, collected", "MB", at("idle.collectedHeapMb")],
-  ["Control's first call", "ms", at("controlFirstUse.callMs")],
-  ["Heap with control loaded, collected", "MB", at("controlFirstUse.collectedHeapMb")],
   ["Idle CPU, median", "%", at("idle.cpuPercent.median")],
   ["Read, p50", "ms", at("reads.sequentialMs.p50")],
   ["Read, p99", "ms", at("reads.sequentialMs.p99")],
