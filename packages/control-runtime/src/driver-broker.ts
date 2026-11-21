@@ -29,6 +29,7 @@ import {
   parseReply,
   readLine,
   type DaemonDescription,
+  type DaemonPeer,
   type SnapshotScope,
 } from "./driver-daemon.js"
 import type { JsonObject } from "./json.js"
@@ -73,10 +74,25 @@ export interface DriverConsumer {
 export interface DriverBrokerOptions {
   /** The daemon's socket, starting the daemon when it isn't running; null where there is no driver. */
   socket: () => Promise<string | null>
+  /** What the daemon's owner knows of the one now on that socket, where it started it itself. */
+  daemon?: () => DaemonOwned | null
+  /**
+   * A program by its bare name, through the host's trusted lookup, or null; given on Windows. There the driver hands a
+   * name that is no installed app to ShellExecute, which searches the current folder and PATH, where any program of
+   * that name would run. With this, a `launch_app` by bare name reaches the driver only as an installed app's name or
+   * with the whole path the lookup gives, and is refused here otherwise.
+   */
+  program?: (name: string) => Promise<string | null>
   /** Mako's own processes, whose window the warm-up pictures rather than anyone else's. */
   own?: () => readonly number[]
   /** One lifecycle line: connected, lost, warmed, leases, and calls that failed or were slow. No contents. */
   log?: (message: string, fields: Record<string, string | number | boolean | undefined>) => void
+}
+
+/** The daemon a host started itself: its process's end. */
+export interface DaemonOwned {
+  /** Settles when the daemon's process has exited: its calls in flight fail then, whoever holds its endpoint. */
+  exited?: Promise<unknown>
 }
 
 type Outcome = "ok" | "error" | "refused" | "closed" | "unavailable" | "cancelled"
@@ -106,6 +122,9 @@ type WarmState = { state: "cold" | "warming" | "skipped" | "failed" } | { state:
 interface Generation {
   number: number
   socket: string
+  /** The signal that closes its connections when its process is gone. */
+  peer: DaemonPeer
+  gone: AbortController
   description: DaemonDescription
   connectedAt: number
   connectMs: number
@@ -210,6 +229,29 @@ function snapshotKey(name: string, args: JsonObject): string | undefined {
  * a result's `"isError":true` can't occur inside a string, where its quotes
  * would be escaped. Logging only; consumers parse the reply themselves.
  */
+/** A program's name with no folder, drive or scheme in it. */
+const BareNameSchema = z.string().regex(/^[^\\/:]+$/)
+/** What `list_apps` says of the apps the driver can launch by name. */
+const InstalledAppsSchema = z.looseObject({ result: z.looseObject({ structuredContent: z.looseObject({ apps: z.array(z.looseObject({ name: z.string() })) }) }) })
+
+/**
+ * `launch_app`'s arguments as the driver may have them. Anything but a bare `name` goes as it is (a whole path, an
+ * AppUserModelID, a `launch_path` from `list_apps`, URLs). A bare name goes as it is when the driver lists an
+ * installed app by it; otherwise with the whole path of the program the host's lookup trusts by that name; otherwise
+ * the call is answered here as a tool's refusal, and the driver never sees it.
+ */
+async function launchable(args: JsonObject, listApps: () => Promise<Buffer>, program: (name: string) => Promise<string | null>): Promise<{ args: JsonObject; refusal?: undefined } | { refusal: Buffer; args?: undefined }> {
+  const name = BareNameSchema.safeParse(args.name)
+  if (!name.success || ["path", "launch_path", "aumid", "bundle_id"].some((key) => args[key] !== undefined && args[key] !== null)) return { args }
+  const wanted = name.data.toLowerCase()
+  const apps = InstalledAppsSchema.safeParse(JSON.parse((await listApps()).toString("utf8")))
+  if (apps.success && apps.data.result.structuredContent.apps.some((app) => [wanted, `${wanted}.exe`].includes(app.name.toLowerCase()))) return { args }
+  const path = await program(name.data)
+  if (path) return { args: { ...args, path } }
+  const text = `No installed app is named ${JSON.stringify(name.data)}, and no program of that name is in a folder Mako trusts. Give launch_app the program's whole path (path) or its AppUserModelID (aumid). No process was started.`
+  return { refusal: Buffer.from(JSON.stringify({ ok: true, result: { content: [{ type: "text", text }], isError: true, structuredContent: { code: "app_not_found", name: name.data } } })) }
+}
+
 function outcomeOf(line: Buffer): Outcome {
   if (!line.subarray(0, okHead.length).equals(okHead)) return "refused"
   return line.includes(isErrorNeedle) ? "error" : "ok"
@@ -261,7 +303,10 @@ export class DriverBroker {
     for (;;) {
       const socket = await this.options.socket()
       if (!socket) throw new DriverNotDispatchedError("Mako's computer-use driver isn't available on this Mac; nothing was dispatched.")
-      const [description, sentinel] = await Promise.allSettled([describeDaemon(socket), openDaemonLease(socket, leaseIdentity())])
+      const { exited } = this.options.daemon?.() ?? {}
+      const gone = new AbortController()
+      const peer: DaemonPeer = { gone: gone.signal }
+      const [description, sentinel] = await Promise.allSettled([describeDaemon(socket, peer), openDaemonLease(socket, leaseIdentity(), peer)])
       if (description.status === "fulfilled" && sentinel.status === "fulfilled") {
         if (this.closed) {
           sentinel.value.close()
@@ -279,6 +324,8 @@ export class DriverBroker {
         const generation: Generation = {
           number: ++this.generations,
           socket,
+          peer,
+          gone,
           description: description.value,
           connectedAt: Date.now(),
           connectMs: Math.round(performance.now() - started),
@@ -290,6 +337,8 @@ export class DriverBroker {
         if (generation.number > 1) this.reconnects++
         this.connected = generation
         void sentinel.value.ended.then(() => this.lose(generation))
+        // The daemon's process ending ends this generation even if something still answers on its endpoint.
+        void exited?.then(() => this.lose(generation), () => this.lose(generation))
         this.log("driver connected", {
           generation: generation.number,
           ms: generation.connectMs,
@@ -315,6 +364,8 @@ export class DriverBroker {
   private lose(generation: Generation) {
     if (generation.lost) return
     generation.lost = true
+    // Every connection to this daemon closes: a call in flight fails as the daemon having stopped.
+    generation.gone.abort()
     if (this.connected === generation) this.connected = undefined
     const leases = [...generation.leases]
     const inFlight = leases.reduce((count, lease) => count + lease.inFlight.size, 0)
@@ -377,7 +428,7 @@ export class DriverBroker {
     const identity = leaseIdentity()
     let control: Awaited<ReturnType<typeof openDaemonLease>>
     try {
-      control = await openDaemonLease(generation.socket, identity)
+      control = await openDaemonLease(generation.socket, identity, generation.peer)
     } catch (error) {
       if (error instanceof DaemonUnavailableError) this.lose(generation)
       throw new DriverNotDispatchedError(`The native driver could not be reached (${error instanceof Error ? error.message : String(error)}); nothing was dispatched.`)
@@ -449,13 +500,15 @@ export class DriverBroker {
       const started = performance.now()
       lease.inFlight.add(record)
       try {
-        const line = await exchange(lease.generation.socket, {
+        const call = (tool: string, sent: JsonObject) => exchange(lease.generation.socket, {
           method: "call",
-          name,
-          args,
+          name: tool,
+          args: sent,
           session_id: lease.identity,
           ...(lease.generation.description.observes && { observation_origin: "mcp_proxy" as const }),
-        })
+        }, undefined, lease.generation.peer)
+        const launch = name === "launch_app" && this.options.program ? await launchable(args, () => call("list_apps", {}), this.options.program) : undefined
+        const line = launch?.refusal ?? await call(name, launch?.args ?? args)
         record.bytes = line.length
         record.outcome = outcomeOf(line)
         if (record.outcome === "ok") this.published(lease, name, args)

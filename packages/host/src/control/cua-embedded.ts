@@ -39,6 +39,20 @@ interface Daemon {
   endpoint: Endpoint
   args: string[]
   env: NodeJS.ProcessEnv
+  /** Settles when the daemon's process has exited. */
+  exited: Promise<void>
+}
+
+/**
+ * The environment the embedded daemon starts with: the host's, less every variable that configures the driver
+ * (`CUA_DRIVER_*`, `CUA_TELEMETRY_ENABLED`), then what the host itself sets. A person's own driver settings are for
+ * their own driver: `CUA_DRIVER_RS_MCP_HTTP_PORT` or `CUA_DRIVER_ENVELOPE_HTTP_PORT` inherited here would open a
+ * loopback TCP listener beside the daemon's private endpoint, and a policy or permission variable would change what
+ * Mako's daemon allows.
+ */
+export function driverEnvironment(inherited: NodeJS.ProcessEnv, own: Record<string, string>): NodeJS.ProcessEnv {
+  const kept = Object.entries(inherited).filter(([name]) => !/^CUA_DRIVER_/i.test(name) && name.toUpperCase() !== "CUA_TELEMETRY_ENABLED")
+  return { ...Object.fromEntries(kept), ...own }
 }
 
 /** Where the daemon listens: a private Unix socket, or on Windows a named pipe the daemon creates with a current-user ACL. */
@@ -85,6 +99,7 @@ function videoHelperEnvironment(): { CUA_DRIVER_VIDEO_HELPER?: string } {
 
 const SOCKET_WAIT_MS = 10_000
 const SOCKET_POLL_MS = 50
+const STARTED_SETTLE_MS = 150
 const RESTART_WINDOW_MS = 60_000
 const RESTARTS_PER_WINDOW = 3
 
@@ -198,6 +213,12 @@ export class CuaEmbedded {
 
   socket(): string | null {
     return this.#daemon?.socket ?? null
+  }
+
+  /** The running daemon for the driver broker: its endpoint and its process's end. */
+  address(): { path: string; exited: Promise<void> } | null {
+    const daemon = this.#daemon
+    return daemon ? { path: daemon.socket, exited: daemon.exited } : null
   }
 
   /** The daemon's pid, for tests that sample what is frontmost while it starts. */
@@ -316,10 +337,7 @@ export class CuaEmbedded {
     // awaiting its glide before semantic AX actions; --no-overlay removes that
     // render path entirely and keeps background control visually quiet.
     const args = ["serve", "--embedded", "--no-overlay", "--socket", socket]
-    const started = await this.#spawn(command, endpoint, args, {
-      ...env,
-      ...driverEnv,
-    })
+    const started = await this.#spawn(command, endpoint, args, driverEnvironment(env, driverEnv))
     this.#daemon = started
     hostLog("computer", "driver started", {
       pid: started.pid,
@@ -361,6 +379,7 @@ export class CuaEmbedded {
       endpoint,
       args,
       env,
+      exited: new Promise((resolve) => child.once("exit", () => resolve())),
     }
     child.once("exit", (code, signal) => {
       if (this.#daemon === current) this.#restart(current, code, signal)
@@ -375,6 +394,11 @@ export class CuaEmbedded {
             : this.#stderr.trim() ||
               `Embedded CUA Driver exited with ${child.exitCode}`)
       )
+      // Started means still running a moment after it first answered: a daemon that could not take its pipe's name
+      // (another process made it first) exits at once, and whatever answered then was not it.
+      if (onWindows()) await new Promise((resolve) => setTimeout(resolve, STARTED_SETTLE_MS))
+      if (spawnFailure !== null || child.exitCode !== null || child.signalCode !== null)
+        throw new Error(spawnFailure ?? (this.#stderr.trim() || `Embedded CUA Driver exited with ${child.exitCode ?? child.signalCode}`))
     } catch (error) {
       stopDaemon(child)
       await endpoint.close()

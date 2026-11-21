@@ -35,7 +35,7 @@ import { prepareBrowserExtension } from "./browser-extension-setup.js"
 import { BrowserIcons } from "./browser-icon.js"
 import { ControlSessions } from "./sessions.js"
 import { startControlService } from "./service.js"
-import { resolveExecutable } from "../base/executable.js"
+import { findExecutable, resolveExecutable } from "../base/executable.js"
 import { trackProviderPid, untrackProviderPid } from "../base/provider-children.js"
 import { CuaEmbedded } from "./cua-embedded.js"
 import { CuaDriverVersions } from "./cua-driver-version.js"
@@ -164,6 +164,10 @@ export function openControl(
   const ensureLocalControl = () => cua.ensure(join(environment.dataRoot, "computer-use", "cua"), MAKO_BUNDLE_ID)
   const driver = new DriverBroker({
     socket: async () => (resolveExecutable("cua-driver") ? ensureLocalControl() : null),
+    // The daemon this host started: its process's end, which ends its calls in flight.
+    daemon: () => cua.address(),
+    // A bare name `launch_app` is given on Windows: an installed app's, or a program the host's trusted lookup finds.
+    ...(onWindows() && { program: (name: string) => findExecutable(name) }),
     // Mako's own window is what the warm-up pictures, never one of the person's.
     own: () => {
       const attached = desktop.attached()
