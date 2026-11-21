@@ -690,7 +690,7 @@ export function AgentThreads() {
           onPointerEnter={() => setHold((current) => current ?? { ranks, folderRanks: byProject ? folderRanks : null })}
           onPointerLeave={() => setHold(null)}
           data-rail-scroller
-          className="scroll-fade-scroller min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3"
+          className="scroll-fade-scroller min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 pb-3 [scrollbar-gutter:stable]"
         >
           {!loaded && matched.length === 0 && unboundLiveAgents.length === 0 ? (
             <RailSkeleton />
