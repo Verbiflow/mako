@@ -156,6 +156,18 @@ Browser control needs the extension loaded once per Chrome profile. Computer
 control needs the CUA driver installed and two macOS permissions granted to
 Mako. Both are optional; agents work without them.
 
+### Windows
+
+Mako also builds for Windows x64: the host, the desktop app and a per-user
+installer, with the computer-use driver and the video helper beside the app.
+It is newer than the Mac app and has been run only on GitHub's hosted Windows
+runners, not on a range of PCs. The installer is **unsigned** until signing is
+set up, so Windows warns before running it and the app doesn't update itself.
+Agents can't drive windows of programs run as administrator, typing into a
+window needs it in front, videos get no poster image, and nothing is built for
+Windows on Arm. [Mako on Windows](docs/windows.md) lists what works, how each
+part is checked, and every limit.
+
 ### Run from source
 
 Requires Node.js 24, Git, and at least one supported agent CLI.

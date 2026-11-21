@@ -3,7 +3,7 @@
 // session Mako put in its environment (MAKO_CONTROL_SESSION_FILE): it runs MAKO_PROOF_COMPUTER_PROGRAM through the
 // control CLI and writes what came back to MAKO_PROOF_COMPUTER_RESULT. Then it serves the streaming ACP stand-in, so
 // the Thread's turn runs to its end.
-import { execFile } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { existsSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -19,7 +19,14 @@ if (!args.includes("stdio")) {
   process.exit(2)
 }
 const { MAKO_PROOF_COMPUTER_PROGRAM: program, MAKO_PROOF_COMPUTER_RESULT: result, MAKO_PROOF_CONTROL_CLI: cli, MAKO_CONTROL_SESSION_FILE: session } = process.env
-if (program && result && cli) {
+// A process this harness starts and leaves running, whose pid it writes down: closing the Thread, or ending the host,
+// must take it too.
+if (process.env.MAKO_PROOF_GRANDCHILD_FILE) {
+  const grandchild = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore", windowsHide: true })
+  writeFileSync(process.env.MAKO_PROOF_GRANDCHILD_FILE, String(grandchild.pid))
+}
+// Once: a later conversation on this stand-in only streams its turn.
+if (program && result && cli && !existsSync(result)) {
   const outcome = { session: session ?? null }
   if (!session) outcome.error = "Mako gave this harness no control session (MAKO_CONTROL_SESSION_FILE is unset)"
   else {

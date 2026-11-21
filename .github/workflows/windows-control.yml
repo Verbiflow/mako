@@ -21,6 +21,8 @@ on:
       - native/video-windows/**
       - scripts/build-video-helper.mjs
       - scripts/windows-host/prove-computer-use.mjs
+      - scripts/windows-host/older-driver-shim.mjs
+      - scripts/windows-host/display-scale.ps1
       - scripts/windows-host/computer-stand-in.mjs
       - package-lock.json
 
@@ -103,7 +105,30 @@ jobs:
         shell: bash
         run: |
           node scripts/build-windows-helper.mjs --require
-          node scripts/windows-host/prove-computer-use.mjs --driver "$MAKO_DRIVER_PACKAGE/cua-driver.exe" --video-helper build/mako-video.exe --thread --evidence evidence
+          node scripts/windows-host/prove-computer-use.mjs --driver "$MAKO_DRIVER_PACKAGE/cua-driver.exe" --video-helper build/mako-video.exe --thread --older-driver --evidence evidence
+      # The same checks with the display scaled above 100%, where a window's pixels and its coordinates differ: the
+      # runner's one display is asked for the next scale up (as Settings > Display > Scale does), and put back after.
+      # A display that keeps its scale (too small for the step) is said in the log, and nothing more is claimed.
+      - name: The driver, and computer use from a Thread, with the display scaled up
+        shell: pwsh
+        run: |
+          $before = powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-host/display-scale.ps1 | ConvertFrom-Json
+          $after = powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-host/display-scale.ps1 -Step 1 | ConvertFrom-Json
+          "before: $($before | ConvertTo-Json -Compress)"
+          "after:  $($after | ConvertTo-Json -Compress)"
+          try {
+            if ($after.unawareScreen -eq $before.unawareScreen) {
+              "::notice::This runner's display kept its scale ($($after.unawareScreen), override $($after.override)): scaled coordinates were not exercised."
+            } else {
+              "The display is scaled: a DPI-unaware program now sees $($after.unawareScreen), not $($before.unawareScreen)."
+              npx tsx scripts/test-control-driver-windows.ts --driver "$env:MAKO_DRIVER_PACKAGE/cua-driver.exe" --video-helper build/mako-video.exe --json evidence/windows-control-scaled.json
+              if ($LASTEXITCODE) { throw "the driver checks failed with the display scaled" }
+              node scripts/windows-host/prove-computer-use.mjs --driver "$env:MAKO_DRIVER_PACKAGE/cua-driver.exe" --video-helper build/mako-video.exe --thread --evidence evidence/scaled
+              if ($LASTEXITCODE) { throw "computer use from a Thread failed with the display scaled" }
+            }
+          } finally {
+            powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-host/display-scale.ps1 -Step 0 | Out-Null
+          }
       - if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

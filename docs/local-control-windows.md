@@ -237,19 +237,36 @@ check box, list position, every mouse message its canvas's window procedure
 receives and every key to a file. It also drives Notepad and Calculator,
 Appshots, and a task's control session through the public program API.
 
+## On a running host, and installed
+
+`prove-computer-use.mjs` (the same workflow) starts a host by hand, which finds
+the driver through its trusted lookup, and runs a Thread on a stand-in harness
+whose `mako-control.cmd` observes the fixture, sets its field, clicks and takes
+an Appshot. With `--older-driver` it then swaps in a driver that says
+`+mako.30` (the real one behind a `cua-driver.cmd`,
+`scripts/windows-host/older-driver-shim.mjs`): the host starts it without the
+key, its log says "driver predates the proof handshake; started without it",
+and it still lists windows and takes an Appshot.
+
+The installer carries `cua-driver.exe` and `mako-video.exe` beside `Mako.exe`.
+`scripts/smoke-windows-install.mjs` (the release workflow) runs the same Thread
+on the installed app and requires that the only driver running is the shipped
+one, that its release is `+mako.31` or later and was started with the proof,
+and that a window recorded by the agent is a finished MP4 with no FFmpeg on
+`PATH`. [Mako on Windows](windows.md) has the whole list.
+
 ## What is left
 
-- The host itself on Windows (another change): until it lands, the driver is
-  checked through the host's own modules rather than a running host. Once it
-  does, run a task end to end: `computer` use from a Thread on a Windows host,
-  observe, set a field, click, and an Appshot.
-- Packaging `cua-driver.exe` with the Windows app, beside the executable or in
-  `~\.local\bin`, from the package this script builds, and `mako-video.exe`
-  where `MAKO_VIDEO_HELPER` points: the host passes that whole path to the
-  driver, which records no window video without it.
 - Background keys without UI Automation focus (post to the element's own window
   handle), proven on an interactive desktop, before the pid keyboard is offered.
-- `invoke_menu` and multi-monitor or high-DPI scaling were not exercised; the
-  runner has one 100% display. A recorded window that changes size ends its
-  recording there (as on the other platforms), which was not exercised either.
-- Signing the executable.
+- `invoke_menu` is not verified. A recorded window that changes size ends its
+  recording there (as on the other platforms), which was not exercised.
+- More than one display, and a display scaled above 100%: see
+  [Mako on Windows](windows.md#newly-checked-and-not-checked) for what the runner allowed.
+- Elevated windows: refused, as above. Nothing Mako ships can drive one.
+- Held input after a crash is not journaled and released on Windows.
+- A video gets no poster on Windows (`video-poster.ts`): the player draws the
+  video's own first frame.
+- Signing the executables. Until then the installer and everything in it is
+  unsigned.
+- Windows on Arm: not built or run.

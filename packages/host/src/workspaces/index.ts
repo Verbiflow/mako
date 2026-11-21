@@ -209,7 +209,10 @@ export function openWorkspaces(deps: WorkspacesDeps): Workspaces {
     file: join(deps.dataRoot, "plan-builds.json"),
     announce: (builds) => emit({ type: "plan-builds", builds }),
   })
-  const shared = store ? realpathSync(dirname(store.path)) : undefined
+  // The system's own answer, as `realpath` from fs/promises gives where Thread scratch compares against this: on
+  // Windows the other one keeps a short name (`RUNNER~1`) the system expands, and every Thread's data and scratch
+  // folder was then refused as linked.
+  const shared = store ? realpathSync.native(dirname(store.path)) : undefined
   const recipes = shared ? join(shared, "recipes") : undefined
   let scratch: ThreadScratch | null = null
   let threadData: ThreadScratch | null = null

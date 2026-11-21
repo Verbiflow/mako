@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, rmSync } from "node:fs"
+import { readdirSync, rmdirSync, unlinkSync } from "node:fs"
 import { mkdir, readdir, unlink, writeFile } from "node:fs/promises"
 import { join } from "node:path"
 
@@ -89,20 +89,39 @@ export async function holdHostLease(hostDirectory: string, pid = process.pid): P
   }
 }
 
+/** What `removeRuntimeDirectory` may take: only what the host itself put there. */
+export interface RuntimeDirectoryOwned {
+  /** The host's own files in the directory, by path: its socket. Each is unlinked; one that is a folder is left. */
+  files?: readonly string[]
+  /**
+   * Whether the directory itself is the host's: the profile's own runtime folder (`runtimeLocation`), or one this
+   * host made as it started. One it was merely given (a socket named in a folder of someone's) is never removed.
+   */
+  own?: boolean
+}
+
 /**
- * Removes a stopping host's runtime directory but the leases a live launcher still holds in it: the profile's next
- * host, after a restart, runs in the same directory and is held by the same launcher. Removing them once let a
- * restarted dev host stop itself 15 seconds later under a launcher that was still serving its page.
+ * Takes a stopping host's own things out of its runtime directory: its files, and the leases of launchers that are
+ * gone. A lease a live launcher still holds stays: the profile's next host, after a restart, runs in the same
+ * directory and is held by the same launcher, and removing them once let a restarted dev host stop itself 15
+ * seconds later under a launcher that was still serving its page. The directory goes only when it is the host's
+ * (`own`) and nothing is left in it, and nothing here deletes a folder's contents: a host whose socket was named in
+ * /tmp once removed everything beside it, as this deleted the socket's folder whole.
  */
-export function removeRuntimeDirectory(hostDirectory: string): void {
-  const leases = leaseDirectory(hostDirectory)
-  const held = existsSync(leases) && readdirSync(leases, { withFileTypes: true }).some((entry) =>
-    entry.name.startsWith(LEASE_PREFIX) && processAlive(Number(entry.name.slice(LEASE_PREFIX.length))))
-  if (!held) {
-    rmSync(hostDirectory, { recursive: true, force: true })
-    return
+export function removeRuntimeDirectory(hostDirectory: string, { files = [], own = false }: RuntimeDirectoryOwned = {}): void {
+  const attempt = (remove: () => void) => {
+    try { remove() } catch { /* gone already, or not this host's to take (a folder, something still in it) */ }
   }
-  for (const entry of readdirSync(hostDirectory)) if (entry !== "leases") rmSync(join(hostDirectory, entry), { recursive: true, force: true })
+  for (const file of files) attempt(() => unlinkSync(file))
+  const leases = leaseDirectory(hostDirectory)
+  const names = (() => {
+    try { return readdirSync(leases) } catch { return [] }
+  })()
+  for (const name of names)
+    if (name.startsWith(LEASE_PREFIX) && !processAlive(Number(name.slice(LEASE_PREFIX.length)))) attempt(() => unlinkSync(join(leases, name)))
+  // Each fails, and leaves the folder, while anything is in it.
+  attempt(() => rmdirSync(leases))
+  if (own) attempt(() => rmdirSync(hostDirectory))
 }
 
 /** Pids of launchers currently holding this host; dead holders are removed. */

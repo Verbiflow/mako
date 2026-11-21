@@ -153,6 +153,38 @@ return {observed: view.nodes.length, field: field.ref, appshot: Object.keys(shot
     const connections = await call("mako:computer-driver-connections")
     return `the window verified "${state.verified}" after ${state.presses} press; broker ${JSON.stringify(connections).slice(0, 160)}; ${String(outcome.stdout).slice(0, 200)}`
   })
+
+  // An installed app carries the driver it shipped with until it updates: one from before the proof (`+mako.31`) is
+  // started without it, says so in the log, and serves as before.
+  if (process.argv.includes("--older-driver")) await step("a driver from before the proof handshake is started without it and still serves", async () => {
+    await run("taskkill", ["/PID", String(host.pid), "/T", "/F"]).catch(() => undefined)
+    await Promise.race([once(host, "exit"), delay(10_000)])
+    await until(async () => (await run("powershell.exe", ["-NoProfile", "-Command", "@(Get-Process -Name cua-driver -ErrorAction SilentlyContinue).Count"])).stdout.trim(), (count) => count === "0", "the first driver to end with its host", 20_000)
+    const real = join(scratch, "real-driver", "cua-driver.exe")
+    await mkdir(join(scratch, "real-driver"), { recursive: true })
+    await copyFile(join(bin, "cua-driver.exe"), real)
+    await rm(join(bin, "cua-driver.exe"), { force: true, maxRetries: 20, retryDelay: 200 })
+    await writeFile(join(bin, "cua-driver.cmd"), `@echo off\r\n"${process.execPath}" "${join(repo, "scripts", "windows-host", "older-driver-shim.mjs")}" %*\r\n`)
+    const olderRoot = join(scratch, "older-data")
+    await mkdir(olderRoot, { recursive: true })
+    runtimeFolders.push(runtimeLocation(olderRoot).directory)
+    host = spawn(process.execPath, [join(repo, "packages", "host", "dist", "mako-host.js")], { env: { ...env, MAKO_DATA_ROOT: olderRoot, MAKO_PROOF_REAL_DRIVER: real }, stdio: ["ignore", "pipe", "pipe"], windowsHide: true })
+    host.stdout.on("data", (chunk) => (hostOutput = (hostOutput + chunk).slice(-8_000)))
+    host.stderr.on("data", (chunk) => (hostOutput = (hostOutput + chunk).slice(-8_000)))
+    let older
+    await until(async () => {
+      assert.equal(host.exitCode, null, `the host exited while starting:\n${hostOutput}`)
+      older = runtimeLocation(olderRoot).socket
+      return probeRuntime(older, { timeoutMs: 2_000 }).catch(() => undefined)
+    }, (probe) => probe?.state === "ready", "the second host's /health", 90_000)
+    const ask = (method, args = []) => invokeRuntime(older, randomUUID(), method, args, 1, { timeoutMs: 90_000 })
+    const windows = await until(() => ask("mako:appshot-windows"), (listed) => listed.some((entry) => entry.windowId === window.hwnd), "the fixture among the older driver's windows", 60_000)
+    const shot = await ask("mako:appshot-capture", [{ pid: window.pid, windowId: window.hwnd }])
+    assert.ok(shot.image.data.length > 1000, "the older driver takes an Appshot")
+    const log = await readFile(join(olderRoot, "logs", "host.log"), "utf8")
+    assert.match(log, /driver predates the proof handshake; started without it/, "the host says it started the driver without the proof")
+    return `${windows.length} windows listed, an Appshot of ${shot.image.data.length} bytes, and the log says it started without the proof`
+  })
 } catch (error) {
   report.failures.push(error instanceof Error ? (error.stack ?? error.message) : String(error))
   console.error(`FAIL ${report.failures.at(-1)}`)

@@ -27,8 +27,10 @@ export const STEPS = [
   [1, "npx tsx scripts/test-host-liveness.ts"],
   // A host without the desktop app holds none of browser and computer use until its first use (create-host's control domain).
   [20, "node scripts/test-control-on-demand.mjs"],
-  // A host with no window and no project keeps no helper process: no watcher child (watching, probing or reading history) and no Git helper.
-  [90, "node scripts/test-idle-helpers.mjs"],
+  // A host with no window and no project keeps no helper process (no watcher child watching, probing or reading history, no Git helper) and starts no process.
+  [150, "node scripts/test-idle-helpers.mjs"],
+  // A stop removes the host's socket and its own empty runtime folder, never a folder its socket was named in.
+  [35, "node scripts/test-host-socket-folder.mjs"],
   // A harness none of whose processes runs is answered from the processes' names, read from /proc or by one `ps` on a Mac.
   [1, "tsx scripts/test-probe-names.ts"],
   // An agent's `computer` server answers its handshake and tools/list from a manifest, byte for byte as Local Control's server does.
@@ -451,7 +453,7 @@ export const MAC_STEPS = [
   [23, "npm run -s build:electron && node scripts/test-fixture-desk.mjs"],
   [2, "tsx scripts/test-host-probes.ts"],
   // On a Mac the probes' child is what stayed: nobody reading what the harnesses' processes do, none is looked at.
-  [95, "npm run -s build:control-runtime && node scripts/test-idle-helpers.mjs"],
+  [155, "npm run -s build:control-runtime && node scripts/test-idle-helpers.mjs"],
   [3, "tsx scripts/test-local-update-install.ts"],
   [25, "tsx scripts/test-native-driver-death.ts"],
   [1, "npm run -s build:electron && node scripts/test-preload.mjs"],
