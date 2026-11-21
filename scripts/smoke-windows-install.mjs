@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
 import { execFile, spawn } from "node:child_process"
 import { existsSync, openSync } from "node:fs"
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
+import { createServer } from "node:net"
+import { randomUUID } from "node:crypto"
 import { createInterface } from "node:readline"
 import { join, resolve } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -109,6 +111,8 @@ try {
   }
   report.hostProcessMs = Math.round(performance.now() - began)
   check("host process starts", Boolean(host), host?.command, true)
+  // The host's native security helper (#1117), which it runs from beside Mako.exe.
+  check("mako-windows.exe beside Mako.exe", existsSync(join(installDirectory, "mako-windows.exe")), installDirectory, true)
   const health = await hostHealth(began)
   report.hostHealthMs = health.ms
   check("host answers health", health.ok, health.detail, true)
@@ -127,7 +131,8 @@ try {
   const login = await registryValue(RUN_KEY, "Mako")
   check("login item", login.includes("Mako.exe") && login.includes("--at-login"), login)
   const scheme = await registryValue(`${SCHEME_KEY}\\shell\\open\\command`, "(default)")
-  check("mako: scheme", scheme.includes("Mako.exe"), scheme)
+  // After `--`, Chromium reads no switch: a link can't pass one to Mako.
+  check("mako: scheme", scheme.includes("Mako.exe") && /(?:"--"|--)\s+"%1"$/.test(scheme.trim()), scheme)
 
   // A second launch hands over to the first and leaves: one window still.
   const second = spawn(executable, ["mako://thread/smoke"], { stdio: "ignore" })
@@ -135,6 +140,12 @@ try {
   await delay(1_000)
   const windows = (await makoProcesses()).filter((entry) => entry.window !== 0)
   check("second launch hands over", secondExit !== "running" && windows.length === 1, { exit: secondExit, windows: windows.length }, true)
+
+  // `mako://open` links, as a web page would send them through Windows: a share, a WebDAV share, a device path, a
+  // missing folder and a file are refused with no question and no connection; a local folder is asked about, and
+  // opens only on Open.
+  report.links = await projectLinks()
+  for (const [name, result] of Object.entries(report.links.checks)) check(name, result.ok, result.detail, true)
 
   // The power helper the host runs while agents work: Electron's powerSaveBlocker, held and let go.
   report.keepAwake = await keepAwake()
@@ -193,6 +204,11 @@ try {
   check("native-messaging registrations removed", remaining.length === 0, remaining)
   check("native-messaging files removed", !existsSync(join(bin, "mako-browser-host-smoke.cmd")) && !existsSync(join(bin, "dev.mako.browser-smoke.json")))
   check("person's data kept", existsSync(join(appData, "Mako")))
+
+  // DLL planting: the installer run from a Downloads folder beside DLLs a download could leave there, each a real x86
+  // DLL that logs its own load. None may load, and the install must still work.
+  report.dllPlanting = await dllPlanting()
+  check("installer loads no DLL from its own folder", report.dllPlanting.ok, report.dllPlanting)
 } catch (error) {
   report.error = error instanceof Error ? error.stack : String(error)
   console.error(report.error)
@@ -210,6 +226,167 @@ const failed = Object.entries(report.checks).filter(([, result]) => !result.ok &
 if (report.error || failed.length) {
   console.error(`Failed: ${[...failed.map(([name]) => name), ...(report.error ? ["error"] : [])].join(", ")}`)
   process.exit(1)
+}
+
+/** The question a linked folder raises (`confirmLinkedProject`): found, or answered by its button. */
+async function linkDialog(answer) {
+  const text = await powershell(`
+    Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
+    $mako = @(Get-Process -Name Mako -ErrorAction SilentlyContinue | ForEach-Object { $_.Id })
+    $root = [Windows.Automation.AutomationElement]::RootElement
+    $isDialog = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::ClassNameProperty, '#32770')
+    # A dialog with a parent window is that window's child in UI Automation, not the desktop's.
+    $dialogs = @($root.FindAll([Windows.Automation.TreeScope]::Children, $isDialog))
+    foreach ($top in $root.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)) {
+      if ($mako -contains $top.Current.ProcessId) { $dialogs += @($top.FindAll([Windows.Automation.TreeScope]::Children, $isDialog)) }
+    }
+    foreach ($dialog in $dialogs) {
+      if ($mako -notcontains $dialog.Current.ProcessId) { continue }
+      # A task dialog's text isn't always a Text control: every named part of it, and its Open button.
+      $parts = $dialog.FindAll([Windows.Automation.TreeScope]::Descendants, [Windows.Automation.Condition]::TrueCondition)
+      $message = (@($dialog.Current.Name) + ($parts | ForEach-Object { $_.Current.Name } | Where-Object { $_ })) -join ' | '
+      if (-not ($parts | Where-Object { $_.Current.Name -eq 'Open' })) { continue }
+      ${answer ? `Add-Type -AssemblyName System.Windows.Forms
+      Add-Type -Name Front -Namespace Win32 -MemberDefinition '[DllImport("user32.dll")] public static extern bool SetForegroundWindow(System.IntPtr hWnd);'
+      $named = New-Object Windows.Automation.PropertyCondition([Windows.Automation.AutomationElement]::NameProperty, '${answer}')
+      $button = $dialog.FindFirst([Windows.Automation.TreeScope]::Descendants, $named)
+      if (-not $button) { Write-Output "no ${answer}: $message"; exit 0 }
+      $kind = $button.Current.ControlType.ProgrammaticName
+      $how = $null
+      try { $button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern).Invoke(); $how = 'invoked' } catch { }
+      if (-not $how) {
+        # A task dialog's buttons aren't always invokable: from the keyboard instead, the dialog in front.
+        [void][Win32.Front]::SetForegroundWindow([System.IntPtr]$dialog.Current.NativeWindowHandle)
+        Start-Sleep -Milliseconds 300
+        try { $button.SetFocus(); Start-Sleep -Milliseconds 200; [System.Windows.Forms.SendKeys]::SendWait(' '); $how = 'pressed' }
+        catch { [System.Windows.Forms.SendKeys]::SendWait('${answer === "Cancel" ? "{ESC}" : "+{TAB}{ENTER}"}'); $how = 'keyed' }
+      }
+      Write-Output "$how $kind ${answer}"
+      exit 0` : ""}
+      Write-Output $message
+      exit 0
+    }`)
+  return text || undefined
+}
+
+/** Whether `token` appears in any file of Mako's data under 5 MB: where an opened project's folder is recorded. */
+async function inMakoData(token) {
+  const root = join(appData, "Mako")
+  const stack = [root]
+  while (stack.length) {
+    const folder = stack.pop()
+    for (const entry of await readdir(folder, { withFileTypes: true }).catch(() => [])) {
+      const path = join(folder, entry.name)
+      if (entry.isDirectory()) stack.push(path)
+      else if (entry.isFile() && (await stat(path).catch(() => ({ size: Infinity }))).size < 5 * 2 ** 20 && (await readFile(path).catch(() => Buffer.alloc(0))).includes(token)) return path
+    }
+  }
+  return undefined
+}
+
+async function projectLinks() {
+  const checks = {}
+  const record = (name, ok, detail) => { checks[name] = { ok, detail } }
+  const send = (path) => powershell(`Start-Process 'mako://open?path=${encodeURIComponent(path)}'`)
+  // A WebDAV server's port, listened on: a link that reached for the share would connect here.
+  const connections = []
+  const server = createServer((socket) => { connections.push(Date.now()); socket.destroy() })
+  await new Promise((done) => server.listen(8080, "127.0.0.1", done))
+  const webClient = await powershell("Start-Service WebClient -ErrorAction SilentlyContinue; (Get-Service WebClient -ErrorAction SilentlyContinue).Status").catch(() => "")
+  const token = `mako-link-project-${randomUUID().slice(0, 8)}`
+  const folder = join(process.env.USERPROFILE ?? "C:\\", token)
+  await mkdir(folder, { recursive: true })
+  await writeFile(join(folder, "notes.txt"), "")
+  const desktopLog = join(appData, "mako-ui-desktop", "logs", "desktop.log")
+  const refusals = async () => ((await readFile(desktopLog, "utf8").catch(() => "")).match(/a link's folder was refused/g) ?? []).length
+  try {
+    const before = await refusals()
+    const smb = async () => Number(await powershell("@(Get-NetTCPConnection -RemotePort 445 -ErrorAction SilentlyContinue).Count").catch(() => "-1"))
+    const smbBefore = await smb()
+    const refused = ["\\\\127.0.0.1@8080\\dav\\x", "//127.0.0.1@8080/dav", "\\\\127.0.0.1\\c$", "\\\\?\\UNC\\127.0.0.1\\c$", "\\\\?\\C:\\Windows", join(folder, "missing"), join(folder, "notes.txt")]
+    for (const path of refused) await send(path)
+    await delay(5_000)
+    record("refused links ask nothing", !(await linkDialog()), refused)
+    record("refused links are refused", (await refusals()) - before === refused.length, { refused: (await refusals()) - before, of: refused.length })
+    const smbAfter = await smb()
+    record("refused links connect to nothing", connections.length === 0 && smbAfter === smbBefore, { webDav: connections.length, webClient, smbBefore, smbAfter })
+
+    await send(folder)
+    let question
+    for (let tries = 0; tries < 50 && !question; tries++) {
+      question = await linkDialog()
+      if (!question) await delay(200)
+    }
+    record("a local folder is asked about", Boolean(question && /Open/.test(question) && /Cancel/.test(question)), question)
+    const cancelled = await linkDialog("Cancel")
+    await delay(3_000)
+    record("Cancel opens nothing", cancelled?.endsWith("Cancel") && !(await linkDialog()) && !/a linked folder opens as a project/.test(await readFile(desktopLog, "utf8").catch(() => "")) && !(await inMakoData(token)))
+
+    await send(folder)
+    for (let tries = 0; tries < 50 && !(await linkDialog()); tries++) await delay(200)
+    const pressed = await linkDialog("Open")
+    const agreed = async () => /a linked folder opens as a project/.test(await readFile(desktopLog, "utf8").catch(() => ""))
+    let opened = false
+    for (let tries = 0; tries < 30 && !opened; tries++) {
+      opened = await agreed()
+      if (!opened) await delay(500)
+    }
+    record("Open opens it", opened && !(await linkDialog()), { pressed, opened, recordedIn: await inMakoData(token) })
+
+    // The control: the same shares reached directly do connect (WebDAV only where Windows's WebDAV client runs), so
+    // the counts above would have seen a link that reached them.
+    await powershell("Test-Path '\\\\127.0.0.1\\c$' | Out-Null; Test-Path '\\\\127.0.0.1@8080\\dav\\x' | Out-Null", 60_000).catch(() => undefined)
+    await delay(1_000)
+    Object.assign(checks["refused links connect to nothing"].detail, { controlWebDav: connections.length, controlSmb: await smb() })
+  } finally {
+    server.close()
+  }
+  return { checks }
+}
+
+
+async function dllPlanting() {
+  /** The names Windows looks up beside an executable before System32 when a program doesn't guard its loads. */
+  const PLANTED = ["version", "userenv", "uxtheme", "cryptbase", "profapi", "apphelp", "propsys", "dwmapi", "cryptsp", "oleacc", "setupapi", "shfolder", "textshaping", "mpr", "netapi32", "winmm", "iphlpapi", "secur32", "sspicli", "wininet", "msimg32", "rsaenh", "wsock32", "ntmarta", "nsi", "dbghelp", "riched20", "comctl32"]
+  const vcvars = (await powershell(`& "\${env:ProgramFiles(x86)}\\Microsoft Visual Studio\\Installer\\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -find 'VC\\Auxiliary\\Build\\vcvars32.bat'`).catch(() => "")).split("\n")[0]?.trim()
+  if (!vcvars) return { ok: false, detail: "no MSVC on this machine to build the planted DLL" }
+  const work = join(process.env.USERPROFILE ?? "", "Downloads", `mako-dll-${randomUUID().slice(0, 8)}`)
+  await mkdir(work, { recursive: true })
+  const source = join(work, "planted.c")
+  await writeFile(source, `#include <windows.h>
+BOOL WINAPI DllMain(HINSTANCE module, DWORD reason, LPVOID reserved) {
+  if (reason == DLL_PROCESS_ATTACH) {
+    char name[MAX_PATH], log[MAX_PATH + 32];
+    DWORD written;
+    HANDLE file;
+    GetModuleFileNameA(module, name, MAX_PATH);
+    GetTempPathA(MAX_PATH, log);
+    lstrcatA(log, "mako-planted-dll.log");
+    file = CreateFileA(log, FILE_APPEND_DATA, FILE_SHARE_READ | FILE_SHARE_WRITE, 0, OPEN_ALWAYS, 0, 0);
+    if (file != INVALID_HANDLE_VALUE) { WriteFile(file, name, lstrlenA(name), &written, 0); WriteFile(file, "\\r\\n", 2, &written, 0); CloseHandle(file); }
+  }
+  return TRUE;
+}
+`)
+  await run("cmd.exe", ["/d", "/s", "/c", `""${vcvars}" >nul && cl /nologo /LD "${source}" /Fe"${join(work, "planted.dll")}" /Fo"${join(work, "planted.obj")}" kernel32.lib"`], { cwd: work, timeout: 120_000, windowsVerbatimArguments: true })
+  const log = join(process.env.TEMP ?? "", "mako-planted-dll.log")
+  await writeFile(log, "")
+  const planted = await readFile(join(work, "planted.dll"))
+  for (const name of PLANTED) await writeFile(join(work, `${name}.dll`), planted)
+  const copy = join(work, "Mako-Setup-x64.exe")
+  await writeFile(copy, await readFile(installer))
+  let installed = false
+  try {
+    await run(copy, ["/S"], { cwd: work, timeout: 300_000 })
+    installed = existsSync(executable)
+  } finally {
+    if (existsSync(join(installDirectory, "Uninstall Mako.exe"))) {
+      await run(join(installDirectory, "Uninstall Mako.exe"), ["/S"], { timeout: 300_000 }).catch(() => undefined)
+      for (let tries = 0; tries < 150 && existsSync(executable); tries++) await delay(200)
+    }
+  }
+  const loaded = (await readFile(log, "utf8")).split(/\r?\n/).filter(Boolean)
+  return { ok: installed && loaded.length === 0, installed, loaded, planted: PLANTED.length }
 }
 
 function role(command = "") {

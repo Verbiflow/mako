@@ -711,6 +711,12 @@
     "win": {
       "target": [
         "nsis"
+      ],
+      "extraFiles": [
+        {
+          "from": "build/mako-windows.exe",
+          "to": "mako-windows.exe"
+        }
       ]
     },
     "extraResources": [

@@ -35,13 +35,15 @@ import { assertCursorSdkPatched } from "./patch-cursor-sdk.mjs"
  *   neither                unsigned, `makoDistribution: "unsigned"`, which turns the updater off as on a Mac
  *
  * Half a set fails rather than shipping unsigned by accident. `MAKO_WINDOWS_PUBLISHER` is the certificate's subject
- * common name; the updater refuses an update not signed by it.
+ * common name; the updater refuses an update not signed by it. Only a version tag's build signs (`GITHUB_REF`
+ * `refs/tags/v…`): with credentials anywhere else this fails, unless `--sign-untagged` says signing a build no tag
+ * names is meant.
  */
 const project = resolve(dirname(fileURLToPath(import.meta.url)), "..")
 const args = process.argv.slice(2)
 assert.ok(
-  args.every((arg) => arg === "--dir" || arg.startsWith("--output=") || arg.startsWith("--arch=")),
-  "Use --dir, --arch=x64|arm64 and/or --output=<directory>"
+  args.every((arg) => arg === "--dir" || arg === "--sign-untagged" || arg.startsWith("--output=") || arg.startsWith("--arch=")),
+  "Use --dir, --arch=x64|arm64, --sign-untagged and/or --output=<directory>"
 )
 assert.equal(process.platform, "win32", "Package Windows on Windows: the native modules installed are this machine's")
 const arch = args.find((arg) => arg.startsWith("--arch="))?.slice(7) ?? process.arch
@@ -52,9 +54,24 @@ const output = resolve(args.find((arg) => arg.startsWith("--output="))?.slice(9)
 const FileSetSchema = z.object({ from: z.string(), to: z.string(), filter: z.array(z.string()).optional() }).passthrough()
 const NoticeSchema = z.enum(["LICENSE", "NOTICE"])
 const signing = windowsSigning(process.env)
+assert.ok(
+  signing.kind === "unsigned" || process.env.GITHUB_REF?.startsWith("refs/tags/v") || args.includes("--sign-untagged"),
+  "Signing credentials are set, but this build isn't a version tag's: only a release is signed. Pass --sign-untagged to sign it anyway."
+)
 const pkgSource = JSON.parse(await readFile(join(project, "package.json"), "utf8"))
 /** Windows's helpers beside `Mako.exe`, as `build.win.extraFiles` declares them (the video helper, the control driver). */
-const helpers = z.array(z.object({ from: z.string(), to: z.string() })).parse(pkgSource.build.win?.extraFiles ?? [])
+/**
+ * The helpers this checkout builds itself, each by its script with `--require`: the host's native security helper
+ * (#1117), which the host runs from beside `Mako.exe`. One whose script this checkout doesn't have yet is left out with
+ * a warning, so a tree from before it still packages; once the script is here, the helper is required.
+ */
+const HELPER_BUILDS = { "build/mako-windows.exe": "scripts/build-windows-helper.mjs" }
+const helpers = z.array(z.object({ from: z.string(), to: z.string() })).parse(pkgSource.build.win?.extraFiles ?? []).filter((helper) => {
+  const builder = HELPER_BUILDS[helper.from]
+  if (!builder || existsSync(join(project, builder))) return true
+  console.warn(`::warning::${helper.to} isn't packaged: this checkout has no ${builder} to build it`)
+  return false
+})
 const inputs = [
   "dist",
   "dist-electron",
@@ -122,6 +139,10 @@ try {
   // The video helper, when this checkout can build one for Windows (`scripts/build-video-helper.mjs`); a declared
   // helper that isn't there fails below rather than shipping an app without it.
   execFileSync(process.execPath, [join(project, "scripts/build-video-helper.mjs"), "--if-fresh"], { cwd: project, stdio: "inherit" })
+  for (const helper of helpers) {
+    const builder = HELPER_BUILDS[helper.from]
+    if (builder) execFileSync(process.execPath, [join(project, builder), "--require"], { cwd: project, stdio: "inherit" })
+  }
   for (const helper of helpers) assert.ok(existsSync(join(project, helper.from)), `build.win.extraFiles names ${helper.from}, which isn't built`)
   const before = await manifest(project)
   for (const path of inputs) {

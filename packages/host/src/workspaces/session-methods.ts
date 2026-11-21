@@ -8,6 +8,8 @@ import type { MethodTable } from "../base/methods.js"
 import type { MachineOffer } from "../contracts/machine-offer.js"
 import type { ElsewhereFolder } from "./elsewhere.js"
 import { folderUnmade } from "../contracts/cloud-threads.js"
+import { windowsRemoteOrDevicePath } from "../contracts/local-folder.js"
+import { onWindows } from "../base/platform.js"
 
 export interface SessionMethodsDeps {
   archives?(): ThreadArchiveSnapshot
@@ -59,6 +61,11 @@ export function declareSessionMethods(methods: MethodTable, context: SessionMeth
   methods.handle(
     "mako:open-tab",
     async (options?: { cwd?: string; sessionPath?: string }) => {
+      // Never a share or a device path: opening one makes Windows connect to its server with the person's credentials,
+      // and Git there runs what the share's `.git/config` says. A link is checked before it reaches a window
+      // (`electron/desktop-deep-link.ts`); this is the host's own refusal, whoever asks.
+      if (options?.cwd && onWindows() && windowsRemoteOrDevicePath(options.cwd))
+        throw new Error("Mako opens projects on this computer's drives, not on a network share or a device path.")
       const live = await ready()
       const opened = await live.open(options ?? {})
       await context.onWorkspaceChanged?.(opened.session.meta.cwd)

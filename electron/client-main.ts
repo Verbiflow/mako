@@ -2,7 +2,7 @@ import { app, BrowserWindow, Menu, clipboard, dialog, ipcMain, powerMonitor, pro
 import { WindowShutdown } from "@mako/host/application/window-shutdown"
 import { SHUTDOWN_HOLD_MS } from "@mako/host/contracts/cloud-threads"
 import { createHash, randomUUID } from "node:crypto"
-import { cp, mkdir, access, mkdtemp, rename, rm, stat } from "node:fs/promises"
+import { cp, mkdir, access, lstat, mkdtemp, rename, rm, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -26,7 +26,7 @@ import { HostLiveness, type HostProbe } from "@mako/host/contracts/host-liveness
 import { HOST_OUTAGE_MESSAGE } from "@mako/host/contracts/host-connection"
 import { electronDesktopNotifier, surfaceWindow } from "./desktop-notifications-electron.js"
 import { DESK_BACKGROUND, DESK_TITLE_BAR_OVERLAY, DESK_TRAFFIC_LIGHTS, deskUrl, privilegedSchemes } from "./desk-scheme.js"
-import { DEEP_LINK_SCHEME, deepLinkInArgv, parseDeepLink, type DeepLink } from "./desktop-deep-link.js"
+import { DEEP_LINK_SCHEME, deepLinkInArgv, openProjectLink, parseDeepLink, type DeepLink } from "./desktop-deep-link.js"
 import { serveDesk } from "./desk-protocol.js"
 import { adoptDeskOrigin } from "./renderer-storage.js"
 import { installCrashReporting } from "@mako/host/base/crash"
@@ -187,7 +187,25 @@ if (role === "desktop")
 
 /** A `mako:` link: from Windows's launch or second launch, or macOS's `open-url`. */
 function openDeepLink(link: DeepLink): void {
-  if (link.kind === "open-project") return requestOpenProject(link.path)
+  if (link.kind === "refused") {
+    hostWarn("desktop", "a link's folder was refused", { reason: link.reason })
+    return
+  }
+  if (link.kind === "open-project") {
+    // A web page or a document can send this link: the folder must be a real one on this computer's drives, and the
+    // person says Open, in this app's own dialog, before any window hears of it.
+    void openProjectLink(link.path, {
+      windows: windowsChrome,
+      reader: { lstat },
+      confirm: confirmLinkedProject,
+      open: (path) => {
+        hostLog("desktop", "a linked folder opens as a project, as the person agreed")
+        requestOpenProject(path)
+      },
+      refused: (_path, reason) => hostWarn("desktop", "a link's folder was refused", { reason }),
+    }).catch((error) => hostWarn("desktop", "a link's folder couldn't be opened", { reason: error instanceof Error ? error.message : String(error) }))
+    return
+  }
   const window = app.isReady() ? (BrowserWindow.getFocusedWindow() ?? personWindows()[0]) : undefined
   if (window && !window.webContents.isLoadingMainFrame()) {
     surfaceWindow(window)
@@ -198,6 +216,24 @@ function openDeepLink(link: DeepLink): void {
   if (link.kind === "open-thread") pendingSubject = link.subject
   if (window) surfaceWindow(window)
   else if (app.isReady() && runtime) void openWindow().catch((error) => dialog.showErrorBox("Mako could not open", error instanceof Error ? error.message : "Try opening Mako again."))
+}
+
+/** Asks whether to open a linked folder as a project; Cancel is the default and Escape's answer. */
+async function confirmLinkedProject(path: string): Promise<boolean> {
+  await app.whenReady()
+  const parent = BrowserWindow.getFocusedWindow() ?? personWindows()[0]
+  const options: Electron.MessageBoxOptions = {
+    type: "question",
+    title: "Mako",
+    message: `Open ${path} as a project in Mako?`,
+    detail: "A link asked Mako to open this folder. Open it only if you expected this: an agent can read and change what's in it.",
+    buttons: ["Open", "Cancel"],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  }
+  const { response } = parent && !parent.isDestroyed() && parent.isVisible() ? await dialog.showMessageBox(parent, options) : await dialog.showMessageBox(options)
+  return response === 0
 }
 
 if (role === "desktop")
@@ -511,7 +547,8 @@ async function start() {
     app.setAppUserModelId("dev.mako.app")
     if (app.isPackaged) {
       // `mako:` links open here; the uninstaller removes the registration (`build/installer.nsh`).
-      app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME)
+      // `"Mako.exe" "--" "%1"`: after `--` Chromium reads no switch, so a link can't pass one.
+      app.setAsDefaultProtocolClient(DEEP_LINK_SCHEME, process.execPath, ["--"])
       // Mako starts at sign-in, its window hidden, so its host is there for agents and Fins; Windows's Startup apps turns it off.
       app.setLoginItemSettings({ openAtLogin: true, name: "Mako", args: ["--at-login"] })
     }
