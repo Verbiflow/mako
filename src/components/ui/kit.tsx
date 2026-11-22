@@ -375,12 +375,12 @@ export function Blank({
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 px-8 py-12 text-center">
       {icon ? (
-        <div className="mb-1 flex size-8 items-center justify-center bg-raised text-faint [&_svg]:size-4">
+        <div className="mb-1 flex items-center justify-center text-faint [&_svg]:size-4">
           {icon}
         </div>
       ) : null}
-      <p className="text-ui font-medium text-foreground">{title}</p>
-      {body ? <p className="max-w-[30ch] text-ui leading-relaxed text-faint">{body}</p> : null}
+      <p className="text-ui text-muted-foreground">{title}</p>
+      {body ? <p className="max-w-[34ch] text-label leading-relaxed text-faint">{body}</p> : null}
       {action}
       {hints?.length ? (
         <div className="mt-3 flex w-full max-w-[19rem] flex-col gap-0.5">

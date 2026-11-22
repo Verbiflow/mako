@@ -2580,7 +2580,8 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 /* Scrolling rows clip anything drawn outside their chips; an outset focus
    ring survived only as a bracket on the chip's right edge. */
 .composer-routing :focus-visible,
-.terminal-tabs :focus-visible {
+.terminal-tabs :focus-visible,
+[data-side-rail] :focus-visible {
   outline-width: 1.5px;
   outline-offset: -1.5px;
 }

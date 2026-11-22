@@ -74,14 +74,14 @@ export function ApexOverview({
   }
   return (
     <section data-apex-fins={counts.total} data-fin-counts={rollupLabel(counts)} aria-label={`${apexTitle}'s ${FIN_WORD}s`} className="mb-1">
-      <div className="flex h-7 items-center gap-1.5 px-1.5 text-label text-faint">
+      <div className="flex h-7 items-center gap-1.5 px-2 text-label text-faint">
         <span className="tabular min-w-0 shrink truncate">{finsWord(counts.total)} · {rollupLine(counts)}</span>
         {stoppable && conversation ? (
           <button
             type="button"
             onClick={stopAll}
             title={`Stop ${finsWord(stoppable)} under ${apexTitle}; the ${APEX_WORD} keeps running`}
-            className="pressable ml-auto shrink-0 px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
+            className="pressable -mr-1.5 ml-auto shrink-0 px-1.5 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground"
           >
             Stop all
           </button>
@@ -106,7 +106,7 @@ export function OverviewHeading({ id, label, count, folded, attention, onToggle 
       data-child-group={id}
       aria-expanded={!folded}
       onClick={onToggle}
-      className="pressable group/heading flex h-7 w-full items-center gap-1.5 px-1.5 text-left text-label text-faint hover:bg-fill-hover"
+      className="pressable group/heading flex h-7 w-full items-center gap-1.5 px-2 text-left text-label text-faint hover:bg-fill-hover"
     >
       <span className={cn("font-medium", attention ? "text-attention" : "text-muted-foreground")}>{label}</span>
       <span className="tabular">{count}</span>
@@ -126,7 +126,7 @@ export function OverviewMore({ rest, opened, onToggle }: { rest: number; opened:
       data-overview-more={opened ? "opened" : rest}
       aria-expanded={opened}
       onClick={onToggle}
-      className="pressable flex h-7 w-full items-center px-1.5 pl-8 text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
+      className="pressable flex h-7 w-full items-center px-2 pl-[2.125rem] text-left text-label text-faint hover:bg-fill-hover hover:text-muted-foreground"
     >
       <span className="tabular">{opened ? "Show fewer" : `Show ${rest} more`}</span>
     </button>
@@ -225,7 +225,7 @@ const FinRow = memo(function FinRow({
         aria-current={lit || undefined}
         title={tip}
         onClick={() => onOpen?.(agent)}
-        className={cn("pressable flex w-full items-start gap-2 px-1.5 py-1.5 text-left transition-colors duration-100 hover:bg-fill-hover", lit && "bg-fill-selected")}
+        className={cn("pressable flex w-full items-start gap-2 px-2 py-1.5 text-left transition-colors duration-100 hover:bg-fill-hover", lit && "bg-fill-selected")}
       >
         <span className="flex h-5 w-[1.125rem] shrink-0 items-center justify-center">
           <FinMark agent={agent} state={state} read cut={lit ? "var(--raised)" : "var(--shell)"} />
@@ -235,7 +235,7 @@ const FinRow = memo(function FinRow({
             <span className={cn("min-w-0 flex-1 truncate text-ui", needs ? "font-medium text-foreground" : group === "done" ? "text-foreground/70" : "text-foreground")}>{agent.title}</span>
             {ticking ? null : <ShiverElapsed agent={agent} className="text-label text-faint" />}
           </span>
-          <span className={cn("truncate text-label", needs ? "text-foreground/90" : group === "failed" ? "text-negative" : "text-muted-foreground")}>{line}</span>
+          <span className={cn("truncate text-label", needs ? "text-foreground/90" : "text-muted-foreground")}>{line}</span>
           <FinMovedLine agent={agent} />
           {agent.runsOn?.note ? (
             <span data-fin-fell-back className="truncate text-label text-caution" title={agent.runsOn.note}>
@@ -255,7 +255,7 @@ function FinAnswers({ agent, conversation, apexTitle }: { agent: NativeAgent; co
   const { sent, send } = useFinAnswer(agent, conversation)
   const ask = openAsk(childStateOf(agent))?.ask
   if (!ask) return null
-  return <FinAnswerButtons agent={agent} ask={ask} apexTitle={apexTitle} sent={sent} send={send} typed={(ask.options?.length ?? 0) === 0} className="pt-0.5 pr-1.5 pb-2 pl-8" />
+  return <FinAnswerButtons agent={agent} ask={ask} apexTitle={apexTitle} sent={sent} send={send} typed={(ask.options?.length ?? 0) === 0} className="pt-0.5 pr-2 pb-2 pl-[2.125rem]" />
 }
 
 /** A Fin that is an Apex of its own: its Fins fold under it, closed until asked, counted as its badge counts them. */
@@ -269,7 +269,7 @@ function SubApexFold({ thread, conversation, apexTitle, onOpen }: { thread: stri
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((value) => !value)}
-        className="pressable ml-8 flex items-center gap-1 px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+        className="pressable ml-[1.75rem] flex items-center gap-1 px-1.5 py-0.5 text-label text-muted-foreground hover:bg-fill-hover hover:text-foreground"
       >
         <ChevronRightIcon className={cn("size-3 transition-transform duration-150", open && "rotate-90")} />
         <ApexMark className="size-3" />
@@ -326,9 +326,9 @@ const PullRow = memo(function PullRow({ pull }: { pull: OverviewPull }) {
     </>
   )
   const url = pull.url
-  if (!url) return <div data-overview-pull={pull.key} title={tip} className="contain-turn flex h-7 items-center gap-2 px-1.5">{body}</div>
+  if (!url) return <div data-overview-pull={pull.key} title={tip} className="contain-turn flex h-7 items-center gap-2 px-2">{body}</div>
   return (
-    <button type="button" data-overview-pull={pull.key} title={tip} onClick={() => void desktop.openUrl(url)} className="pressable contain-turn flex h-7 w-full items-center gap-2 px-1.5 text-left hover:bg-fill-hover">
+    <button type="button" data-overview-pull={pull.key} title={tip} onClick={() => void desktop.openUrl(url)} className="pressable contain-turn flex h-7 w-full items-center gap-2 px-2 text-left hover:bg-fill-hover">
       {body}
     </button>
   )
