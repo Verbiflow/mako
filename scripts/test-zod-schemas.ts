@@ -1,21 +1,15 @@
 import assert from "node:assert/strict"
-import { readFileSync } from "node:fs"
-import { createRequire } from "node:module"
-import { dirname, join } from "node:path"
 import { z } from "zod"
 
 /**
- * `scripts/patch-zod.mjs`: zod's methods bound on first use, as its builder methods already were, so a schema holds
- * none of its own until one is asked for; and its lazy properties, `description` and `~standard` on prototypes, so
- * every schema keeps a shared shape rather than becoming a dictionary. This holds the patch applied to the zod
- * installed here, every method it moved behaving as zod's own (detached too), every lazy property reading as zod's
- * own, and a schema small and fast. Run with `--allow-natives-syntax` to check the shapes.
+ * What the host needs of zod's schemas, held against the zod installed here. The host makes about 19,000 of them as
+ * it imports its modules, so what one holds decides tens of megabytes: zod 4.4.3 shipped each with a closure for every
+ * method and accessors of its own (7.5 KB a `z.string()`, every schema a dictionary to V8), and Mako patched that
+ * (`scripts/patch-zod.mjs`, to 1.2 KB). Zod keeps its methods and lazy properties on prototypes itself from 4.6 on
+ * (0.7 KB, measured on 4.6.7, 2026-11-21), so the patch is gone and this holds zod to it: a schema owning no method
+ * until one is asked for, every method and lazy property behaving as before, a schema small and of a shared shape.
+ * Run with `--allow-natives-syntax` to check the shapes.
  */
-const root = dirname(createRequire(import.meta.url).resolve("zod/package.json"))
-assert.ok(readFileSync(join(root, "v4/classic/schemas.js"), "utf8").startsWith("/* mako: methods bound on first use"), "patch-zod.mjs has patched the zod installed here: run it, or port it to this version")
-for (const file of ["v4/classic/schemas.js", "v4/core/util.js", "v4/core/core.js", "v4/core/schemas.js"])
-  assert.ok(readFileSync(join(root, file), "utf8").includes("/* mako: lazy properties on prototypes (scripts/patch-zod.mjs) */"), `patch-zod.mjs has put zod's lazy properties on prototypes in ${file}`)
-
 // A schema owns no method until one is asked for.
 const fresh = z.string()
 for (const method of ["parse", "safeParse", "parseAsync", "email", "url", "min", "toJSONSchema"])
@@ -74,35 +68,9 @@ const overridden = z.string()
 overridden.parse = () => "mine"
 assert.equal(overridden.parse("x"), "mine", "a method set on a schema is its own")
 
-// A schema locked before its first use (frozen, sealed, not extensible) parses as zod's own did, whose methods were its
-// own properties: the method is bound afresh each time instead of kept on it.
-const locks: [(schema: z.ZodType) => z.ZodType, string][] = [[(schema) => Object.freeze(schema), "frozen"], [(schema) => Object.seal(schema), "sealed"], [(schema) => Object.preventExtensions(schema), "locked"]]
-for (const [lock, how] of locks) {
-  for (const [kind, make, good, bad] of [
-    ["string", () => z.string(), "yes", 1],
-    ["object", () => z.object({ a: z.string() }), { a: "yes" }, { a: 1 }],
-    ["lazy", () => z.lazy(() => z.string()), "yes", 1],
-  ] as const) {
-    const schema: z.ZodType = lock(make())
-    assert.deepEqual(schema.safeParse(good), { success: true, data: good }, `a ${how} ${kind} parses`)
-    assert.equal(schema.safeParse(bad).success, false, `and refuses, ${how}`)
-    assert.deepEqual(schema.parse(good), good)
-    assert.deepEqual(await schema.parseAsync(good), good)
-    const { safeParse: detached } = schema
-    assert.equal(detached(good).success, true, `a ${how} ${kind}'s method apart from it`)
-    const checked = schema["~standard"].validate(good)
-    assert.ok(!(checked instanceof Promise) && "value" in checked, `a ${how} ${kind}'s standard schema validates`)
-    assert.equal(schema["~standard"], schema["~standard"], "the same standard schema each time")
-    assert.ok(schema.toJSONSchema(), `a ${how} ${kind} says its JSON schema`)
-  }
-}
-// A value set on a sealed schema stays, as on zod's own property; a frozen one refuses it, as zod's own did.
-const sealed = Object.seal(z.string())
-sealed.parse = () => "mine"
-assert.equal(sealed.parse("x"), "mine", "a sealed schema keeps a method set on it")
-const frozen = Object.freeze(z.string())
-assert.throws(() => Object.assign(frozen, { safeParse: () => "theirs" }), TypeError, "a frozen schema refuses one")
-assert.equal(frozen.safeParse("x").success, true)
+// A schema frozen, sealed or locked before its first use is one zod 4.6 doesn't parse with: its methods are kept on it
+// as they're first asked for, which a locked one refuses. Nothing in Mako locks a schema; this says so if zod changes.
+assert.throws(() => Object.freeze(z.string()).safeParse("x"), TypeError, "a frozen schema is still one zod can't keep a method on")
 
 // Lazy properties read as zod's own: computed once on first read, each schema its own, a getter's undefined read again.
 const kinds = z.enum(["a", "b"])
@@ -123,12 +91,6 @@ const described = z.string().describe("a word")
 assert.equal(described.description, "a word", "description, as zod's registry has it")
 assert.equal(z.string().description, undefined)
 assert.equal(z.string().meta({ description: "meta" }).description, "meta")
-const lockedEnum = Object.freeze(z.enum(["q"]))
-assert.equal(lockedEnum._zod.values.has("q"), true, "a frozen schema reads its lazy properties")
-assert.equal(Object.freeze(z.string().describe("cold")).description, "cold")
-// `~standard` carries its JSON schema methods, made with it on first read, for a frozen schema too.
-const coldStandard = Object.freeze(z.object({ id: z.string() }))["~standard"]
-assert.deepEqual(coldStandard.jsonSchema.output({ target: "draft-2020-12" }).required, ["id"])
 
 // Every schema keeps a shared shape, its `_zod` too: V8 made each a dictionary while each had accessors of its own.
 /** V8's own answer, where Node runs with `--allow-natives-syntax`: whether a schema, or its internals, has fast properties. */
@@ -140,7 +102,7 @@ const fastPropertiesCheck = ((): LayoutCheck | undefined => {
     const check = new Function("value", "return %HasFastProperties(value) === true")
     return (value) => check(value) === true
   } catch {
-    console.log("zod patch: object layouts not checked; run with --allow-natives-syntax")
+    console.log("zod schemas: object layouts not checked; run with --allow-natives-syntax")
     return undefined
   }
 })()
@@ -149,7 +111,7 @@ if (fastPropertiesCheck) {
     ["string", () => z.string()], ["number", () => z.number().int()], ["object", () => z.object({ a: z.string() })],
     ["optional", () => z.string().optional()], ["enum", () => z.enum(["a"])], ["array", () => z.array(z.string())],
     ["union", () => z.union([z.string(), z.number()])], ["discriminated", () => either], ["checked", () => z.string().min(1).max(3)],
-    ["record", () => z.record(z.string(), z.number())], ["literal", () => z.literal(1)], ["described", () => z.string().describe("d")],
+    ["record", () => z.record(z.string(), z.number())], ["described", () => z.string().describe("d")],
   ]
   for (const [kind, make] of made) {
     const schema = make()
@@ -160,7 +122,7 @@ if (fastPropertiesCheck) {
   }
 }
 
-// A schema is small: 7.5 KB each before (2026-11-07), 2.0 KB with its methods on prototypes, measured here over many.
+// A schema is small: 7.5 KB each as zod 4.4.3 shipped, 1.2 KB with Mako's patch of it, 0.7 KB as zod 4.6.7 ships, measured here over many.
 const gc = globalThis.gc
 if (gc) {
   const used = () => { gc(); gc(); return process.memoryUsage().heapUsed }
@@ -168,8 +130,15 @@ if (gc) {
   const before = used()
   const kept = Array.from({ length: count }, () => z.string())
   const each = (used() - before) / count
-  assert.ok(each < 1_600, `a z.string() holds ${each.toFixed(0)} bytes, under 1.6 KB`)
+  assert.ok(each < 1_000, `a z.string() holds ${each.toFixed(0)} bytes, under 1 KB`)
   void kept.length
-  console.log(`zod patch: a z.string() holds ${each.toFixed(0)} bytes`)
+  // A literal is the one kind zod 4.6.7 leaves a dictionary (its `value` is an accessor of its own); it is no larger for it
+  // (1.7 KB, as with Mako's patch of 4.4.3), which this holds.
+  const literalsBefore = used()
+  const literals = Array.from({ length: count }, () => z.literal("a"))
+  const literal = (used() - literalsBefore) / count
+  assert.ok(literal < 2_000, `a z.literal() holds ${literal.toFixed(0)} bytes, under 2 KB`)
+  void literals.length
+  console.log(`zod schemas: a z.string() holds ${each.toFixed(0)} bytes`)
 }
-console.log("zod patch: methods bound on first use, lazy properties on prototypes, each behaving as zod's own, every schema a shared shape")
+console.log("zod schemas: no method of its own until asked for, lazy properties on prototypes, every schema a shared shape")

@@ -251,7 +251,7 @@
   "npm run -s test:transfer-scheduling": 4,
   "npm run -s test:web-delivery": 7,
   "npm run -s test:window-boot": 3,
-  "npm run -s test:zod-patch": 1,
+  "npm run -s test:zod-schemas": 1,
   "npm run bench:person-ask": 3,
   "npm run build -w @mako/web-client": 7,
   "npm run eval:orch-tools -- --dry-run": 3,

@@ -82,7 +82,7 @@
   "dependencies": {
     "@mako/lazy": "0.1.0",
     "@mako/protocol": "0.1.0",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   },
   "peerDependencies": {
     "@agentclientprotocol/sdk": "^1.3.0",

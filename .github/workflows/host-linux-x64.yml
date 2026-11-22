@@ -20,7 +20,6 @@ on:
       - scripts/fixtures/host-measure-preload.cjs
       - scripts/patch-cursor-sdk.mjs
       - scripts/lib/anchored-patch.mjs
-      - scripts/patch-zod.mjs
       - scripts/patch-sdk-schemas.mjs
       - scripts/test-host-linux.mjs
       - scripts/test-linux-locks.mjs

@@ -34,7 +34,6 @@ function lane(name, command, args) {
 }
 
 await lane("cursor-sdk", process.execPath, ["scripts/patch-cursor-sdk.mjs"])
-await lane("zod", process.execPath, ["scripts/patch-zod.mjs"])
 await lane("sdk-schemas", process.execPath, ["scripts/patch-sdk-schemas.mjs"])
 await lane("prune", process.execPath, ["scripts/prune-host-output.mjs"])
 
