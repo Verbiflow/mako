@@ -2,6 +2,7 @@ import { SESSION_HEARTBEAT_MS, type Artifact, type BorrowAnswer, type Lease, typ
 import { HeldLeases } from "../base/held-leases.js"
 import type { LentHere } from "../base/lent.js"
 import type { SimulatorVia } from "../contracts/simulators.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** How often a served session says it's alive: well inside its lease's window, so one late beat never loses it. */
 export const LEND_BEAT_MS = SESSION_HEARTBEAT_MS / 2
@@ -135,7 +136,7 @@ export class Lending {
 
   /** A file a served session made, for its borrower: only under a lease this device serves now. */
   async artifact(lease: string, file: string, name: string): Promise<Artifact> {
-    if (!this.#served.has(lease) || !this.#deps.upload) throw new Error("No lease this Mac serves takes that file")
+    if (!this.#served.has(lease) || !this.#deps.upload) throw new Error(localWords("No lease this Mac serves takes that file"))
     const made = await this.#deps.upload(lease, file, name)
     this.#deps.log?.("gave a lease a file", { lease, size: made.size })
     return made

@@ -6,6 +6,7 @@ import { readOnlyCommand } from "./read-only.js"
 import type { RanText } from "./scripts.js"
 import { WorkingSets } from "./working-set.js"
 import { distinct } from "./written.js"
+import { insideOf, windowsStyle } from "../base/path-style.js"
 
 /*
  * Who made a change, from what the tracker knows: Mako's own writes, the
@@ -685,9 +686,11 @@ function spelled(report: ReportedCall, change: ObservedChange, ran: readonly Ran
 function spellsPath(text: string, path: string, folders: readonly (string | undefined)[]): boolean {
   const names = [path]
   for (const folder of folders) {
-    if (!folder || !path.startsWith(`${folder}/`)) continue
-    const inside = path.slice(folder.length + 1)
+    if (!folder || folder === path || !within(folder, path)) continue
+    const inside = insideOf(folder, path)
     names.push(inside, `./${inside}`)
+    // On Windows a command spells it either way.
+    if (windowsStyle(folder)) names.push(inside.replaceAll("/", "\\"), `.\\${inside.replaceAll("/", "\\")}`)
   }
   return names.some((name) => /[./]/.test(name) && spells(text, name))
 }

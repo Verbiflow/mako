@@ -19,6 +19,7 @@ import {
   type StoragePart,
   type StorageReport,
 } from "../contracts/storage.js"
+import { localWords } from "@mako/protocol/computer-words"
 const run = hostCommand
 
 /** Collectors run this often, the first a while after the host starts, so a start's own work goes first. */
@@ -353,7 +354,7 @@ export class MakoStorage {
     this.#deps.emit({
       type: "notice",
       level: "error",
-      message: `This Mac has ${gigabytes(disk.freeBytes)} free.`,
+      message: localWords(`This Mac has ${gigabytes(disk.freeBytes)} free.`),
       action: { label: `Free ${gigabytes(low - disk.freeBytes)}`, does: "open-storage" },
     })
   }

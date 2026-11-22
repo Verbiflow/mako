@@ -8,6 +8,7 @@ import { splitLines } from "./line-diff.js"
 import { BASE, type Run } from "./line-map.js"
 import { walkingLines } from "./line-walk.js"
 import { within } from "./paths.js"
+import { kept, under } from "../base/path-style.js"
 
 /*
  * What the journal answers, as functions of what it holds: who wrote each
@@ -151,7 +152,10 @@ export function writerOf(author: Attribution | null): Writer {
   return "author" in author ? { thread: author.author.thread, certainty: author.certainty } : { certainty: author.certainty }
 }
 
-export const rootsIn = (view: JournalView, checkout: string) => [...view.roots()].filter((root) => within(checkout, root.root.path) || within(root.root.path, checkout))
+export const rootsIn = (view: JournalView, asked: string) => {
+  const checkout = kept(asked)
+  return [...view.roots()].filter((root) => within(checkout, root.root.path) || within(root.root.path, checkout))
+}
 
 export function linesOf(view: JournalView, ref: ContentRef | null): string[] | undefined {
   if (!ref) return []
@@ -349,7 +353,7 @@ export function partition(view: JournalView, checkout: string, thread: string, o
       return last && { seq: last.seq, side: sideOf(last.seq) }
     }
     for (const file of files.values()) {
-      const absolute = `${root.path}/${file.path}`
+      const absolute = under(root.path, file.path)
       const content = (ref: ContentRef | null): FileVersion => (ref ? { kind: "content", ref, path: view.store.hasBlob(ref) ? undefined : absolute } : { kind: "absent" })
       if (file.base === null || file.current === null || !file.text) {
         const last = wholeSide(file)
@@ -490,7 +494,7 @@ export function shares(view: JournalView, checkout: string, thread: string): Che
     // A renamed file's lines are counted at its new path, which keeps their writers.
     const renamed = renames(view, files)
     for (const file of files.values()) {
-      const path = `${root.path}/${file.path}`
+      const path = under(root.path, file.path)
       const counted = new Map<ChangeClass | "likely", number>()
       if (file.base === null || file.current === null || !file.text) {
         const last = lastEntry(view, file)
@@ -563,7 +567,7 @@ export function changes(view: JournalView, thread: string): ThreadChanges {
     }
     result.lines.added += entry.added ?? 0
     result.lines.removed += entry.removed ?? 0
-    const key = `${roots.get(entry.root) ?? entry.root}/${entry.path}`
+    const key = under(roots.get(entry.root) ?? entry.root, entry.path)
     if (!first.has(key)) first.set(key, entry)
     latest.set(key, entry)
   }
@@ -571,7 +575,7 @@ export function changes(view: JournalView, thread: string): ThreadChanges {
     const began = first.get(path)!
     if (entry.kind === "delete") {
       if (began.kind !== "create") result.files.deleted.push(path)
-    } else if (entry.kind === "rename") result.files.renamed.push({ from: `${roots.get(entry.root) ?? entry.root}/${entry.from}`, to: path })
+    } else if (entry.kind === "rename") result.files.renamed.push({ from: under(roots.get(entry.root) ?? entry.root, entry.from ?? "undefined"), to: path })
     else if (began.kind === "create") result.files.created.push(path)
     else result.files.modified.push(path)
   }
@@ -950,11 +954,11 @@ function* countFile(view: JournalView, group: TurnFile, tagOf: (seq: number) => 
   const maybes = has("maybe")
   if (!owns && !maybes) return undefined
   return {
-    path: `${base}/${group.path}`,
+    path: under(base, group.path),
     root: group.root,
     relative: group.path,
     kind,
-    ...(renamed && { from: `${base}/${group.was}` }),
+    ...(renamed && { from: under(base, group.was) }),
     ...(owns && { own: lines ? lines.own : null }),
     ...(maybes && { maybe: lines ? lines.maybe : null }),
     before: first.before,

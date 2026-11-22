@@ -3,6 +3,7 @@ import { MenuItem, MenuSeparator, MenuSub, MenuSubContent, MenuSubTrigger } from
 import { Shimmer } from "@/components/ui/shimmer"
 import { cn } from "@/lib/utils"
 import { formatAgo, formatBytes, probeThreadApp, useThreadApp, type AppProbeView } from "@/state/thread-app"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * The app's probe, a row of its menu: what it touches on this Mac beyond
@@ -26,8 +27,8 @@ export function AppProbeMenu({ cwd, now }: { cwd: string; now: number }) {
           </div>
           <p className="mt-1 text-label text-muted-foreground">
             {view && !view.running
-              ? "The app isn't running. This is what it left running and changed on this Mac since it last started."
-              : "What the app uses on this Mac beyond its checkout and ports, which a second copy of it would fight over."}
+              ? localWords("The app isn't running. This is what it left running and changed on this Mac since it last started.")
+              : localWords("What the app uses on this Mac beyond its checkout and ports, which a second copy of it would fight over.")}
           </p>
           {probe?.error ? <p className="mt-1 text-label text-negative">{`The last look failed: ${probe.error}`}</p> : null}
         </div>
@@ -86,14 +87,14 @@ export function ProbeReport({ view }: { view: AppProbeView }) {
         </Section>
       ) : null}
       {view.connectsTo.length ? (
-        <Section title="Services on this Mac it uses" note="A service another Thread's app also uses is shared, so each copy needs its own database, namespace or prefix in it.">
+        <Section title={localWords("Services on this Mac it uses")} note="A service another Thread's app also uses is shared, so each copy needs its own database, namespace or prefix in it.">
           {view.connectsTo.map((entry) => (
             <Finding key={entry.port} name={`Port ${entry.port}`}>{`Listened on by ${entry.owner}.`}</Finding>
           ))}
         </Section>
       ) : null}
       {view.connectsOutside.entries.length ? (
-        <Section title="Connections off this Mac">
+        <Section title={localWords("Connections off this Mac")}>
           {view.connectsOutside.entries.map((address) => <Finding key={address} name={address} />)}
           <More count={view.connectsOutside.more} noun="connection" />
         </Section>

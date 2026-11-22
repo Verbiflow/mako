@@ -2,6 +2,7 @@ import { hostFetch } from "../base/host-stopping.js"
 import { z } from "zod"
 import type { FileOwner } from "../workspaces/index.js"
 import { runtimeFile } from "../transport/index.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** An address for an owner's files is asked again after this; the gateway ends one an hour after its last use. */
 const ADDRESS_KEPT_MS = 30 * 60_000
@@ -55,7 +56,7 @@ export class OwnerFiles {
   async #ask(owner: Exclude<FileOwner, { kind: "socket" }>): Promise<string> {
     const gateway = this.#options.gateway()
     const token = await this.#options.token()
-    if (!gateway || !token) throw new Error("This Mac isn't signed in to Mako, so another computer's files can't be reached")
+    if (!gateway || !token) throw new Error(localWords("This Mac isn't signed in to Mako, so another computer's files can't be reached"))
     const body = owner.kind === "thread" ? { threadId: owner.threadId, files: true } : { deviceId: owner.deviceId, files: true }
     const fetchFile = this.#options.fetch ?? hostFetch
     const answer = await fetchFile(new URL("/v1/previews", gateway), {

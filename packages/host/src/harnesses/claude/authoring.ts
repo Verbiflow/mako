@@ -29,6 +29,7 @@ import {
   type ProviderMcpEditing,
   type ReadSource,
 } from "../../tools/index.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Claude Code's hooks, commands and MCP servers, as 2.1.283 reads them.
@@ -158,7 +159,7 @@ export function createClaudeMcpEditing(): ProviderMcpEditing {
     form: "mcp",
     names: "last",
     imports: true,
-    precedence: "A local server (this project, this Mac) wins over a project server in .mcp.json, which wins over a user server of the same name.",
+    precedence: localWords("A local server (this project, this Mac) wins over a project server in .mcp.json, which wins over a user server of the same name."),
     reload: "Claude Code starts MCP servers when a conversation starts.",
     operations: {
       create: readOnly("Copy a server in from another agent in the MCP servers section."),

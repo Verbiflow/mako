@@ -19,13 +19,14 @@ import {
   type ModelConnectionProvider,
 } from "@mako/host/contracts/model-connections"
 import { routeAccepted } from "@mako/host/contracts/model-routes"
+import { localWords } from "@mako/protocol/computer-words"
 
 const inputClass = cn(FIELD, "h-9 w-full")
 
 const GROUPS: Array<{ kind: ModelConnectionKind; title: string; note: string }> = [
   { kind: "subscription", title: "Subscriptions", note: "Sign in with the plan you already pay for." },
   { kind: "gateway", title: "Gateways", note: "Paste a key; its models appear under every harness that takes them." },
-  { kind: "local", title: "Local", note: "Models running on this Mac, which your agents reach on localhost." },
+  { kind: "local", title: "Local", note: localWords("Models running on this Mac, which your agents reach on localhost.") },
   { kind: "custom", title: "Custom endpoint", note: "A base URL and a key." },
 ]
 
@@ -407,7 +408,7 @@ function ConnectionForm({ provider, onBusy, onBack, onClose }: { provider: Model
                       <ExternalLinkIcon className="size-3" />
                     </button>
                   ) : null}
-                  <span>Encrypted on this Mac with the system key store, and sent only to this endpoint.</span>
+                  <span>{localWords("Encrypted on this Mac with the system key store, and sent only to this endpoint.")}</span>
                 </span>
               </label>
             ) : null}

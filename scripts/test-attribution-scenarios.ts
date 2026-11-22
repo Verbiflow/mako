@@ -23,6 +23,7 @@ import { threadTrees } from "@mako/host/attribution/thread-tree"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { LiveActivity } from "@mako/host/attribution/live-activity"
 import type { LiveBatch, LiveRequest } from "@mako/host/contracts/live-conversations"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * Two Threads and the person in one checkout, on a real repository: the same
@@ -213,7 +214,8 @@ test("interleaved Threads and the person, line by line", async () => {
   assert.ok(listed.includes("b2.ts") && !listed.includes("b.ts") && !listed.includes("d.ts"))
   assert.equal(git("show", `${tree!.tree}:a.ts`) + "\n", lines(24, { 3: "line 3 by T1", 7: "line 7 by T1" }))
   assert.equal(git("show", `${tree!.tree}:c.md`), "# Rewritten")
-  assert.match(git("ls-tree", tree!.tree, "run.sh"), /^100755 /)
+  // The mode Git holds for it: executable where the system has such a bit, which Windows doesn't.
+  assert.equal(git("ls-tree", tree!.tree, "run.sh").slice(0, 7), process.platform === "win32" ? "100644 " : "100755 ")
 
   const hunked = hunks(view, root).filter((hunk) => hunk.path === "a.ts")
   assert.ok(hunked.some((hunk) => hunk.writers.some((writer) => writer.thread === "T1") && hunk.writers.some((writer) => writer.thread === "T2")), "the line 7–8 hunk has both Threads")
@@ -301,15 +303,15 @@ test("a turn's footprint outside the checkout: what it named is kept, what it di
     footprinted.activity({ ...turn, kind: "call", id: "fc1", edge: "end", at: footClock.now(), turn: "f1" })
     footprinted.activity({ ...turn, kind: "turn", id: "f1", edge: "end", at: footClock.now() })
     await footprinted.settled()
-    const found = footprinted.footprint("T1").map((entry) => [entry.path.slice(home.length + 1), entry.access, entry.evidence, entry.secret, Boolean(entry.ref)])
+    const found = footprinted.footprint("T1").map((entry) => [entry.path.slice(home.length + 1).replaceAll("\\", "/"), entry.access, entry.evidence, entry.secret, Boolean(entry.ref)])
     assert.deepEqual(found.sort(), [
       [".config/tool/state.json", "write", "strong", false, true],
       ["read-me.md", "read", "strong", false, false],
     ])
   } finally {
     await footprinted.close()
-    rmSync(home, { recursive: true, force: true })
-    rmSync(footStorage, { recursive: true, force: true })
+    removeScratch(home)
+    removeScratch(footStorage)
   }
 })
 
@@ -357,8 +359,8 @@ test("the live conversations' batches become turns, calls, background work and r
     assert.ok(live.store.activityOfThread("T9").find((item) => item.kind === "background")?.named.includes(join(folder, "web")))
   } finally {
     await live.close()
-    rmSync(folder, { recursive: true, force: true })
-    rmSync(liveStorage, { recursive: true, force: true })
+    removeScratch(folder)
+    removeScratch(liveStorage)
   }
 })
 
@@ -406,8 +408,8 @@ test("a Fin its Apex lists runs as its own Thread: nothing changed in the Apex's
     assert.deepEqual(tracker.store.activityOfThread("APEX").filter((item) => item.kind === "background"), [], "the Fin is no background work of the Apex")
   } finally {
     await tracker.close()
-    rmSync(folder, { recursive: true, force: true })
-    rmSync(finStorage, { recursive: true, force: true })
+    removeScratch(folder)
+    removeScratch(finStorage)
   }
 })
 
@@ -481,8 +483,8 @@ async function liveWorld() {
     },
     async close() {
       await tracker.close()
-      rmSync(folder, { recursive: true, force: true })
-      rmSync(store, { recursive: true, force: true })
+      removeScratch(folder)
+      removeScratch(store)
     },
   }
   return world
@@ -612,13 +614,13 @@ test("a root whose folder went while no tracker ran is let go, not journaled as 
   let gone = await LaptopTracker.open(ports)
   await gone.track({ id: "gone", path: folder, kind: "attached" })
   await gone.close()
-  rmSync(folder, { recursive: true, force: true })
+  removeScratch(folder)
   gone = await LaptopTracker.open(ports)
   await gone.settled()
   assert.equal(gone.changes(0).length, 0)
   assert.equal(gone.rootStates().size, 0)
   await gone.close()
-  rmSync(goneStorage, { recursive: true, force: true })
+  removeScratch(goneStorage)
 })
 
 /**
@@ -647,7 +649,7 @@ async function gitWorld(t: { after(run: () => Promise<void> | void): void }) {
   await worldTracker.track({ id: "git", path: folder, kind: "workspace" })
   t.after(async () => {
     await worldTracker.close()
-    for (const path of [upstream, folder, journal]) rmSync(path, { recursive: true, force: true })
+    for (const path of [upstream, folder, journal]) removeScratch(path)
   })
   const touch = (path: string) => {
     const absolute = join(folder, path)
@@ -798,7 +800,7 @@ test("a branch switch, a pull, a stash and a rebase are Git's, not the running T
   // Drop the older of the two commits, as `git rebase -i` with that line removed does.
   execFileSync("git", ["-c", "user.email=test@example.com", "-c", "user.name=Test", "rebase", "-q", "-i", "HEAD~2"], {
     cwd: folder,
-    env: { ...process.env, GIT_SEQUENCE_EDITOR: `${process.execPath} -e "const f=process.argv[1];const fs=require('fs');const l=fs.readFileSync(f,'utf8').split('\\n');l[0]='drop'+l[0].slice(4);fs.writeFileSync(f,l.join('\\n'))"` },
+    env: { ...process.env, GIT_SEQUENCE_EDITOR: `"${process.execPath.replaceAll("\\", "/")}" -e "const f=process.argv[1];const fs=require('fs');const l=fs.readFileSync(f,'utf8').split('\\n');l[0]='drop'+l[0].slice(4);fs.writeFileSync(f,l.join('\\n'))"` },
   })
   assert.notEqual(world.git("rev-parse", "HEAD"), before)
   world.gitHeard(["r1.ts", "r2.ts"])
@@ -816,8 +818,8 @@ test("a call a hook bounds: its write proven by content, the person's saves arou
   const hooked = await LaptopTracker.open({ fs: nodeFileSystem(), events: hookedEvents, clock: hookedClock, storage: journal, device: "scenario" })
   t.after(async () => {
     await hooked.close()
-    rmSync(folder, { recursive: true, force: true })
-    rmSync(journal, { recursive: true, force: true })
+    removeScratch(folder)
+    removeScratch(journal)
   })
   for (const name of ["a.ts", "x.ts", "p.ts", "q.ts"]) writeFileSync(join(folder, name), `${name} as it was\n`)
   await hooked.track({ id: "hooked", path: folder, kind: "attached" })
@@ -892,7 +894,7 @@ test("a call a hook bounds: its write proven by content, the person's saves arou
 
 test("Claude's hooks mark a call's exact bounds and hash the file it wrote; a call left running bounds nothing", async (t) => {
   const folder = realpathSync(mkdtempSync(join(tmpdir(), "mako-attribution-hooks-")))
-  t.after(() => rmSync(folder, { recursive: true, force: true }))
+  t.after(() => removeScratch(folder))
   const target = join(folder, "page.ts")
   writeFileSync(target, "export const title = 'old'\n")
   const heard: LiveCallBounds[] = []
@@ -1218,12 +1220,12 @@ test("a journal from before either column set opens in the one format: turns and
       store.close()
     }
   } finally {
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
 test.after(async () => {
   await tracker.close()
-  rmSync(root, { recursive: true, force: true })
-  rmSync(storage, { recursive: true, force: true })
+  removeScratch(root)
+  removeScratch(storage)
 })

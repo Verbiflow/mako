@@ -2,6 +2,7 @@ import { describeFollow, describeList, describeOwner, describeOwnerChecks, type 
 import { describeSending, type SyncStatus } from "@mako/host/contracts/sync-status"
 import { Action } from "@/components/ui/kit"
 import { formatRelative } from "@/lib/format"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** At most this many followed streams are listed: the ones heard from most recently. */
 const SHOWN = 8
@@ -22,7 +23,7 @@ export function SyncReadout({ readings, sending }: { readings: SyncReadings; sen
         <div className="min-w-0 flex-1">
           <p className="text-ui">Sync</p>
           <p className="text-label leading-relaxed text-faint">
-            How this Mac follows what your other devices do. Times run from the moment the other device sent something.
+            {localWords("How this Mac follows what your other devices do. Times run from the moment the other device sent something.")}
           </p>
         </div>
         <Action tone="ghost" onClick={() => void navigator.clipboard.writeText(JSON.stringify(readings, null, 2))}>
@@ -30,7 +31,7 @@ export function SyncReadout({ readings, sending }: { readings: SyncReadings; sen
         </Action>
       </div>
       <div className="">
-        {sending ? <Line title="This Mac's Sessions" detail={describeSending(sending)} /> : null}
+        {sending ? <Line title={localWords("This Mac's Sessions")} detail={describeSending(sending)} /> : null}
         <Line title="Account list" detail={describeList(readings.list)} />
         {checks && checked ? <Line title="Checked with your account before running here" detail={checks} when={formatRelative(new Date(checked.at).toISOString())} /> : null}
         {owner ? <Line title="Watched from elsewhere" detail={owner} /> : null}

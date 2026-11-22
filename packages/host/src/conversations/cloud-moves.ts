@@ -25,6 +25,7 @@ import type { MoveHaste } from "../contracts/workspace-moves.js"
 import type { CheckedSession } from "./harness-check.js"
 import { MoveNotQuietError } from "./live-moves.js"
 import { logMoveDiagnostic, moveDiagnosticReason } from "./move-diagnostics.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * A Thread of this Mac's moving to the cloud, natively: its checkout carried to a machine that clones the repository
@@ -88,7 +89,7 @@ const RELEASE_TAKES_MS = 4_000
 /** How long a handoff with a deadline waits for the attribution journal as its Thread goes onto its own branch. */
 const HASTE_SETTLE_MS = 1_500
 /** Why a Mac going off kept a Thread it couldn't release in time. */
-const TOO_LATE = "There wasn't time to hand it off before this Mac went off. It waits, paused: Continue in the cloud from another device takes it, or it goes on here when this Mac is back."
+const TOO_LATE = localWords("There wasn't time to hand it off before this Mac went off. It waits, paused: Continue in the cloud from another device takes it, or it goes on here when this Mac is back.")
 /**
  * How long this host waits for the cloud's answer to a move it carries through: its arrival refuses the move within
  * two minutes if its machine can't take the Thread, and a claim follows a machine's arrival at once.
@@ -516,7 +517,7 @@ export class CloudMoves {
   async goAway(conversationId: string, goingAway: string, handOff: ThreadHandOff): Promise<{ thread: ThreadId; sessions: Array<{ session: SessionId; generation: number }>; parked: Array<{ conversation: string; request: string; continuation: string; stopped: string[] }> }> {
     const threads = this.#options.threads()
     const thread = threads?.journalPlacement(conversationId)?.thread
-    if (!threads || !thread) throw new Error("It isn't in this Mac's Threads, so nothing could continue it elsewhere.")
+    if (!threads || !thread) throw new Error(localWords("It isn't in this Mac's Threads, so nothing could continue it elsewhere."))
     const move = namedUuid(`mako going away\0${goingAway}\0${thread}`)
     const conversations = this.#conversationsOf(thread, conversationId)
     const paused: Paused[] = []
@@ -583,7 +584,7 @@ export class CloudMoves {
     if (!threads) throw new Error("The Thread store isn't open.")
     const id = SessionIdSchema.parse(session)
     const execution = threads.execution(id)
-    if (execution && execution.state !== "here") return { kind: "unsettled", reason: "It isn't this Mac's to give up." }
+    if (execution && execution.state !== "here") return { kind: "unsettled", reason: localWords("It isn't this Mac's to give up.") }
     // Carried on first: a continue whose press went away before its hand-over goes on from here.
     const state = await this.#account().continueState?.(session, move, { carryOn: true })
     if (!state) throw new Error("The account has no record of this continue.")
@@ -716,7 +717,7 @@ export class CloudMoves {
   async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses: boolean, checkout: "later"): Promise<Weighed>
   async #plan(conversationId: string, move: MoveId, handOff: ThreadHandOff | undefined, weighHarnesses = true, checkout: "now" | "later" = "now"): Promise<Plan | Weighed> {
     const account = this.#options.account()
-    if (!account || !(await account.id())) throw new Error("Moving to the cloud needs this Mac signed in to Mako Cloud.")
+    if (!account || !(await account.id())) throw new Error(localWords("Moving to the cloud needs this Mac signed in to Mako Cloud."))
     const threads = this.#options.threads()
     if (!threads) throw new Error("Moves need the Thread store, which didn't open.")
     const placed = threads.journalPlacement(conversationId)
@@ -725,7 +726,7 @@ export class CloudMoves {
     for (const { session } of threads.threadSessions(placed.thread)) {
       const execution = threads.execution(session)
       if (execution && execution.state !== "here") throw new Error(execution.state === "elsewhere" && execution.owner.kind === "cloud"
-        ? "This Thread runs in the cloud already. Bring it back to this Mac first to move it again."
+        ? localWords("This Thread runs in the cloud already. Bring it back to this Mac first to move it again.")
         : executionRefusal(execution) ?? "This Thread is moving already.")
     }
     // Asked before anything is made: a busy Thread starts no machine. The release asks again, with no wait before it
@@ -822,7 +823,7 @@ export class CloudMoves {
         hostWarn("moves", "a released move couldn't be handed to the cloud", { move: plan.move, error: errorMessage({ error }), ...error instanceof Error && error.cause instanceof Error && { stack: error.cause.stack?.split("\n").slice(0, 6).join(" | ") ?? "" } })
         answer = await this.#refuse(plan, errorMessage({ error }))
         if (!answer) {
-          const reason = `This Mac couldn't hand the Thread to the cloud: ${errorMessage({ error })}. It asks again; the Thread runs nowhere until it hears.`
+          const reason = localWords(`This Mac couldn't hand the Thread to the cloud: ${errorMessage({ error })}. It asks again; the Thread runs nowhere until it hears.`)
           step({ kind: "unsettled", reason })
           return { kind: "unsettled", reason }
         }
@@ -833,7 +834,7 @@ export class CloudMoves {
       step({ kind: "resuming", ...plan.continued && { whileAway: { behind: plan.continued.behind } } })
       answer = await this.#awaitAnswer(plan)
       if (!answer) {
-        const reason = "The cloud carries this Thread through, and this Mac hasn't heard how it went yet. It asks again; the Thread runs nowhere until it hears."
+        const reason = localWords("The cloud carries this Thread through, and this Mac hasn't heard how it went yet. It asks again; the Thread runs nowhere until it hears.")
         step({ kind: "unsettled", reason })
         return { kind: "unsettled", reason }
       }
@@ -857,7 +858,7 @@ export class CloudMoves {
       // A continue was handed over by the account, before anything waited here: the turns this Mac paused as it went
       // off go on there, then what waits here now goes after them.
       if (plan.continued) {
-        await named("The turns paused as this Mac went off couldn't be continued in the cloud", this.#sendParked(plan))
+        await named(localWords("The turns paused as this Mac went off couldn't be continued in the cloud"), this.#sendParked(plan))
         await named("The messages typed here couldn't be sent to the cloud", this.#sendWaiting(plan))
       }
       plan.phase = "started"
@@ -989,7 +990,7 @@ export class CloudMoves {
     if (!checkpoint) throw new Error("The move has no checkpoint to carry.")
     const account = this.#account()
     const deviceId = await account.deviceId()
-    if (!deviceId) throw new Error("This Mac isn't signed in to Mako.")
+    if (!deviceId) throw new Error(localWords("This Mac isn't signed in to Mako."))
     const calls: Array<{ channel: string; args: unknown[]; key: string }> = []
     const sessions = plan.sessions.map(({ harness, nativeId, holdings, conversationId, cwd, modeId, tuning }) => ({
       harness, nativeId, ...holdings && { holdings },
@@ -1305,7 +1306,7 @@ export class CloudMoves {
 
   #account(): CloudAccount {
     const account = this.#options.account()
-    if (!account) throw new Error("This Mac signed out of Mako Cloud.")
+    if (!account) throw new Error(localWords("This Mac signed out of Mako Cloud."))
     return account
   }
 

@@ -66,20 +66,6 @@ export function Stage() {
   const surfaceWidths = usePrefs((prefs) => prefs.surfaceWidths)
   const surfaceHeights = usePrefs((prefs) => prefs.surfaceHeights)
 
-  // On first boot, restore the companion you usually work with. Tab ids do
-  // not survive a relaunch, so this is the only cross-launch memory needed.
-  const seeded = useRef(false)
-  useEffect(() => {
-    if (seeded.current || !activeId) return
-    seeded.current = true
-    const last = prefsStore.get().lastCompanion
-    const remembered = surfaces.find((surface) => surface.id === last)
-    // Not a pick: an Apex on screen at boot opens on its own, over what the rail last showed.
-    if (remembered && remembered.placement !== "bottom")
-      stage.open(remembered.id, { remember: false })
-    else if (last) setPref("lastCompanion", null)
-  }, [activeId, surfaces])
-
   // The stage measures itself so the clamp and the beside→over degradation
   // are render-time facts, not stored state. Resizes are rare and the two
   // cards are memoized, so the re-render is cheap.
@@ -102,6 +88,25 @@ export function Stage() {
     observer.observe(node)
     return () => observer.disconnect()
   }, [])
+
+  // On first boot, restore the companion you usually work with. Tab ids do
+  // not survive a relaunch, so this is the only cross-launch memory needed.
+  // The stage is laid out by now: in a window too narrow for both, a
+  // companion nobody asked for this launch would cover the Thread, so it
+  // stays closed there and the title bar's toggle brings it back.
+  const seeded = useRef(false)
+  useEffect(() => {
+    if (seeded.current || !activeId) return
+    seeded.current = true
+    const last = prefsStore.get().lastCompanion
+    const remembered = surfaces.find((surface) => surface.id === last)
+    // Not a pick: an Apex on screen at boot opens on its own, over what the rail last showed.
+    if (remembered && remembered.placement !== "bottom") {
+      const least = Math.max(COMPANION_MIN_DEFAULT, ...surfaces.filter((surface) => surface.placement !== "bottom").map((surface) => surface.minWidth ?? 0))
+      const wide = stageRef.current?.getBoundingClientRect().width
+      if (!wide || fitsBeside(wide, least)) stage.open(remembered.id, { remember: false })
+    } else if (last) setPref("lastCompanion", null)
+  }, [activeId, surfaces])
 
   useStageLayoutWatch(stageRef)
   const companionRef = useRef<HTMLDivElement>(null)

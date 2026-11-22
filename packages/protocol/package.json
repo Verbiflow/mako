@@ -13,6 +13,7 @@
     "./records": "./dist/records.js",
     "./borrow": "./dist/borrow.js",
     "./borrow-words": "./dist/borrow-words.js",
+    "./computer-words": "./dist/computer-words.js",
     "./setup": "./dist/setup.js",
     "./records-http": "./dist/records-http.js",
     "./moves": "./dist/moves.js",

@@ -227,7 +227,7 @@ try {
   await thread.connect(clientSide)
   clients.push(thread)
   const stdio = new Client({ name: "mako-mcp", version: "1.0.0" })
-  await stdio.connect(new StdioClientTransport({ command: process.execPath, args: [cli, "mcp", "--socket", socket], env: { ...getDefaultEnvironment(), MAKO_SESSION_ID: "s-mine" }, stderr: "pipe" }))
+  await stdio.connect(new StdioClientTransport({ command: process.execPath, args: [cli, "mcp", "--socket", socket], env: { ...getDefaultEnvironment(), MAKO_SESSION_ID: "s-mine", MAKO_COMPUTER_WORDS: process.env.MAKO_COMPUTER_WORDS ?? "" }, stderr: "pipe" }))
   clients.push(stdio)
 
   const listed = (await thread.listTools()).tools.find((tool) => tool.name === "thread_move")

@@ -21,7 +21,24 @@ export const JournalIdSchema = z.uuid()
 export const JournalSeqSchema = z.number().int().positive()
 export const RootIdSchema = z.string().regex(NAME)
 export const SessionRefSchema = z.string().regex(NAME)
-export const AbsolutePathSchema = z.string().min(1).max(4096).startsWith("/")
+/** A drive's path (`C:\x`, `C:/x`) or a share's written with `\`: how Windows writes an absolute path. */
+const WINDOWS_PATH = /^(?:[A-Za-z]:[\\/]|\\\\)/
+/** Whether `path` is written as Windows writes an absolute path. */
+export const windowsPath = (path: string): boolean => WINDOWS_PATH.test(path)
+/**
+ * An absolute path as the record of changes keeps it. A path from `/` is kept as it is. A Windows path is kept as
+ * Windows and Node write it: `\\` between folders, its drive letter a capital and no `\\` at its end
+ * (`C:\\Users\\ana\\site`), so the one folder a harness, Git (`C:/Users/ana/site`) and the system each write their own
+ * way is one folder here.
+ */
+export function keptPath(path: string): string {
+  if (!windowsPath(path)) return path
+  const slashed = path.replaceAll("/", "\\")
+  const cut = slashed.length > 3 && slashed.endsWith("\\") ? slashed.slice(0, -1) : slashed
+  return cut[1] === ":" ? `${cut.slice(0, 1).toUpperCase()}${cut.slice(1)}` : cut
+}
+/** From `/` on a Mac or Linux; from a drive or a share on Windows, kept as `keptPath` writes it. */
+export const AbsolutePathSchema = z.string().min(1).max(4096).refine((path) => path.startsWith("/") || windowsPath(path), "must start with \"/\" or a drive").transform(keptPath)
 /** Relative to its root, with `/` between folders, never `..` or a leading `/`. */
 export const RootPathSchema = z
   .string()

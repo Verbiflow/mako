@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -11,6 +11,7 @@ import { followHostLog, type HostLogFields } from "@mako/host/base/host-log"
 import { openAttribution } from "@mako/host/attribution/index"
 import { JournalStore } from "@mako/host/attribution/journal-store"
 import { sharedJournalFolder } from "@mako/host/attribution/shared-journal"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * The journal's writing owner runs in a worker so the host's thread never waits on SQLite; the owner must not wait on
@@ -91,6 +92,6 @@ test("the writing owner journals while the host's thread is held, without waitin
   } finally {
     unfollow()
     await owner.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })

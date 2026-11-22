@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { spawn, spawnSync } from "node:child_process"
-import { mkdirSync, realpathSync, rmSync, statSync } from "node:fs"
+import { mkdirSync, realpathSync, statSync } from "node:fs"
 import { connect, createServer, type Socket } from "node:net"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -9,6 +9,7 @@ import type { ActivityMark } from "@mako/protocol"
 import { acquireHostLock } from "@mako/host/base/host-lock"
 import { SharedJournal, ownerAddress, type JournalWrites, type OwnedJournal } from "@mako/host/attribution/shared-journal"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * The journal's owner can be reached, and a host that stops doesn't wait on one that can't be: an owner's socket
@@ -101,7 +102,7 @@ test("an owner whose journal and temporary folder are both deep is listened to a
 async function occupy(address: string): Promise<(() => Promise<void>) | undefined> {
   if (process.platform === "darwin") {
     mkdirSync(join(address, "in-the-way"), { recursive: true })
-    return async () => rmSync(address, { recursive: true, force: true })
+    return async () => removeScratch(address)
   }
   if (process.platform !== "linux" || spawnSync("python3", ["--version"]).status !== 0) return undefined
   const holder = spawn("python3", ["-c", "import socket, sys\ns = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)\ns.bind(chr(0) + sys.argv[1])\nprint('bound', flush=True)\nsys.stdin.read()", address.slice(1)], { stdio: ["pipe", "pipe", "inherit"] })
@@ -166,7 +167,9 @@ test("a stopping host doesn't wait for an acknowledgement nobody can send", asyn
   }
 })
 
-test("a host waiting on its owner's acknowledgement stops when the owner goes, and waits on while it acknowledges", async () => {
+// On Windows an owner listens on a pipe it draws and proves itself on, published under its family's name: a bare
+// server on the address itself, as this case's stand-in owner is, is nothing a host there would follow.
+test("a host waiting on its owner's acknowledgement stops when the owner goes, and waits on while it acknowledges", process.platform === "win32" ? { skip: "its stand-in owner listens on the bare address, which Windows hosts never use" } : {}, async () => {
   const folder = realpathSync(testScratch("mako-journal-applied-owner-"))
   const lock = await acquireHostLock(folder, { purpose: "owner" })
   let shared: SharedJournal | undefined

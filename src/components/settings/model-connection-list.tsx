@@ -13,6 +13,7 @@ import {
 } from "@mako/host/contracts/model-connections"
 import { AddConnection, ConnectionMark, MarkTile } from "./add-connection"
 import { SignInCard } from "./provider-accounts"
+import { localWords } from "@mako/protocol/computer-words"
 
 const ROWS = "bg-raised"
 
@@ -78,7 +79,7 @@ export function ModelConnections() {
         ))}
         {snapshot && !kept.length && !subscriptions.length ? (
           <div role="listitem" className="px-4 py-4 text-label leading-relaxed text-faint">
-            No connections yet. Sign in to a plan, paste a gateway key, or point Mako at a model running on this Mac.
+            {localWords("No connections yet. Sign in to a plan, paste a gateway key, or point Mako at a model running on this Mac.")}
           </div>
         ) : null}
       </div>
@@ -209,7 +210,7 @@ function ConnectionRow({ connection, issue }: { connection: ModelConnectionView;
       {removing ? (
         <div className="flex flex-wrap items-center gap-2 pr-2.5 pb-2.5 pl-14 text-label text-muted-foreground">
           <span className="flex-1">
-            {connection.credential ? "Remove this connection and its key from this Mac?" : "Remove this connection?"}
+            {connection.credential ? localWords("Remove this connection and its key from this Mac?") : "Remove this connection?"}
           </span>
           <Action size="xs" autoFocus onClick={() => setRemoving(false)}>Keep</Action>
           <Action

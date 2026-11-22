@@ -21,6 +21,7 @@ import {
   resolveExecutable,
 } from "../../base/executable.js"
 import { grokPresentation } from "./presentation.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** xAI's installer, which takes a version as its argument. */
 const GROK_INSTALLER = "https://x.ai/cli/install.sh"
@@ -49,7 +50,7 @@ export const installGrok: ProviderModule = (host, context) => {
       review: { mako: makosOwn("Grok has no review command.") },
       sideQuestions: { native: native("/btw", "`/btw`, answered in a panel beside the turn"), mako: shownAs("`/btw` opens the side panel above the composer, and Grok answers through its own `/btw`.") },
       scheduledPrompts: { native: native("/loop", "`/loop [interval] <prompt>`; the `scheduler_create`, `scheduler_delete` and `scheduler_list` tools; `_x.ai/scheduled_task_*`"), mako: makoLacks("Mako draws the calls that set one up but doesn't track schedules, so closing an idle conversation's process can end them.") },
-      cloudRuns: { mako: harnessLacks("Grok runs only on this Mac.") },
+      cloudRuns: { mako: harnessLacks(localWords("Grok runs only on this Mac.")) },
       backgroundSessions: { mako: makosOwn() },
       fileRewind: { native: native("/rewind", "`/rewind` (`/undo`), which takes back turns but not files"), mako: makosOwn() },
       worktrees: { native: native("-w", "`-w` and `cli.worktree_type`"), mako: makosOwn() },

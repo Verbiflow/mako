@@ -18,6 +18,7 @@ import type { JournalStore } from "./journal-store.js"
 import { within } from "./paths.js"
 import { otherAppsData } from "../base/other-apps-data.js"
 import { rootLinks } from "./ports.js"
+import { insideOf, separatorOf } from "../base/path-style.js"
 
 /*
  * Reads each turn's footprint when it ends. Every path the rules can keep
@@ -561,8 +562,8 @@ const BUNDLE_ID = /^(?:com|org|net|io|dev|app|co|me|ai|us|uk|de|fr|jp|group)\.[A
 export function otherAppsTemporary(path: string, roots: readonly string[]): string | undefined {
   for (const root of roots) {
     if (!within(root, path) || path === root) continue
-    const name = path.slice(root.length + 1).split("/")[0]!
-    if (BUNDLE_ID.test(name)) return `${root}/${name}`
+    const name = insideOf(root, path).split("/")[0]!
+    if (BUNDLE_ID.test(name)) return `${root}${separatorOf(root)}${name}`
   }
   return undefined
 }
@@ -570,6 +571,7 @@ export function otherAppsTemporary(path: string, roots: readonly string[]): stri
 /** Whether `path` is one of `folders` or inside one: one lookup per folder on the way up. */
 function holds(folders: ReadonlyMap<string, unknown>, path: string): boolean {
   if (!folders.size) return false
-  for (let end = path.length; end > 0; end = path.lastIndexOf("/", end - 1)) if (folders.has(end === path.length ? path : path.slice(0, end))) return true
+  const sep = separatorOf(path)
+  for (let end = path.length; end > 0; end = path.lastIndexOf(sep, end - 1)) if (folders.has(end === path.length ? path : path.slice(0, end))) return true
   return false
 }

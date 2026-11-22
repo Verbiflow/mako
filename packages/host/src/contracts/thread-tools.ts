@@ -1,6 +1,7 @@
 import type { HostCallReplay } from "./host-call-policy.js"
 import type { JsonValue } from "./json.js"
 import type { ReturnLanded } from "./cloud-threads.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * The Thread's own place as an agent or a shell moves it: Move to the cloud, Bring it back to this Mac and Continue in
@@ -192,7 +193,7 @@ export const THREAD_MOVE_TOOL: ThreadToolDefinition = {
   mcp: {
     name: "thread_move",
     description: [
-      "Move this Thread to the cloud, as Move to the cloud does in the app: its worktree, branch, files and every Session in it. Call it when the person asks to continue, move or hand off this work to the cloud, or to keep it going while their Mac is closed or off. Not agents_start: a Fin is new work beside this Thread, which stays on this Mac.",
+      localWords("Move this Thread to the cloud, as Move to the cloud does in the app: its worktree, branch, files and every Session in it. Call it when the person asks to continue, move or hand off this work to the cloud, or to keep it going while their Mac is closed or off. Not agents_start: a Fin is new work beside this Thread, which stays on this Mac."),
       "On full access it goes now; on other access Mako asks the person first.",
       "A Thread in its own worktree hands off: keep working, and your turn pauses here and goes on in the cloud. One in the main checkout moves onto its own branch first, once your turn ends.",
       "In a cloud Thread, to: back asks the person to bring it back.",
@@ -317,6 +318,6 @@ export const AFTER_ACT = {
 export const AFTER_MOVE = {
   handingOff: "Mako hands this Thread to the cloud now. Keep working as you were: in a few seconds this turn pauses here, and it goes on in the cloud from where it paused, in the same worktree and branch. If your work is done, end your turn; the Thread still moves.",
   afterTurn: "This Thread is in the main checkout, so it moves onto its own branch and then to the cloud once this turn ends. Finish now: make no further edits here, tell the person it continues in the cloud, and end your turn. Its next message runs there.",
-  askedBack: "Asked the person: their answer is in a card above the composer. If they allow it, this Thread goes back to its Mac and this machine ends, so push or commit what you need kept. Until then, keep working here.",
+  askedBack: localWords("Asked the person: their answer is in a card above the composer. If they allow it, this Thread goes back to its Mac and this machine ends, so push or commit what you need kept. Until then, keep working here."),
   asked: (handsOff: boolean) => `Asked the person: their answer is in a card above the composer. If they allow it, the Thread moves to the cloud${handsOff ? "; if your turn is still running then, it pauses here and goes on there" : ", onto its own branch first, once this turn ends"}. Until then, keep working here.`,
 } as const

@@ -10,7 +10,7 @@ type CallId = string
 
 /**
  * A file a turn's records name, absolute.
- * @wire z.string().min(2).max(4_096).startsWith("/")
+ * @wire z.string().min(2).max(4_096).regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/)
  */
 type MediaPath = string
 
@@ -47,7 +47,7 @@ export interface MediaCheck {
 
 /**
  * A turn's checks, answered in one call, in order.
- * @wire z.array(z.object({ callId: z.string().min(1).max(512), path: z.string().min(2).max(4_096).startsWith("/"), evidence: z.enum(["shown", "produced", "wrote", "named", "embedded"]), startedAt: z.number().int().nonnegative().max(8_640_000_000_000_000).optional(), endedAt: z.number().int().nonnegative().max(8_640_000_000_000_000).optional(), digest: z.string().regex(/^[a-f0-9]{64}$/).optional() })).max(200)
+ * @wire z.array(z.object({ callId: z.string().min(1).max(512), path: z.string().min(2).max(4_096).regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/), evidence: z.enum(["shown", "produced", "wrote", "named", "embedded"]), startedAt: z.number().int().nonnegative().max(8_640_000_000_000_000).optional(), endedAt: z.number().int().nonnegative().max(8_640_000_000_000_000).optional(), digest: z.string().regex(/^[a-f0-9]{64}$/).optional() })).max(200)
  */
 export type MediaChecks = MediaCheck[]
 

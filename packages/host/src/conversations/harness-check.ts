@@ -5,6 +5,7 @@ import type { CloudHarnesses, HarnessAhead, HarnessBehind, ThreadHarnessCheck } 
 import type { HarnessUpdates } from "../contracts/harness-updates.js"
 import { compareVersions } from "../contracts/runtime-version.js"
 import { installedReading, type InstalledRuntime } from "./kept-resume.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * A Thread's harnesses here weighed against the cloud's, before it moves either way, by the one rule every restore
@@ -80,7 +81,7 @@ export class HarnessCheck {
 
   async #ask(): Promise<Held> {
     const account = this.#options.account()
-    if (!account) return { at: 0, missed: "This Mac isn't signed in to Mako Cloud." }
+    if (!account) return { at: 0, missed: localWords("This Mac isn't signed in to Mako Cloud.") }
     const before = this.#held
     try {
       const cloud = (await account.cloudHarnesses?.()) ?? null

@@ -11,6 +11,7 @@ import { isBusyNativeAgent } from "../contracts/native-agents.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
 import type { SessionId, ThreadPlacement } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 const SettingsFileSchema = z.object({ version: z.literal(1), onSleep: z.boolean() })
 
@@ -342,19 +343,19 @@ async function answeredBy(work: Promise<QuietAnswer | "unserved">, deadline: num
 }
 
 const REFUSED = {
-  "not-yours": "The account doesn't have it as this Mac's",
-  stale: "The account has it at another point than this Mac",
+  "not-yours": localWords("The account doesn't have it as this Mac's"),
+  stale: localWords("The account has it at another point than this Mac"),
   "no-checkpoint": "None of its changes had reached Mako Cloud yet",
-  "auto-off": "Moving agents to the cloud when this Mac is off is turned off",
+  "auto-off": localWords("Moving agents to the cloud when this Mac is off is turned off"),
 } satisfies Record<QuietRefusal, string>
 
 /** What a Thread paused as this Mac went away says of where it goes on. */
 function goingAwayWords(heard: NoteHeard, word: QuietAnswer["threads"][number] | undefined): string {
-  const here = "it goes on here when this Mac is back, or Continue in the cloud from another device takes it."
-  if (word?.accepted) return "Paused while this Mac is away. If it's still away in a couple of minutes, Mako Cloud goes on with it from its last changes; otherwise it goes on here."
-  if (word && !word.accepted) return `Paused while this Mac is away. ${REFUSED[word.why]}, so ${here}`
-  if (heard.kind === "unserved") return `Paused while this Mac is away. Mako Cloud can't go on with it by itself yet, so ${here}`
-  return `Paused while this Mac is away. Mako Cloud didn't hear it go, so ${here}`
+  const here = localWords("it goes on here when this Mac is back, or Continue in the cloud from another device takes it.")
+  if (word?.accepted) return localWords("Paused while this Mac is away. If it's still away in a couple of minutes, Mako Cloud goes on with it from its last changes; otherwise it goes on here.")
+  if (word && !word.accepted) return localWords(`Paused while this Mac is away. ${REFUSED[word.why]}, so ${here}`)
+  if (heard.kind === "unserved") return localWords(`Paused while this Mac is away. Mako Cloud can't go on with it by itself yet, so ${here}`)
+  return localWords(`Paused while this Mac is away. Mako Cloud didn't hear it go, so ${here}`)
 }
 
 export { SHUTDOWN_HOLD_MS }

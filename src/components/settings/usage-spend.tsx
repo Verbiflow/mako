@@ -14,6 +14,7 @@ import { useThreads } from "@/state/threads"
 import { loadUsage } from "@/state/usage"
 import { UsageChart } from "./usage-chart"
 import { periodLabel, share, shortPath, valueOf, type UsageMetric, type UsageSeries } from "./usage-figures"
+import { localWords } from "@mako/protocol/computer-words"
 
 const METRICS = [
   { value: "cost", label: "Cost" },
@@ -165,7 +166,7 @@ function WindowSpend({ window, metric, truncated }: { window: UsageWindow; metri
 
       <p className="text-label leading-relaxed text-faint" data-estimate-policy>
         Read only from session files on this machine and Mako&rsquo;s own records, its commit drafts included. No figure here is a bill: each is what the tokens cost at API prices, a harness&rsquo;s own where it prices them and, where it prices none, Mako&rsquo;s estimate from API list prices
-        {window.priceTables?.length ? ` read ${window.priceTables.join(", ")}` : ""}, marked ≈. A subscription is billed by its plan, whatever its tokens would cost at API prices; discounts and billing adjustments are not included. Days start at midnight on this Mac&rsquo;s clock.
+        {window.priceTables?.length ? ` read ${window.priceTables.join(", ")}` : ""}, marked ≈. A subscription is billed by its plan, whatever its tokens would cost at API prices; discounts and billing adjustments are not included. {localWords("Days start at midnight on this Mac’s clock.")}
         {truncated ? " Some session records could not be read, so these totals may be low; the host log names them." : ""}
         {window.incomplete?.length ? ` ${NAMES.format(window.incomplete)} recorded some of ${window.incomplete.length === 1 ? "its" : "their"} usage as incomplete, so these totals may be low.` : ""}
       </p>

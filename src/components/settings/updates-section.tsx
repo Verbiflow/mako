@@ -25,6 +25,7 @@ import { updates, useUpdates } from "@/state/updates"
 import { application, useApplication } from "@/state/application"
 import { runCommand } from "@/extend/commands"
 import { cn } from "@/lib/utils"
+import { localWords } from "@mako/protocol/computer-words"
 
 type BuildPhase = Extract<UpdateInstallation["local"], { kind: "building" }>["phase"]
 /** Each phase's step in the progress row; installing dependencies is part of preparing. */
@@ -110,7 +111,7 @@ function MeasuredPerformance({ performance }: { performance: UnsurePerformance }
   )
 }
 
-const BLAME = { code: "The code", machine: "This Mac", checkout: "The checkout" } satisfies Record<BuildFailure["blame"], string>
+const BLAME = { code: "The code", machine: localWords("This Mac"), checkout: "The checkout" } satisfies Record<BuildFailure["blame"], string>
 
 /** A failed build: what failed, whose it reads as, what to do next, and what the failing command printed. */
 function FailureDetails({ failure }: { failure: BuildFailure }) {
@@ -148,8 +149,8 @@ function localCopy(installation: UpdateInstallation, text: UpdateSourceText | nu
   const { local, checkout } = installation
   if (local.kind === "ready" && local.performance)
     return {
-      title: "Your Mac was too busy to measure performance",
-      detail: "The update is built and verified. Mako will check its performance again when the Mac is quieter, or you can install it without that check.",
+      title: localWords("Your Mac was too busy to measure performance"),
+      detail: localWords("The update is built and verified. Mako will check its performance again when the Mac is quieter, or you can install it without that check."),
     }
   if (local.kind === "ready") return { title: "Your update is ready", detail: "Verified and ready. Install after agents finish, or choose when to stop them." }
   if (local.kind === "building" && local.remeasuring)

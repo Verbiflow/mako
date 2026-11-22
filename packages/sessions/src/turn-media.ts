@@ -71,7 +71,7 @@ export function mediaKindOfType(mimeType: string): MediaKind | undefined {
   return undefined
 }
 
-const AbsolutePath = z.string().min(2).max(4_096).startsWith("/")
+const AbsolutePath = z.string().min(2).max(4_096).regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/)
 const MediaFile = z.object({
   path: AbsolutePath,
   caption: z.string().trim().min(1).max(500).optional().catch(undefined),

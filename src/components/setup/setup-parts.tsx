@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils"
 import { ASK_TOUCH, wantLine } from "@/lib/ask-card"
 import { AskHeading } from "@/components/ui/ask-heading"
 import { addTo, answerAsk, readSetup, rowTap, useAway, useSetup } from "@/state/setup"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** The dot's colour by its tone; the words beside it always say the same. */
 const DOT = {
@@ -211,13 +212,13 @@ function partHint(part: SetupListPart, place: SetupPlace): string {
     case "code":
       return "Pushes only to its own repository"
     case "files":
-      return cloud ? "From your Mac, outside Git" : here ? "Outside Git: what worktrees get, and what this Mac lends" : "Copied from your Mac when a Thread moves here"
+      return cloud ? localWords("From your Mac, outside Git") : here ? localWords("Outside Git: what worktrees get, and what this Mac lends") : localWords("Copied from your Mac when a Thread moves here")
     case "access":
       return "Names, scope and expiry; never a value"
     case "tools":
       return cloud ? "Mako's image, then this project's setup" : "What this project's Threads use here"
     case "services":
-      return here ? "What the recipe starts, and what this Mac lends" : "What the recipe starts, and what's reached through your Mac"
+      return here ? localWords("What the recipe starts, and what this Mac lends") : localWords("What the recipe starts, and what's reached through your Mac")
   }
 }
 

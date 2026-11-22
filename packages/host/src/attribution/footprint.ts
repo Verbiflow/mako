@@ -1,6 +1,7 @@
 import type { FootprintBasis } from "@mako/protocol"
 import { z } from "zod"
 import { within } from "./paths.js"
+import { folderOf, insideOf, separatorOf } from "../base/path-style.js"
 
 /*
  * A turn's footprint: what it changed outside every tracked root, and why
@@ -111,14 +112,15 @@ const BOOKKEEPING = /(-wal|-shm|-journal|\.lock|\.pid|\.tmp|\.swp|~)$|\.tmp\b/
  */
 export function staticNoise(path: string, home: string, roots: readonly string[] = [home]): string | undefined {
   const root = roots.find((item) => within(item, path)) ?? ""
+  const sep = separatorOf(path)
   const below = path.slice(root.length)
-  const part = below.split("/").find((item) => NOISE_PARTS.has(item))
-  if (part) return root + below.slice(0, below.indexOf(`/${part}`) + part.length + 1)
+  const part = below.split(sep).find((item) => NOISE_PARTS.has(item))
+  if (part) return root + below.slice(0, below.indexOf(`${sep}${part}`) + part.length + 1)
   if (!within(home, path)) return undefined
-  const inside = path.slice(home.length + 1)
+  const inside = insideOf(home, path)
   if (HOME_NOISE_FILES.has(inside)) return path
   const folder = HOME_NOISE.find((item) => within(item, inside))
-  return folder ? `${home}/${folder}` : undefined
+  return folder ? `${home}${sep}${folder.split("/").join(sep)}` : undefined
 }
 
 /**
@@ -127,13 +129,14 @@ export function staticNoise(path: string, home: string, roots: readonly string[]
  * the home folder, or a call naming `/tmp`, says nothing about one file.
  */
 export function container(folder: string, roots: readonly string[]): boolean {
-  return folder === "/" || roots.some((root) => within(folder, root))
+  return folderOf(folder) === folder || roots.some((root) => within(folder, root))
 }
 
 /** The nearest of `path` and its folders that `set` holds, below every container; undefined when none. */
 function holder(set: ReadonlySet<string> | ReadonlyMap<string, unknown>, path: string, roots: readonly string[]): string | undefined {
   if (set.has(path)) return path
-  for (let end = path.lastIndexOf("/"); end > 0; end = path.lastIndexOf("/", end - 1)) {
+  const sep = separatorOf(path)
+  for (let end = path.lastIndexOf(sep); end > 0; end = path.lastIndexOf(sep, end - 1)) {
     const folder = path.slice(0, end)
     if (container(folder, roots)) return undefined
     if (set.has(folder)) return folder
@@ -153,7 +156,7 @@ function sessionNamed(path: string, sessions: ReadonlyMap<string, string>): { gr
   const named = (id: string, end: number) => {
     const why = sessions.get(id.toLowerCase())
     if (!why) return undefined
-    const after = path.indexOf("/", end)
+    const after = path.indexOf(separatorOf(path), end)
     return { group: after < 0 ? parent(path) : path.slice(0, after), why: `${why}, by its id` }
   }
   for (const match of path.matchAll(SESSION_ID)) {
@@ -161,7 +164,7 @@ function sessionNamed(path: string, sessions: ReadonlyMap<string, string>): { gr
     if (found) return found
   }
   for (let start = 1; start < path.length; ) {
-    const end = path.indexOf("/", start)
+    const end = path.indexOf(separatorOf(path), start)
     const stop = end < 0 ? path.length : end
     const name = path.slice(start, stop)
     const dot = name.indexOf(".", 1)
@@ -188,7 +191,8 @@ export class FolderRules {
   /** The rule folder holding `path` whose rule comes first: a tracked root inside another session's folder is still tracked. */
   find(path: string): RuleFolder | undefined {
     let best: RuleFolder | undefined
-    for (let end = path.length; end > 0; end = path.lastIndexOf("/", end - 1)) {
+    const sep = separatorOf(path)
+    for (let end = path.length; end > 0; end = path.lastIndexOf(sep, end - 1)) {
       const found = this.byFolder.get(end === path.length ? path : path.slice(0, end))
       if (found && (!best || RULE_ORDER.get(found.rule)! < RULE_ORDER.get(best.rule)!)) best = found
     }
@@ -211,7 +215,7 @@ export function classify(path: string, input: FootprintInput, rules: FolderRules
   }
   if (input.turn.named.has(path)) return { path, kept: true, basis: "named", access: "write" }
   if (input.turn.mentioned.has(path)) return { path, kept: true, basis: "output", access: "write" }
-  if (BOOKKEEPING.test(path.slice(path.lastIndexOf("/") + 1))) return { path, kept: false, rule: "bookkeeping", group: parent(path) }
+  if (BOOKKEEPING.test(path.slice(path.lastIndexOf(separatorOf(path)) + 1))) return { path, kept: false, rule: "bookkeeping", group: parent(path) }
   if (folder?.rule === "other-session") return { path, kept: false, rule: "other-session", group: folder.folder, why: folder.why }
   const other = holder(input.others, path, input.roots)
   const named = holder(input.turn.named, path, input.roots)
@@ -227,7 +231,7 @@ export function classify(path: string, input: FootprintInput, rules: FolderRules
 }
 
 export function parent(path: string): string {
-  return path.slice(0, Math.max(1, path.lastIndexOf("/")))
+  return path.slice(0, Math.max(1, path.lastIndexOf(separatorOf(path))))
 }
 
 /** Excluded paths gathered by rule and folder, for the turn's summary: the biggest groups, at most `limit`. */

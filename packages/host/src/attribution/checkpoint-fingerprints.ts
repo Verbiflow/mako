@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { contentRef } from "./content.js"
 import type { JournalStore } from "./journal-store.js"
 import { partition, storedView, type Partition, type PartitionFile } from "./queries.js"
+import { kept } from "../base/path-style.js"
 
 /** The checkpoint input identity: HEAD and the Thread side of every file, in path order. */
 export function threadFingerprint(head: string | null | undefined, partition: Partition, repoRoot: string): string {
@@ -31,9 +32,9 @@ export class CheckpointFingerprints {
     const found = partition({ ...view, roots: () => roots }, checkout, thread)
     // Active base/current blobs are immutable and retained by collection. A missing text body can arrive later
     // without another file write, so don't cache that incomplete input. It is revisited until the body arrives.
-    const complete = roots.filter(({ root }) => root.path === checkout).every(({ files }) => [...files.values()].every(file =>
+    const complete = roots.filter(({ root }) => root.path === kept(checkout)).every(({ files }) => [...files.values()].every(file =>
       !file.text || ((!file.base || this.store.hasBlob(file.base)) && (!file.current || this.store.hasBlob(file.current)))))
-    const head = found.roots.find((root) => root.path === checkout)?.head
+    const head = found.roots.find((root) => root.path === kept(checkout))?.head
     const fingerprint = createHash("sha256").update(threadFingerprint(head, found, checkout)).digest("hex")
     if (this.held.size >= 128) this.held.delete(this.held.keys().next().value!)
     if (complete) this.held.set(key, { version, fingerprint })

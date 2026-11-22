@@ -39,6 +39,7 @@ import { hostConnectionStore, hostDisconnected } from "@/state/host-connection"
 import { isHostReconnectingError } from "@mako/host/contracts/host-connection"
 import { UNSTATED_MACHINE_OFFER, type MachineOffer } from "@mako/host/contracts/machine-offer"
 import type { ProcessPlatform } from "@mako/host/contracts/platform"
+import { hostSaidPlatform } from "@mako/protocol/computer-words"
 import { admitProfile, admitRuntimeUpdates, providers } from "@/state/providers"
 import { providerConnectionsStore } from "@/state/provider-connections"
 import { cloudAccountStore, heardAccountEvent } from "@/state/cloud-account"
@@ -803,6 +804,7 @@ function adoptBoot(boot: BootPayload) {
   stopPaneWatch ??= watchSessionPanes()
   stopResidencyWatch ??= watchLiveResidency()
   void restorePendingMessages()
+  hostSaidPlatform(boot.platform)
   store.set({
     phase: "ready",
     fault: undefined,

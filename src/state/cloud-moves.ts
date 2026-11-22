@@ -8,6 +8,7 @@ import { acpStore, updateAcpConversation } from "@/state/acp-state"
 import { receiveLive } from "@/state/live-door"
 import { hydrateLive } from "@/state/live-recovery"
 import { createHook, createStore } from "@/state/store"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** Both directions share observation order and effect ownership; only a confirmed return establishes local authority. */
 type CloudOperation = { origin: string; target: string; ignored?: true; superseded?: true; located?: string[]; refreshed?: string[] } & (
@@ -240,7 +241,7 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
       } },
       moving: without(state.moving, conversationId),
     }))
-    toast.message("It stayed on this Mac", { id: `move:${move}`, description: step.continued ? `${step.reason} Its turn goes on here.` : step.reason })
+    toast.message(localWords("It stayed on this Mac"), { id: `move:${move}`, description: step.continued ? `${step.reason} Its turn goes on here.` : step.reason })
     return
   }
   cloudMovesStore.set((state) => {
@@ -282,8 +283,8 @@ function completeMove(conversationId: string, move: string, step: Extract<Thread
 
 /** A Thread another device continued in the cloud while this Mac was off, as this Mac says it once it let go. */
 export function whileAwaySentence(behind: boolean): string {
-  const base = "It went on in a cloud machine while this Mac was off, so this Mac let go of it. Its worktree here follows each turn there; bring it back any time."
-  return behind ? `${base} The last turns you read may not have reached the cloud before this Mac went quiet: they stay in this Mac's history.` : base
+  const base = localWords("It went on in a cloud machine while this Mac was off, so this Mac let go of it. Its worktree here follows each turn there; bring it back any time.")
+  return behind ? localWords(`${base} The last turns you read may not have reached the cloud before this Mac went quiet: they stay in this Mac's history.`) : base
 }
 
 /** Why a path stayed behind, in a few words. */
@@ -329,7 +330,7 @@ export function landedSentence(landed: ReturnLanded | undefined): string | undef
   else if (landed.outside.placed.length) parts.push(`${files(landed.outside.placed.length)} outside its worktree came back to ${landed.outside.placed.length === 1 ? "its place" : "their places"}.`)
   // Only what this Mac sent comes back to its place: what the agent wrote elsewhere waits apart, beside the person's.
   const unsent = landed.outside.unsent ?? []
-  if (unsent.length) parts.push(`${unsent.length === 1 ? name(unsent[0] ?? "") : files(unsent.length)}, written outside its worktree in the cloud, ${unsent.length === 1 ? "is" : "are"} kept apart: this Mac never sent ${unsent.length === 1 ? "it" : "them"}.`)
+  if (unsent.length) parts.push(localWords(`${unsent.length === 1 ? name(unsent[0] ?? "") : files(unsent.length)}, written outside its worktree in the cloud, ${unsent.length === 1 ? "is" : "are"} kept apart: this Mac never sent ${unsent.length === 1 ? "it" : "them"}.`))
   const failed = landed.outside.failed ?? []
   const [first] = failed
   if (first) parts.push(failed.length === 1 ? `${name(first.path)} couldn't be written back: ${first.why}.` : `${files(failed.length)} outside its worktree couldn't be written back, such as ${name(first.path)}: ${first.why}.`)
@@ -500,7 +501,7 @@ function completeReturn(conversationId: string, move: string, step: Extract<Thre
     const waiting = [...returned.landed?.outside.waiting ?? [], ...returned.landed?.outside.unsent ?? []]
     const kept = returned.landed?.outside.kept
     const compare = kept && waiting.length ? { label: waiting.length === 1 ? "Open the cloud's copy" : "Show the cloud's copies", onClick: () => void getMako().revealPath(waiting.length === 1 ? `${kept}${waiting[0]}` : kept).catch(() => undefined) } : undefined
-    say("Back on this Mac", { id: `return:${move}`, description: landed ?? "It goes on here, with what it did in the cloud in its worktree. The cloud machine is gone.", ...landed && { duration: 12_000 }, ...compare && { action: compare } })
+    say(localWords("Back on this Mac"), { id: `return:${move}`, description: landed ?? "It goes on here, with what it did in the cloud in its worktree. The cloud machine is gone.", ...landed && { duration: 12_000 }, ...compare && { action: compare } })
   }
   for (const id of new Set([...locations, ...refreshes])) {
     if (locations.includes(id)) receiveLive(id, { from: "said" }, () => updateAcpConversation(id, (conversation) => (conversation.kind === "live" ? { ...conversation, elsewhere: undefined } : conversation)))

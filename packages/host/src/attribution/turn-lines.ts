@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { relative } from "node:path"
+import { insideOf, under, within } from "../base/path-style.js"
 import type { ContentRef } from "@mako/protocol"
 import type { TurnChangedFile } from "../contracts/turn-changes.js"
 import type { KeptLines, TurnUndoFile, TurnUndoKept, TurnUndoLeft, TurnUndoScope, TurnWriter, WriterRun } from "../contracts/turn-review.js"
@@ -59,7 +59,7 @@ export type TurnFileSpan = Pick<TurnChangedFile, "path" | "root" | "relative" | 
 /** A record's file as the journal groups it: its root, the paths it was at, and the turn's entries that span it. */
 function recordGroup(file: TurnFileSpan): Pick<TurnFile, "root" | "paths" | "first" | "last"> {
   const base = file.path.slice(0, file.path.length - file.relative.length - 1)
-  const was = file.from?.startsWith(`${base}/`) ? file.from.slice(base.length + 1) : file.relative
+  const was = file.from && file.from !== base && within(base, file.from) ? insideOf(base, file.from) : file.relative
   return { root: file.root, paths: new Set([file.relative, was]), first: file.entries.first, last: file.entries.last }
 }
 
@@ -253,7 +253,7 @@ export function undoPlan(view: JournalView, thread: string, scope: TurnUndoScope
   const sides = new Map(entries.map((entry) => [entry.seq, entrySide(view, entry.seq, thread)]))
   const own = new Set(entries.filter((entry) => sides.get(entry.seq) === "thread").map((entry) => entry.seq))
   const plan: UndoPlan = { writes: [], undo: [], kept: [], left: [], token: "" }
-  const named = (root: string, path: string) => relative(checkout, `${inside.get(root)!.root.path}/${path}`) || path
+  const named = (root: string, path: string) => insideOf(checkout, under(inside.get(root)!.root.path, path)) || path
   const ownGroups = fileGroups(entries.filter((entry) => own.has(entry.seq)))
   for (const group of ownGroups.values()) planFile(view, thread, own, group, inside.get(group.root)!.root.path, inside.get(group.root)!.files, named, plan)
   // Files with only lines that might be the scope's: they stay, and say so.
@@ -387,7 +387,7 @@ function planFile(view: JournalView, thread: string, own: ReadonlySet<number>, g
 /** A turn's or background work still running in `checkout`, on any host of this journal; undefined when none is. */
 export function runningIn(view: JournalView, checkout: string): { thread: string; kind: "turn" | "background" } | undefined {
   const roots = rootsIn(view, checkout).map((root) => root.root.path)
-  const inside = (folder: string | undefined) => folder !== undefined && roots.some((root) => folder === root || folder.startsWith(`${root}/`) || root.startsWith(`${folder}/`))
+  const inside = (folder: string | undefined) => folder !== undefined && roots.some((root) => within(root, folder) || within(folder, root))
   for (const activity of view.store.openActivity()) {
     if (activity.kind === "call") continue
     if (inside(activity.checkout) || inside(activity.cwd)) return { thread: activity.thread, kind: activity.kind }

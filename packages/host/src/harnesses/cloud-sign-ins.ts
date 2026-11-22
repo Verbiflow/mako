@@ -23,6 +23,7 @@ import type { HarnessAccounts } from "./accounts.js"
 import { credentialFingerprint } from "./accounts-common.js"
 import { chainFingerprint, type CloudSignInCapability, type CloudSignInMirror, type CloudSignInPlace } from "./cloud-sign-in.js"
 import type { ProviderRegistry } from "./registry.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * How often this Mac reads every harness's sign-in while it has somewhere to send them (signed in to an account with
@@ -543,7 +544,7 @@ export class CloudSignInSync {
             delete this.#inStep[harness]
           }
           const sent = await this.#sync(harness, send, sentBefore)
-          return { ...sent, rotates: true, status: "failed", problem: `Mako can't update this sign-in on this Mac (${stillRefused.problem}), so Mako Cloud doesn't refresh it; it's sent as it is` }
+          return { ...sent, rotates: true, status: "failed", problem: localWords(`Mako can't update this sign-in on this Mac (${stillRefused.problem}), so Mako Cloud doesn't refresh it; it's sent as it is`) }
         }
       }
       if (!ours) {

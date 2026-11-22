@@ -19,6 +19,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { HandoffSchema, type Handoff } from "../contracts/thread-execution.js"
 import { applyMoveCheckpoint, captureMoveCheckpoint, openCarry, placeOutside, verifyMoveCheckpoint } from "../workspaces/index.js"
 import { sendCheckpoint } from "./machine-saves.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * A Thread arriving on a cloud machine from a device, before anything runs: its checkout applied to the machine's
@@ -382,7 +383,7 @@ export async function openArrivedSessions(
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error)
       const name = deps.label(session.harness)
-      const signIn = deps.signedIn(session.harness) === false ? ` Mako Cloud has no sign-in for ${name}: turn on "Use this Mac's sign-ins" in Settings › Account, then move the Thread again.` : ""
+      const signIn = deps.signedIn(session.harness) === false ? localWords(` Mako Cloud has no sign-in for ${name}: turn on "Use this Mac's sign-ins" in Settings › Account, then move the Thread again.`) : ""
       throw new Error(`${name} couldn't start in the cloud: ${why}${signIn}`, { cause: error })
     }
     at.opened = { ms: Math.round(performance.now() - opening) }

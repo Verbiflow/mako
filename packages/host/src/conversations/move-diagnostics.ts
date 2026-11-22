@@ -1,6 +1,7 @@
 import { z } from "zod"
 import type { FailureBoundary } from "../base/error-message.js"
 import type { HostLogFields } from "../base/host-log.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** Only product-owned words enter the durable log; arbitrary errors can contain prompts, paths or credentials. */
 export function moveDiagnosticReason(boundary: FailureBoundary): HostLogFields {
@@ -35,10 +36,10 @@ function reasonFields({ error }: FailureBoundary): HostLogFields {
   }
   if (message === undefined) return withheldReason()
   const known = [
-    "Moving to the cloud needs this Mac signed in to Mako Cloud.",
+    localWords("Moving to the cloud needs this Mac signed in to Mako Cloud."),
     "Moves need the Thread store, which didn't open.",
     "This conversation isn't in a Thread yet.",
-    "This Thread runs in the cloud already. Bring it back to this Mac first to move it again.",
+    localWords("This Thread runs in the cloud already. Bring it back to this Mac first to move it again."),
     "This Thread is moving already.",
     "A Thread in the project folder goes onto its own branch before it moves, once its turn has ended. Move it then.",
     "A Thread moves to the cloud from its own worktree. Move it into one first; the main checkout stays here.",

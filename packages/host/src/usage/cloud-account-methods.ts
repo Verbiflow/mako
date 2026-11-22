@@ -38,6 +38,7 @@ import { describeThisDevice } from "./device-description.js"
 import type { BorrowAnswer, Grant, Lease, Progress, SourceAnswer, Stream } from "@mako/protocol/borrow"
 import type { BorrowSnapshot } from "../contracts/setup.js"
 import type { OwnerAnswer, OwnerAsk, QuietAnswer, QuietNote } from "@mako/protocol/handoff"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** The Mako account this host is signed in to, for the services that act as it. */
 /** The account's stream skipped a number, or said one was lost: the list is read whole again (`onAccountGap`). */
@@ -438,7 +439,7 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
   methods.handle("mako:github-authorship-save", (as: CommitAuthor) => cloud.saveGitHubAuthorship(as))
 
   sync?.start()
-  const unsharable = () => Promise.reject(new Error("This Mac can't share sign-ins with Mako Cloud."))
+  const unsharable = () => Promise.reject(new Error(localWords("This Mac can't share sign-ins with Mako Cloud.")))
   methods.handle("mako:cloud-sign-ins", () => sync?.state() ?? unsharable())
   methods.handle("mako:cloud-sign-ins-share", (sharing: boolean) => sync?.share(sharing) ?? unsharable())
   return {

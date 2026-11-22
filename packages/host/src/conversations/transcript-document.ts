@@ -3,6 +3,7 @@ import type { Entry } from "@mako/sessions/entries"
 import type { LiveSnapshot } from "../contracts/live-conversations.js"
 import type { TranscriptDepth, TranscriptDocument, TranscriptSource } from "../contracts/transcript-document.js"
 import { resumed } from "./resumed-history.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** What a transcript reads of a live conversation. */
 export type LiveHistory = Pick<LiveSnapshot, "base" | "baseCoveredBlocks" | "blocks"> & { session: Pick<LiveSnapshot["session"], "title" | "harness"> }
@@ -28,7 +29,7 @@ export async function transcriptDocument(deps: TranscriptDocumentDeps, source: T
     return render(deps, thread.ref.title, thread.ref.harness, thread.entries, depth)
   }
   const snapshot = await deps.snapshot(source.id)
-  if (!snapshot) throw new Error("This session isn't open on this Mac any more")
+  if (!snapshot) throw new Error(localWords("This session isn't open on this Mac any more"))
   const entries = [...await resumed(deps, snapshot), ...snapshot.blocks.slice(snapshot.baseCoveredBlocks ?? 0)]
   return render(deps, snapshot.session.title, snapshot.session.harness, entries, depth)
 }

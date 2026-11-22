@@ -43,6 +43,7 @@ import {
 } from "@/state/open-project"
 import { useSession } from "@/state/session"
 import { createHook } from "@/state/store"
+import { localWords } from "@mako/protocol/computer-words"
 
 const useHeads = createHook(checkoutHeadsStore)
 
@@ -183,7 +184,7 @@ function OpenProjectDialog() {
     }
     const foundRow = (checkout: (typeof fresh)[number]): Row => ({
       id: `found:${checkout.path}`,
-      section: "On this Mac",
+      section: localWords("On this Mac"),
       icon: FolderGit2Icon,
       title: checkout.name,
       detail: [tilde(checkout.path), checkout.remote, checkout.branch].filter(Boolean).join(" · "),
@@ -304,10 +305,10 @@ function OpenProjectDialog() {
 
     list.push(...recent.slice(0, RECENT_SHOWN).map((each) => recentRow(each)))
     list.push(...fresh.slice(0, FOUND_SHOWN).map(foundRow))
-    if (found?.state === "scanning" && fresh.length === 0) list.push({ id: "found:scanning", section: "On this Mac", icon: FolderGit2Icon, title: "Looking for projects on this Mac…" })
+    if (found?.state === "scanning" && fresh.length === 0) list.push({ id: "found:scanning", section: localWords("On this Mac"), icon: FolderGit2Icon, title: localWords("Looking for projects on this Mac…") })
     const guardedNames = (paths: string[]) => paths.map((path) => path.split("/").at(-1)).join(", ")
-    if (found?.refused.length) list.push({ id: "found:refused", section: "On this Mac", icon: ShieldIcon, title: `macOS keeps Mako out of ${guardedNames(found.refused)}`, detail: "Privacy & Security › Files and Folders", keys: ["↩"], keysLabel: "Open settings", run: openPrivacySettings })
-    else if (found?.skipped.length) list.push({ id: "found:skipped", section: "On this Mac", icon: FolderSearchIcon, title: `Also look in ${guardedNames(found.skipped)}`, detail: "macOS may ask first", run: scanGuardedFolders })
+    if (found?.refused.length) list.push({ id: "found:refused", section: localWords("On this Mac"), icon: ShieldIcon, title: `macOS keeps Mako out of ${guardedNames(found.refused)}`, detail: "Privacy & Security › Files and Folders", keys: ["↩"], keysLabel: "Open settings", run: openPrivacySettings })
+    else if (found?.skipped.length) list.push({ id: "found:skipped", section: localWords("On this Mac"), icon: FolderSearchIcon, title: `Also look in ${guardedNames(found.skipped)}`, detail: "macOS may ask first", run: scanGuardedFolders })
     list.push(...startRows)
     return list
   })()

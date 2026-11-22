@@ -1,4 +1,4 @@
-import { isAbsolute, join, normalize, relative, sep } from "node:path"
+import { absolutePath, insideOf, joined, kept, normalizedPath, under, within } from "../base/path-style.js"
 import type { FileCandidate, FileResolution, ResolveReason, Touch, TouchKind } from "../contracts/file-references.js"
 import type { SuffixIndex } from "./suffix-index.js"
 
@@ -70,16 +70,16 @@ export function candidatesOf(spelling: string, context: ReferenceContext): Draft
   }
   const chosen = context.chosen?.get(path)
   if (chosen) add({ path: chosen, folder: Number.NEGATIVE_INFINITY, reason: "chosen" })
-  const expanded = path === "~" || path.startsWith("~/") ? join(context.home, path.slice(1)) : path
-  if (isAbsolute(expanded)) {
-    add({ path: normalize(expanded), folder: Number.POSITIVE_INFINITY, reason: "absolute" })
+  const expanded = path === "~" || path.startsWith("~/") ? joined(context.home, path.slice(1)) : path
+  if (absolutePath(expanded)) {
+    add({ path: normalizedPath(kept(expanded)), folder: Number.POSITIVE_INFINITY, reason: "absolute" })
     return unique(drafts)
   }
   const parts = segmentsOf(path)
   const bare = parts.length === 1
   // A bare name from a folder only where the Thread touched it: `package.json` said while working in one.
   context.folders.forEach((folder, i) => {
-    const draft = normalize(join(folder, path))
+    const draft = joined(folder, path)
     if (!bare || context.touched.has(draft)) add({ path: draft, folder: i, reason: "from-folder" })
   })
   // `../x/y.ts` from a folder the record doesn't show: its trailing segments.
@@ -88,7 +88,7 @@ export function candidatesOf(spelling: string, context: ReferenceContext): Draft
   for (const file of context.touched.keys()) if (endsWithSegments(file, tail)) add({ path: file, folder: Number.POSITIVE_INFINITY, reason: "touched" })
   for (const place of context.places) {
     if (bare && !place.current) continue
-    for (const inside of place.index?.find(tail.join("/"), 20) ?? []) add({ path: join(place.root, inside), folder: Number.POSITIVE_INFINITY, reason: "only-match" })
+    for (const inside of place.index?.find(tail.join("/"), 20) ?? []) add({ path: under(place.root, inside), folder: Number.POSITIVE_INFINITY, reason: "only-match" })
   }
   return unique(drafts)
 }
@@ -101,9 +101,9 @@ function follow(draft: Draft, context: ReferenceContext): Draft[] {
   for (const item of own) {
     const from = placeOf(item.path, context.places)
     if (!from || from.current || (!from.repository && !from.gone)) continue
-    const inside = relative(from.root, item.path)
+    const inside = insideOf(from.root, item.path)
     for (const twin of context.places)
-      if (twin !== from && twin.current && twins(from, twin)) out.push({ path: join(twin.root, inside), was: item.was ?? item.path, folder: item.folder, reason: "twin" })
+      if (twin !== from && twin.current && twins(from, twin)) out.push({ path: under(twin.root, inside), was: item.was ?? item.path, folder: item.folder, reason: "twin" })
   }
   return out
 }
@@ -130,7 +130,7 @@ function endsWithSegments(path: string, tail: readonly string[]): boolean {
 function placeOf(path: string, places: readonly Place[]): Place | undefined {
   let found: Place | undefined
   for (const place of places)
-    if ((path === place.root || path.startsWith(place.root + sep)) && (!found || place.root.length > found.root.length)) found = place
+    if (within(place.root, path) && (!found || place.root.length > found.root.length)) found = place
   return found
 }
 
@@ -162,7 +162,7 @@ export function resolveSpelling(spelling: string, context: ReferenceContext, exi
     const candidate: FileCandidate = {
       path: draft.path,
       ...(draft.was && { was: draft.was }),
-      ...(place && { place: { name: place.name, folder: relative(place.root, draft.path).split(sep).slice(0, -1).join("/") } }),
+      ...(place && { place: { name: place.name, folder: insideOf(place.root, draft.path).split("/").slice(0, -1).join("/") } }),
       ...(touch && { touch }),
       reason: touch && (draft.reason === "only-match" || draft.reason === "absolute") ? "touched" : draft.reason,
     }

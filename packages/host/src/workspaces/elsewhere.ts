@@ -1,4 +1,5 @@
 import type { EncodedValue } from "../contracts/runtime-value.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * A conversation's folder that lives on another host, a cloud machine's clone: a window looking at that conversation
@@ -71,9 +72,9 @@ export function elsewhereRefusal(channel: string, where: string): string | undef
   switch (channel) {
     case "mako:open-in-editor":
     case "mako:reveal":
-      return `This conversation's folder is on ${where}, not this Mac, so it can't be opened here. Its files are in the Files panel.`
+      return localWords(`This conversation's folder is on ${where}, not this Mac, so it can't be opened here. Its files are in the Files panel.`)
     case "mako:git-generate-message":
-      return `Commit messages are drafted from folders on this Mac. This conversation's folder is on ${where}: ask its agent to commit, or write the message.`
+      return localWords(`Commit messages are drafted from folders on this Mac. This conversation's folder is on ${where}: ask its agent to commit, or write the message.`)
     default:
       return undefined
   }

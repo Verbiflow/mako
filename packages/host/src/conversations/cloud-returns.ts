@@ -19,6 +19,7 @@ import type { ThreadFileHistory } from "@mako/protocol"
 import { applyMoveCheckpoint, captureMoveCheckpoint, mergeReturned, openCarry, planOutsideReturn, ProjectMissingError, returnOutside, unchangedSince, type OpenedCarry, type OutsideReturned } from "../workspaces/index.js"
 import { cloudRuntimeOf, MovePlanSchema, namedUuid, onBranchHere } from "./cloud-moves.js"
 import type { CloudWorktrees } from "./cloud-worktrees.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * A Thread of this Mac's that moved to the cloud, coming back: a move the other way, by the same rules. One owner
@@ -270,7 +271,7 @@ export class CloudReturns {
       hostLog("returns", "an archived Thread wasn't restored here", { move, cloudThread: archived.thread, reason })
       return { kind: "stayed", reason }
     }
-    if (!asked) return refused("This Thread came to the cloud from another Mac, or began there: restore it on the Mac it came from.")
+    if (!asked) return refused(localWords("This Thread came to the cloud from another Mac, or began there: restore it on the Mac it came from."))
     const record = await heard(this.#account().returnState(archived.thread, move)).catch((error: Error) => error)
     if (record instanceof Error) return { kind: "unsettled", reason: `Mako couldn't hear the cloud: ${record.message}. It stays archived; restore it again.`, waitsOn: "cloud" }
     if (record?.phase === "returned") return { kind: "back" }
@@ -359,7 +360,7 @@ export class CloudReturns {
   /** What the return carries, read before anything changes: refused, with the reason, when the Thread can't come back. */
   async #plan(conversationId: string, move: MoveId, options: ThreadReturnOptions, archived?: ArchivedThread): Promise<ReturnPlan> {
     const account = this.#options.account()
-    if (!account || !(await account.id())) throw new Error("Bringing a Thread back needs this Mac signed in to Mako Cloud.")
+    if (!account || !(await account.id())) throw new Error(localWords("Bringing a Thread back needs this Mac signed in to Mako Cloud."))
     const threads = this.#options.threads()
     if (!threads) throw new Error("Returns need the Thread store, which didn't open.")
     const placed = threads.journalPlacement(conversationId)
@@ -368,7 +369,7 @@ export class CloudReturns {
     const members = threads.threadSessions(placed.thread)
     for (const { session } of members) {
       const execution = threads.execution(session)
-      if (execution?.state !== "elsewhere" || execution.owner.kind !== "cloud") throw new Error("This Thread runs on this Mac already.")
+      if (execution?.state !== "elsewhere" || execution.owner.kind !== "cloud") throw new Error(localWords("This Thread runs on this Mac already."))
       owners.add(execution.owner.runtime)
     }
     if (owners.size !== 1) throw new Error("This Thread's Sessions run in more than one place, so it can't come back as one.")
@@ -399,7 +400,7 @@ export class CloudReturns {
     }
     if (left.length) hostLog("returns", "conversations begun in the cloud whose harness never started there bring nothing back", { move, conversations: left.join(", ") })
     const device = await account.deviceId()
-    if (!device) throw new Error("This Mac isn't one of the account's devices, so nothing can be sent back to it.")
+    if (!device) throw new Error(localWords("This Mac isn't one of the account's devices, so nothing can be sent back to it."))
     // Last, as it may change this Mac: its worktree made a checkout Git reads, of a project that's here. A write of the
     // worktree's, so a follow under way finishes first and none lays anything after.
     await this.#options.worktrees.returnWrite(forward.cloudThread, () => this.#ready(placed.thread, forward, options.project))
@@ -425,7 +426,7 @@ export class CloudReturns {
       const plan = MovePlanSchema.safeParse(JSON.parse(await readFile(join(this.#options.moves, name), "utf8").catch(() => "null"))).data
       if (plan?.phase === "started" && plan.thread === thread && cloudRuntimeOf(plan.cloudThread) === runtime) return plan
     }
-    throw new Error("This Mac has no record of the move that took this Thread to the cloud.")
+    throw new Error(localWords("This Mac has no record of the move that took this Thread to the cloud."))
   }
 
   async #resume(plan: ReturnPlan): Promise<ThreadReturnOutcome> {
@@ -529,7 +530,7 @@ export class CloudReturns {
           .then((value) => ({ departure: ReturnDepartureSchema.parse(decodeRuntimeValue(value)) }), (error: Error) => ({ error })),
       ])
       if ("error" in packed) return this.#cancel(plan, errorMessage({ error: packed.error }))
-      if ("error" in kept) return this.#cancel(plan, `This Mac couldn't keep its worktree as it is before taking the cloud's: ${errorMessage({ error: kept.error })}`)
+      if ("error" in kept) return this.#cancel(plan, localWords(`This Mac couldn't keep its worktree as it is before taking the cloud's: ${errorMessage({ error: kept.error })}`))
       plan.timings.packed = Date.now() - plan.began
       return this.#landed(plan, await heard(account.releaseReturn(plan.cloudThread, plan.move, packed.departure)))
     }
@@ -796,7 +797,7 @@ export class CloudReturns {
       if (plan.from === "archive") return this.#stayArchived(plan, reason)
       const given = await heard(account.giveBackReturn(plan.cloudThread, plan.move, reason))
       if (given.phase === "given-back") return this.#stay(plan, given.reason)
-      throw new Error(`the cloud reads the return as ${given.phase} after this Mac gave it back`, { cause: error })
+      throw new Error(localWords(`the cloud reads the return as ${given.phase} after this Mac gave it back`), { cause: error })
     }
     plan.phase = "applied"
     plan.timings.applied = Date.now() - plan.began
@@ -927,7 +928,7 @@ export class CloudReturns {
 
   #account(): CloudAccount {
     const account = this.#options.account()
-    if (!account) throw new Error("This Mac signed out of Mako Cloud.")
+    if (!account) throw new Error(localWords("This Mac signed out of Mako Cloud."))
     return account
   }
 
@@ -973,11 +974,11 @@ export function landedNote(landed: ReturnLanded, waiting: string): string | unde
   const lines: string[] = []
   const conflicts = new Set(landed.conflicts)
   const clean = landed.merged.filter((path) => !conflicts.has(path))
-  if (clean.length) lines.push(`While you worked in the cloud, the user changed ${clean.length === 1 ? "a file" : `${clean.length} files`} in this worktree on their Mac; Mako kept their changes beside yours: ${named(clean)}.`)
+  if (clean.length) lines.push(localWords(`While you worked in the cloud, the user changed ${clean.length === 1 ? "a file" : `${clean.length} files`} in this worktree on their Mac; Mako kept their changes beside yours: ${named(clean)}.`))
   if (conflicts.size) lines.push(`You and the user both changed ${named([...conflicts])}: ${conflicts.size === 1 ? "it holds" : "they hold"} Git's conflict markers, theirs as \`mako/merge/this-mac\` and yours as \`mako/merge/cloud\`. Resolve them before building on ${conflicts.size === 1 ? "it" : "them"}.`)
   if (landed.mine) lines.push(`The user's own commits on this branch meanwhile are on \`${landed.mine}\`.`)
   if (landed.outside.waiting.length) lines.push(`Files outside the worktree that you changed in the cloud, and the user changed here meanwhile, kept the user's version; yours wait under ${waiting}: ${named(landed.outside.waiting)}.`)
-  if (landed.outside.unsent?.length) lines.push(`Files you wrote outside the worktree in the cloud that never came from this Mac weren't put in place; they wait under ${waiting}: ${named(landed.outside.unsent)}.`)
+  if (landed.outside.unsent?.length) lines.push(localWords(`Files you wrote outside the worktree in the cloud that never came from this Mac weren't put in place; they wait under ${waiting}: ${named(landed.outside.unsent)}.`))
   if (landed.outside.failed?.length) lines.push(`Files outside the worktree that couldn't be written back on the user's Mac: ${named(landed.outside.failed.map((each) => `${each.path} (${each.why})`))}.`)
   return lines.length ? lines.join(" ") : undefined
 }
@@ -1010,13 +1011,13 @@ function unsettledReason(waitsOn: ReturnWaitsOn, phase: ReturnPlan["phase"], mes
   const again = "Ask again, or Mako asks when it next starts."
   if (phase === "claimed")
     return waitsOn === "cloud"
-      ? `It runs on this Mac, and Mako couldn't tell the cloud it's done: ${message}. Its cloud machine stays until the cloud hears. ${again}`
-      : `It runs on this Mac, and Mako couldn't finish setting up its conversations here: ${message}. ${again}`
+      ? localWords(`It runs on this Mac, and Mako couldn't tell the cloud it's done: ${message}. Its cloud machine stays until the cloud hears. ${again}`)
+      : localWords(`It runs on this Mac, and Mako couldn't finish setting up its conversations here: ${message}. ${again}`)
   if (waitsOn === "here")
-    return `This Mac couldn't finish taking the Thread: ${message}. The cloud let it go, so it runs nowhere until this Mac does. ${again}`
+    return localWords(`This Mac couldn't finish taking the Thread: ${message}. The cloud let it go, so it runs nowhere until this Mac does. ${again}`)
   return phase === "preparing"
     ? `Mako couldn't hear the cloud: ${message}. Until it does, it can't tell whether the cloud let the Thread go, so it runs nowhere. ${again}`
-    : `Mako couldn't hear the cloud: ${message}. The cloud let the Thread go and this Mac hasn't taken it, so it runs nowhere until Mako hears. ${again}`
+    : localWords(`Mako couldn't hear the cloud: ${message}. The cloud let the Thread go and this Mac hasn't taken it, so it runs nowhere until Mako hears. ${again}`)
 }
 
 /** A return refused because a harness here is older than the one that wrote its sessions in the cloud. */

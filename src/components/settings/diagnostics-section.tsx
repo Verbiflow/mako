@@ -27,6 +27,7 @@ import { loadFileEvents, useFileEvents } from "@/state/file-events"
 import { StoreFormatLine } from "@/components/shell/store-format-line"
 import { changedStores } from "@/lib/store-formats"
 import { loadStoreFormats, useStoreFormats } from "@/state/store-formats"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * What broke, and where it is written down.
@@ -417,7 +418,7 @@ function routingState(reading: NativeRoutingReading): string {
   if (reading.state === "words") return "Mako's instructions alone"
   const checked = reading.verified?.version ?? ""
   if (reading.state === "control") return `Off in an ${APEX_WORD}, checked on ${checked}`
-  return reading.installed ? `Unverified: checked on ${checked}, this Mac runs ${reading.installed}` : `Unverified: checked on ${checked}, this Mac's version isn't read yet`
+  return reading.installed ? localWords(`Unverified: checked on ${checked}, this Mac runs ${reading.installed}`) : localWords(`Unverified: checked on ${checked}, this Mac's version isn't read yet`)
 }
 
 /**

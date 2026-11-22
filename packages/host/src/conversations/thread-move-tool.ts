@@ -12,6 +12,7 @@ import { AFTER_MOVE, THREAD_TOOLS, type ThreadMoveRefused, type ThreadToolDefini
 import { namedUuid } from "./cloud-moves.js"
 import type { AgentAskGate } from "./agent-ask-gate.js"
 import { logMoveDiagnostic, moveDiagnosticReason } from "./move-diagnostics.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** Where a conversation's Thread runs, as its row says it: here, in the cloud, or on another device. */
 export type ThreadPlace = "here" | "cloud" | "device"
@@ -74,12 +75,12 @@ export class ThreadMoveTool {
     if (!conversationId) return refused("no-thread", "Name the conversation whose Thread moves (--conversation), or call it from a Thread's shell.")
     if (this.#deps.machine) return this.#fromTheMac(input, own)
     const moves = this.#deps.moves()
-    if (!moves) return refused("unavailable", "Moving to the cloud needs this Mac signed in to Mako Cloud.")
+    if (!moves) return refused("unavailable", localWords("Moving to the cloud needs this Mac signed in to Mako Cloud."))
     const place = this.#deps.place(conversationId)
     if (!place) return refused("no-thread", "Mako doesn't know that conversation here.")
     const key = namedUuid(`thread move\0${caller.kind === "agent" ? caller.session : "person"}\0${input.clientKey}`)
     if (input.to === "back") {
-      if (place === "here") return refused("already-there", "This Thread runs on this Mac already.")
+      if (place === "here") return refused("already-there", localWords("This Thread runs on this Mac already."))
       if (place === "device") return refused("not-yours", "This Thread runs on another device: bring it back from there, or continue it in the cloud.")
       return returned(await moves.bringBack(conversationId, key))
     }
@@ -105,7 +106,7 @@ export class ThreadMoveTool {
 
   /** Acknowledge the person's choice on its cloud owner; the answering client opens Bring it back on their Mac. */
   allowedBack(conversationId: string): void {
-    if (!this.#deps.machine || !this.#deps.place(conversationId)) throw new Error("That cloud Thread is no longer here to answer. Open its Thread on your Mac to bring it back.")
+    if (!this.#deps.machine || !this.#deps.place(conversationId)) throw new Error(localWords("That cloud Thread is no longer here to answer. Open its Thread on your Mac to bring it back."))
     // No host move runs here, and this acknowledgement says nothing of whether the client completed its return.
   }
 
@@ -140,7 +141,7 @@ export class ThreadMoveTool {
 
   #start(conversationId: string, move: string, handOff?: ThreadHandOff): void {
     const moves = this.#deps.moves()
-    if (!moves) return logMoveDiagnostic(() => hostWarn("thread-moves", "an agent's move found this Mac signed out of the cloud", { conversation: conversationId, move, stage: "dispatch", ...moveDiagnosticReason({ error: "Moving to the cloud needs this Mac signed in to Mako Cloud." }) }))
+    if (!moves) return logMoveDiagnostic(() => hostWarn("thread-moves", "an agent's move found this Mac signed out of the cloud", { conversation: conversationId, move, stage: "dispatch", ...moveDiagnosticReason({ error: localWords("Moving to the cloud needs this Mac signed in to Mako Cloud.") }) }))
     // Its steps reach the window as the app's own move's do (`thread-move-step`).
     void Promise.resolve().then(() => moves.move(conversationId, move, handOff)).then(
       (outcome) => logMoveDiagnostic(() => hostLog("thread-moves", "an agent's move ended", { conversation: conversationId, move, outcome: outcome.kind, ...outcome.kind === "kept-here" && { stage: "move-result", ...moveDiagnosticReason({ error: outcome.reason }) } })),
@@ -151,7 +152,7 @@ export class ThreadMoveTool {
   /** A cloud machine can't reach its Mac: its agent asks, and the person's allow presses Bring it back where they are. */
   #fromTheMac(input: ThreadsMoveInput, own: string | undefined): ThreadsMoveResult {
     if (input.to === "cloud") return refused("already-there", "This Thread runs in the cloud already.")
-    if (!own) return refused("from-the-mac", "A cloud Thread comes back from the Mac it came from: the person presses Bring it back to this Mac there, or runs `mako thread move back --conversation <id>` in a shell on it.")
+    if (!own) return refused("from-the-mac", localWords("A cloud Thread comes back from the Mac it came from: the person presses Bring it back to this Mac there, or runs `mako thread move back --conversation <id>` in a shell on it."))
     return { outcome: "asked", ask: this.#deps.gate.ask(own, { kind: "back" }).id, next: AFTER_MOVE.askedBack }
   }
 }

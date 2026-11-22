@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** The settings an agent may change for the person, each with its value. `commit-model`: the model that drafts commit messages (Settings › Utility models). */
 export const SettingSchema = z.lazy(() => z.discriminatedUnion("name", [
@@ -67,7 +68,7 @@ export function agentAskLine(want: AgentAskWant): string {
     case "move":
       return "Wants to move this Thread to the cloud"
     case "back":
-      return "Wants to bring this Thread back to your Mac"
+      return localWords("Wants to bring this Thread back to your Mac")
     case "rename":
       return `Wants to rename this Thread to ${want.title}`
     case "archive":
@@ -95,7 +96,7 @@ export function personOnlyAsk(want: AgentAskWant): boolean {
 function settingLine(setting: Setting): string {
   switch (setting.name) {
     case "hand-off-on-sleep":
-      return `Wants to turn ${setting.value ? "on" : "off"} handing agents off when this Mac sleeps`
+      return localWords(`Wants to turn ${setting.value ? "on" : "off"} handing agents off when this Mac sleeps`)
     case "continue-after-restart":
       return `Wants to turn ${setting.value ? "on" : "off"} continuing turns a restart cut short`
     case "harness-order":
@@ -103,9 +104,9 @@ function settingLine(setting: Setting): string {
     case "commit-model":
       return `Wants to draft commit messages with ${setting.value}`
     case "keep-awake":
-      return `Wants to turn ${setting.value ? "on" : "off"} keeping this Mac awake while agents work`
+      return localWords(`Wants to turn ${setting.value ? "on" : "off"} keeping this Mac awake while agents work`)
     case "keep-awake-lid-closed":
-      return `Wants to turn ${setting.value ? "on" : "off"} keeping this Mac awake with its lid closed`
+      return localWords(`Wants to turn ${setting.value ? "on" : "off"} keeping this Mac awake with its lid closed`)
   }
 }
 
@@ -132,13 +133,13 @@ export function agentAskWords(want: AgentAskWant, name: string): AgentAskWords {
         keep: "Keep here",
       }
     case "back":
-      return { title, description: "with its worktree, branch and sessions", detail: "Its work comes back to the Mac it came from, and the cloud machine ends.", allow: "Bring it back", keep: "Keep in the cloud" }
+      return { title, description: "with its worktree, branch and sessions", detail: localWords("Its work comes back to the Mac it came from, and the cloud machine ends."), allow: "Bring it back", keep: "Keep in the cloud" }
     case "rename":
       return { title, description: "its title in the list", detail: "The title it shows everywhere; the agent's work goes on as it is.", allow: "Rename", keep: "Keep this title" }
     case "archive":
       return { title, description: "out of the list", detail: "It leaves the list, and a turn still running stops. Restore brings it back.", allow: "Archive", keep: "Keep it" }
     case "setting":
-      return { title, description: "in Settings", detail: "It changes this setting for every Thread on this Mac. You can change it back in Settings.", allow: "Change it", keep: "Leave it" }
+      return { title, description: "in Settings", detail: localWords("It changes this setting for every Thread on this Mac. You can change it back in Settings."), allow: "Change it", keep: "Leave it" }
     case "automation":
       return {
         title,
@@ -162,8 +163,8 @@ export function agentAskWords(want: AgentAskWant, name: string): AgentAskWords {
     case "harness":
       return {
         title,
-        description: "on this Mac",
-        detail: want.action === "install" ? "It installs this harness on this Mac, as Settings does." : "It updates this harness on this Mac, as Settings does. Sessions running on it keep their version until they restart.",
+        description: localWords("on this Mac"),
+        detail: want.action === "install" ? localWords("It installs this harness on this Mac, as Settings does.") : localWords("It updates this harness on this Mac, as Settings does. Sessions running on it keep their version until they restart."),
         allow: want.action === "install" ? "Install" : "Update",
         keep: "Not now",
       }

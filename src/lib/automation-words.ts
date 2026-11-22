@@ -19,6 +19,7 @@ import {
 } from "@mako/host/contracts/automations"
 import { ACCESS_TIERS } from "@mako/host/contracts/access"
 import type { Brief } from "@mako/host/contracts/agents"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * An automation in words: each trigger as a sentence ("Every weekday at 9:00 in Europe/London", "When a release is
@@ -386,7 +387,7 @@ export function accessWords(tier: string): string {
 }
 
 export function placeWords(place: string): string {
-  if (place === "here") return "This Mac"
+  if (place === "here") return localWords("This Mac")
   if (place === "cloud") return "Cloud"
   return place.startsWith("device:") ? place.slice("device:".length) : place
 }
@@ -410,7 +411,7 @@ export function startFacts(start: AutomationStart, harnessLabel: (id: string) =>
   if (start.reasoning) facts.push(["Reasoning", start.reasoning])
   if (start.rule) facts.push(["Rule", `Rule ${start.rule}`])
   facts.push(["Access", accessWords(start.access)], ["Runs on", placeWords(start.place)])
-  if (start.place !== "cloud") facts.push(["If this Mac is off", WHEN_AWAY_WORDS[start.whenAway]])
+  if (start.place !== "cloud") facts.push([localWords("If this Mac is off"), WHEN_AWAY_WORDS[start.whenAway]])
   facts.push(["Worktree", start.workspace ? [start.workspace.branch ? `branch ${start.workspace.branch}` : "a new branch", start.workspace.base ? `from ${start.workspace.base}` : undefined].filter(Boolean).join(" ") : "The project folder"])
   return facts
 }
@@ -503,7 +504,7 @@ export function runWhenWords(run: AutomationRun): string | undefined {
 }
 
 export const WHEN_AWAY_WORDS = {
-  queue: "Run when this Mac is back",
+  queue: localWords("Run when this Mac is back"),
   cloud: "Run in the cloud",
   skip: "Skip it",
 } as const
@@ -683,7 +684,7 @@ export function standingNote(view: AutomationView): { text: string; tone: "cauti
   const waiting = view.definition.triggers.map((trigger) => cloudTriggerWaiting(trigger, view.local.cloudRegistered)).find(Boolean)
   if (view.standing === "paused" && view.local.paused) return { text: view.local.paused.reason, tone: "caution" }
   if (view.local.cloudIssue) return { text: `Your cloud account didn’t register it: ${view.local.cloudIssue}`, tone: "negative" }
-  if (view.standing === "unsupported") return { text: waiting ?? view.issues[0] ?? "None of its triggers fires on this Mac.", tone: "faint" }
+  if (view.standing === "unsupported") return { text: waiting ?? view.issues[0] ?? localWords("None of its triggers fires on this Mac."), tone: "faint" }
   if (view.issues.length) return { text: view.issues.join(" "), tone: "caution" }
   if (view.local.enabled && waiting) return { text: waiting, tone: "faint" }
   return undefined

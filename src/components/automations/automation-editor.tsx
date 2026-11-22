@@ -36,6 +36,7 @@ import { automationsBack, goAutomations, type AutomationsRoute } from "@/state/a
 import { confirmAction } from "@/state/confirm"
 import { useHarnessOrder } from "@/state/harness-order"
 import { providers, useProviders } from "@/state/providers"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Making or changing an automation: its name, its prompt as a brief, its triggers as sentences, what it starts with,
@@ -258,7 +259,7 @@ export function AutomationEditor({ route }: { route: EditRoute }) {
     const id = draft.id
     toast(route.id ? `Saved ${draft.name.trim()}` : `Added ${draft.name.trim()}`, {
       duration: ACTION_TOAST_MS,
-      description: view?.local.enabled ? "Written to .mako/automations.json" : "Written to .mako/automations.json; it's off on this Mac until you turn it on",
+      description: view?.local.enabled ? "Written to .mako/automations.json" : localWords("Written to .mako/automations.json; it's off on this Mac until you turn it on"),
       ...(!view?.local.enabled && { action: { label: "Turn on", onClick: () => void automations.setEnabled(project, id, true) } }),
     })
     goAutomations({ kind: "detail", project, id })
@@ -360,7 +361,7 @@ export function AutomationEditor({ route }: { route: EditRoute }) {
               />
             </div>
             <Problem field="id" text={shownProblem("id") ?? (draft.id ? undefined : tried ? "Give it an id." : undefined)} />
-            {route.id && draft.id !== route.id ? <p className="text-label text-caution">Renaming the id starts its run history and its on/off afresh on every Mac.</p> : null}
+            {route.id && draft.id !== route.id ? <p className="text-label text-caution">{localWords("Renaming the id starts its run history and its on/off afresh on every Mac.")}</p> : null}
           </Block>
 
           <Block title="What each run does" help="The brief its agent gets, as an Apex would start a Fin.">
@@ -475,9 +476,9 @@ export function AutomationEditor({ route }: { route: EditRoute }) {
             <ShareIcon aria-hidden className="size-3 shrink-0" />
             <span className="truncate">Shared with the repo</span>
           </span>
-          <span className="flex min-w-0 items-center gap-1.5" title="Whether it runs is your choice on each Mac; a clone never turns it on">
+          <span className="flex min-w-0 items-center gap-1.5" title={localWords("Whether it runs is your choice on each Mac; a clone never turns it on")}>
             <LaptopIcon aria-hidden className="size-3 shrink-0" />
-            <span className="truncate">On or off is this Mac’s</span>
+            <span className="truncate">{localWords("On or off is this Mac’s")}</span>
           </span>
         </p>
         <Action tone="ghost" onClick={() => void leave()}>
@@ -502,7 +503,7 @@ function Summary({ draft }: { draft: Draft }) {
   const first = draft.triggers.find((trigger) => trigger.kind !== "manual")
   const when = first ? lowerFirstWord(triggerSentence(first)) : "only when you press Run now"
   const harness = draft.harness ? harnessLabel(draft.harness) : "your first harness with room"
-  const where = draft.place === "cloud" ? "in the cloud" : draft.place === "device" ? `on ${draft.device || "another device"}` : "on this Mac"
+  const where = draft.place === "cloud" ? "in the cloud" : draft.place === "device" ? `on ${draft.device || "another device"}` : localWords("on this Mac")
   const leaves = { "pull-request": "opens a pull request", report: "reports back in its Thread", act: "makes its changes directly" }[draft.result]
   const next = first?.kind === "schedule" ? nextRuns(first.cron, first.timezone, 1)[0] : undefined
   const more = draft.triggers.filter((trigger) => trigger.kind !== "manual").length - 1
@@ -583,7 +584,7 @@ function StartFields({ now, draft, set, problem }: { now: number; draft: Draft; 
             value={draft.place}
             onChange={(value) => set("place", value)}
             options={[
-              { value: "here", label: "This Mac" },
+              { value: "here", label: localWords("This Mac") },
               { value: "cloud", label: "Cloud" },
               { value: "device", label: "Another device" },
             ]}
@@ -593,9 +594,9 @@ function StartFields({ now, draft, set, problem }: { now: number; draft: Draft; 
         <Problem field="device" text={problem} />
       </Labeled>
       {draft.place !== "cloud" && draft.triggers.some((trigger) => ["github", "slack", "linear", "sentry", "webhook"].includes(trigger.kind)) ? (
-        <Labeled label="If this Mac is off when a cloud trigger fires" hint="Schedules and commits fire on this Mac; GitHub, Slack, Linear, Sentry and webhooks fire in your cloud account.">
+        <Labeled label={localWords("If this Mac is off when a cloud trigger fires")} hint={localWords("Schedules and commits fire on this Mac; GitHub, Slack, Linear, Sentry and webhooks fire in your cloud account.")}>
           <Segmented
-            label="If this Mac is off"
+            label={localWords("If this Mac is off")}
             value={draft.whenAway}
             onChange={(value) => set("whenAway", value)}
             options={entriesOf(WHEN_AWAY_WORDS).map(([value, label]) => ({ value, label }))}

@@ -1,5 +1,6 @@
 import type { Git, RunOptions } from "@mako/git"
 import type { MoveCheckpoint } from "@mako/protocol/moves"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * A Thread's worktree coming back from the cloud after the person changed it here meanwhile. `base` is the checkout
@@ -55,7 +56,7 @@ async function keptBranch(git: Git, checkout: string, name: string, head: string
     const moved = await git.run({ cwd: checkout, args: ["update-ref", ref, head, at], codes: [0, 128], timeoutMs: TIMEOUT_MS })
     if (moved.code === 0) return branch
   }
-  throw new Error(`No branch beside ${name} was free to keep this Mac's commits on.`)
+  throw new Error(localWords(`No branch beside ${name} was free to keep this Mac's commits on.`))
 }
 
 /**

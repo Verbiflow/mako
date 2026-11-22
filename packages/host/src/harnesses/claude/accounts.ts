@@ -52,6 +52,7 @@ import { chainFingerprint, changeJsonFile, instant, objectValue, placeSecret, re
 import { claudeRuntime } from "./runtime.js"
 import { onMac } from "../../base/platform.js"
 import { publishFile } from "../../base/published-files.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** Env vars that would override file credentials and cross accounts. */
 const AUTH_ENV = [
@@ -722,7 +723,7 @@ export function claudeAccountCapability(root: AccountRoot): SelectableAccountCap
     accountUsage: async (name) => usageForEnv(await usageEnv(root, name)),
     usedElsewhere: {
       everyMs: 5 * 60_000,
-      reason: "Claude on the web, the desktop app and the phone spend the same plan limits and leave nothing on this Mac.",
+      reason: localWords("Claude on the web, the desktop app and the phone spend the same plan limits and leave nothing on this Mac."),
       read: async (name) => usageForEnv(await usageEnv(root, name), false),
     },
     cloudSignIn: claudeCloudSignIn,

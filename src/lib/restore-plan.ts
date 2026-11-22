@@ -1,4 +1,5 @@
 import type { OutdatedRestore } from "@mako/host/contracts/restore-plan"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * What the window says when a session Mako keeps the records of may be
@@ -27,7 +28,7 @@ export function ownerName(label: string, owner: string): string {
 
 /** What's installed here, in words: `this Mac has 0.159.3`, or that the program isn't installed. */
 function here(program: string, outdated: Versions): string {
-  return outdated.installed === null ? `${program} isn't installed here` : `this Mac has ${outdated.installed}`
+  return outdated.installed === null ? `${program} isn't installed here` : localWords(`this Mac has ${outdated.installed}`)
 }
 
 /**
@@ -101,7 +102,7 @@ export function carriedBecause(label: string, outdated: Versions): string {
  */
 export function returnNotice(label: string, outdated: OutdatedRestore): RestoreNotice {
   const wrote = outdated.wrote ? `${label} ${outdated.wrote.version} wrote its latest turns in the cloud` : outdated.upTo ? `${label} up to ${outdated.upTo} wrote its latest turns in the cloud` : `A newer ${label} wrote its latest turns in the cloud`
-  const line = `${wrote}; ${outdated.installed === null ? `${label} isn't installed here` : `this Mac has ${outdated.installed}`}.`
+  const line = `${wrote}; ${outdated.installed === null ? `${label} isn't installed here` : localWords(`this Mac has ${outdated.installed}`)}.`
   const offer = outdated.offer
   const detail =
     offer.kind === "update"

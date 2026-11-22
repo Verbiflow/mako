@@ -1,6 +1,7 @@
 import { continueTimings, describeContinue, type ContinueReading } from "@mako/host/contracts/cloud-continues"
 import { Action } from "@/components/ui/kit"
 import { formatTime } from "@/lib/format"
+import { localWords } from "@mako/protocol/computer-words"
 
 const PHASE = {
   asking: "Asking",
@@ -22,7 +23,7 @@ export function ContinueReadout({ readings }: { readings: readonly ContinueReadi
       <div className="flex items-center justify-between gap-3 px-3 py-2">
         <div className="min-w-0">
           <p className="text-ui">Continue in the cloud</p>
-          <p className="text-label text-faint">Threads carried to a cloud machine while their Mac was off.</p>
+          <p className="text-label text-faint">{localWords("Threads carried to a cloud machine while their Mac was off.")}</p>
         </div>
         <Action tone="ghost" onClick={() => void navigator.clipboard.writeText(readings.map(describeContinue).join("\n"))}>
           Copy

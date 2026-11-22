@@ -17,6 +17,7 @@ import { cn } from "@/lib/utils"
 import type { IntegrationCategory, IntegrationRecord } from "@/lib/types"
 import { integrations, useIntegrations } from "@/state/integrations"
 import { Shimmer } from "@/components/ui/shimmer"
+import { localWords } from "@mako/protocol/computer-words"
 
 const CATEGORIES: IntegrationCategory[] = [
   "Communication",
@@ -75,9 +76,7 @@ export function IntegrationsSection() {
     <div>
       <div className="flex items-start gap-4 pb-5">
         <p className="min-w-0 flex-1 text-ui leading-relaxed text-muted-foreground">
-          Bring work context into every agent. Services connect through each
-          agent’s own sign-in; Google uses a signed-in local browser session.
-          Browser and computer control never leave this Mac.
+          {localWords("Bring work context into every agent. Services connect through each agent’s own sign-in; Google uses a signed-in local browser session. Browser and computer control never leave this Mac.")}
         </p>
         <Action
           tone="outline"

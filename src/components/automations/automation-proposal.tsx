@@ -10,6 +10,7 @@ import { APPROVE_WORDS, PROPOSAL_CHANGE_WORDS, PROPOSAL_STATUS_WORDS, whenAgo } 
 import { cn } from "@/lib/utils"
 import { openRunThread } from "@/state/automations"
 import { showAutomation } from "@/state/automations-view"
+import { localWords } from "@mako/protocol/computer-words"
 
 const SHORT = ["name", "prompt", "triggers"] as const
 
@@ -109,7 +110,7 @@ export const ProposalBlock = memo(function ProposalBlock({
         </div>
       ) : null}
       {pending ? (
-        <p data-proposal-note className="-mt-1 text-label text-faint">{proposal.change === "delete" ? "Removed from .mako/automations.json" : proposal.change === "enable" ? "It then runs on its own on this Mac" : proposal.change === "create" ? "Saved to .mako/automations.json, off until you turn it on" : "Saved to .mako/automations.json"}</p>
+        <p data-proposal-note className="-mt-1 text-label text-faint">{proposal.change === "delete" ? "Removed from .mako/automations.json" : proposal.change === "enable" ? localWords("It then runs on its own on this Mac") : proposal.change === "create" ? "Saved to .mako/automations.json, off until you turn it on" : "Saved to .mako/automations.json"}</p>
       ) : (
         <p data-proposal-ended className={cn("text-label", proposal.status === "approved" ? "text-positive" : proposal.status === "stale" ? "text-caution" : "text-muted-foreground")}>
           {PROPOSAL_STATUS_WORDS[proposal.status]}

@@ -8,6 +8,7 @@ import { formatDay, formatRelative, formatTime } from "@/lib/format"
 import { useThreads } from "@/state/thread-store"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
+import { localWords } from "@mako/protocol/computer-words"
 
 const TIER_LABELS = {
   now: "Working now",
@@ -40,7 +41,7 @@ export function SyncSection() {
           <div className="min-w-0">
             <div className="text-ui font-medium">Your last 7 days, in the cloud</div>
             <p className="mt-0.5 max-w-[30rem] text-label leading-relaxed text-pretty text-muted-foreground">
-              Every Thread you worked in during the last 7 days goes up whole, the newest first: the one you're working in within seconds of each turn, then today's, then the rest of the week. Your other devices can read each one, and continue it, even while this Mac is off.
+              {localWords("Every Thread you worked in during the last 7 days goes up whole, the newest first: the one you're working in within seconds of each turn, then today's, then the rest of the week. Your other devices can read each one, and continue it, even while this Mac is off.")}
             </p>
           </div>
           <StateChip status={status} />
@@ -65,7 +66,7 @@ export function SyncSection() {
           <ListCardRow>
             <p className="flex items-center gap-1.5 text-label text-faint">
               <Spinner className="size-3" />
-              {status?.state === "starting" ? `Reading ${count(status.sessions, "Session")} on this Mac…` : "Reading what's on this Mac…"}
+              {status?.state === "starting" ? localWords(`Reading ${count(status.sessions, "Session")} on this Mac…`) : localWords("Reading what's on this Mac…")}
             </p>
           </ListCardRow>
         )}
@@ -119,19 +120,19 @@ function detail(tier: SyncTier): string {
     tier.whole === tier.sessions ? "all ready to continue anywhere" : `${tier.whole} ready to continue anywhere`,
   ]
   const unread = tier.sessions - tier.held
-  if (unread > 0) parts.push(`${unread} still being read on this Mac`)
+  if (unread > 0) parts.push(localWords(`${unread} still being read on this Mac`))
   return parts.join(" · ")
 }
 
 function footer(status: Running): string {
   const parts: string[] = []
-  if (status.state === "paused") parts.push("Catching up waits while this Mac is on a low battery or in Low Power Mode; the Thread you're working in still goes up.")
+  if (status.state === "paused") parts.push(localWords("Catching up waits while this Mac is on a low battery or in Low Power Mode; the Thread you're working in still goes up."))
   parts.push(status.lastSuccessAt ? `Last sent ${ago(status.lastSuccessAt)}.` : "Nothing sent yet.")
   if (status.stale > 0) parts.push(`${count(status.stale, "Session")} changed since ${status.stale === 1 ? "its" : "their"} last copy, going up in turn.`)
   if (status.retrying && status.unreachableSince === undefined) parts.push(`${count(status.retrying, "Session")} will be sent again shortly.`)
   const backfill = status.backfill
   if (backfill && backfill.endedAt === undefined && backfill.done < backfill.sessions)
-    parts.push(`Reading this Mac's older sessions into its records: ${backfill.done.toLocaleString()} of ${backfill.sessions.toLocaleString()}.`)
+    parts.push(localWords(`Reading this Mac's older sessions into its records: ${backfill.done.toLocaleString()} of ${backfill.sessions.toLocaleString()}.`))
   return parts.join(" ")
 }
 

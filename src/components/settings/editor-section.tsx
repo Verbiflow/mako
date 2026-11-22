@@ -3,6 +3,7 @@ import { SearchSelect } from "@/components/ui/search-select"
 import { desktop } from "@/state/desktop"
 import type { ExternalEditor } from "@/lib/types"
 import { setPref, usePrefs } from "@/state/prefs"
+import { localWords } from "@mako/protocol/computer-words"
 
 export function EditorSection() {
   const selected = usePrefs((prefs) => prefs.externalEditor)
@@ -44,7 +45,7 @@ export function EditorSection() {
             ...editors.map((editor) => ({
               value: editor.id,
               label: editor.label,
-              detail: "Installed on this Mac",
+              detail: localWords("Installed on this Mac"),
             })),
           ]}
           onChange={(next) =>

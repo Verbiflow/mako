@@ -2,6 +2,7 @@ import type { MakoFootprint, RescanFootprint, WatchFootprint } from "@mako/host/
 import { CALM_POLL_MS, SLOW_DELIVERY_MS } from "@mako/host/contracts/watcher-child"
 import { Action } from "@/components/ui/kit"
 import { formatBytes } from "@/lib/format"
+import { localWords } from "@mako/protocol/computer-words"
 
 const DROPPED_BY = [["client", "by Mako's watcher"], ["kernel", "by macOS"], ["coalesced", "as too many at once"], ["unsaid", "without a reason"]] as const
 
@@ -19,7 +20,7 @@ export function FootprintReadout({ footprint }: { footprint: MakoFootprint }) {
         <div className="min-w-0 flex-1">
           <p className="text-ui">Mako's footprint</p>
           <p className="text-label leading-relaxed text-faint">
-            What Mako's own processes and file watching cost this Mac now. CPU is a recent average, as Activity Monitor shows it.
+            {localWords("What Mako's own processes and file watching cost this Mac now. CPU is a recent average, as Activity Monitor shows it.")}
           </p>
         </div>
         <Action tone="ghost" onClick={() => void navigator.clipboard.writeText(JSON.stringify(footprint, null, 2))}>

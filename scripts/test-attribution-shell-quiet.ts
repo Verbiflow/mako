@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { test } from "node:test"
 import { Git } from "@mako/git"
@@ -10,6 +10,7 @@ import { FakeEventSource } from "@mako/protocol/attribution-conformance"
 import { gitRepository, headFromFiles, nodeFileSystem } from "@mako/host/attribution/ports"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * A turn's shell commands and Git: HEAD read from Git's files, and the checkout listed by one `git status` when the
@@ -22,7 +23,7 @@ function scratch() {
   mkdirSync(repo)
   const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=Test", "-c", "user.email=test", ...args], { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim()
   git(repo, "init", "-q", "-b", "main")
-  return { project, repo, git, remove: () => rmSync(project, { recursive: true, force: true }) }
+  return { project, repo, git, remove: () => removeScratch(project) }
 }
 
 test("HEAD read from Git's files is the commit Git names", async () => {
@@ -110,7 +111,7 @@ test("a turn's shell reconciliation costs one Git process: HEAD from its files, 
     assert.equal(runs.filter((args) => args.startsWith("status ")).length, 1)
   } finally {
     await tracker.close()
-    rmSync(storage, { recursive: true, force: true })
+    removeScratch(storage)
     w.remove()
   }
 })

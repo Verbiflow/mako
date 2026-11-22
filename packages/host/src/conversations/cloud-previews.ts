@@ -4,6 +4,7 @@ import type { AddressInfo, Socket } from "node:net"
 import type { WebSocketServer } from "ws"
 import { heavy } from "../base/heavy-packages.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * A cloud Thread's app, served on this Mac as a local Thread's is: each of its ports at `<thread>.cloud.localhost:<port
@@ -89,7 +90,7 @@ export class CloudPreviews {
     const target = this.#target(threadId, port, incoming.url)
     const token = await this.#options.token().catch(() => undefined)
     if (!target || !token) {
-      outgoing.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end("This Mac isn't signed in to Mako Cloud, so the cloud Thread's app can't be reached.")
+      outgoing.writeHead(503, { "content-type": "text/plain; charset=utf-8" }).end(localWords("This Mac isn't signed in to Mako Cloud, so the cloud Thread's app can't be reached."))
       return
     }
     const headers: Record<string, string | string[]> = {}

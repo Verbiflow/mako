@@ -18,6 +18,7 @@ import { harnessDefaults } from "@/state/composer-settings"
 import { chooseFinDefault, loadFinDefaults, setFinCeiling, setFinLimit, useFinDefaults } from "@/state/fin-defaults"
 import { useHarnessOrder } from "@/state/harness-order"
 import { providers, useProviders } from "@/state/providers"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Settings › Fins: what each harness's Fins start on when their Apex names no
@@ -54,7 +55,7 @@ export function FinsSection() {
           ))}
         </div>
       </div>
-      {failed ? <p className="text-label text-caution">This Mac's choices for Fins couldn't be read. Reopen Settings to try again.</p> : null}
+      {failed ? <p className="text-label text-caution">{localWords("This Mac's choices for Fins couldn't be read. Reopen Settings to try again.")}</p> : null}
       </section>
       <FinMoveOnLimit />
     </div>
@@ -90,17 +91,17 @@ function FinLimit() {
       </div>
       <div role="list" className="flex flex-col gap-px">
         <PlaceRow
-          place="This Mac"
+          place={localWords("This Mac")}
           detail={detail}
           caution={Boolean(capacity?.pressure) && own === undefined}
         >
           <Segmented
-            label="How this Mac's number is set"
+            label={localWords("How this Mac's number is set")}
             value={own === undefined ? "auto" : "fixed"}
             options={[{ value: "auto", label: "Auto" }, { value: "fixed", label: "Fixed" }]}
             onChange={(next) => saveLimit(next === "auto" ? null : atOnce)}
           />
-          {own === undefined ? <span className="tabular w-[5.5rem] text-right text-ui font-medium">{atOnce}</span> : <Stepper label="This Mac's Fins at once" value={own} most={FIN_LIMIT_MAX} onChange={saveLimit} />}
+          {own === undefined ? <span className="tabular w-[5.5rem] text-right text-ui font-medium">{atOnce}</span> : <Stepper label={localWords("This Mac's Fins at once")} value={own} most={FIN_LIMIT_MAX} onChange={saveLimit} />}
         </PlaceRow>
         {reading.cloud ? (
           <PlaceRow place="Cloud" detail="A machine per Fin, so your plan and daily spend ceiling set it">

@@ -4,6 +4,7 @@ import { join, sep } from "node:path"
 import { AppKeySchema, type AppKey } from "../contracts/thread-environments.js"
 import { ThreadIdSchema, type ThreadId } from "../contracts/thread-identity.js"
 import type { ReclaimClass, ReclaimItem } from "../contracts/storage.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** How many entries a look for recent writes reads in one folder before it judges by those it read. */
 const RECENT_WALK_LIMIT = 20_000
@@ -115,7 +116,7 @@ export class AppDataRetention {
       thread, bytes: null, class: "keep", reason: "", parts,
     }
     const judged = await this.#judge(path, parts, open, async () => {
-      if (!known) return ["approve", "Its Thread is no longer listed on this Mac."]
+      if (!known) return ["approve", localWords("Its Thread is no longer listed on this Mac.")]
       if (await this.#deps.appRunning(app)) throw new Kept("The Thread's app is running.")
       const owner = this.#deps.owner(thread)
       if (this.#deps.archived(thread)) return ["now", "The Thread is archived."]

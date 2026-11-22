@@ -121,6 +121,9 @@ export class FakeFileSystem implements TrackerFileSystem {
   }
 }
 
+/** Whether `path` is under `folder`, written with `/` or as Windows writes a real folder's files, with `\\`. */
+const below = (folder: string, path: string) => path.startsWith(`${folder}/`) || path.startsWith(`${folder}\\`)
+
 /**
  * Watches over the fake file system, and its history: every change is
  * numbered as FSEvents numbers them, so a tracker opened later asks what
@@ -143,7 +146,7 @@ export class FakeEventSource implements TrackerEventSource {
       return
     }
     for (const [root, listeners] of this.watchers)
-      if (path.startsWith(`${root}/`)) for (const listener of listeners) listener.changed([path.slice(root.length + 1)])
+      if (below(root, path)) for (const listener of listeners) listener.changed([path.slice(root.length + 1).replaceAll("\\", "/")])
   }
 
   /** Lose every event until `restore`. */
@@ -173,8 +176,8 @@ export class FakeEventSource implements TrackerEventSource {
     const ignore = options?.ignore ?? []
     const ignored = ignore.map(() => 0)
     const paths: string[] = []
-    for (const path of new Set(this.history.slice(from).filter((path) => path.startsWith(`${root}/`)))) {
-      const at = ignore.findIndex((folder) => path === folder || path.startsWith(`${folder}/`))
+    for (const path of new Set(this.history.slice(from).filter((path) => below(root, path)))) {
+      const at = ignore.findIndex((folder) => path === folder || below(folder, path))
       if (at < 0) paths.push(path)
       else ignored[at]! += 1
     }

@@ -7,7 +7,8 @@ import type { ToolEffects } from "@mako/sessions/tool-effects"
 import { randomUUID } from "node:crypto"
 import { realpathSync } from "node:fs"
 import { homedir, hostname, tmpdir } from "node:os"
-import { join, sep } from "node:path"
+import { join } from "node:path"
+import { folderOf, kept } from "../base/path-style.js"
 import type { HostJobs } from "../base/host-jobs.js"
 import { onMac } from "../base/platform.js"
 import type { MethodTable } from "../base/methods.js"
@@ -455,7 +456,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
     })
   }
   const working = (cwd: string) => {
-    if (cwd === home || cwd === sep) return
+    if (cwd === home || folderOf(cwd) === cwd) return
     const known = repositories.get(cwd)
     if (known) return known.forEach(ensure)
     if (resolving.has(cwd)) return
@@ -580,7 +581,7 @@ export async function openAttribution(deps: AttributionDeps): Promise<Attributio
       }
     },
     readBack: (checkout, budgetMs) => journal.writes.readBack(checkout, budgetMs),
-    head: (repository) => [...view().roots()].find((state) => state.root.path === repository)?.root.head,
+    head: (repository) => [...view().roots()].find((state) => state.root.path === kept(repository))?.root.head,
     blob: (ref) => view().store.blob(ref),
     threadTrees: async (checkout, thread) => {
       await Promise.all(wakeFor(checkout))

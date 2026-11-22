@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { mock } from "node:test"
 import { DatabaseSync } from "node:sqlite"
 import { CheckpointFingerprints, threadFingerprint } from "@mako/host/attribution/checkpoint-fingerprints"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -18,6 +18,7 @@ import { nodeFileSystem } from "@mako/host/attribution/ports"
 import { contentRef } from "@mako/host/attribution/content"
 import { collectPlanOffThread, JournalReader } from "@mako/host/attribution/journal-reader"
 import { JournalStore, type StoredActivity } from "@mako/host/attribution/journal-store"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * The record of changes' reads that run off the host's thread say what they said on it (`npm run test:attribution`):
@@ -76,8 +77,8 @@ test("collected off the host's thread, kept content goes exactly as collected at
     a.store.close()
     b.store.close()
   } finally {
-    rmSync(here, { recursive: true, force: true })
-    rmSync(there, { recursive: true, force: true })
+    removeScratch(here)
+    removeScratch(there)
   }
 })
 
@@ -101,7 +102,7 @@ test("content the owner names again while the worker reads is never dropped", as
     for (const ref of refs.oldOnly) assert.ok(store.hasBlob(ref))
     store.close()
   } finally {
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -131,7 +132,7 @@ test("the activity a gap's changes are attributed from reads the same on the jou
     store.close()
   } finally {
     await reader.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -175,7 +176,7 @@ test("a Thread's changes made are summed from counts on the reader, as reading i
     Object.assign(JournalStore.prototype, whole)
     await reader.close()
     store.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -199,7 +200,7 @@ test("a root's paths and where entries put files read the same narrow as whole",
     assert.deepEqual(store.entryPaths(store.lastSeq()), [])
   } finally {
     store.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -237,7 +238,7 @@ test("a reader counts complete turns from new commits, without reading their bod
     JournalStore.prototype.blob = before
     await reader.close()
     store.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -271,7 +272,7 @@ test("the composed attribution owner counts off-thread and discards an in-flight
   } finally {
     JournalStore.prototype.blob = before
     await (closed ?? owner.close())
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -282,7 +283,7 @@ test("a failed reader count rejects without a synchronous fallback, and releases
     await assert.rejects(reader.countTurn("t", "turn", "settled"))
   } finally {
     await reader.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -296,7 +297,7 @@ test("a repeated tracker close joins the release even after the tracker is marke
     assert.equal(tracker.close(), closed)
   } finally {
     await tracker.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -351,7 +352,7 @@ test("checkpoint identities ignore activity and stats, follow partition inputs, 
     noScan?.mock.restore()
     await reader.close()
     store.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -392,7 +393,7 @@ test("checkpoint versions follow content and attribution across writers, survive
     const migrated = JournalStore.open(join(folder, "journal.sqlite"), { device: "new-owner" })
     try { assert.ok(!legacy.checkpointVersion(checkout).startsWith("legacy:"), "the already-open reader adopts the new persisted counter") }
     finally { migrated.close() }
-  } finally { legacy.close(); rmSync(folder, { recursive: true, force: true }) }
+  } finally { legacy.close(); removeScratch(folder) }
 })
 
 test("checkpoint caches keep separate root versions and revisit a missing text body when it arrives", () => {
@@ -419,5 +420,5 @@ test("checkpoint caches keep separate root versions and revisit a missing text b
     assert.notEqual(complete, incomplete, "an incomplete input was not cached as a complete checkpoint")
     noScan = mock.method(store, "files", () => { throw new Error("complete unchanged input scanned again") })
     assert.equal(cache.read(checkout, "t"), complete)
-  } finally { noScan?.mock.restore(); store.close(); rmSync(folder, { recursive: true, force: true }) }
+  } finally { noScan?.mock.restore(); store.close(); removeScratch(folder) }
 })

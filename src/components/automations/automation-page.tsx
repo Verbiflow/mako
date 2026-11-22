@@ -13,6 +13,7 @@ import { approvedNow, automations, automationView, useAutomations } from "@/stat
 import { AutomationDiff } from "@/components/automations/automation-diff"
 import { z } from "zod"
 import { automationsBack, duplicateAutomation, editAutomation, goAutomations } from "@/state/automations-view"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * One automation: its switch, Run now and Edit at the top; a proposal for it, answerable; then when it runs (each
@@ -68,12 +69,12 @@ export function AutomationPage({ project, id }: { project: string; id: string })
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-title font-semibold text-foreground">{definition.name}</h1>
           <p className="truncate text-label text-faint">
-            {projectName(project)} · {definition.id} · {next ? <span data-page-next title={nextRunTitle(next)}>next {zoneDate(next.at, next.zone)}</span> : local.enabled ? (view.standing === "paused" ? "paused" : definition.triggers.some((trigger) => trigger.kind !== "manual") ? "starts when its triggers fire" : "only by Run now") : "off on this Mac"}
+            {projectName(project)} · {definition.id} · {next ? <span data-page-next title={nextRunTitle(next)}>next {zoneDate(next.at, next.zone)}</span> : local.enabled ? (view.standing === "paused" ? "paused" : definition.triggers.some((trigger) => trigger.kind !== "manual") ? "starts when its triggers fire" : "only by Run now") : localWords("off on this Mac")}
           </p>
         </div>
-        <label className="flex items-center gap-2 pr-1 text-label text-muted-foreground" title="Whether it runs on this Mac (T)">
-          <Toggle label={`${definition.name} on this Mac`} on={local.enabled} onChange={() => void automations.setEnabled(project, id, !local.enabled)} />
-          <span data-automation-switch-words>{local.enabled ? "On" : "Off"} on this Mac</span>
+        <label className="flex items-center gap-2 pr-1 text-label text-muted-foreground" title={localWords("Whether it runs on this Mac (T)")}>
+          <Toggle label={localWords(`${definition.name} on this Mac`)} on={local.enabled} onChange={() => void automations.setEnabled(project, id, !local.enabled)} />
+          <span data-automation-switch-words>{local.enabled ? "On" : "Off"} {localWords("on this Mac")}</span>
         </label>
         <Action tone="outline" data-automation-page-run onClick={() => void automations.runNow(project, id)} title="Run now (R)">
           <PlayIcon />
@@ -157,7 +158,7 @@ export function AutomationPage({ project, id }: { project: string; id: string })
             </Part>
             <Part title="Shared and local">
               <p className="text-label leading-relaxed text-muted-foreground">
-                Its definition is in <span className="font-mono">{projectName(project)}/.mako/automations.json</span>, committed with the repo. Whether it runs is this Mac's alone: a clone never turns it on, and a change to the file after you turned it on pauses it until you turn it on again.
+                Its definition is in <span className="font-mono">{projectName(project)}/.mako/automations.json</span>{localWords(", committed with the repo. Whether it runs is this Mac's alone: a clone never turns it on, and a change to the file after you turned it on pauses it until you turn it on again.")}
               </p>
             </Part>
           </div>

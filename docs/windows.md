@@ -65,15 +65,26 @@ on the runner and uses the app as a person and an agent would:
   typing needs the window in front.
 - **Menus** (`invoke_menu`) aren't verified, so that route stays unavailable.
 - **Held input after a crash** isn't journaled and released, as it is on a Mac.
-- **Which Thread changed which file.** The host's record of changes takes
-  paths that start with `/` and refuses a Windows path, so on Windows it
-  records nothing: the host logs "a scoped journal read is not settled" and
-  goes on without it. Diffs and the working tree are unaffected.
+- **Which Thread changed which file.** The host's record of changes works on
+  Windows: it keeps a Windows path as Windows writes it (`C:\Users\ana\site`),
+  whichever way a harness, Git or the system wrote it, and a turn's edit is
+  attributed to it on a Windows host (`prove.mjs`). Its suites run on
+  `windows-latest` (`host-windows.yml`, the `attribution` job). Open there: one
+  case of the writer's recovery (a worker that never answers) doesn't finish,
+  and one suite's process doesn't end after its cases pass; both are named
+  where they are skipped. A folder named by an 8.3 short name
+  (`C:\Users\RUNNER~1\…`) and by its full name is two folders to the record. A
+  path a shell command names as Git Bash writes it (`/c/Users/…`) isn't read
+  as a Windows path. Files changed outside a project aren't followed on
+  Windows or Linux (the system's own history of changes is read on a Mac only).
 - **More than one display.** The runner has one. Scaling is checked at 125%
   (below); a second display, or displays at different scales, never were.
 - **Video posters.** A video's poster frame isn't made on Windows; a player
   draws the video's own first frame.
-- **Copy written for a Mac.** Some text in the window still says "this Mac".
+- **Words written for a Mac.** The window and the host say "this computer"
+  on Windows and Linux where a Mac says "this Mac" (`computer-words.ts`). The
+  phone and browser client and the shared setup steps still say "Mac": they
+  name another computer, whose system the page doesn't know.
 - **Hardware video encoding.** The helper takes a hardware H.264 encoder where
   one enumerates and Windows' software encoder otherwise. The runner has no
   GPU: the software path, the fallback from `auto`, and the refusal when a

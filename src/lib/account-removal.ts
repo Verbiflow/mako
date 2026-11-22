@@ -1,6 +1,7 @@
 import type { AccountRemovalPlan } from "@/lib/types"
 import type { ConfirmRequest, ConfirmSubject } from "@/state/confirm"
 import type { AccountRemovalWait } from "@mako/host/contracts/accounts"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** What each session does about the account, short enough to sit beside its title. */
 const FATES = {
@@ -27,7 +28,7 @@ export function removalConfirmation(label: string, account: string, selected: st
     name: session.title,
     detail: session.waitingFor ? FATES[session.waitingFor] : "Switches with its next message",
   }))
-  const forgets = `Mako forgets this ${label} login and deletes its saved credentials from this Mac`
+  const forgets = localWords(`Mako forgets this ${label} login and deletes its saved credentials from this Mac`)
   const request: ConfirmRequest = {
     title: `Remove ${account}?`,
     body: !plan.sessions.length && !waiting
@@ -45,7 +46,7 @@ export function removalConfirmation(label: string, account: string, selected: st
   const use = plan.runs === 1 ? "uses" : "use"
   const notes = [
     plan.runs ? (plan.sessions.length ? `${runs} outside these sessions also ${use} it.` : `${runs} ${use} it.`) : "",
-    plan.elsewhere ? "Another copy of Mako on this Mac is also using it." : "",
+    plan.elsewhere ? localWords("Another copy of Mako on this Mac is also using it.") : "",
     waiting ? "Until it's removed, it can't be selected; you can keep it from its row." : "",
   ].filter(Boolean)
   if (notes.length) request.note = notes.join(" ")

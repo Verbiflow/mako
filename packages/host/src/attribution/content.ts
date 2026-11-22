@@ -2,6 +2,7 @@ import { createHash } from "node:crypto"
 import { constants, zstdCompressSync, zstdDecompressSync } from "node:zlib"
 import { sensitivePath } from "@mako/git"
 import type { ContentRef } from "@mako/protocol"
+import { partsOf } from "../base/path-style.js"
 
 /*
  * Content addresses are SHA-256 through Node's crypto, which uses the CPU's
@@ -71,7 +72,7 @@ const SECRET_NAMES = [/^\.netrc$/, /^\.npmrc$/, /^\.pypirc$/, /\.p12$/, /\.pfx$/
  */
 export function secretPath(path: string): boolean {
   if (sensitivePath(path)) return true
-  const parts = path.split("/")
+  const parts = partsOf(path)
   const name = parts.at(-1) ?? ""
   return SECRET_NAMES.some((pattern) => pattern.test(name)) || parts.some((part) => SECRET_FOLDERS.has(part))
 }

@@ -7,6 +7,7 @@ import { fitLine, memoryLine, othersAmong, roomDetail, roomMemory, roomTip, room
 import { cn } from "@/lib/utils"
 import { confirmAction } from "@/state/confirm"
 import { formatBytes, threadAppDriver, useThreadApp, type RoomApp, type RoomView } from "@/state/thread-app"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** Subjects a confirmation names before it counts the rest. */
 const SHOWN_SUBJECTS = 5
@@ -121,9 +122,9 @@ export function RoomList({ room, now = room.at }: { room: RoomView; now?: number
         )}
       </div>
       {room.apps.length === 0 ? (
-        <p className="flex h-7 items-center px-1.5 text-label text-faint/70">No apps running on this Mac</p>
+        <p className="flex h-7 items-center px-1.5 text-label text-faint/70">{localWords("No apps running on this Mac")}</p>
       ) : (
-        <ul aria-label="Apps on this Mac">
+        <ul aria-label={localWords("Apps on this Mac")}>
           {room.apps.map((app) => {
             const title = roomTitle(app)
             const memory = roomMemory(app)

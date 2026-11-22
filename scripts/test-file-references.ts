@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, renameSync, writeFileSync } from "node:fs"
 import { DatabaseSync } from "node:sqlite"
 import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
@@ -17,6 +17,7 @@ import { resolveSpelling, type Place, type ReferenceContext, type Touch } from "
 import { SuffixIndex } from "@mako/host/files/suffix-index"
 import { RenameHistory } from "@mako/host/files/git-renames"
 import { movedPathsNotice } from "@mako/host/workspaces/thread-worktree-moves"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * Which file a spelling in an answer means (step 17, the Thread's files):
@@ -252,7 +253,7 @@ test("through a real journal: a Thread's renamed file resolves to its name now, 
     await journal.settled()
     const [after] = await journal.resolveFiles({ liveId: "c1" }, ["old.ts"])
     assert.deepEqual(after?.kind === "file" && [after.file.path, after.file.reason], [join(repo, "renamed.ts"), "renamed"], "the name now, through the journal's rename")
-    const [partial] = await journal.resolveFiles({ liveId: "c1" }, [`${repo.split("/").at(-1)}/renamed.ts`])
+    const [partial] = await journal.resolveFiles({ liveId: "c1" }, [`${repo.split(/[\\/]/).at(-1)}/renamed.ts`])
     assert.equal(partial?.kind === "file" && partial.file.path, join(repo, "renamed.ts"), "found by the end of its path in the journal's index")
 
     // Renamed again with an edit in the same burst: the content differs, so only the file's ID ties the two.
@@ -301,9 +302,9 @@ test("through a real journal: a Thread's renamed file resolves to its name now, 
     ].join("\n"))
   } finally {
     await journal.close()
-    if (checkout) rmSync(checkout, { recursive: true, force: true })
-    rmSync(repo, { recursive: true, force: true })
-    rmSync(userRoot, { recursive: true, force: true })
+    if (checkout) removeScratch(checkout)
+    removeScratch(repo)
+    removeScratch(userRoot)
   }
 })
 
@@ -365,8 +366,8 @@ test("through a real journal: a change heard just before settled is in its answe
     assert.deepEqual(missed, [], "each rename heard before settled is journaled by the time it answers")
   } finally {
     await journal.close()
-    rmSync(repo, { recursive: true, force: true })
-    rmSync(userRoot, { recursive: true, force: true })
+    removeScratch(repo)
+    removeScratch(userRoot)
   }
 })
 
@@ -416,7 +417,7 @@ test("through a real journal: renames from before tracking come from Git, an ans
       await new Promise((done) => setTimeout(done, 100))
       then = await first(written, "src/before.ts")
     }
-    assert.deepEqual(then?.kind === "file" && [then.file.path, then.file.reason, then.file.was], [join(repo, "src", "after.ts"), "renamed", join(repo, "src", "before.ts")])
+    assert.deepEqual(then?.kind === "file" && [then.file.path, then.file.reason, then.file.was], [join(repo, "src", "after.ts"), "renamed", join(repo, "src", "before.ts")], JSON.stringify(then))
     assert.equal((await first(undefined, "src/before.ts"))?.kind, "none", "an answer being written now means a file named that now")
     assert.equal((await first(base + 3 * hour, "src/before.ts"))?.kind, "none", "written after the rename, it meant some other file of that name")
 
@@ -438,8 +439,8 @@ test("through a real journal: renames from before tracking come from Git, an ans
     assert.equal(now?.kind === "file" && now.file.path, join(repo, "b", "src", "dup.ts"), "and now, over the Thread's own read")
   } finally {
     await journal.close()
-    rmSync(repo, { recursive: true, force: true })
-    rmSync(userRoot, { recursive: true, force: true })
+    removeScratch(repo)
+    removeScratch(userRoot)
   }
 })
 
@@ -503,7 +504,7 @@ test("a Thread's work is read once and then only what moved, in slices: another 
     assert.ok(ended.touched.has(join(folder, "finished.ts")), "with what it did")
   } finally {
     store.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -534,7 +535,7 @@ for (const [name, change] of Object.entries({
       assert.deepEqual([...(await read(files)).touched.keys()].sort(), [...(await read(new ThreadFiles({ git: new Git(), home: folder }))).touched.keys()].sort(), "exactly as a fresh read does")
     } finally {
       store.close()
-      rmSync(folder, { recursive: true, force: true })
+      removeScratch(folder)
     }
   })
 }
@@ -564,7 +565,7 @@ test("a Thread's places are the roots it ran in, under or touched, indexed from 
     const read = () => files.context(store, { thread: "t", current: [join(folder, "current", "deep")] })
     const places = (await read()).places
     const at = (id: string) => places.find((place) => place.root === join(folder, id))
-    assert.deepEqual(places.map((place) => relative(folder, place.root)).sort(), ["current", "gone", "kept", "outer/inner", "ran", "removed", "touched"], "never one it didn't go near, nor one whose name only starts alike")
+    assert.deepEqual(places.map((place) => relative(folder, place.root).replaceAll("\\", "/")).sort(), ["current", "gone", "kept", "outer/inner", "ran", "removed", "touched"], "never one it didn't go near, nor one whose name only starts alike")
     assert.deepEqual(["gone", "kept", "removed", "ran"].map((id) => at(id)?.gone ?? false), [true, false, true, false], "a root let go counts as gone only once its folder is")
     assert.deepEqual(["current", "ran", "removed"].map((id) => at(id)?.current), [true, false, false])
     assert.deepEqual(at("touched")?.index?.find("y.ts"), ["src/y.ts"])
@@ -582,7 +583,7 @@ test("a Thread's places are the roots it ran in, under or touched, indexed from 
   } finally {
     Object.assign(store, whole)
     store.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -610,7 +611,7 @@ test("a Thread's writes follow its entries as they're settled, and a call moved 
   } finally {
     rows.close()
     store.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -635,6 +636,6 @@ test("a journal without change tracking, as an older owner leaves it, reads exac
     view.close()
   } finally {
     store.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })

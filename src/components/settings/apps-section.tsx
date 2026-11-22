@@ -18,6 +18,7 @@ import { setupAgentLabel, startProjectSetup, useSetupAgent } from "@/state/proje
 import { actions } from "@/state/session"
 import { showSetupFor, threadAppDriver, useThreadApp } from "@/state/thread-app"
 import { useProjectRoots } from "@/state/project-settings"
+import { localWords } from "@mako/protocol/computer-words"
 
 const HOME = /^\/(?:Users|home)\/[^/]+(?=\/)/
 const shortPath = (path: string) => path.replace(HOME, "~")
@@ -68,7 +69,7 @@ function ProjectList({ onOpen }: { onOpen: (root: string) => void }) {
     <div>
       <p className="pb-4 text-ui leading-relaxed text-muted-foreground">
         {tab === "setup"
-          ? "Choose a project to see its files, accounts, tools and services on this Mac, your devices and the cloud."
+          ? localWords("Choose a project to see its files, accounts, tools and services on this Mac, your devices and the cloud.")
           : "How each project’s Threads install, start and check their own copy of its app. An agent works this out once and Mako keeps it as the project’s recipe, for every branch."}
       </p>
       {roots.length ? (
@@ -384,11 +385,11 @@ function VersionProof({ entry }: { entry: RecipeVersionView }) {
 function PlacesProof({ local, cloud }: { local: RecipeProofSummary | undefined; cloud: RecipeProofSummary }) {
   const failed = (summary: RecipeProofSummary, where: string, lead: boolean) => <span className="text-caution">{lead ? "Failed" : "failed"} on {where} at {summary.failed}</span>
   if (cloud.passed) {
-    if (local?.passed) return <>Proved on this Mac and on a cloud machine</>
-    return <>Proved on a cloud machine · {local ? failed(local, "this Mac", false) : "not yet on this Mac"}</>
+    if (local?.passed) return <>{localWords("Proved on this Mac and on a cloud machine")}</>
+    return <>Proved on a cloud machine · {local ? failed(local, localWords("this Mac"), false) : localWords("not yet on this Mac")}</>
   }
-  if (local?.passed) return <>Proved on this Mac · {failed(cloud, "a cloud machine", false)}</>
-  return <>{local ? <>{failed(local, "this Mac", true)} · </> : null}{failed(cloud, "a cloud machine", !local)}</>
+  if (local?.passed) return <>{localWords("Proved on this Mac · ")}{failed(cloud, "a cloud machine", false)}</>
+  return <>{local ? <>{failed(local, localWords("this Mac"), true)} · </> : null}{failed(cloud, "a cloud machine", !local)}</>
 }
 
 /** What a new Thread's checkout gets from the main folder besides Git's files: copies of its own, and links to the main folder's. */
@@ -444,7 +445,7 @@ function InTheCloud({ root }: { root: string }) {
         <CloudOn view={view} busy={busy} />
       )}
       {view?.staying.length ? (
-        <Line name="Stay on this Mac" muted>
+        <Line name={localWords("Stay on this Mac")} muted>
           {view.staying.map((entry) => `${entry.path} (${entry.why})`).join(", ")}.
         </Line>
       ) : null}
@@ -460,7 +461,7 @@ function CloudOff({ view, busy }: { view: CarriedFilesView; busy: string | undef
     <ListCardRow>
       <div className="flex items-start gap-4">
         <div className="min-w-0 flex-1">
-          <p className="text-ui font-medium text-foreground">{view.decision === "declined" ? "Kept on this Mac" : "Not copied yet"}</p>
+          <p className="text-ui font-medium text-foreground">{view.decision === "declined" ? localWords("Kept on this Mac") : "Not copied yet"}</p>
           <p className="mt-1 text-label leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">
             {paths.length
               ? <>Git leaves out {list(paths)}, so a Thread moved to the cloud starts without {paths.length === 1 ? "it" : "them"}. Mako can keep an encrypted copy in your account and give {paths.length === 1 ? "it" : "them"} to each cloud Thread of this project as it starts. Agents never see the values.</>
@@ -509,7 +510,7 @@ function CloudOn({ view, busy }: { view: CarriedFilesView; busy: string | undefi
 }
 
 function cloudState(file: CarriedFileView): string {
-  if (file.kept) return "Kept on this Mac"
+  if (file.kept) return localWords("Kept on this Mac")
   if (!file.cloud) return "Goes with the next move"
   if (!file.cloud.current) return "Changed here · goes with the next move"
   return `In the cloud · ${ago(Date.parse(file.cloud.savedAt))}`
@@ -528,7 +529,7 @@ function RecipeSource({ state }: { state: ReadyRecipe }) {
     state.draft
       ? `Version ${state.version ?? ""}, a draft saved${state.savedAt ? ` ${ago(state.savedAt)}` : ""} that only this folder's app runs until an agent proves and publishes it.`
       : state.account
-      ? `${state.version ? `Version ${state.version}, kept` : "Kept"} by your account for every branch, on this Mac and on cloud machines${state.earlier ? `; ${plural(state.earlier, "earlier version")} kept` : ""}.`
+      ? localWords(`${state.version ? `Version ${state.version}, kept` : "Kept"} by your account for every branch, on this Mac and on cloud machines${state.earlier ? `; ${plural(state.earlier, "earlier version")} kept` : ""}.`)
       : state.source === "mako"
       ? `${state.version ? `Version ${state.version}, saved` : "Saved"} in Mako${state.savedAt ? ` ${ago(state.savedAt)}` : ""}, for every branch${state.earlier ? `; ${plural(state.earlier, "earlier version")} kept` : ""}.`
       : "Committed with the project as .mako/recipe.json, so it changes with the branch."

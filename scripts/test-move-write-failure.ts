@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import fsp from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
 import { tmpdir } from "node:os"
@@ -10,6 +10,7 @@ import { test } from "node:test"
 import { Git } from "@mako/git"
 import { mapLimit } from "@mako/protocol/map-limit"
 import { rewriteInPlace, type InPlaceFile } from "@mako/host/workspaces/worktree-move"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 const tick = (ms: number) => new Promise((done) => setTimeout(done, ms))
 
@@ -64,7 +65,7 @@ test("a disk that fills mid-rewrite: every file is put back, the writes still in
     const real = { writeFile: fsp.writeFile, rename: fsp.rename }
     let writes = 0
     // The rewrite stages each file in `.git/mako-move/` and renames it into the checkout.
-    const staged = (path: Parameters<typeof fsp.rename>[0] | Parameters<typeof fsp.writeFile>[0]) => String(path).includes(`${join(".git", "mako-move")}/`)
+    const staged = (path: Parameters<typeof fsp.rename>[0] | Parameters<typeof fsp.writeFile>[0]) => String(path).replaceAll("\\", "/").includes(".git/mako-move/")
     fsp.writeFile = async (file, data, options) => {
       if (staged(file) && ++writes === 3) throw Object.assign(new Error(`ENOSPC: no space left on device, write '${String(file)}'`), { code: "ENOSPC", errno: -28, syscall: "write" })
       return real.writeFile(file, data, options)
@@ -89,6 +90,6 @@ test("a disk that fills mid-rewrite: every file is put back, the writes still in
     assert.deepEqual(wrong, [], `every file put back: ${wrong.length} of ${count} left rewritten`)
     assert.equal(git("status", "--porcelain"), "", "the checkout is as it was")
   } finally {
-    rmSync(base, { recursive: true, force: true })
+    removeScratch(base)
   }
 })

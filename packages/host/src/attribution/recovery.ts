@@ -7,6 +7,7 @@ import { contentRef } from "./content.js"
 import { within } from "./paths.js"
 import { restorable, type JournalView, type Restorable } from "./queries.js"
 import type { LaptopTracker } from "./tracker.js"
+import { under } from "../base/path-style.js"
 
 /*
  * Recovering lost work: versions the journal still keeps that the files on
@@ -32,7 +33,7 @@ export async function lostVersions(tracker: LaptopTracker, view: JournalView, ta
     const root = roots.get(version.root)
     if (!root) continue
     if (out.length >= LOST_LISTED) break
-    const path = join(root, version.path)
+    const path = under(root, version.path)
     const now = await readFile(path).catch(() => null)
     if (now && contentRef(now) === version.ref) continue
     const writer = "author" in version.author ? version.author.author.thread : undefined
@@ -56,7 +57,7 @@ export async function restoreVersion(tracker: LaptopTracker, rootId: string, seq
   const root = tracker.store.roots().find((candidate) => candidate.id === rootId)
   const bytes = entry?.after ? tracker.store.blob(entry.after) : undefined
   if (!entry || entry.root !== rootId || !root || !bytes) throw new Error("Mako no longer keeps that version.")
-  const path = join(root.path, entry.path)
+  const path = under(root.path, entry.path)
   const now = await readFile(path).catch(() => null)
   if (now && !tracker.store.hasBlob(contentRef(now))) tracker.store.putBlob(contentRef(now), now, Date.now())
   const mode = await stat(path).then((found) => found.mode & 0o777, () => 0o644)

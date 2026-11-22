@@ -10,6 +10,7 @@ import { togglePref, usePrefs } from "@/state/prefs"
 import { projectName, useWorkspaceMoves, workspaceMoves } from "@/state/workspace-moves"
 import { removable, worktreeCheckouts, type CheckoutDetail } from "@/lib/worktree-removal"
 import { readWorktreeRetention, saveWorktreeRetention, leavingWorktrees, readWorktreeInventory, removeCheckout, removeLandedWorktrees, useLeavingWorktrees, useWorktreeSizesMeasured } from "@/state/worktrees"
+import { localWords } from "@mako/protocol/computer-words"
 
 const plural = (count: number, one: string, many = `${one}s`) => `${count} ${count === 1 ? one : many}`
 const folderName = (path: string) => path.split("/").filter(Boolean).at(-1) ?? path
@@ -118,7 +119,7 @@ export function WorktreesSection() {
       <RetentionSettings />
 
       <section>
-        <h3 className="text-ui font-medium">On this Mac</h3>
+        <h3 className="text-ui font-medium">{localWords("On this Mac")}</h3>
         <p className="mt-0.5 pb-3 text-label text-muted-foreground">
           A Thread on its own branch works in a worktree: its own checkout of the
           project. Removing a worktree deletes the folder and keeps the branch,

@@ -178,7 +178,8 @@ function judge(what: string, atOnce: readonly number[], sliced: readonly number[
   assert.ok(steps.every(ms => Number.isFinite(ms) && ms >= 0), "each sample needs a finite one-step yardstick")
   const stepRatio = median(steps.map((sample, index) => sample / reference[index]!))
   console.log(`${what}: indivisible step / paired slice reference median ${stepRatio.toFixed(2)} (under 1)`)
-  assert.ok(stepRatio < 1, `${what}: an indivisible step exceeded its paired slice reference`)
+  // Windows counts a thread's CPU time in 15.6 ms ticks: a step and its reference that each took one tick read as equal.
+  assert.ok(process.platform === "win32" ? stepRatio <= 1 : stepRatio < 1, `${what}: an indivisible step exceeded its paired slice reference`)
 
 }
 
@@ -343,7 +344,7 @@ async function idleWhileWorkBegins(name: string, meanwhile: (tracker: LaptopTrac
 }
 
 const turnIn = (tracker: LaptopTracker, folder: string, clock: FakeClock) =>
-  tracker.activity({ kind: "turn", id: `turn-in-${folder.split("/").at(-1)}`, edge: "start", at: clock.now(), thread: "T1", session: "S1", checkout: folder })
+  tracker.activity({ kind: "turn", id: `turn-in-${folder.split(/[\\/]/).at(-1)}`, edge: "start", at: clock.now(), thread: "T1", session: "S1", checkout: folder })
 
 async function workBeginsMeanwhile(): Promise<void> {
   // pr-review's case: a turn begins on the root after the reading, before the root is let go.

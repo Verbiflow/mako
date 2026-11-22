@@ -2,12 +2,16 @@ import type { Git } from "@mako/git"
 import { createHash } from "node:crypto"
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, rmdir, unlink, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { dirname, join, relative, resolve } from "node:path"
+import { dirname, join, relative as systemRelative, resolve, sep } from "node:path"
 import { z } from "zod"
 import { contentRef, diffLines, splitLines, type Attribution, type CheckoutShares, type ChangeClass, type Partition, type PartitionFile, type PartitionOptions, type Share } from "../attribution/index.js"
 import type { MoveOutcome, MoveShare, MoveShares } from "../contracts/workspace-moves.js"
 import { copyGitIndex } from "./index-copy.js"
 import { mapLimit } from "@mako/protocol/map-limit"
+import { kept } from "../base/path-style.js"
+
+/** `to` from `from` with `/` between its folders on every system, as a file in a checkout is named everywhere else here. */
+const relative = (from: string, to: string) => systemRelative(from, to).split(sep).join("/")
 
 /*
  * Moving a Thread's uncommitted changes from the main checkout into its new
@@ -347,7 +351,7 @@ async function planRepository(input: MoveInput, member: MoveInput["members"][num
   if (ledger) {
     // Only this repository's files: a partition reaches every tracked root around or inside the folder.
     const own = (result: Partition) => {
-      const roots = new Set(result.roots.filter((root) => root.path === repoRoot).map((root) => root.root))
+      const roots = new Set(result.roots.filter((root) => root.path === kept(repoRoot)).map((root) => root.root))
       return result.files.filter((file) => roots.has(file.root))
     }
     // Asked together, so the reader answers the three one after another from the same journal.

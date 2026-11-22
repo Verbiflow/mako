@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -22,6 +22,7 @@ import type { ProviderLiveDriver } from "@mako/host/harnesses/live-driver"
 import { NO_NATIVE_EXCLUSION } from "@mako/host/contracts/execution-context"
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import { fixtureResume, noCapabilities } from "./fixtures/driver-capabilities.ts"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 // `thread_history` on the `mako` server, called the way an agent calls it:
 // over HTTP with the grant its binding was minted, while its turn runs. One
@@ -403,7 +404,7 @@ async function main() {
     servers.close()
     await live.stop()
     threads.close()
-    rmSync(root, { recursive: true, force: true })
+    removeScratch(root)
   }
 }
 

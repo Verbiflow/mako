@@ -18,6 +18,7 @@ import type { FinTarget } from "../contracts/fin-tuning.js"
 import type { JsonValue } from "../contracts/json.js"
 import type { AutomationClaims, Automations } from "./automations.js"
 import type { AutomationStore } from "./automation-store.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * This Mac's automations, linked to its Mako account (`@mako/protocol/automations-cloud`):
@@ -170,7 +171,7 @@ const STATUS = {
 /** The account's record of an occurrence as this Mac keeps it, under the Mac's project. */
 export function cloudRunRecord(project: string, run: CloudRun, self?: string): AutomationRun {
   const elsewhere = run.status === "device" && run.place !== self
-  const why = elsewhere ? "It runs on another of the account's devices." : run.status === "queued" ? (run.why ?? "Waiting for its Mac to come back.") : run.why
+  const why = elsewhere ? "It runs on another of the account's devices." : run.status === "queued" ? (run.why ?? localWords("Waiting for its Mac to come back.")) : run.why
   return {
     occurrence: run.occurrence,
     automation: run.automation,
@@ -205,7 +206,7 @@ export class AutomationCloud {
     claim: async (project, run) => {
       const api = this.#deps.api()
       const registered = this.#registration(project, run.automation)
-      if (!api || !registered) return { unreachable: !api ? "this Mac isn't signed in to its cloud account" : "it isn't registered with the cloud account" }
+      if (!api || !registered) return { unreachable: !api ? localWords("this Mac isn't signed in to its cloud account") : "it isn't registered with the cloud account" }
       if (run.cause.kind !== "schedule" && run.cause.kind !== "event") return { claimed: true }
       const answer = await api.claim({ project: registered.key, id: run.automation, occurrence: run.occurrence, cause: run.cause })
       return answer.ok ? { claimed: true } : { held: answer.run }
@@ -390,7 +391,7 @@ export class AutomationCloud {
   readonly forward = {
     settle: async (thread: string, proposal: string, outcome: ForwardedOutcome): Promise<void> => {
       const call = this.#deps.threadCall
-      if (!call) throw new Error("this Mac can't reach cloud Threads")
+      if (!call) throw new Error(localWords("this Mac can't reach cloud Threads"))
       await call(thread, "mako:automations-forward-settle", [proposal, outcome], false)
     },
   }
@@ -398,7 +399,7 @@ export class AutomationCloud {
   /** A webhook the account takes deliveries at, made or its secret rotated; the secret is shown this once. */
   async hook(name: string, provider: "webhook" | "linear" | "sentry" = "webhook", rotate?: boolean, secret?: string): Promise<{ name: string; provider: "webhook" | "linear" | "sentry"; url: string; secret?: string }> {
     const api = this.#deps.api()
-    if (!api) throw new Error("This Mac isn't signed in to a Mako account with the cloud.")
+    if (!api) throw new Error(localWords("This Mac isn't signed in to a Mako account with the cloud."))
     const made = await api.hook({ name, provider, ...(rotate && { rotate }), ...(secret && { secret }) })
     return { name: made.hook.name, provider: made.hook.provider, url: made.url, ...(made.secret && { secret: made.secret }) }
   }

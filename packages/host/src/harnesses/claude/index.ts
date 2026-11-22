@@ -17,6 +17,7 @@ import { claudeInstall, claudeRuntime, terminalClaudeExecutable } from "./runtim
 import { claudeUsageHistory } from "./usage-history.js"
 import { claudePresentation } from "./presentation.js"
 import { CLAUDE_AUTH_LOG } from "./auth-diagnostics.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 export const installClaude: ProviderModule = (host, context) => installHarness(host, {
   provider: "claude",
@@ -39,7 +40,7 @@ export const installClaude: ProviderModule = (host, context) => installHarness(h
     review: { native: native("/code-review, /security-review, /ultrareview", "`/code-review` (or `/review`) of a branch, commit or path, which reports through `ReportFindings` when `CLAUDE_CODE_REPORT_FINDINGS` is set; `/security-review` of the branch's pending changes; `/ultrareview` in a cloud session"), mako: shownAs("`/review` opens the review picker above the composer and sends Claude's `/code-review` for the target. Its `ReportFindings` call shows as the review's card.") },
     sideQuestions: { native: native("/btw", "`/btw`, answered without interrupting the main conversation"), mako: shownAs("`/btw` opens the side panel above the composer, and Claude answers through its own side question, with the panel's earlier exchanges as its history.") },
     scheduledPrompts: { native: native("/loop", "`/loop [interval] <prompt>` through `CronCreate`, `CronDelete` and `CronList`, or `ScheduleWakeup` when it paces itself"), mako: makoLacks("Mako draws the calls that set one up but doesn't track schedules, so closing an idle conversation's process can end them.") },
-    cloudRuns: { native: native("--cloud, /schedule", "`--cloud` and `--remote` sessions; `/schedule` (`/routines`) and `RemoteTrigger` for remote agents"), mako: makoLacks("Mako runs Claude Code on this Mac; handing a conversation to its cloud isn't built.") },
+    cloudRuns: { native: native("--cloud, /schedule", "`--cloud` and `--remote` sessions; `/schedule` (`/routines`) and `RemoteTrigger` for remote agents"), mako: makoLacks(localWords("Mako runs Claude Code on this Mac; handing a conversation to its cloud isn't built.")) },
     backgroundSessions: { native: native("claude --bg", "`claude --bg` and `/background`, listed by `claude agents`"), mako: makosOwn("It doesn't attach to sessions started with `claude --bg`.") },
     fileRewind: { native: native("/rewind", "`/rewind` (`/checkpoint`, `/undo`); the SDK's `enableFileCheckpointing` and `rewindFiles`"), mako: makosOwn("Claude Code's own checkpoints aren't used.") },
     worktrees: { native: native("--worktree", "`--worktree`, the `EnterWorktree` and `ExitWorktree` tools, and agents started with `isolation: \"worktree\"`"), mako: makosOwn() },

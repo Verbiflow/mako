@@ -10,6 +10,7 @@ import { listed, toolText, when } from "../base/tool-text.js"
 import type { FileHistory } from "./watch-backend.js"
 import { onMac, onWindows } from "../base/platform.js"
 import { windowsPowerShell } from "../base/system-tools.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 const run = hostCommand
 
@@ -509,7 +510,7 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
   const candidates = Object.entries(changed).filter(([folder]) => kept(folder))
   const shown = candidates.filter(([folder]) => !within(folder, roots.scratch) || held(folder)).sort(([a], [b]) => a.localeCompare(b))
   const strangers = candidates.length - shown.length
-  if (strangers) notes.push(`${strangers} other ${strangers === 1 ? "entry" : "entries"} in ${roots.scratch} changed since the app came up and ${strangers === 1 ? "is" : "are"} left out: every program on this Mac writes there, and nothing of the app had ${strangers === 1 ? "it" : "them"} open when Mako looked.`)
+  if (strangers) notes.push(localWords(`${strangers} other ${strangers === 1 ? "entry" : "entries"} in ${roots.scratch} changed since the app came up and ${strangers === 1 ? "is" : "are"} left out: every program on this Mac writes there, and nothing of the app had ${strangers === 1 ? "it" : "them"} open when Mako looked.`))
   const outside = [...new Set(open.connected.filter((entry) => !entry.local).map((entry) => `${entry.host}:${entry.port}`))]
   const ours = (port: number) => (port >= input.ports.first && port <= input.ports.last) || port >= picked
   const view: AppProbeView = {
@@ -538,10 +539,10 @@ export async function probeApp(input: ProbeInput): Promise<AppProbeView> {
     if (input.containers.length && !view.running) notes.push("containers are still running though the app's processes aren't: a stop ends what Mako started, and a `docker compose up -d` or `docker run -d` hands its containers to the runtime. Run Compose in the foreground as one of the recipe's processes, so stopping the app stops them.")
     if (view.containers.some((entry) => entry.ports.some((port) => port.fixed))) notes.push("A container publishing a port outside this Thread's block makes a second copy's container fight over it; publish it on one of the Thread's ports.")
   }
-  if (owners.length) notes.unshift("connectsTo is every port on this Mac the app has a connection to, with who listens there; a service another Thread's app also uses is shared, so each copy needs its own database, namespace or prefix in it.")
+  if (owners.length) notes.unshift(localWords("connectsTo is every port on this Mac the app has a connection to, with who listens there; a service another Thread's app also uses is shared, so each copy needs its own database, namespace or prefix in it."))
   if (writing.length) notes.push("writing is files the app holds open for writing outside this checkout and this Thread's data folder; two copies writing one file is a conflict.")
   if (input.leftovers.length) notes.push("leftovers, by pid, look left behind by the app: each started since it came up and outlived the process that started it, so stopping the app doesn't end it. One that carries the app's mark (set in the environment of everything Mako starts for it) is surely the app's; one Mako can't read the environment of counts because it works in this checkout or data folder.")
-  if (shown.length) notes.push(`changedFolders is where apps keep state, with something in it changed since the app came up; other apps on this Mac write there too, so look for names of this project or its tools. who says which of the app's processes had a file open there, now or when Mako looked while it ran (every ${SAMPLE_EVERY_MS / 1000} seconds); macOS names the process that wrote a file only to an administrator, so a folder nothing of the app had open may still be the app's, from a file it opened and closed between looks.`)
+  if (shown.length) notes.push(localWords(`changedFolders is where apps keep state, with something in it changed since the app came up; other apps on this Mac write there too, so look for names of this project or its tools. who says which of the app's processes had a file open there, now or when Mako looked while it ran (every ${SAMPLE_EVERY_MS / 1000} seconds); macOS names the process that wrote a file only to an administrator, so a folder nothing of the app had open may still be the app's, from a file it opened and closed between looks.`))
   if (registered.length) notes.push("registered is what was added to macOS while the app ran; each says whether it points into this app. A second copy registering the same label or URL scheme replaces the first or fights it for links and logins.")
   return view
 }
@@ -834,8 +835,8 @@ async function declaredSchemes(bundles: string[]): Promise<Registered[]> {
     const opened = !found
       ? "Mako couldn't ask LaunchServices which apps open these links."
       : !found.apps.length
-        ? "No app on this Mac is registered to open these links yet."
-        : `Apps on this Mac that open these links: ${found.apps.join(", ")}${found.chosen ? `; the default is ${found.chosen}` : ""}.${others.length ? " With more than one, which copy a link reaches is up to the system, not this copy." : ""}`
+        ? localWords("No app on this Mac is registered to open these links yet.")
+        : localWords(`Apps on this Mac that open these links: ${found.apps.join(", ")}${found.chosen ? `; the default is ${found.chosen}` : ""}.${others.length ? " With more than one, which copy a link reaches is up to the system, not this copy." : ""}`)
     return { kind: "url-scheme", name: `${scheme}:`, detail: `Declared by ${bundle}, which the app runs. ${opened}` }
   })
 }

@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { keptPath, windowsPath } from "@mako/protocol/attribution"
 import type { Entry, EntryOf } from "./entries.js"
 import type { EffectKeys, EffectReading, ReportedChange } from "./harnesses/vocabulary.js"
 import { liveToolFinished } from "./live-content.js"
@@ -840,7 +841,7 @@ function runsOf(program: Word, rest: readonly Word[], folder: string | undefined
     return path ? [{ kind: "file", path, ...(folder && { cwd: folder }), shell: interpreter.shell === true }] : []
   }
   // A program run by its path, not looked up on PATH: its first line says what runs it.
-  if (!program.text.includes("/")) return []
+  if (!program.text.includes("/") && !windowsPath(program.text)) return []
   const path = absolutePath(program.text, folder)
   return path ? [{ kind: "file", path, ...(folder && { cwd: folder }) }] : []
 }
@@ -1004,7 +1005,11 @@ function escapeRegExp(text: string): string {
 
 /* -------------------------------------------------------------- values */
 
-/** A path made absolute against `cwd`; undefined for a URL of another scheme, a home-relative path, or a relative one with no folder. */
+/**
+ * A path made absolute against `cwd`; undefined for a URL of another scheme, a home-relative path, or a relative one
+ * with no folder. A Windows path (`C:\\site\\a.ts`, `C:/site/a.ts`, or a name read from a folder written so) comes back
+ * as the record of changes keeps one (`keptPath`): `\\` between folders and a capital drive letter.
+ */
 export function absolutePath(path: string | undefined, cwd: string | undefined): string | undefined {
   let local = path?.trim()
   if (!local) return undefined
@@ -1014,8 +1019,12 @@ export function absolutePath(path: string | undefined, cwd: string | undefined):
     } catch {
       return undefined
     }
-  } else if (/^[a-z][\w+.-]*:/i.test(local) || local.startsWith("~")) return undefined
+    // `file:///C:/site/a.ts` names `C:/site/a.ts`.
+    if (windowsPath(local.slice(1))) local = local.slice(1)
+  } else if (!windowsPath(local) && (/^[a-z][\w+.-]*:/i.test(local) || local.startsWith("~"))) return undefined
+  if (windowsPath(local)) return windowsNormalized(local)
   if (local.startsWith("/")) return normalized(local)
+  if (cwd && windowsPath(cwd)) return windowsNormalized(`${cwd}\\${local}`)
   return cwd?.startsWith("/") ? normalized(`${cwd}/${local}`) : undefined
 }
 
@@ -1027,6 +1036,19 @@ function normalized(path: string): string {
     else parts.push(part)
   }
   return `/${parts.join("/")}`
+}
+
+/** A drive's or a share's path with `.` and `..` taken out, never above its drive or share. */
+function windowsNormalized(path: string): string {
+  const whole = keptPath(path)
+  const head = whole.startsWith("\\\\") ? "\\\\" : whole.slice(0, 3)
+  const parts: string[] = []
+  for (const part of whole.slice(head.length).split("\\")) {
+    if (!part || part === ".") continue
+    if (part === "..") parts.pop()
+    else parts.push(part)
+  }
+  return `${head}${parts.join("\\")}`
 }
 
 /** Keys a declaration gives as one or a list, as a list. */

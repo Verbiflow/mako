@@ -13,6 +13,7 @@ import { changeSummary, lostVersions, restoreVersion } from "@mako/host/attribut
 import { gitRepository, nodeFileSystem } from "@mako/host/attribution/ports"
 import { changes, type JournalView } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * Recovering lost work and "changes made", on a real repository: a Thread's
@@ -90,7 +91,7 @@ test("work thrown away is listed, restored by a rename as the person's, and coun
   assert.equal(git("status", "--porcelain"), "")
 
   const lost = await lostVersions(tracker, view, { thread: "T1" })
-  assert.deepEqual(lost.map((version) => [version.path.slice(repo.length + 1), version.by, version.thread]).sort(), [["a.ts", "thread", "T1"], ["b.ts", "thread", "T1"], ["run.sh", "thread", "T1"]])
+  assert.deepEqual(lost.map((version) => [version.path.slice(repo.length + 1).replaceAll("\\", "/"), version.by, version.thread]).sort(), [["a.ts", "thread", "T1"], ["b.ts", "thread", "T1"], ["run.sh", "thread", "T1"]])
   assert.deepEqual((await lostVersions(tracker, view, { path: join(repo, "b.ts") })).map((version) => version.entry), [lost.find((version) => version.path.endsWith("b.ts"))!.entry])
 
   // Restore: the version comes back whole, with the file's mode, and the journal names the person.
@@ -104,7 +105,8 @@ test("work thrown away is listed, restored by a rename as the person's, and coun
   assert.equal(readFileSync(join(repo, "a.ts"), "utf8"), "export const a = 2\n")
   assert.equal(readFileSync(join(repo, "b.ts"), "utf8"), "export const b = 1\nexport const c = 2\n")
   assert.equal(readFileSync(join(repo, "run.sh"), "utf8"), "echo changed\n")
-  assert.equal(statSync(join(repo, "run.sh")).mode & 0o777, 0o755, "the file keeps its mode")
+  // Windows keeps no executable bit: every file it can write reads as 0o666.
+  assert.equal(statSync(join(repo, "run.sh")).mode & 0o777, process.platform === "win32" ? 0o666 : 0o755, "the file keeps its mode")
   const restored = tracker.changes(0).filter((entry) => entry.path === "a.ts").at(-1)!
   assert.deepEqual(restored.author, { certainty: "person", via: "editor" })
   assert.deepEqual(await lostVersions(tracker, view, { thread: "T1" }), [], "nothing of T1's is lost any more")
@@ -114,5 +116,5 @@ test("work thrown away is listed, restored by a rename as the person's, and coun
 
   await assert.rejects(restoreVersion(tracker, "repo", 999_999), /no longer keeps/)
   await tracker.close()
-  rmSync(base, { recursive: true, force: true })
+  removeScratch(base)
 })

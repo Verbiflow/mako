@@ -4,6 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import type { JournalView, Partition, PartitionFile } from "./queries.js"
+import { kept, under } from "../base/path-style.js"
 
 /** A Thread's side of one repository, as a Git tree. */
 export interface ThreadTree {
@@ -69,7 +70,7 @@ async function bytesOf(view: JournalView, rootPath: string, file: PartitionFile)
   if (version.kind === "absent") throw new Error(`${file.path} has no content on the Thread's side.`)
   const kept = view.store.blob(version.ref)
   if (kept) return kept
-  return readFile(version.path ?? join(rootPath, file.path))
+  return readFile(version.path ?? under(rootPath, file.path))
 }
 
 /** The modes the base gives `paths`, so an executable stays one. */
@@ -87,6 +88,6 @@ async function indexModes(git: Git, cwd: string, env: Record<string, string>, pa
 
 /** A file new to the repository is executable when its stat says so. */
 function executable(rootPath: string, file: PartitionFile, view: JournalView): boolean {
-  const stats = [...view.roots()].find((item) => item.root.path === rootPath)?.stats
+  const stats = [...view.roots()].find((item) => item.root.path === kept(rootPath))?.stats
   return Boolean(((stats?.get(file.path)?.mode ?? 0) & 0o111) !== 0)
 }

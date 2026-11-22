@@ -68,6 +68,7 @@ import {
   type Mark,
   type ThreadAppView,
 } from "@/state/thread-app"
+import { localWords } from "@mako/protocol/computer-words"
 
 type Ready = Extract<ThreadAppView, { kind: "ready" }>
 type Asleep = Extract<ThreadAppView, { kind: "asleep" }>
@@ -627,9 +628,9 @@ function ReadyHead({ view, crashed, now }: { view: Ready; crashed?: AppProcessVi
     case "waiting":
       return (
         <Head title="Waiting for memory">
-          {`Your Mac is short on memory, so the app starts by itself once there's room.${
+          {localWords(`Your Mac is short on memory, so the app starts by itself once there's room.${
             view.room?.apps ? ` ${view.room.apps === 1 ? "Another app is" : `${view.room.apps} other apps are`} using ${formatBytes(view.room.bytes)}.` : ""
-          }`}
+          }`)}
         </Head>
       )
     case "preparing":

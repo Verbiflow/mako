@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 import { execFile, spawn, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { once } from "node:events"
+import { realpathSync } from "node:fs"
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { request } from "node:http"
 import { connect } from "node:net"
@@ -33,7 +34,9 @@ const evidenceAt = process.argv.indexOf("--evidence")
 const evidence = evidenceAt > 0 ? resolve(process.argv[evidenceAt + 1]) : undefined
 const scratch = await mkdtemp(join(tmpdir(), "mako-windows-host-"))
 const dataRoot = join(scratch, "data")
-const project = join(scratch, "project")
+// Named in full, as a person's project is: the temporary folder here is under a short name (RUNNER~1), which the data
+// root keeps on purpose and which Git and the system would each write their own way for the project.
+const project = join(realpathSync.native(scratch), "project")
 const standIn = join(scratch, "bin")
 const grandchildFile = join(scratch, "grandchild.pid")
 const controlFile = join(scratch, "control.json")
@@ -67,11 +70,16 @@ try {
   await Promise.all([mkdir(dataRoot, { recursive: true }), mkdir(project, { recursive: true }), mkdir(standIn, { recursive: true })])
   // A batch file, though not npm's shim (which is run as Node on its script, `windows-launch.ts`): it goes through
   // ComSpec as any batch file does, and its tree is cmd.exe, Node, and the grandchild the stand-in starts.
+  // A repository with one commit: the record of changes follows a checkout.
+  await writeFile(join(project, "kept.txt"), "as committed\n")
+  for (const args of [["init", "-q"], ["add", "-A"], ["-c", "user.name=Proof", "-c", "user.email=proof@example.com", "commit", "-q", "-m", "first"]]) await run("git", args, { cwd: project })
   await writeFile(join(standIn, "grok.cmd"), `@echo off\r\n"${process.execPath}" "${join(repo, "scripts", "windows-host", "grok-stand-in.mjs")}" %*\r\n`)
   const env = {
     ...process.env,
     [pathKey]: [standIn, process.env[pathKey]].filter(Boolean).join(delimiter),
     MAKO_DATA_ROOT: dataRoot,
+    // Every turn of the stand-in edits this file in its project, for the record of who changed what.
+    MEASURE_EDIT_FILE: "edited-by-the-agent.txt",
     MAKO_TELEMETRY: "off",
     MAKO_PROD: "1",
     MAKO_PROOF_GRANDCHILD_FILE: grandchildFile,
@@ -153,6 +161,23 @@ try {
   assert.doesNotMatch(launchLog, /Thread data registration failed|Scratch preparation failed/, "the Thread's data and scratch folders are made")
   passed("the Thread gets its own data and scratch folders")
 
+  // A second turn edits the same file again, now that the project is followed: the edit is that turn's in the record
+  // of changes, which takes this project's Windows path as it is.
+  const client = randomUUID()
+  const edited = join(project, "edited-by-the-agent.txt")
+  assert.match(await readFile(edited, "utf8"), /edited by turn 1/, "the stand-in edited its file")
+  await until(() => readFile(join(dataRoot, "logs", "host.log"), "utf8"), (log) => /attribution tracking root=/.test(log), "the project to be followed", 60_000)
+  const editedAgain = await mako("send", started.conversationId, "Edit it again")
+  const secondTurn = editedAgain.find((line) => line.requestId)?.requestId
+  assert.deepEqual(editedAgain.at(-1), { kind: "settled", requestId: secondTurn, status: "completed" }, JSON.stringify(editedAgain.slice(0, 3)))
+  assert.match(await readFile(edited, "utf8"), /edited by turn 2/, "the stand-in edited its file again")
+  const turnChanges = () => invokeRuntime(socket, client, "mako:live-turn-changes", [started.conversationId, secondTurn]).catch((error) => ({ error: error.message }))
+  const changes = await until(turnChanges, (found) => JSON.stringify(found ?? null).includes("edited-by-the-agent.txt"), "the turn's changed files to name the edit", 60_000)
+    .catch(async (error) => assert.fail(`${error.message}; the host said: ${JSON.stringify(await turnChanges()).slice(0, 1500)}`))
+  const attributionLog = await readFile(join(dataRoot, "logs", "host.log"), "utf8")
+  assert.doesNotMatch(attributionLog, /Not a request the record of changes takes|must start with/, "the record of changes takes this project's path")
+  passed("a turn's edit is attributed to it by the record of changes", JSON.stringify(changes).slice(0, 400))
+
   // Local Control, end to end: the agent's own `mako-control status`, run by the stand-in from its shell, reached the
   // task's session over its pipe (the handshake, the host's relay to the worker) and was answered.
   const control = JSON.parse(await readFile(controlFile, "utf8"))
@@ -193,7 +218,6 @@ try {
   // Closing the conversation ends the stand-in's tree: cmd.exe, the stand-in, and the grandchild it started.
   const grandchild = Number(await readFile(grandchildFile, "utf8"))
   assert.ok(alive(grandchild), "the stand-in's grandchild runs while the conversation is open")
-  const client = randomUUID()
   await invokeRuntime(socket, client, "mako:live-close", [started.conversationId], 1, { timeoutMs: 60_000 })
   await until(async () => alive(grandchild), (running) => !running, `the grandchild (pid ${grandchild}) to end with its tree`, 20_000)
   passed("closing the conversation ends the harness's whole tree", `grandchild ${grandchild} gone`)
@@ -227,7 +251,7 @@ try {
   }, (probe) => probe?.state === "ready" && probe.info.pid !== ready.info.pid, "the second host's /health", 90_000)
   assert.notEqual(again, socket, "each start listens on a pipe of its own")
   const kept = await mako("history", started.conversationId)
-  assert.equal(kept.filter((line) => line.kind === "user").length, 2, "the second host reads the conversation the first wrote")
+  assert.equal(kept.filter((line) => line.kind === "user").length, 3, "the second host reads the conversation the first wrote")
   assert.match(text(kept), /the host reads each update/, "its words too")
   passed("mako-host stop runs the host's own stop; a host started again reads what it wrote", `pid ${ready.info.pid} exited 0, pid ${second.info.pid} read ${kept.length} lines back`)
 

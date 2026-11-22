@@ -22,7 +22,7 @@ import { z } from "zod"
 export const MAX_EFFECT_TEXT = 2_000_000
 /** A unified diff of one file, as `diff -u` writes it, without the `---`/`+++` header. */
 const Patch = z.string().max(MAX_EFFECT_TEXT)
-const AbsolutePath = z.string().min(1).startsWith("/")
+const AbsolutePath = z.string().min(1).regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/)
 /**
  * One replacement an edit made, as the tool stated it: `old` became `new`,
  * once, or at every occurrence with `all`. Exact against the file's content

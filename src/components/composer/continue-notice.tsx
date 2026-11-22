@@ -12,6 +12,7 @@ import { askContinueOffer, continueInCloud, dismissContinue, useCloudContinues }
 import { confirmAction } from "@/state/confirm"
 import { shallowEqual } from "@/state/store"
 import { MoveSteps as Steps } from "./move-steps"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Above the composer, while the conversation on screen is another device's, read from its copy because that device is
@@ -44,7 +45,7 @@ function pressedNotice(key: string, device: string, step: ThreadContinueStep, ch
         tone: "caution",
         title: continueTitle(undefined),
         description: "Not confirmed · asking your account again",
-        detail: <p>{continueLostDetail("This Mac", step.reason)}</p>,
+        detail: <p>{continueLostDetail(localWords("This Mac"), step.reason)}</p>,
         data: { "data-continue": "unconfirmed" },
       }
     case "failed":
