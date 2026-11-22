@@ -7,8 +7,8 @@ FROM debian:bookworm-slim AS node
 # Node publishes its pointer-compressed build from its unofficial-builds
 # farm, for x64 only. Every native module the host loads is Node-API, which
 # does not depend on V8's pointer size; each isolate's heap is capped at 4 GB.
-ARG NODE_VERSION=24.21.0
-ARG NODE_SHA256=cbb7d2d47c94e1e0ee82e0ebc3130664423258c3d36abf46ffaeea097ed85d30
+ARG NODE_VERSION=24.22.3
+ARG NODE_SHA256=384aa2ac9edc33519952f35fd82363382257602907234e2712b43588f4cdc8e8
 # git for Threads' repositories and worktrees; ps and lsof for the process
 # table and ports; curl for the harnesses' own installers.
 RUN test "$(dpkg --print-architecture)" = amd64 || { echo "Mako's Linux host image is x64: Node builds pointer compression for x64 only" >&2; exit 1; } \
