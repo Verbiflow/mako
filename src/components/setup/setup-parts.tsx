@@ -62,11 +62,34 @@ export function PlaceIcon({ place, className }: { place: SetupPlace; className?:
 }
 
 /** One thing the place has: its name and scope, where it comes from, its state in words, and its one button. */
-function Row({ folder, place, row, now, compact }: { folder: string; place: string; row: SetupRow; now: number; compact: boolean }) {
+/** `inset` keeps a compact row inside a list that has its own edges (the phone's fold); without it the row's hover fill reaches the panel's gutter. */
+function Row({ folder, place, row, now, compact, inset = false }: { folder: string; place: string; row: SetupRow; now: number; compact: boolean; inset?: boolean }) {
   const said = syncWords(row.sync, now)
   const action = rowAction(row, now, useAway(folder))
   const busy = useSetup((state) => Boolean(state.busy[row.id]))
   const Icon = ICONS[row.icon]
+  // The side panel's and the phone's row: its name and how it stands on one line, where it comes from on one more.
+  // Its button takes the state's place under the pointer or focus, and stands beside it where there's no pointer.
+  if (compact)
+    return (
+      <div data-setup-row={row.id} data-sync={row.sync.state} className={cn("group/row flex items-start gap-2.5 py-1.5 transition-colors duration-100 hover:bg-fill-hover", inset ? "px-3" : "-mx-2 px-2")}>
+        <Icon aria-hidden className="mt-[3px] size-3.5 shrink-0 text-faint" />
+        <div className="min-w-0 flex-1">
+          <div className="flex h-5 min-w-0 items-center gap-2">
+            <span className="truncate text-ui text-foreground">{row.name}</span>
+            {row.scope ? <span className="shrink-0 text-label text-faint">{SCOPE_WORDS[row.scope]}</span> : null}
+            <span className="flex-1" />
+            <SyncLine said={said} className={cn("shrink-0", action && "[@media(hover:hover)]:group-focus-within/row:hidden [@media(hover:hover)]:group-hover/row:hidden")} />
+            {action ? (
+              <Action tone="quiet" size="xs" data-setup-action={action} disabled={busy} onClick={() => rowTap(folder, place, row, action)} className="-mr-1.5 shrink-0 [@media(hover:hover)]:hidden [@media(hover:hover)]:group-focus-within/row:flex [@media(hover:hover)]:group-hover/row:flex">
+                {busy ? "…" : ROW_ACTION_LABELS[action]}
+              </Action>
+            ) : null}
+          </div>
+          <p title={row.detail} className="truncate text-label text-muted-foreground">{row.detail}</p>
+        </div>
+      </div>
+    )
   return (
     <div data-setup-row={row.id} data-sync={row.sync.state} className="flex items-start gap-3 px-3 py-2.5">
       <Icon aria-hidden className="mt-[3px] size-3.5 shrink-0 text-faint" />
@@ -76,10 +99,9 @@ function Row({ folder, place, row, now, compact }: { folder: string; place: stri
           {row.scope ? <span className="shrink-0 text-label text-faint">{SCOPE_WORDS[row.scope]}</span> : null}
         </div>
         <p className="mt-0.5 text-label leading-relaxed text-muted-foreground [overflow-wrap:anywhere]">{row.detail}</p>
-        {compact ? <SyncLine said={said} className="mt-1" /> : null}
       </div>
       <div className="flex h-5 shrink-0 items-center gap-2">
-        {compact ? null : <SyncLine said={said} />}
+        <SyncLine said={said} />
         {action ? (
           <Action tone="quiet" size="xs" data-setup-action={action} disabled={busy} onClick={() => rowTap(folder, place, row, action)}>
             {busy ? "…" : ROW_ACTION_LABELS[action]}
@@ -166,10 +188,10 @@ export function AskRow({ folder, ask, now, compact }: { folder: string; ask: Set
   )
 }
 
-function PartHead({ title, hint, add, attention }: { title: string; hint?: string; add?: { label: string; onClick: () => void }; attention?: boolean }) {
+function PartHead({ title, hint, add, attention, flush }: { title: string; hint?: string; add?: { label: string; onClick: () => void }; attention?: boolean; flush?: boolean }) {
   return (
     <div className="flex h-6 items-center gap-3">
-      <Eyebrow className={attention ? "text-attention" : undefined}>{title}</Eyebrow>
+      <Eyebrow className={cn(attention && "text-attention", flush && "px-0")}>{title}</Eyebrow>
       {hint ? <span className="min-w-0 flex-1 truncate text-label text-faint">{hint}</span> : <span className="flex-1" />}
       {add ? (
         <Action size="xs" className="text-faint" onClick={add.onClick}>
@@ -210,13 +232,13 @@ const EMPTY = {
 function ListPart({ folder, view, part, now, compact }: { folder: string; view: SetupPlaceView; part: SetupPartView; now: number; compact: boolean }) {
   const away = useAway(folder)
   return (
-    <section data-setup-part={part.part} className="flex flex-col gap-1.5">
-      <PartHead title={SETUP_PART_TITLES[part.part]} hint={compact ? undefined : partHint(part.part, view.place)} add={compact || away ? undefined : { label: SETUP_PART_ADDS[part.part], onClick: () => addTo(folder, part.part, view) }} />
-      <div className="flex flex-col divide-y divide-hairline bg-shell/55">
+    <section data-setup-part={part.part} className={cn("flex flex-col", compact ? "gap-0.5" : "gap-1.5")}>
+      <PartHead title={SETUP_PART_TITLES[part.part]} hint={compact ? undefined : partHint(part.part, view.place)} add={compact || away ? undefined : { label: SETUP_PART_ADDS[part.part], onClick: () => addTo(folder, part.part, view) }} flush={compact} />
+      <div className={cn("flex flex-col", compact ? undefined : "divide-y divide-hairline bg-shell/55")}>
         {part.rows.length ? (
           part.rows.map((row) => <Row key={row.id} folder={folder} place={view.id} row={row} now={now} compact={compact} />)
         ) : (
-          <p className="px-3 py-2.5 text-label text-faint">{away ? SETUP_AWAY_EMPTY : EMPTY[part.part]}</p>
+          <p className={cn("text-label text-faint", compact ? "py-1.5" : "px-3 py-2.5")}>{away ? SETUP_AWAY_EMPTY : EMPTY[part.part]}</p>
         )}
       </div>
     </section>
@@ -227,7 +249,7 @@ export function NeedsYou({ folder, asks, now, compact, hint }: { folder: string;
   if (!asks.length) return null
   return (
     <section data-setup-part="needs" className="flex flex-col gap-1.5">
-      <PartHead title={SETUP_PART_TITLES.needs} hint={hint} attention />
+      <PartHead title={SETUP_PART_TITLES.needs} hint={hint} attention flush={compact} />
       <div className="flex flex-col gap-px">
         {asks.map((ask) => <AskRow key={ask.id} folder={folder} ask={ask} now={now} compact={compact} />)}
       </div>
@@ -263,7 +285,7 @@ export function PartSummaryRow({ part, now, away, open, onToggle }: { part: Setu
 export function PartRows({ folder, view, part, now }: { folder: string; view: SetupPlaceView; part: SetupPartView; now: number }) {
   return (
     <div className="flex flex-col divide-y divide-hairline border-t border-hairline">
-      {part.rows.map((row) => <Row key={row.id} folder={folder} place={view.id} row={row} now={now} compact />)}
+      {part.rows.map((row) => <Row key={row.id} folder={folder} place={view.id} row={row} now={now} compact inset />)}
     </div>
   )
 }

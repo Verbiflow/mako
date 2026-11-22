@@ -108,20 +108,20 @@ export function ThreadSetup({ folder, thread, elsewhere, onAll }: { folder: stri
   if (!place) return <p className="px-4 py-3 text-label text-faint">This Thread&apos;s place has no setup to show.</p>
   return (
     <div data-setup-panel={place.id} className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-2 px-4 pt-3 pb-2">
-        <Chip className="gap-1.5">
-          <PlaceIcon place={place.place} className="size-3" />
-          {place.place.kind === "cloud" ? "This Thread's cloud machine" : place.title}
-        </Chip>
+      <div className="flex h-8 shrink-0 items-center gap-2 px-4">
+        <span data-setup-place className="flex min-w-0 items-center gap-1.5 text-label text-muted-foreground">
+          <PlaceIcon place={place.place} className="size-3 shrink-0 text-faint" />
+          <span className="truncate">{place.place.kind === "cloud" ? "This Thread's cloud machine" : place.title}</span>
+        </span>
         <span className="flex-1" />
-        <Action size="xs" className="text-faint" onClick={() => (onAll ? onAll(view.root) : openAppSetup(view.root, "setup"))}>
+        <Action size="xs" className="-mr-1.5 shrink-0 text-label text-faint" onClick={() => (onAll ? onAll(view.root) : openAppSetup(view.root, "setup"))}>
           All of {view.project}
           <ArrowUpRightIcon />
         </Action>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
         {view.away ? <SetupAwayNote className="pt-1" /> : null}
-        <div className="flex flex-col gap-5 pt-2">
+        <div className="flex flex-col gap-4 pt-1">
           <SetupPlaceBody folder={folder} view={place} now={readAt(view)} compact />
         </div>
       </div>

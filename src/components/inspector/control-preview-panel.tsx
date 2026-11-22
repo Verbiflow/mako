@@ -68,7 +68,7 @@ export function ControlPreviewPanel() {
       className="flex h-full min-h-0 flex-col"
       aria-label="Control preview"
     >
-      <div className="flex h-8 shrink-0 items-center gap-2 px-3 text-label">
+      <div className="flex h-8 shrink-0 items-center gap-2 px-4 text-label">
         {browser ? (
           <GlobeIcon className="size-3.5 shrink-0 text-faint" />
         ) : (
@@ -115,7 +115,7 @@ export function ControlPreviewPanel() {
           </button>
         ) : null}
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pt-1 pb-4">
         {conversationId && (preview?.window || frame || preview?.video) ? (
           <button
             type="button"
@@ -185,11 +185,6 @@ export function ControlPreviewPanel() {
             {error}
           </p>
         ) : null}
-        <p className="mt-4 px-0.5 text-label leading-relaxed text-faint">
-          Browser previews stay live while this panel is open. App windows
-          stream during activity when capture is available; otherwise the latest
-          screenshot remains visible.
-        </p>
       </div>
     </section>
   )

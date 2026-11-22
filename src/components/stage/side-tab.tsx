@@ -85,7 +85,7 @@ export function SideTabs({ label, touch = false, children }: { label: string; to
       aria-orientation="horizontal"
       data-side-rail
       data-fit={fit}
-      className={cn("flex shrink-0 items-center overflow-hidden px-2", touch ? "h-12" : "h-10")}
+      className={cn("flex shrink-0 items-center overflow-hidden px-1.5", touch ? "h-12" : "h-10")}
       onKeyDown={moveInTabs}
     >
       <div ref={row} className="flex w-max shrink-0 items-center gap-0.5">
