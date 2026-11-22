@@ -27,6 +27,7 @@ import { heldReason } from "../contracts/session-hold.js"
 import { hostWarn } from "../base/host-log.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * What Mako knows about a native session that its provider's store does not
@@ -157,7 +158,7 @@ export const SESSION_MEMORY_SHARED: SharedWrites = { update: { holds: ["heartbea
 export const HOLD_STALE_MS = 3 * 60_000
 /** How long no build may write `conversation_routes` before a current one retires it. */
 export const LEGACY_ROUTES_RETIRE_MS = 14 * 24 * 60 * 60_000
-export const LEGACY_ROUTES_RETIRED = "This copy of Mako is older than the conversation ledger on this Mac. Update Mako to keep working in conversations."
+export const LEGACY_ROUTES_RETIRED = localWords("This copy of Mako is older than the conversation ledger on this Mac. Update Mako to keep working in conversations.")
 export const HOLD_HEARTBEAT_MS = 30_000
 export const ANNOTATION_CACHE_MS = 2_000
 

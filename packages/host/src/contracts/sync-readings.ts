@@ -1,3 +1,4 @@
+import { localWords } from "@mako/protocol/computer-words"
 /**
  * How this device's sync is going, as Diagnostics shows it: for each stream it follows of another device's work, how
  * long a traced update took to arrive, the numbers it skipped, the times it read the conversation again whole, and the
@@ -264,11 +265,11 @@ export function describeList(list: SyncReadings["list"]): string {
 
 const AWAY_TEXT = {
   start: "Mako started",
-  wake: "this Mac woke",
+  wake: localWords("this Mac woke"),
   linked: "its link came back",
   account: "a sign-in",
   gap: "a gap in the account's list",
-  quiet: "the account found this Mac quiet",
+  quiet: localWords("the account found this Mac quiet"),
   unheard: "a message while the account's link was down",
 } as const satisfies Record<AwayEnd, string>
 const duration = (ms: number) => (ms < 1_000 ? `${ms} ms` : `${(ms / 1_000).toFixed(1)} s`)

@@ -95,7 +95,7 @@ export interface FileReferenceSource {
 
 /**
  * A file the person picked for a spelling, as an absolute path.
- * @wire z.string().min(2).max(4_096).startsWith("/")
+ * @wire z.string().min(2).max(4_096).regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/)
  */
 export type ChosenFile = string
 

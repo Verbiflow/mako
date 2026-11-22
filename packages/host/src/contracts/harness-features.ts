@@ -1,6 +1,7 @@
 import type { ToolKind } from "@mako/sessions/tool-identity"
 import type { Capability, LiveCapabilityKey } from "./harness-capabilities.js"
 import type { HarnessUsageKey } from "./harness-usage.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** A declaration the window shows: a live capability, a usage reading, or the harness's artifact previews. */
 export type DeclarationKey = `capabilities.${LiveCapabilityKey}` | `usage.${HarnessUsageKey}` | "artifacts"
@@ -95,7 +96,7 @@ export const HARNESS_FEATURES = {
   },
   computerUse: {
     name: "Computer use",
-    is: "The agent drives a browser or the Mac.",
+    is: localWords("The agent drives a browser or the Mac."),
     mako: "Mako's browser and computer control, through its `mako-computer` MCP server.",
   },
   notifications: {

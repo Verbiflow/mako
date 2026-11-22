@@ -3,6 +3,7 @@ import type { ThreadRef } from "@mako/sessions"
 import type { ExternalThreadActivity } from "./host-events-boot.js"
 import { heldReason } from "./session-hold.js"
 import type { OutdatedRestore } from "./restore-plan.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** Host-selected transport for a catalogued native session. */
 export type ContinuationPlan =
@@ -153,6 +154,6 @@ export function planContinuation(
     }
   return {
     transport: "refused",
-    reason: `${provider} is not installed on this Mac, so this session cannot be continued here.`,
+    reason: localWords(`${provider} is not installed on this Mac, so this session cannot be continued here.`),
   }
 }

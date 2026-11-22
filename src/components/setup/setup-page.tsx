@@ -9,6 +9,7 @@ import { openAppSetup } from "@/state/app-setup"
 import { addTo, choosePlace, rebuildBase, shownPlace, threadPlaceId, useSetup } from "@/state/setup"
 import { useSetupView } from "./use-setup-view"
 import { NeedsYou, PartRows, PartSummaryRow, PlaceIcon, SetupAwayNote, SetupPlaceBody, SetupReadFailed } from "./setup-parts"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** The clock rows' ages are read against: the page's own read, so a row says the same until the page reads again. */
 function readAt(view: SetupView): number {
@@ -45,7 +46,7 @@ function PlacePicker({ folder, view, current, short }: { folder: string; view: S
     <Segmented
       label="Place"
       value={current.id}
-      options={view.places.map((place) => ({ value: place.id, label: short && place.place.kind === "device" && place.place.platform === "mac" && place.place.here ? "This Mac" : place.title }))}
+      options={view.places.map((place) => ({ value: place.id, label: short && place.place.kind === "device" && place.place.platform === "mac" && place.place.here ? localWords("This Mac") : place.title }))}
       onChange={(next) => choosePlace(folder, next)}
     />
   )

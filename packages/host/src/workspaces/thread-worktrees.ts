@@ -29,6 +29,7 @@ import { githubRepositoryUrl } from "../contracts/cloud-threads.js"
 import { fillWorktree, ProjectMissingError, reattachWorktree, workingCheckout } from "./worktree-reattach.js"
 import { childBackend, type WatchBackend } from "./watch-backend.js"
 import { HEAD_MARKER, REF_MARKERS, INDEX_MARKER, watchGitMarkers, type GitDirWatch } from "./git-dir-watch.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** Git's own markers for work under way, which a removal would throw away. */
 const UNDER_WAY: readonly (readonly [string, string])[] = [
@@ -843,7 +844,7 @@ export class ThreadWorktreeService {
     }
     if (!repoRoot) throw new ProjectMissingError(`Mako has no record of the project ${folder} was made from, so it has nowhere to come back to. It goes on in the cloud.`, { folder })
     if (!(await this.git.succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])))
-      throw new ProjectMissingError(`Its project, ${repoRoot}, isn't on this Mac anymore: it was moved or deleted. It goes on in the cloud.`, { folder, project: repoRoot })
+      throw new ProjectMissingError(localWords(`Its project, ${repoRoot}, isn't on this Mac anymore: it was moved or deleted. It goes on in the cloud.`), { folder, project: repoRoot })
     await reattachWorktree(this.git, repoRoot, folder, input.branch ?? row?.branch)
     if (row && row.repoRoot !== repoRoot) {
       const inside = relative(row.repoRoot, row.project)
@@ -2184,7 +2185,7 @@ export class ThreadWorktreeService {
       return { kind: "failed", path, why }
     }
     if (!(await this.git.succeeds(repoRoot, ["rev-parse", "--verify", "--quiet", "HEAD^{commit}"])))
-      return failed(`its project, ${repoRoot}, isn't a repository on this Mac anymore: it was moved or deleted.`)
+      return failed(localWords(`its project, ${repoRoot}, isn't a repository on this Mac anymore: it was moved or deleted.`))
     if (existsSync(path) && (await readdir(path)).length) return failed(`${path} holds other files now, which Mako won't write over.`)
     await this.git.output(repoRoot, ["worktree", "prune"]).catch(() => "")
     const branch = retired.branch

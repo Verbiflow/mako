@@ -12,6 +12,7 @@ import { nextRunOf, runAt, standingNote, runStatus, triggersLine, whenAgo, whenA
 import { cn } from "@/lib/utils"
 import { automations, openRunThread } from "@/state/automations"
 import { duplicateAutomation, editAutomation, rowKey, showAutomation } from "@/state/automations-view"
+import { localWords } from "@mako/protocol/computer-words"
 
 const TONE_TEXT = {
   working: "text-foreground",
@@ -139,8 +140,8 @@ export const AutomationRow = memo(function AutomationRow({ view, proposals, now 
           >
             <PlayIcon className="size-3.5" />
           </button>
-          <span className="flex size-7 items-center justify-center" title={off ? "Off on this Mac (T)" : "On on this Mac (T)"}>
-            <Toggle label={`${definition.name} on this Mac`} on={local.enabled} onChange={() => void automations.setEnabled(project, definition.id, !local.enabled)} />
+          <span className="flex size-7 items-center justify-center" title={off ? localWords("Off on this Mac (T)") : localWords("On on this Mac (T)")}>
+            <Toggle label={localWords(`${definition.name} on this Mac`)} on={local.enabled} onChange={() => void automations.setEnabled(project, definition.id, !local.enabled)} />
           </span>
           <RowMenu view={view} />
         </span>

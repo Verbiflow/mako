@@ -16,6 +16,7 @@ import { devinExecutable } from "./executable.js"
 import { DEVIN_VERSIONS, devinNewest, devinSetup } from "./versions.js"
 import { devinPresentation } from "./presentation.js"
 import { devinUsageHistory } from "./usage-history.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 export const installDevin: ProviderModule = (host, context) => {
   const acp = createDevinAcpSource(context.stores)
@@ -40,7 +41,7 @@ export const installDevin: ProviderModule = (host, context) => {
       review: { native: native("/loop", "`/loop`, which runs a prompt, then reviews the diff and fixes it, in a loop"), mako: makosOwn("Devin has no command that only reviews, so Mako's review prompt asks Devin to hand the review to its read-only review subagent.") },
       sideQuestions: { native: native("/btw", "`/btw`, a quick question that doesn't disrupt the main conversation"), mako: shownAs("`/btw` opens the side panel above the composer, and Devin answers on its side chain.") },
       scheduledPrompts: { mako: harnessLacks("Devin's scheduled sessions run in its cloud; the CLI has no schedule.") },
-      cloudRuns: { native: native("/handoff", "`/handoff` and `/cloud-attach`"), mako: makoLacks("Mako runs Devin on this Mac; handing a session to Devin's cloud isn't built.") },
+      cloudRuns: { native: native("/handoff", "`/handoff` and `/cloud-attach`"), mako: makoLacks(localWords("Mako runs Devin on this Mac; handing a session to Devin's cloud isn't built.")) },
       backgroundSessions: { mako: makosOwn() },
       fileRewind: { native: native("/revert", "`_cognition.ai/revert/*`, which takes back files and history"), mako: makosOwn() },
       worktrees: { mako: makosOwn() },

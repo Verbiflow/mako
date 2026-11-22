@@ -185,6 +185,7 @@ import { CloudFinStartSchema, cloudFinInputSha256, cloudFinThread, type CloudFin
 import { ContinueRepositorySchema } from "@mako/protocol/continues"
 import type { PullOutcome, PullReading, PullWaitUntil } from "../contracts/pull-waits.js"
 import type { PullTarget as ReadTarget } from "../git/index.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 const NONE: readonly NativeAgent[] = []
 /** How long `agents_move` holds its answer for the switch to settle: within the door's window, and a failure later reports. */
@@ -4446,7 +4447,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const limit = this.placeLimit(HERE)
     return {
       ...(limit.place === "device" && { atOnce: { working: this.working(HERE), of: limit.atOnce } }),
-      ...this.mac?.busy && { mac: `This Mac is busy (${this.mac.why}): it starts anyway, so run builds and test suites one at a time.` },
+      ...this.mac?.busy && { mac: localWords(`This Mac is busy (${this.mac.why}): it starts anyway, so run builds and test suites one at a time.`) },
     }
   }
 

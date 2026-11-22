@@ -10,6 +10,7 @@ import { MoveSteps as Steps } from "./move-steps"
 import { activeAcp, useAcp } from "@/state/acp"
 import { application } from "@/state/application"
 import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, checkMoveAgain, dismissCheckoutStayed, dismissFailedMove, dismissFollowStopped, loadAwayHeld, runHereAnyway, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, retryFailedMove, updateThen, useCloudMoves, whileAwaySentence, type HarnessUpdating } from "@/state/cloud-moves"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** A move's steps in the order they're taken, each in the words its step says. */
 const STEPS = [
@@ -39,7 +40,7 @@ function detail(step: ThreadMoveStep, handOff: boolean): string {
     case "pausing":
       return "Its turn stops where it is. What it did so far is saved and goes with it."
     case "handing-over":
-      return "This Mac let go of it; nothing runs it until a cloud machine takes it."
+      return localWords("This Mac let go of it; nothing runs it until a cloud machine takes it.")
     case "resuming":
       return handOff ? "A cloud machine took it. Its turn goes on there from where it paused, at the same folder." : "A cloud machine took it. Its sessions pick up where they left off, at the same folder."
     case "unsettled":
@@ -109,7 +110,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
         id: "thread-move",
         tone: "progress",
         title: "Continued in the cloud",
-        description: "While this Mac was off",
+        description: localWords("While this Mac was off"),
         detail: <p>{whileAwaySentence(moving.step.whileAway.behind)}</p>,
         data: { "data-thread-move": "resuming", "data-thread-while-away": true },
       }
@@ -121,7 +122,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
       detail: (
         <>
           <p>{detail(moving.step, handOff)}</p>
-          {unsettled && <p>Keep this Mac awake until the move is confirmed.</p>}
+          {unsettled && <p>{localWords("Keep this Mac awake until the move is confirmed.")}</p>}
           {!unsettled && <Steps steps={steps} at={at} />}
         </>
       ),
@@ -135,9 +136,9 @@ export function useThreadMoveNotice(): ComposerNotice | null {
     if (failed) return {
       id: "thread-move",
       tone: "caution",
-      title: "Still on this Mac",
+      title: localWords("Still on this Mac"),
       description: failed.reason,
-      detail: <p>{failed.continued ? "Its turn continues here. Keep this Mac awake while it works." : "Its work and sessions remain here. Keep this Mac awake while its agents are running."}</p>,
+      detail: <p>{failed.continued ? localWords("Its turn continues here. Keep this Mac awake while it works.") : localWords("Its work and sessions remain here. Keep this Mac awake while its agents are running.")}</p>,
       actions: [{ label: "Retry move", primary: true, onClick: () => void retryFailedMove(key, failed.move) }],
       onDismiss: () => dismissFailedMove(key, failed.move),
       dismissLabel: "Dismiss move failure",
@@ -164,7 +165,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   return {
     id: "thread-move",
     tone: "progress",
-    title: "Coming back to this Mac",
+    title: localWords("Coming back to this Mac"),
     description: RETURN_STEPS[at]?.words,
     detail: (
       <>
@@ -190,8 +191,8 @@ function awayHeldNotice(conversationId: string): ComposerNotice {
     id: "thread-move",
     tone: "caution",
     title: "Waiting to hear from Mako Cloud",
-    description: "Paused while this Mac was away",
-    detail: <p>Mako Cloud may have gone on with it while this Mac was away, so it doesn't run here until Mako Cloud says whether it did. Running it here anyway could leave two copies going.</p>,
+    description: localWords("Paused while this Mac was away"),
+    detail: <p>{localWords("Mako Cloud may have gone on with it while this Mac was away, so it doesn't run here until Mako Cloud says whether it did. Running it here anyway could leave two copies going.")}</p>,
     actions: [{ label: "Run it here", onClick: () => void runHereAnyway(conversationId) }],
     data: { "data-thread-away": "held" },
   }
@@ -205,13 +206,13 @@ function checkoutStayedNotice(conversationId: string, stayed: { paths: string[];
   const files = stayed.paths.length === 1 ? "1 of its files" : `${stayed.paths.length} of its files`
   const pushed = stayed.unpushed === 1 ? "1 unpushed commit" : `${stayed.unpushed} unpushed commits`
   const named = stayed.paths.slice(0, 5).join(", ") + (stayed.paths.length > 5 ? ` and ${stayed.paths.length - 5} more` : "")
-  const commits = stayed.unpushed ? `It includes ${stayed.unpushed === 1 ? "1 commit" : `${stayed.unpushed} commits`} not yet pushed from this Mac.` : ""
+  const commits = stayed.unpushed ? localWords(`It includes ${stayed.unpushed === 1 ? "1 commit" : `${stayed.unpushed} commits`} not yet pushed from this Mac.`) : ""
   const here = stayed.paths.length ? `${named} ${stayed.paths.length === 1 ? "isn't" : "aren't"} as Mako Cloud has ${stayed.paths.length === 1 ? "it" : "them"}, so ${stayed.paths.length === 1 ? "it stays" : "they stay"} here as ${stayed.paths.length === 1 ? "it is" : "they are"}.` : ""
   return {
     id: "thread-move",
     tone: stayed.paths.length ? "caution" : "progress",
     title: stayed.paths.length ? `${files} stayed in your project folder` : "Continued in the cloud",
-    description: stayed.unpushed ? `${pushed} went to Mako Cloud` : stayed.paths.length ? "Mako Cloud went on with it" : "While this Mac was away",
+    description: stayed.unpushed ? `${pushed} went to Mako Cloud` : stayed.paths.length ? "Mako Cloud went on with it" : localWords("While this Mac was away"),
     detail: <p>{[here, commits].filter(Boolean).join(" ")}</p>,
     onDismiss: () => dismissCheckoutStayed(conversationId),
     dismissLabel: "Dismiss",
@@ -243,7 +244,7 @@ function missingProject(conversationId: string, entry: { missing: ReturnProjectM
   return {
     id: "thread-move",
     tone: "caution",
-    title: "Its project isn't on this Mac",
+    title: localWords("Its project isn't on this Mac"),
     description: "Still in the cloud",
     detail: (
       <>
@@ -275,7 +276,7 @@ function harnessUpdate(conversationId: string, updating: HarnessUpdating): Compo
   const steps = updateSteps(updating)
   const failed = updating.failed
   const label = harnessLabel(failed?.harness ?? updating.harnesses[updating.at] ?? "")
-  const where = updating.after === "move" ? "It's still on this Mac." : "It's still in the cloud, where it goes on."
+  const where = updating.after === "move" ? localWords("It's still on this Mac.") : "It's still in the cloud, where it goes on."
   if (failed) {
     const retry: ComposerNoticeAction = { label: "Try again", primary: true, onClick: () => void updateThen(conversationId, updating.after, updating.handOff) }
     const anyway: ComposerNoticeAction = { label: updating.handOff ? "Hand off anyway" : "Move anyway", onClick: () => {
@@ -299,7 +300,7 @@ function harnessUpdate(conversationId: string, updating: HarnessUpdating): Compo
     tone: "progress",
     icon: <HarnessIcon harness={updating.harnesses[updating.at] ?? ""} />,
     title: `Updating ${label}`,
-    description: updating.after === "move" ? (updating.handOff ? "Then it hands off to the cloud" : "Then it moves to the cloud") : "Then it comes back to this Mac",
+    description: updating.after === "move" ? (updating.handOff ? "Then it hands off to the cloud" : "Then it moves to the cloud") : localWords("Then it comes back to this Mac"),
     detail: (
       <>
         <p>{`Mako updates ${label} to the version the cloud runs, so the Thread can come back. ${where}`}</p>

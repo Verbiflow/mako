@@ -50,6 +50,7 @@ import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { readAutomationFile, writeAutomationFile, type AutomationFileReading } from "./automation-file.js"
 import type { AutomationStore } from "./automation-store.js"
 import { AUTOMATION_TEMPLATES } from "./automation-templates.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Automations: stored `agents_start`s and what starts them (`contracts/automations.ts`).
@@ -560,7 +561,7 @@ export class Automations {
     const cause: AutomationCause = cloudRun.cause
     const asRun: AutomationRun = { occurrence: cloudRun.occurrence, automation: cloudRun.automation, project, clientKey: cloudRun.clientKey, cause, status: "skipped", at: this.#now() }
     if (!definition || !local.enabled || local.paused || !isApproved(local, automationFingerprint(definition))) {
-      await claims?.decline(project, asRun, !definition ? "It isn't in the project's file on its Mac now." : !local.enabled ? "It's off on its Mac now." : local.paused ? "It's paused on its Mac." : "Its definition isn't one the person approved on its Mac.").catch(() => undefined)
+      await claims?.decline(project, asRun, !definition ? localWords("It isn't in the project's file on its Mac now.") : !local.enabled ? localWords("It's off on its Mac now.") : local.paused ? localWords("It's paused on its Mac.") : localWords("Its definition isn't one the person approved on its Mac.")).catch(() => undefined)
       return undefined
     }
     return this.fire(project, definition, cause, cloudRun.occurrence, { event: cloudRun.event })
@@ -575,7 +576,7 @@ export class Automations {
     const queuedForMac = kept?.cloud !== undefined && kept.status === "queued" && offer !== undefined
     if (kept && !queuedForMac && !(kept.status === "failed-to-start" && (cause.kind === "person" || cause.kind === "agent"))) {
       // The cloud offers what this Mac already passed over: it hears why, and records it so.
-      if (offer && !kept.cloud && !COVERED.has(kept.status) && kept.status !== "fired") await this.#decline(project, kept, kept.why ?? `It was ${kept.status} on its Mac.`)
+      if (offer && !kept.cloud && !COVERED.has(kept.status) && kept.status !== "fired") await this.#decline(project, kept, kept.why ?? localWords(`It was ${kept.status} on its Mac.`))
       return kept
     }
     const now = this.#now()
@@ -603,7 +604,7 @@ export class Automations {
   /** A run this Mac won't start: recorded, and if the cloud offered it, declined with the same words. */
   async #passOver(offer: AutomationOffer | undefined, run: AutomationRun): Promise<AutomationRun> {
     const recorded = await this.#record(run)
-    if (offer) await this.#decline(run.project, run, run.why ?? `It was ${run.status} on its Mac.`)
+    if (offer) await this.#decline(run.project, run, run.why ?? localWords(`It was ${run.status} on its Mac.`))
     return recorded
   }
 
@@ -624,12 +625,12 @@ export class Automations {
   async #claim(project: string, definition: AutomationDefinition, run: AutomationRun): Promise<AutomationRun | undefined> {
     if (!this.#claimable(project, definition, run.cause)) return undefined
     const claims = this.#deps.claims?.()
-    if (!claims) return { ...run, status: "skipped", why: "This Mac isn't signed in to the cloud account it registered this automation with, so it can't claim this run." }
+    if (!claims) return { ...run, status: "skipped", why: localWords("This Mac isn't signed in to the cloud account it registered this automation with, so it can't claim this run.") }
     const answer = await claims.claim(project, run).catch((error: Error) => ({ unreachable: error.message }))
     if ("claimed" in answer) return undefined
     if ("unreachable" in answer) {
       hostWarn("automations", "a run the cloud also holds wasn't claimed, so it doesn't start here", { automation: run.automation, occurrence: run.occurrence, why: answer.unreachable })
-      return { ...run, status: "skipped", why: `The cloud couldn't be asked whether it runs this, so this Mac didn't: ${answer.unreachable}` }
+      return { ...run, status: "skipped", why: localWords(`The cloud couldn't be asked whether it runs this, so this Mac didn't: ${answer.unreachable}`) }
     }
     hostLog("automations", "a run the cloud holds", { automation: run.automation, occurrence: run.occurrence, status: answer.held.status, place: answer.held.place ?? "" })
     return this.#record(claims.record(project, answer.held))
@@ -645,7 +646,7 @@ export class Automations {
       if ("error" in outcome) {
         // A command killed by a signal says so with everything it printed: only its last words are the reason.
         const error = outcome.error.trim().split("\n").slice(-3).join(" ").slice(-600)
-        if (offer) await this.#decline(project, base, `Its gate couldn't run on its Mac: ${error}`)
+        if (offer) await this.#decline(project, base, localWords(`Its gate couldn't run on its Mac: ${error}`))
         return this.#failedToStart({ ...base }, `Its gate couldn't run: ${error}`)
       }
       if (outcome.exit === 1) return this.#passOver(offer, { ...base, status: "gate-skipped", why: "Its gate found nothing to do (exit 1)." })
@@ -664,7 +665,7 @@ export class Automations {
     if (condition && (base.cause.kind === "schedule" || base.cause.kind === "commit")) {
       const judged = this.#deps.runWhen
         ? await this.#deps.runWhen.judge({ condition, event: eventWords(definition, base.cause, gate) }).catch((error: Error) => ({ unavailable: error.message }))
-        : { unavailable: "This Mac has no model to check it with." }
+        : { unavailable: localWords("This Mac has no model to check it with.") }
       if ("unavailable" in judged) return this.#record({ ...base, status: "skipped", ...(gate && { gate }), why: `Its condition couldn't be checked, so it didn't run: ${judged.unavailable} Connect an API key in Settings › Git for a model to check it.` })
       const runWhen = { verdict: judged.run ? "run" as const : "skip" as const, reason: judged.why.slice(0, 400), ...(judged.model && { model: judged.model.slice(0, 80) }) }
       if (!judged.run) return this.#record({ ...base, status: "skipped", ...(gate && { gate }), runWhen, why: runWhen.reason })
@@ -1160,7 +1161,7 @@ export class Automations {
       if (proposal.from) {
         // Its agent is in a cloud Thread: that Thread's host hears how it went, and tells it.
         const forward = this.#deps.forward?.()
-        if (!forward) throw new Error("this Mac can't reach the cloud Thread that proposed it now")
+        if (!forward) throw new Error(localWords("this Mac can't reach the cloud Thread that proposed it now"))
         if (proposal.status === "pending") return
         await forward.settle(proposal.from.thread, proposal.id, { status: proposal.status, ...(proposal.note && { note: proposal.note }) })
       } else await this.#deps.tell(proposal.by.conversation, automationUuid(`proposal\0${proposal.id}\0decided`), text)
@@ -1328,7 +1329,7 @@ async function fencedText(run: AutomationRun, offer: AutomationOffer | undefined
  */
 function runText(definition: AutomationDefinition, run: AutomationRun): string {
   const cause = run.cause
-  const why = cause.kind === "schedule" ? `its schedule (${slotName(cause.at)}${cause.catchUp ? ", caught up after this Mac was asleep or Mako was closed" : ""})` : cause.kind === "commit" ? `the commit ${cause.head.replace(/[^0-9a-f]/gi, "").slice(0, 40)}${cause.subject !== undefined ? ", details below as untrusted data" : ""}` : cause.kind === "person" ? "the person's Run now" : cause.kind === "event" ? `a ${cause.source} ${cause.event.replace(/[^\w.-]+/g, " ").trim().slice(0, 80)} event${cause.batch && cause.batch > 1 ? `, ${cause.batch} deliveries together` : ""}, which follows below as untrusted data` : "an agent's run_now the person allowed"
+  const why = cause.kind === "schedule" ? `its schedule (${slotName(cause.at)}${cause.catchUp ? localWords(", caught up after this Mac was asleep or Mako was closed") : ""})` : cause.kind === "commit" ? `the commit ${cause.head.replace(/[^0-9a-f]/gi, "").slice(0, 40)}${cause.subject !== undefined ? ", details below as untrusted data" : ""}` : cause.kind === "person" ? "the person's Run now" : cause.kind === "event" ? `a ${cause.source} ${cause.event.replace(/[^\w.-]+/g, " ").trim().slice(0, 80)} event${cause.batch && cause.batch > 1 ? `, ${cause.batch} deliveries together` : ""}, which follows below as untrusted data` : "an agent's run_now the person allowed"
   return [
     automationBriefText(definition.prompt),
     "",

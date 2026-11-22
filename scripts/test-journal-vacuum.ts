@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
-import { mkdtempSync, realpathSync, rmSync, statSync } from "node:fs"
+import { mkdtempSync, realpathSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -8,6 +8,7 @@ import { test } from "node:test"
 import { contentRef } from "@mako/host/attribution/content"
 import { vacuumIfSparse } from "@mako/host/attribution/journal-vacuum"
 import { JournalStore } from "@mako/host/attribution/journal-store"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /* The record of changes is compacted as its owner opens it only when its free pages are many, and keeps what it holds. */
 
@@ -44,7 +45,7 @@ test("a journal mostly free pages is compacted, and keeps what it holds", async 
     for (const ref of keptRefs) assert.ok(store.hasBlob(ref))
     store.close()
   } finally {
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })
 
@@ -55,6 +56,6 @@ test("a journal with few free pages is left as it is", async () => {
     const done = await vacuumIfSparse(path, { freeBytes: 1024 * 1024, freeShare: 0.25 })
     assert.ok(done.ok && !done.vacuumed, JSON.stringify(done))
   } finally {
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })

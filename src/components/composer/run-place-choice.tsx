@@ -18,6 +18,7 @@ import { shallowEqual } from "@/state/store"
 import { useSession } from "@/state/session"
 import { useOnScreen } from "@/state/thread-sessions"
 import { useWorktrees } from "@/state/worktrees"
+import { localWords } from "@mako/protocol/computer-words"
 
 const triggerClass = "pressable flex h-7 min-w-0 items-center gap-1.5 px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground aria-pressed:text-foreground"
 
@@ -39,13 +40,13 @@ export function RunPlaceChoice() {
   if (device !== undefined) return <DeviceRunPlace kind={device.slice(0, device.indexOf("\n")) || undefined} name={device.slice(device.indexOf("\n") + 1)} />
   if (here.thread && invited) return <ThreadRunPlace thread={here.thread} />
   if (here.thread || here.draft || here.cwd || !inRepository || !invited) return null
-  const describe = cloud ? "Runs in the cloud, in a clone of this project's GitHub repository" : "Runs on this Mac"
+  const describe = cloud ? "Runs in the cloud, in a clone of this project's GitHub repository" : localWords("Runs on this Mac")
   return (
     <button
       type="button"
       data-run-place={cloud ? "cloud" : "local"}
       aria-pressed={cloud}
-      aria-label={`${describe}. Switch to ${cloud ? "this Mac" : "the cloud"}`}
+      aria-label={`${describe}. Switch to ${cloud ? localWords("this Mac") : "the cloud"}`}
       title={describe}
       onClick={() => runPlaceStore.set({ cloud: !cloud })}
       className={triggerClass}
@@ -103,7 +104,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
       setOpen(false)
       void bringBack(live.key)
     }
-    const why = live.running ? "Threads come back between turns: wait for this turn to end, or stop it." : "What it did in the cloud comes into its worktree here, and every session picks up on this Mac. The cloud machine ends."
+    const why = live.running ? "Threads come back between turns: wait for this turn to end, or stop it." : localWords("What it did in the cloud comes into its worktree here, and every session picks up on this Mac. The cloud machine ends.")
     return (
       <Popover
         open={open}
@@ -113,7 +114,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
         }}
       >
         <PopoverTrigger asChild>
-          <button type="button" data-run-place="cloud" disabled={returning} aria-label={returning ? "Coming back to this Mac" : "Runs on a cloud machine. Bring it back to this Mac"} title={returning ? "Coming back to this Mac" : "Runs on a cloud machine, at the same folder"} className={cn(triggerClass, "text-foreground")}>
+          <button type="button" data-run-place="cloud" disabled={returning} aria-label={returning ? localWords("Coming back to this Mac") : localWords("Runs on a cloud machine. Bring it back to this Mac")} title={returning ? localWords("Coming back to this Mac") : "Runs on a cloud machine, at the same folder"} className={cn(triggerClass, "text-foreground")}>
             {returning ? <Spinner className="size-3 shrink-0" /> : <CloudIcon className="size-3 shrink-0" />}
             <span data-collapse="1" className="truncate">
               {returning ? "Coming back…" : "Cloud"}
@@ -122,7 +123,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
         </PopoverTrigger>
         <PopoverContent side="top" align="start" sideOffset={8} className={cn("p-1", behind.length ? "w-96" : "w-80")}>
           <p className="px-2 py-1.5 text-label text-faint">Where this thread runs</p>
-          <OfferRow data={{ "data-thread-return-offer": true }} icon={<CloudDownloadIcon className="mt-0.5 size-3 shrink-0" />} title="Bring back to this Mac" detail={why} disabled={live.running} onClick={behind.length ? undefined : back} />
+          <OfferRow data={{ "data-thread-return-offer": true }} icon={<CloudDownloadIcon className="mt-0.5 size-3 shrink-0" />} title={localWords("Bring back to this Mac")} detail={why} disabled={live.running} onClick={behind.length ? undefined : back} />
           {behind.length ? (
             <HarnessesBehind
               behind={behind}
@@ -145,7 +146,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
   const blocked = !live.started
     ? "Send a first message before it moves."
     : !inWorktree && (live.running || live.background)
-      ? "It works in the project folder, so it goes onto its own branch first, once this turn ends. Move it then; the project folder stays on this Mac."
+      ? localWords("It works in the project folder, so it goes onto its own branch first, once this turn ends. Move it then; the project folder stays on this Mac.")
       : known?.refusal
   // This Mac's harnesses older than the cloud's: the way back will need them updated, said before it goes.
   const behind = blocked === undefined ? known?.behind ?? [] : []
@@ -175,7 +176,7 @@ function ThreadRunPlace({ thread }: { thread: string }) {
       }}
     >
       <PopoverTrigger asChild>
-        <button type="button" data-run-place="local" disabled={moving} aria-label={unconfirmed ? "Move not confirmed. Check its status above the composer." : moving ? "Moving to the cloud" : "Runs on this Mac. Move it to the cloud"} title={unconfirmed ? "Move not confirmed" : moving ? "Moving to the cloud" : "Runs on this Mac"} className={triggerClass}>
+        <button type="button" data-run-place="local" disabled={moving} aria-label={unconfirmed ? "Move not confirmed. Check its status above the composer." : moving ? "Moving to the cloud" : localWords("Runs on this Mac. Move it to the cloud")} title={unconfirmed ? "Move not confirmed" : moving ? "Moving to the cloud" : localWords("Runs on this Mac")} className={triggerClass}>
           {unconfirmed ? <TriangleAlertIcon className="size-3 shrink-0 text-caution" /> : moving ? <Spinner className="size-3 shrink-0" /> : <LaptopIcon className="size-3 shrink-0" />}
           <span data-collapse="1" className="truncate">
             {unconfirmed ? "Move not confirmed" : moving ? "Moving…" : "Local"}
@@ -196,12 +197,12 @@ function ThreadRunPlace({ thread }: { thread: string }) {
           title={handOff ? "Hand off to the cloud" : "Move to the cloud"}
           detail={blocked ??
             (!inWorktree
-              ? "It goes onto its own branch first, taking only its own changes; the project folder keeps yours. Then its worktree and every session go to a cloud machine, at the same folder. Your Mac can close."
+              ? localWords("It goes onto its own branch first, taking only its own changes; the project folder keeps yours. Then its worktree and every session go to a cloud machine, at the same folder. Your Mac can close.")
               : live.running
-              ? "Its turn pauses, and its worktree and every session go to a cloud machine at the same folder. The turn goes on there from where it paused. Your Mac can close."
+              ? localWords("Its turn pauses, and its worktree and every session go to a cloud machine at the same folder. The turn goes on there from where it paused. Your Mac can close.")
               : handOff
-              ? "What it left running in the background stops, and its worktree and every session go to a cloud machine at the same folder, where it's told what stopped. Your Mac can close."
-              : "Its worktree and every session go to a cloud machine, at the same folder, and pick up where they left off. Your Mac can close.")}
+              ? localWords("What it left running in the background stops, and its worktree and every session go to a cloud machine at the same folder, where it's told what stopped. Your Mac can close.")
+              : localWords("Its worktree and every session go to a cloud machine, at the same folder, and pick up where they left off. Your Mac can close."))}
           disabled={blocked !== undefined}
           onClick={behind.length ? undefined : () => start(false)}
         />

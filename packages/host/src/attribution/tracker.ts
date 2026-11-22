@@ -24,7 +24,8 @@ import {
   type TrackerFileStat,
   type TrackerPorts,
 } from "@mako/protocol/attribution"
-import { dirname, join } from "node:path"
+import { join } from "node:path"
+import { absolutePath, folderOf, insideOf, kept, under } from "../base/path-style.js"
 import { inSlices, StepsStopped } from "@mako/sessions/slices"
 import { HourCounts } from "../base/hour-counts.js"
 import { mapLimit } from "@mako/protocol/map-limit"
@@ -327,7 +328,7 @@ const sameContent = (row: StatRow, stat: TrackerFileStat) => row.dev === stat.de
 const sameStat = (row: StatRow, stat: TrackerFileStat) =>
   row.dev === stat.dev && row.ino === stat.ino && row.size === stat.size && row.mtimeNs === stat.mtimeNs && row.ctimeNs === stat.ctimeNs
 
-const relative = (root: string, path: string) => path.slice(root.length + 1)
+const relative = insideOf
 /** The file a tool puts in a folder it owns as a cache (https://bford.info/cachedir/). */
 const CACHE_TAG = "CACHEDIR.TAG"
 const nanos = (ms: number) => BigInt(Math.round(ms)) * 1_000_000n
@@ -563,7 +564,7 @@ export class LaptopTracker implements AttributionTracker {
         if (repo) state.moved = await this.headChecked(state)
         await this.settleCommitted(state)
         if (history?.complete) {
-          const paths = history.paths.filter((path) => within(root.path, path) && path !== root.path).map((path) => relative(root.path, path))
+          const paths = history.paths.map(kept).filter((path) => within(root.path, path) && path !== root.path).map((path) => relative(root.path, path))
           for (const path of paths) if (!isGitPath(path)) state.pending.set(path, "history")
           await this.flush(state)
           this.store.closeGap(gap, this.now())
@@ -580,7 +581,7 @@ export class LaptopTracker implements AttributionTracker {
   private async listen(state: RootState): Promise<void> {
     state.watch = await this.ports.events.watch(state.root.path, {
       changed: (paths) => {
-        if (paths.some((path) => !isGitPath(path.startsWith("/") ? relative(state.root.path, path) : path))) state.watchedAt = this.now()
+        if (paths.some((path) => !isGitPath(absolutePath(path) ? relative(state.root.path, path) : path))) state.watchedAt = this.now()
         this.heard(state, paths)
       },
       lost: (reason) => this.lost(state, reason),
@@ -608,7 +609,7 @@ export class LaptopTracker implements AttributionTracker {
     if (this.closed || state.asleep || this.states.get(state.root.id) !== state) return
     let head = false
     for (const raw of paths) {
-      const path = raw.startsWith("/") ? relative(state.root.path, raw) : raw
+      const path = absolutePath(raw) ? relative(state.root.path, raw) : raw
       if (!path || path.startsWith("..")) continue
       if (isGitPath(path)) {
         if (GIT_HEAD.test(path)) head = true
@@ -947,7 +948,7 @@ export class LaptopTracker implements AttributionTracker {
       const dirty = new Set(changed)
       const keep = (path: string, git: boolean) => !untrackable(path, git)
       await mapLimit(tracked.filter((path) => keep(path, true) && !dirty.has(path)), PARALLEL, async (path) => {
-        const stat = await this.ports.fs.stat(join(root.path, path))
+        const stat = await this.ports.fs.stat(under(root.path, path))
         if (stat?.kind === "file") state.stats.set(path, this.row(stat, null))
       })
       const carried = untracked.filter((path) => keep(path, false))
@@ -987,7 +988,7 @@ export class LaptopTracker implements AttributionTracker {
 
   /** Stat a path and, when it's a file, read and hash it. */
   private async observe(state: RootState, path: string, stat?: TrackerFileStat | null): Promise<Observed> {
-    const absolute = join(state.root.path, path)
+    const absolute = under(state.root.path, path)
     const found = stat === undefined ? await this.ports.fs.stat(absolute) : stat
     if (found?.kind !== "file") return { path, kind: "gone" }
     if (found.size > READ_LIMIT && this.ports.fs.stream) {
@@ -1011,7 +1012,7 @@ export class LaptopTracker implements AttributionTracker {
    * undefined when it holds anything else or is too large to compare.
    */
   private async holding(state: RootState, path: string, bytes: Uint8Array | null): Promise<TrackerFileStat | null | undefined> {
-    const absolute = join(state.root.path, path)
+    const absolute = under(state.root.path, path)
     const stat = await this.ports.fs.stat(absolute)
     if (!bytes) return stat ? undefined : null
     if (stat?.kind !== "file" || stat.size !== bytes.byteLength || stat.size > READ_LIMIT) return undefined
@@ -1063,10 +1064,10 @@ export class LaptopTracker implements AttributionTracker {
     await mapLimit(batch, PARALLEL, async ([path, how]) => {
       // Never stat, let alone walk, what is never tracked, nor what Git ignores.
       if (untrackable(path, state.tracked.has(path)) || unread(path)) return
-      const stat = await this.ports.fs.stat(join(state.root.path, path))
+      const stat = await this.ports.fs.stat(under(state.root.path, path))
       if (stat?.kind === "directory") {
         const skip = (child: string) => untrackable(`${path}/${child}`, state.tracked.has(`${path}/${child}`)) || unread(`${path}/${child}`)
-        for (const inner of await this.ports.fs.walk(join(state.root.path, path), skip)) expanded.set(`${path}/${inner}`, how)
+        for (const inner of await this.ports.fs.walk(under(state.root.path, path), skip)) expanded.set(`${path}/${inner}`, how)
       } else {
         expanded.set(path, how)
         stats.set(path, stat)
@@ -1074,7 +1075,7 @@ export class LaptopTracker implements AttributionTracker {
       if (!stat && !state.stats.has(path)) for (const known of state.stats.keys()) if (known.startsWith(`${path}/`)) expanded.set(known, how)
     })
     await mapLimit([...expanded.keys()].filter((path) => !stats.has(path)), PARALLEL, async (path) => {
-      stats.set(path, await this.ports.fs.stat(join(state.root.path, path)))
+      stats.set(path, await this.ports.fs.stat(under(state.root.path, path)))
     })
     const candidates: string[] = []
     const unknown: string[] = []
@@ -1151,7 +1152,7 @@ export class LaptopTracker implements AttributionTracker {
     const gapEvidence = lostFrom !== undefined ? evidenceOf(await this.activityOverlapping(lostFrom - TRAIL_MS, at), this.evidence.worked) : undefined
     // A remote owner asks its host for current session context before taking the SQLite write transaction.
     const outsiders = this.options.outsider ? new Map(await Promise.all(prepared.filter(({ how }) => how === "event" || how === "inventory").map(async ({ item }) =>
-      [item.path, await this.options.outsider!(join(state.root.path, item.path), state.root.path)] as const))) : new Map<string, string | undefined>()
+      [item.path, await this.options.outsider!(under(state.root.path, item.path), state.root.path)] as const))) : new Map<string, string | undefined>()
     // A burst (a build's output, a copied folder) is journaled a slice at a time: each change is attributed as it's recorded.
     const slice = new Slice(this.slicing)
     try {
@@ -1251,7 +1252,7 @@ export class LaptopTracker implements AttributionTracker {
     const nested = new Map<string, Promise<boolean>>()
     const holdsGit = (folder: string) => {
       let found = nested.get(folder)
-      if (!found) nested.set(folder, (found = this.ports.fs.stat(join(state.root.path, folder, ".git")).then((stat) => stat !== null, () => false)))
+      if (!found) nested.set(folder, (found = this.ports.fs.stat(under(state.root.path, `${folder}/.git`)).then((stat) => stat !== null, () => false)))
       return found
     }
     const inside = await mapLimit(paths, PARALLEL, async (path) => {
@@ -1280,7 +1281,7 @@ export class LaptopTracker implements AttributionTracker {
   private async adoptable(state: RootState, path: string): Promise<boolean> {
     if (secretPath(path)) return false
     for (let at = path.lastIndexOf("/"); at > 0; at = path.lastIndexOf("/", at - 1)) {
-      const tag = await this.ports.fs.stat(join(state.root.path, path.slice(0, at), CACHE_TAG)).catch(() => null)
+      const tag = await this.ports.fs.stat(under(state.root.path, `${path.slice(0, at)}/${CACHE_TAG}`)).catch(() => null)
       if (tag) return false
     }
     return true
@@ -1391,8 +1392,8 @@ export class LaptopTracker implements AttributionTracker {
     // Content already there before the gap began: written where the watch never read (a file Git ignored until a commit named it), so nothing running in the gap made it.
     if (lost === "before") given ??= { certainty: "ambiguous", candidates: [], reason: "lost-events" }
     const change: ObservedChange = {
-      path: join(root.path, path),
-      from: from ? join(root.path, from) : undefined,
+      path: under(root.path, path),
+      from: from ? under(root.path, from) : undefined,
       kind,
       changedAt,
       refs: { before: before.ref, after: afterRef },
@@ -1667,7 +1668,7 @@ export class LaptopTracker implements AttributionTracker {
   private wakeAround(folder: string | undefined): void {
     if (!folder) return
     for (const { root, asleep } of [...this.states.values()]) {
-      if (!asleep || !(within(root.path, folder) || dirname(root.path) === folder)) continue
+      if (!asleep || !(within(root.path, folder) || folderOf(root.path) === folder)) continue
       this.track({ id: root.id, path: root.path, kind: root.kind, ...(root.carry && { carry: root.carry }) }).catch((error: Error) =>
         this.log("a root could not be woken", { root: root.path, error: error.message }))
     }
@@ -1929,7 +1930,7 @@ export class LaptopTracker implements AttributionTracker {
         const bytes = this.store.blob(ref)
         return bytes && isText(bytes) ? decodeText(bytes) : undefined
       }
-      const change: ObservedChange = { path: join(state.root.path, path), kind: entry.kind, changedAt: entry.changedAt, before: text(entry.before), after: text(entry.after), root: state.root.path }
+      const change: ObservedChange = { path: under(state.root.path, path), kind: entry.kind, changedAt: entry.changedAt, before: text(entry.before), after: text(entry.after), root: state.root.path }
       if (change.before === undefined || change.after === undefined) continue
       for (const { call, effect } of found) {
         if (!withinCall(call, entry.changedAt, this.now())) continue
@@ -2011,7 +2012,7 @@ export class LaptopTracker implements AttributionTracker {
     if (author.certainty === "exact") {
       const entry = this.store.entry(seq)
       const state = entry && this.states.get(entry.root)
-      if (entry && state) this.evidence.proved(author.author, join(state.root.path, entry.path), entry.changedAt)
+      if (entry && state) this.evidence.proved(author.author, under(state.root.path, entry.path), entry.changedAt)
       this.reattribute()
     }
   }
@@ -2041,7 +2042,7 @@ export class LaptopTracker implements AttributionTracker {
           const at = times.get(run.ins)
           if (at !== undefined) since = Math.min(since ?? at, at)
         }
-        if (since !== undefined) out.set(join(state.root.path, file.path), { root: state.root.path, since })
+        if (since !== undefined) out.set(under(state.root.path, file.path), { root: state.root.path, since })
       }
     }
     return out

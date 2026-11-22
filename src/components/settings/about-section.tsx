@@ -4,6 +4,7 @@ import { useUpdates } from "@/state/updates"
 import { ExternalLinkIcon } from "lucide-react"
 import { FaGithub } from "react-icons/fa"
 import appIcon from "/icons/app-icon.png?url"
+import { localWords } from "@mako/protocol/computer-words"
 
 const REPOSITORY = "https://github.com/Verbiflow/mako"
 
@@ -20,7 +21,7 @@ export function AboutSection() {
         <span className="min-w-0">
           <span className="block text-title font-semibold">Mako</span>
           <span className="block text-ui text-muted-foreground">
-            Run coding agents on your Mac.
+            {localWords("Run coding agents on your Mac.")}
           </span>
           <span className="mt-0.5 block text-label text-faint">
             Version {version || "development"} · Alpha · Apple silicon

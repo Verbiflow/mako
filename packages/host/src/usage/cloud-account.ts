@@ -92,6 +92,7 @@ import { SecretLocked, type LegacyFiles, type SecretRecord, type Secrets } from 
 import { accountEventClock, type AccountEventClock, type AccountEventCursors, type AccountEventScope } from "./account-event-cursor.js"
 import { RequestTraces } from "./request-trace.js"
 import { CloudLink, PING_MS, type CloudLinkAttachment, type CloudLinkEnding, type CloudLinkOptions, type CloudLinkState } from "./cloud-link.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** How long a browser sign-in may take; the cloud's sign-in request lasts as long. */
 const SIGN_IN_MS = 10 * 60_000
@@ -139,11 +140,11 @@ const DEVICE_CODE_GRANT = "urn:ietf:params:oauth:grant-type:device_code"
 const SLOW_DOWN_SECONDS = 5
 const REMOVED: CloudSignedOutNotice = {
   kind: "removed",
-  message: "This Mac was removed from your Mako account. Sign in to connect it again.",
+  message: localWords("This Mac was removed from your Mako account. Sign in to connect it again."),
 }
 const REUSED: CloudSignedOutNotice = {
   kind: "reused",
-  message: "This Mac's sign-in was used from somewhere else, so Mako signed it out to keep your account safe. Sign in again, then check Devices for any you don't know.",
+  message: localWords("This Mac's sign-in was used from somewhere else, so Mako signed it out to keep your account safe. Sign in again, then check Devices for any you don't know."),
 }
 
 const ConnectionSchema = z.object({ token: z.string().min(1), expiresAt: z.number() })
@@ -1202,7 +1203,7 @@ export class CloudAccounts {
    */
   async quiet(note: QuietNote, record?: (sent: QuietNote) => Promise<void>): Promise<QuietAnswer | "unserved"> {
     const deviceId = await this.deviceId()
-    if (!deviceId) throw new CloudAccountError("This Mac isn't signed in to Mako.")
+    if (!deviceId) throw new CloudAccountError(localWords("This Mac isn't signed in to Mako."))
     const sent = QuietNoteSchema.parse(this.#noteFor(note))
     await record?.(sent)
     const response = await this.#call("devices.quiet", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/quiet`, sent, false, [404])
@@ -1237,7 +1238,7 @@ export class CloudAccounts {
    */
   async owner(ask: OwnerAsk): Promise<OwnerAnswer | "unserved"> {
     const deviceId = await this.deviceId()
-    if (!deviceId) throw new CloudAccountError("This Mac isn't signed in to Mako.")
+    if (!deviceId) throw new CloudAccountError(localWords("This Mac isn't signed in to Mako."))
     const response = await this.#call("devices.owner", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/owner`, OwnerAskSchema.parse(ask), false, [404])
     if (response.status === 404) return "unserved"
     return OwnerAnswerSchema.parse(await response.json())
@@ -1254,7 +1255,7 @@ export class CloudAccounts {
   }
 
   #accountPath(): string {
-    if (!this.#stored) throw new CloudAccountError("This Mac isn't signed in to Mako.")
+    if (!this.#stored) throw new CloudAccountError(localWords("This Mac isn't signed in to Mako."))
     return `/v1/accounts/${encodeURIComponent(this.#stored.account.id)}`
   }
 
@@ -1726,7 +1727,7 @@ export class CloudAccounts {
    */
   async #call(route: CloudRoute, method: CloudRequest["method"], path: string, body?: JsonValue | FileBody, retried = false, answers: readonly number[] | "any" = [], correlationId?: string): Promise<CloudResponse> {
     const token = await this.#connectionToken().catch((error) => {
-      throw error instanceof Removed ? new CloudAccountError("This Mac isn't signed in to Mako.") : error
+      throw error instanceof Removed ? new CloudAccountError(localWords("This Mac isn't signed in to Mako.")) : error
     })
     const init: CloudRequest = {
       method,
@@ -2024,8 +2025,8 @@ function parseCloud(value: string | undefined, fixture: boolean): CloudTarget {
   }
   const loopback = ["127.0.0.1", "localhost", "[::1]"].includes(url.hostname)
   if (url.protocol !== "https:" && !(url.protocol === "http:" && loopback))
-    return { problem: "MAKO_CLOUD_URL must use https, or http on this Mac." }
-  if (fixture && !loopback) return { problem: "A fixture desk signs in only to a Mako cloud running on this Mac." }
+    return { problem: localWords("MAKO_CLOUD_URL must use https, or http on this Mac.") }
+  if (fixture && !loopback) return { problem: localWords("A fixture desk signs in only to a Mako cloud running on this Mac.") }
   return { url: new URL(url.origin) }
 }
 

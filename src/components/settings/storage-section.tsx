@@ -9,6 +9,7 @@ import { desktop } from "@/state/desktop"
 import { freeStorage, planStorage, readStorage, reclaimStorage, setStorageBudget } from "@/state/storage"
 import { Biggest, ReclaimClasses, ReclaimHistory } from "./storage-reclaim"
 import { StorageRetention } from "./storage-retention"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** How often the section reads the report while a preview or a removal runs behind it. */
 const FOLLOW_MS = 1500
@@ -89,7 +90,7 @@ export function StorageSection() {
   return (
     <div className="flex flex-col gap-6" data-storage>
       <section>
-        <h3 className="text-ui font-medium">On this Mac</h3>
+        <h3 className="text-ui font-medium">{localWords("On this Mac")}</h3>
         <p className="mt-0.5 pb-3 text-label text-muted-foreground">
           What Mako keeps in its folders, and what of it can go. Nothing in use, holding uncommitted or unpushed work,
           or kept on purpose is ever removed.

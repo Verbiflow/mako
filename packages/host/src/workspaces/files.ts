@@ -27,6 +27,7 @@ import { WorkspaceGit } from "../git/index.js"
 import { workspaceWrites } from "../base/workspace-writes.js"
 import { FolderIndex, type FolderIndexOptions } from "./file-index.js"
 import { videoPosters } from "./media-renditions.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * The most of a file the viewer will render.
@@ -50,7 +51,7 @@ type FileReadOptions = { relativeTo?: "cwd"; dataDir?: ConversationDataDir; prev
  * its repository and its data folder). Only this Mac's own window reads a path anywhere on it; a device through the
  * gateway reads the Thread's files, and nothing else is read or signed for it.
  */
-export const OUTSIDE_THREAD_WORDS = "It's outside this Thread's folders, so it's only opened on the Mac it's on."
+export const OUTSIDE_THREAD_WORDS = localWords("It's outside this Thread's folders, so it's only opened on the Mac it's on.")
 /** Larger than this on its longer side, a picture gets a thumbnail for grid tiles; smaller, the tile draws it. */
 const THUMBNAIL_ABOVE = 960
 

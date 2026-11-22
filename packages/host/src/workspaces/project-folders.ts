@@ -34,6 +34,7 @@ import {
   type FoundCheckouts,
   type FoundCheckoutsRequest,
 } from "../contracts/projects.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** Folders a typed path lists at most: more than a palette shows. */
 const BROWSE_LIMIT = 60
@@ -356,7 +357,7 @@ export class ProjectFolders {
           kind: "failed",
           signIn,
           message: signIn
-            ? `GitHub didn't let this Mac clone ${label}. If it's private, run gh auth login in Terminal, then try again.`
+            ? localWords(`GitHub didn't let this Mac clone ${label}. If it's private, run gh auth login in Terminal, then try again.`)
             : `Git couldn't clone ${label}${fatal ? `: ${fatal}` : "."}`,
         })
       })()
@@ -406,7 +407,7 @@ export class ProjectFolders {
 
   async #realFolder(path: string, purpose: string): Promise<string> {
     const real = await realpath(path).catch(() => undefined)
-    if (!real || !(await isFolder(real))) throw new Error(`${path} isn't a folder on this Mac to ${purpose}.`)
+    if (!real || !(await isFolder(real))) throw new Error(localWords(`${path} isn't a folder on this Mac to ${purpose}.`))
     return real
   }
 }

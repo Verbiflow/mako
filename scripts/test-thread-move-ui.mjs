@@ -91,6 +91,7 @@ async function checkMoveState() {
     const api = load(code, {
       sonner: { toast: { success: (...args) => effects.push(["success", args]), message: (...args) => effects.push(["message", args]), warning: (...args) => effects.push(["warning", args]) } },
       "@/state/providers": { providers: {} },
+      "@mako/protocol/computer-words": { localWords: (text) => text },
       "@/lib/bridge": { hasBridge: () => true, getMako: () => bridge },
       "@/state/acp-state": { acpStore: { get: () => ({ conversations }) }, updateAcpConversation: (id, apply) => {
         if (conversations[id]) conversations[id] = apply(conversations[id])

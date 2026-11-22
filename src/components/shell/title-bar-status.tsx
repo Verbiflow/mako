@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils"
 import { Spinner } from "@/components/ui/spinner"
 import { useEffect } from "react"
 import { ArrowUpCircleIcon, BatteryLowIcon, CoffeeIcon, PlugZapIcon, TriangleAlertIcon } from "lucide-react"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * What is wrong, in the titlebar's right cluster — and nothing else.
@@ -99,7 +100,7 @@ function KeepAwakePill() {
   // A first failure Mako tries again within the minute is no news yet: only one the retry didn't fix is said.
   if (!hold || hold.kind === "rest" || (hold.kind === "failed" && !hold.again)) return null
   const held = hold.kind === "idle" || hold.kind === "lid"
-  const title = keepAwakeWarning(hold) ?? `Keeping this Mac awake: ${agentsWorking(hold.agents)}. ${hold.kind === "lid" ? "Mako asked macOS to stay awake with the lid closed, on power." : "Closing the lid still puts it to sleep."}`
+  const title = keepAwakeWarning(hold) ?? localWords(`Keeping this Mac awake: ${agentsWorking(hold.agents)}. ${hold.kind === "lid" ? "Mako asked macOS to stay awake with the lid closed, on power." : "Closing the lid still puts it to sleep."}`)
   const Icon = hold.kind === "low-battery" ? BatteryLowIcon : held ? CoffeeIcon : TriangleAlertIcon
   return (
     <button

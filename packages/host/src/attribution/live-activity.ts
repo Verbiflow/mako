@@ -1,4 +1,4 @@
-import { isAbsolute, resolve } from "node:path"
+import { absoluteFrom } from "../base/path-style.js"
 import type { ActivityMark, AttributionTracker, ExactBounds, ReportedEffect } from "@mako/protocol"
 import type { LiveUpdate } from "@mako/sessions/live-content"
 import type { ToolEffect } from "@mako/sessions/tool-effects"
@@ -224,7 +224,7 @@ export class LiveActivity {
     for (const match of command.slice(0, 16_000).matchAll(PATH_WORD)) {
       const word = match[1]!
       if (word.startsWith("~/")) continue
-      const path = isAbsolute(word) ? word : conversation.cwd ? resolve(conversation.cwd, word) : undefined
+      const path = absoluteFrom(conversation.cwd, word, "resolve")
       if (path) named.add(path)
     }
     return [...named].slice(0, 256)
@@ -290,7 +290,7 @@ export class LiveActivity {
     const cwd = conversation.cwd
     const named = new Set<string>()
     if (identity.path) {
-      const path = isAbsolute(identity.path) ? identity.path : cwd ? resolve(cwd, identity.path) : undefined
+      const path = absoluteFrom(cwd, identity.path, "resolve")
       if (path) named.add(path)
     }
     if (identity.command) for (const path of this.paths(conversation, identity.command)) named.add(path)

@@ -8,6 +8,7 @@ import type { UtilityConnection, UtilityProvider, UtilityProviderInfo } from "@/
 import { chooseCommitModel, refreshCommitModel, useCommitModelSettings } from "@/state/commit-model"
 import { utilityModels } from "@/state/model-runtime"
 import { ConnectModel } from "./connect-model"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * The API keys commit messages are written with. Each connected key is a
@@ -135,7 +136,7 @@ export function CommitKeys() {
               {issue ? <p className="pb-2.5 pl-14 text-label text-caution">{issue.message}</p> : null}
               {removing === connection.provider ? (
                 <div className="flex flex-wrap items-center gap-2 pr-2.5 pb-2.5 pl-14 text-label text-muted-foreground">
-                  <span className="flex-1">Remove this key from this Mac?</span>
+                  <span className="flex-1">{localWords("Remove this key from this Mac?")}</span>
                   {/* Focus lands on Keep, not back on the ⋯ button, whose tooltip would cover these answers. */}
                   <Action size="xs" autoFocus onClick={() => setRemoving(null)}>Keep</Action>
                   <Action

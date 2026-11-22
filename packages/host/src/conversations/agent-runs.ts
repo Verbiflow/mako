@@ -15,6 +15,7 @@ import { SESSION_VARIABLE } from "../contracts/agent-tools.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { uniqueName, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** At most one tail read per run this often: a Session can write many times a second. */
 export const READ_EVERY_MS = 500
@@ -757,7 +758,7 @@ export class AgentRuns {
       return this.end(followed, { at, kind: "failed", detail: `It exited with code ${status}${error ? `: ${error}` : "."}`, ...counted })
     }
     if (summary && last.at(-1)?.type === "text") return this.end(followed, { at, kind: "done", detail: summary, ...counted })
-    const detail = followed.seenAlive ? "Its process ended without saying how it went." : "Its process ended while Mako wasn't running: a quit, a crash, or this Mac shutting down or restarting."
+    const detail = followed.seenAlive ? "Its process ended without saying how it went." : localWords("Its process ended while Mako wasn't running: a quit, a crash, or this Mac shutting down or restarting.")
     this.end(followed, { at, kind: "unknown", detail, ...counted })
   }
 

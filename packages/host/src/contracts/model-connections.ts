@@ -1,4 +1,5 @@
 import type { HarnessModelRoutes, ModelWire } from "./model-routes.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Every way the person pays for models, in one list. A subscription is a
@@ -48,9 +49,9 @@ export const MODEL_CONNECTION_PROVIDERS: readonly ModelConnectionProvider[] = [
   { id: "deepinfra", name: "DeepInfra", kind: "gateway", wire: "openai-chat", baseUrl: "https://api.deepinfra.com/v1/openai", key: "required", keyUrl: "https://deepinfra.com/dash/api_keys", description: "Open models at low cost" },
   { id: "fireworks", name: "Fireworks", kind: "gateway", wire: "openai-chat", baseUrl: "https://api.fireworks.ai/inference/v1", key: "required", keyUrl: "https://fireworks.ai/account/api-keys", description: "Open models and your fine-tunes" },
   { id: "baseten", name: "Baseten", kind: "gateway", wire: "openai-chat", baseUrl: "https://inference.baseten.co/v1", key: "required", keyUrl: "https://app.baseten.co/settings/api_keys", description: "Model APIs and your own deployments" },
-  { id: "ollama", name: "Ollama", kind: "local", wire: "openai-chat", baseUrl: "http://localhost:11434/v1", key: "none", description: "Models you pulled with Ollama, on this Mac" },
+  { id: "ollama", name: "Ollama", kind: "local", wire: "openai-chat", baseUrl: "http://localhost:11434/v1", key: "none", description: localWords("Models you pulled with Ollama, on this Mac") },
   { id: "lmstudio", name: "LM Studio", kind: "local", wire: "openai-chat", baseUrl: "http://localhost:1234/v1", key: "none", description: "The models LM Studio's server has loaded" },
-  { id: "local", name: "Other local server", kind: "local", wire: "openai-chat", baseUrl: "http://localhost:8080/v1", urlHint: "http://localhost:<port>/v1", key: "optional", description: "Any OpenAI-compatible server on this Mac" },
+  { id: "local", name: "Other local server", kind: "local", wire: "openai-chat", baseUrl: "http://localhost:8080/v1", urlHint: "http://localhost:<port>/v1", key: "optional", description: localWords("Any OpenAI-compatible server on this Mac") },
   { id: "openai-compatible", name: "Custom endpoint", kind: "custom", wire: "openai-chat", urlHint: "https://your-endpoint/v1", key: "optional", description: "Any OpenAI-compatible base URL and key" },
 ]
 

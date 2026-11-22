@@ -13,6 +13,11 @@ on:
 permissions:
   contents: read
 
+# The suites assert Mako's sentences as a Mac says them ("this Mac"); on Linux the host and the window say "this
+# computer" (`@mako/protocol/computer-words`), so the suites choose the Mac's words wherever they run.
+env:
+  MAKO_COMPUTER_WORDS: mac
+
 # A pull request's newer push cancels its older run. A push to main never cancels: each merge's run finishes, so main
 # always has a complete run to compare with.
 concurrency:

@@ -1,6 +1,7 @@
 import { toast } from "sonner"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import type { CloudArchiveOutcome, CloudArchiveStep } from "@mako/host/contracts/thread-lifecycle"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * A cloud Thread's archive or restore, as a window shows it: one toast per cloud Thread, from the host's first step to
@@ -11,7 +12,7 @@ import type { CloudArchiveOutcome, CloudArchiveStep } from "@mako/host/contracts
 const STEP_WORDS = {
   packing: { title: "Archiving thread", description: "Saving its checkout and history in the cloud" },
   ending: { title: "Archiving thread", description: "Ending its cloud machine" },
-  bringing: { title: "Restoring thread", description: "Bringing its checkout and history to this Mac" },
+  bringing: { title: "Restoring thread", description: localWords("Bringing its checkout and history to this Mac") },
 } satisfies Record<CloudArchiveStep["kind"], { title: string; description: string }>
 
 const toastId = (thread: string) => `cloud-archive:${thread}`
@@ -33,7 +34,7 @@ export function cloudArchiveSettled(outcome: CloudArchiveOutcome, archiving: boo
     return
   }
   if (outcome.kind === "restored") {
-    toast.success("Thread restored", { id, description: "It runs on this Mac again." })
+    toast.success("Thread restored", { id, description: localWords("It runs on this Mac again.") })
     return
   }
   if (outcome.anyway) {

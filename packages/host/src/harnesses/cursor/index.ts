@@ -27,6 +27,7 @@ import { cursorSdkAvailable, installCursorSdk } from "./sdk/installed.js"
 import { scriptInstall } from "../update-source.js"
 import { CURSOR_VERSIONS } from "./versions.js"
 import { cursorPresentation } from "./presentation.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Cursor runs through its SDK and nothing else. `cursor-agent acp` was the
@@ -73,7 +74,7 @@ export const installCursor: ProviderModule = (host, context) => {
       review: { mako: makosOwn("Cursor's SDK has no review; Bugbot reviews pull requests on Cursor's servers.") },
       sideQuestions: { mako: makosOwn("SDK 1.2.0 has no side question, so Mako asks a read-only copy of the agent.") },
       scheduledPrompts: { mako: harnessLacks("Cursor's SDK has no schedule.") },
-      cloudRuns: { native: native("cloud agents", "`AgentOptions.cloud`; agent IDs starting `bc-`"), mako: makoLacks("Mako runs Cursor's agents on this Mac; starting a cloud agent isn't built.") },
+      cloudRuns: { native: native("cloud agents", "`AgentOptions.cloud`; agent IDs starting `bc-`"), mako: makoLacks(localWords("Mako runs Cursor's agents on this Mac; starting a cloud agent isn't built.")) },
       backgroundSessions: { mako: makosOwn() },
       fileRewind: { mako: makosOwn() },
       worktrees: { mako: makosOwn() },

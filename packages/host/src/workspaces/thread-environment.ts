@@ -21,6 +21,7 @@ import type { ThreadStore } from "../threads/index.js"
 import { checkoutOf, processPort, projectRoot, readRecipe, recipeValues } from "./thread-recipe.js"
 import { linkedCarry, linkedEntries, missingEntries, missingText } from "./worktree-carry.js"
 import type { Recipe, RecipeAccounts, RecipeWhere } from "./thread-recipe.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 const VARIABLES = ["MAKO_SESSION_ID", "MAKO_THREAD_ID", "MAKO_THREAD_HOST", "MAKO_THREAD_PORT", "MAKO_THREAD_PORTS", "MAKO_THREAD_URL", "MAKO_THREAD_DATA_DIR", "MAKO_APP_DATA_DIR", "MAKO_THREAD_SCRATCH_DIR", "MAKO_THREAD_VALUES"] as const
 /** Lists the recipe's names Mako set, so a Mako started inside a Thread can clear them. */
@@ -328,7 +329,7 @@ export class ThreadEnvironments {
         }
       }
       if (port === undefined)
-        throw new Error("Every block of ports for Threads on this Mac is held by a Thread used in the last week")
+        throw new Error(localWords("Every block of ports for Threads on this Mac is held by a Thread used in the last week"))
       const claimed = store.claimEnvironment({ app, host, port, reclaim })
       if (claimed) return claimed
     }

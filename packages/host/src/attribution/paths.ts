@@ -1,4 +1,5 @@
 import { quietFolder } from "../base/quiet-folders.js"
+import { insideOf, partsOf, within } from "../base/path-style.js"
 
 /*
  * What the tracker never journals, and what a turn's footprint leaves out.
@@ -22,10 +23,7 @@ export function untrackable(path: string, tracked: boolean): boolean {
   return !tracked && parts.some((part) => quietFolder(part) || CACHES.has(part))
 }
 
-/** Whether `path` is inside `folder` or is it. */
-export function within(folder: string, path: string): boolean {
-  return path === folder || path.startsWith(folder.endsWith("/") ? folder : `${folder}/`)
-}
+export { within }
 
 /** Under the home folder: churn no turn means, unless one of its calls named the path. */
 const HOME_NOISE = [
@@ -62,12 +60,12 @@ const NOISE_FILE = /(-wal|-shm|-journal|\.lock|\.pid|\.tmp|\.swp|~)$|\.tmp\b/
 export function footprintNoise(path: string, home: string, stores: readonly string[], named: "path" | "folder" | undefined): boolean {
   if (stores.some((store) => within(store, path))) return true
   if (named === "path") return false
-  const parts = path.split("/")
+  const parts = partsOf(path)
   if (NOISE_FILE.test(parts.at(-1) ?? "")) return true
   if (named === "folder") return false
   if (parts.some((part) => NOISE_PARTS.has(part))) return true
   if (!within(home, path)) return false
-  const inside = path.slice(home.length + 1)
+  const inside = insideOf(home, path)
   if (HOME_NOISE_FILES.has(inside)) return true
   return HOME_NOISE.some((folder) => within(folder, inside))
 }

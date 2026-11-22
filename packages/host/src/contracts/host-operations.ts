@@ -19,6 +19,7 @@ import { HOST_CLOSED_CODE, HOST_RESTARTING_CODE } from "./host-connection.js"
 import { RuntimeArgsSchema, decodeRuntimeArgs, runtimeArgs, runtimeFailureError, type RuntimeFailure } from "./runtime.js"
 import type { EncodedValue } from "./runtime-value.js"
 import { exactReadable } from "./provider-failure-evidence.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Every host call is a `runtime` operation named `host.<channel>`: the gateway forwards it to the
@@ -44,7 +45,7 @@ export const hostOperations: ReadonlyMap<string, HostOperation> = new Map(
 const ownCalls: ReadonlySet<string> = new Set(hostChannels)
 
 /** Why another device's call to one of this host's own was refused. */
-export const GATEWAY_REFUSED = "Only this Mac's own windows make this call"
+export const GATEWAY_REFUSED = localWords("Only this Mac's own windows make this call")
 
 /** A host call's input: its arguments as the socket carries them, and whether the caller pages history. */
 const HostInputSchema = z.object({

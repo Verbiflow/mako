@@ -8,6 +8,7 @@ import type { CloudSignInRow, CloudSignInsState } from "../contracts/cloud-sign-
 import type { CloudRepository } from "../contracts/cloud-threads.js"
 import { TURN_ON_STEPS, baseSettled, noAccess, type BaseStanding, type CloudTurnOn, type TurnOnAgent, type TurnOnProject, type TurnOnStep, type TurnOnStepId, type TurnOnStepOf } from "../contracts/cloud-turn-on.js"
 import type { SyncStatus } from "../contracts/sync-status.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Turning Mako Cloud on, read whole from what owns each step (`contracts/cloud-turn-on.ts`). Everything the steps wait
@@ -66,7 +67,7 @@ function stepsOf(reading: TurnOnReading): TurnOnStep[] {
   const account: TurnOnStepOf<"account"> = { id: "account", state: "done", connection: state.connection }
   if (state.connection === "offline") {
     account.state = "stuck"
-    account.problem = "Mako Cloud can't be reached from this Mac just now. It tries again by itself."
+    account.problem = localWords("Mako Cloud can't be reached from this Mac just now. It tries again by itself.")
     account.fix = "check-plan"
   }
   if (!state.account.entitlements.includes(CLOUD)) return [account, { id: "plan", state: "yours", fix: "check-plan" }, ...TURN_ON_STEPS.slice(2).map(later)]

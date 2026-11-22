@@ -19,6 +19,7 @@ import { useHandOff } from "@/state/handoff"
 import type { LifecycleWork } from "@mako/host/contracts/app-lifecycle"
 import { finsWord } from "@mako/host/contracts/agents"
 import type { HandOffCandidate, HandOffResult, ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** An Apex whose Fins are at work, as one row. */
 type ApexRow = NonNullable<LifecycleWork["lead"]> & { fins: number }
@@ -179,9 +180,9 @@ export function ApplicationDialog() {
               : handingOff
                 ? "Each agent's turn is paused, its Thread moves to a cloud machine, and the turn goes on there."
                 : stayed.length
-                  ? `${results.size - stayed.length} went to the cloud. ${stayed.length === 1 ? "One stayed" : `${stayed.length} stayed`} on this Mac, still working: keep ${stayed.length === 1 ? "it" : "them"} running here, or stop ${stayed.length === 1 ? "it" : "them"}.`
+                  ? localWords(`${results.size - stayed.length} went to the cloud. ${stayed.length === 1 ? "One stayed" : `${stayed.length} stayed`} on this Mac, still working: keep ${stayed.length === 1 ? "it" : "them"} running here, or stop ${stayed.length === 1 ? "it" : "them"}.`)
                   : work.length
-                    ? `${work.length} ${work.length === 1 ? "operation is" : "operations are"} still active. ${quitting ? (canHandOff ? `Keep ${work.length === 1 ? "it" : "them"} working on this Mac, or hand ${work.length === 1 ? "it" : "them"} to the cloud so ${work.length === 1 ? "it goes" : "they go"} on while it's off.` : `Close the window without stopping ${work.length === 1 ? "its" : "their"} work.`) : `Your update can wait. No need to interrupt ${work.length === 1 ? "its" : "their"} work.`}`
+                    ? `${work.length} ${work.length === 1 ? "operation is" : "operations are"} still active. ${quitting ? (canHandOff ? localWords(`Keep ${work.length === 1 ? "it" : "them"} working on this Mac, or hand ${work.length === 1 ? "it" : "them"} to the cloud so ${work.length === 1 ? "it goes" : "they go"} on while it's off.`) : `Close the window without stopping ${work.length === 1 ? "its" : "their"} work.`) : `Your update can wait. No need to interrupt ${work.length === 1 ? "its" : "their"} work.`}`
                     : "No agents are working. Your saved conversations will be here when you return."}
           </p>
         </div>

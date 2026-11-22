@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -12,6 +12,7 @@ import { otherAppsData } from "@mako/host/base/other-apps-data"
 import { otherAppsTemporary } from "@mako/host/attribution/footprint-reader"
 import { childHistory } from "@mako/host/workspaces/watch-backend"
 import { WatchReadings } from "@mako/host/workspaces/watch-readings"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * The footprint outside the checkouts: each rule in its order, and turns
@@ -137,7 +138,7 @@ async function footprintWorld(over: { segmentMs?: number } = {}) {
   const mark = (thread: string, over: Partial<ActivityMark> & Pick<ActivityMark, "kind" | "id" | "edge">): ActivityMark => ({ thread, session: `S-${thread}`, at: clock.now(), ...over })
   const close = async () => {
     await tracker.close()
-    rmSync(storage, { recursive: true, force: true })
+    removeScratch(storage)
   }
   /** The folders whose history was read, each once, in order. */
   const readRoots = () => [...new Set(events.reads.map((read) => read.root))].sort()
@@ -525,7 +526,7 @@ test("a path a call names through a link is the path the history reports", async
     assert.deepEqual(tracker.footprint("T1").map((entry) => entry.path).sort(), ["/private/tmp/out.txt", "/private/tmp/scratch/build.log"])
   } finally {
     await tracker.close()
-    rmSync(storage, { recursive: true, force: true })
+    removeScratch(storage)
   }
 })
 
@@ -552,7 +553,7 @@ test("where the platform names writers, a Thread's own process keeps a path no c
     assert.equal(described(verdicts.get("/h/.config/theirs.json")), "out other-writer")
   } finally {
     await tracker.close()
-    rmSync(storage, { recursive: true, force: true })
+    removeScratch(storage)
   }
 })
 
@@ -573,7 +574,7 @@ test("the watcher child's history read leaves folders out and counts them (macOS
     assert.equal(found.ignored[1], 0)
     assert.deepEqual(found.lost, [])
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeScratch(root)
   }
 })
 
@@ -597,7 +598,7 @@ test("Mako's own folders are left out of a history read before they're replayed,
     assert.ok(inside.paths.includes(join(own, "deep/f0")), "a read of the folder itself, or inside one that holds it, reads it")
     assert.equal(readings.reading().history.readsLastHour, 2)
   } finally {
-    rmSync(root, { recursive: true, force: true })
+    removeScratch(root)
   }
 })
 
@@ -626,6 +627,6 @@ test("a history read of the home folder never replays another app's container, s
     assert.ok(found.paths.includes(join(home, "work/a.txt")), "the rest of the home folder crosses")
     assert.deepEqual(found.paths.filter((path) => path.includes("Containers") || path.includes("Application Scripts")), [], "nothing in another app's data is replayed")
   } finally {
-    rmSync(home, { recursive: true, force: true })
+    removeScratch(home)
   }
 })

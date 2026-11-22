@@ -1,6 +1,7 @@
 import type { KeepAwakeHold, KeepAwakeSettings, KeepAwakeState } from "@mako/host/contracts/keep-awake"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Keeping this Mac awake while its agents work, as the window sees it. The host holds the power assertion
@@ -19,9 +20,9 @@ export function agentsWorking(agents: number): string {
  * undefined when nothing is. The setting's switch says the person's choice; this says what's happening.
  */
 export function keepAwakeWarning(hold: KeepAwakeHold | undefined): string | undefined {
-  if (hold?.kind === "low-battery") return `Battery at ${hold.percent}%, below ${hold.floor}%: this Mac may sleep with ${agentsWorking(hold.agents)}.`
+  if (hold?.kind === "low-battery") return localWords(`Battery at ${hold.percent}%, below ${hold.floor}%: this Mac may sleep with ${agentsWorking(hold.agents)}.`)
   // A first failure Mako tries again within the minute is no news yet: only one the retry didn't fix is said (`again`).
-  if (hold?.kind === "failed") return !hold.again ? undefined : `Mako couldn't keep this Mac awake, so it may sleep with ${agentsWorking(hold.agents)}. Mako tries again within a minute.`
+  if (hold?.kind === "failed") return !hold.again ? undefined : localWords(`Mako couldn't keep this Mac awake, so it may sleep with ${agentsWorking(hold.agents)}. Mako tries again within a minute.`)
   return undefined
 }
 

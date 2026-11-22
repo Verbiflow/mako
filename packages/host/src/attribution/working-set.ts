@@ -1,4 +1,4 @@
-import { dirname } from "node:path"
+import { folderOf } from "../base/path-style.js"
 import { within } from "./paths.js"
 
 /** What the journal keeps of a call, turn or background work that says where it worked. */
@@ -38,7 +38,7 @@ export class WorkingSets {
     const touched = (path: string | undefined) => {
       if (!path) return
       keep(path)
-      keep(dirname(path))
+      keep(folderOf(path))
     }
     keep(activity.cwd)
     for (const named of activity.named) keep(named)
@@ -63,8 +63,8 @@ export class WorkingSets {
   reached(thread: string, path: string, root?: string): "path" | "folder" | undefined {
     const set = this.set(thread)
     if (set.has(path)) return "path"
-    if (!root) return set.has(dirname(path)) ? "folder" : undefined
-    for (let folder = dirname(path); folder !== root && within(root, folder); folder = dirname(folder))
+    if (!root) return set.has(folderOf(path)) ? "folder" : undefined
+    for (let folder = folderOf(path); folder !== root && within(root, folder); folder = folderOf(folder))
       if (set.has(folder)) return "folder"
     return undefined
   }

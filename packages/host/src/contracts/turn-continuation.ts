@@ -1,6 +1,7 @@
 import { INTERRUPTION_REASONS, type InterruptionReason, type LiveRequest } from "./live-conversations.js"
 import { RESUMED_OPENS } from "./resume-account.js"
 import { holdOf } from "./request-hold.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * How long Mako waits after a turn ends on a dropped connection before it
@@ -279,7 +280,7 @@ export function continuationsSpent(requests: readonly LiveRequest[], last: LiveR
 export const CUT_BY = {
   stopped: "it was stopped",
   "host-quit": "Mako quit, restarted or updated",
-  "host-crashed": "Mako stopped without closing: a crash, a force quit, or this Mac shutting down or losing power",
+  "host-crashed": localWords("Mako stopped without closing: a crash, a force quit, or this Mac shutting down or losing power"),
   "connection-lost": "its harness lost its connection",
   "provider-exited": "its harness's process exited",
   "signed-out": "its harness's account signed out",

@@ -15,6 +15,7 @@ import { decideCarriedFiles, readCarriedFiles, useCarriedFiles } from "@/state/c
 import { useCloudAccount } from "@/state/cloud-account"
 import { cloudTurnOn, stepOf, useCloudTurnOn } from "@/state/cloud-turn-on"
 import { useThreads } from "@/state/thread-store"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Mako Cloud in Settings › Account: one calm surface that says where the cloud stands and what it's doing, in the
@@ -140,7 +141,7 @@ function useSummary(turnOn: CloudTurnOn): Summary {
   let going = true
   if (turnOn.phase === "turning-on") {
     headline = "Getting your cloud ready"
-    line = agents?.state === "working" ? "Bringing your agents over from this Mac…" : "Almost there…"
+    line = agents?.state === "working" ? localWords("Bringing your agents over from this Mac…") : "Almost there…"
   } else {
     headline = firstThread ? "Mako Cloud is on" : "Mako Cloud is ready"
     const parts = [settingUp ? "setting up your projects" : undefined, syncing ? "syncing your last 7 days" : undefined].filter((part) => part !== undefined)
@@ -198,8 +199,8 @@ function whatNeedsYou(
         <NeedRow
           data="agent"
           icon={<HarnessIcon harness={signedOut.harness} />}
-          title={`${name} is signed out on this Mac`}
-          detail="Cloud Threads use the same sign-in as this Mac, so signing in here is all it takes."
+          title={localWords(`${name} is signed out on this Mac`)}
+          detail={localWords("Cloud Threads use the same sign-in as this Mac, so signing in here is all it takes.")}
           action={
             <Action tone="solid" size="sm" onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "agents" }))} data-turn-on-fix="sign-in-agent">
               Sign in
@@ -236,7 +237,7 @@ function whatNeedsYou(
     return {
       acts: false,
       short: `${name} is private`,
-      node: <NeedRow data="private" icon={<LockIcon />} title={`${name} is a private repository`} detail={`Cloud Threads work with public GitHub repositories for now, so ${name} stays on this Mac.${instead}`} />,
+      node: <NeedRow data="private" icon={<LockIcon />} title={`${name} is a private repository`} detail={localWords(`Cloud Threads work with public GitHub repositories for now, so ${name} stays on this Mac.${instead}`)} />,
     }
   }
   if (startFolder && carried && carried.decision === "unasked" && carried.repository && carried.files.length)
@@ -329,7 +330,7 @@ function Details({ turnOn }: { turnOn: CloudTurnOn }) {
     rows.push({
       id: "agents",
       label: "Agents",
-      value: !agents.sharing ? "Kept on this Mac" : list.length ? `${joinWords(list)}, from this Mac` : "None signed in on this Mac yet",
+      value: !agents.sharing ? localWords("Kept on this Mac") : list.length ? localWords(`${joinWords(list)}, from this Mac`) : localWords("None signed in on this Mac yet"),
       status: out.length ? `${joinWords(out)} signed out` : sending ? "Bringing over" : took(agents) ?? "In the cloud",
     })
   }
@@ -352,7 +353,7 @@ function Details({ turnOn }: { turnOn: CloudTurnOn }) {
     rows.push({
       id: "history",
       label: "Last 7 days",
-      value: history.threads ? `${history.inCloud.toLocaleString()} of ${count(history.threads, "Thread")}` : "Reading this Mac",
+      value: history.threads ? `${history.inCloud.toLocaleString()} of ${count(history.threads, "Thread")}` : localWords("Reading this Mac"),
       status: history.failures ? `${count(history.failures, "Session")} retrying` : history.paused ? "Waiting for power" : history.state === "done" ? took(history) ?? "In the cloud" : "Syncing",
     })
   const thread = stepOf(turnOn, "thread")

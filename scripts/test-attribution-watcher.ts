@@ -1,7 +1,7 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, realpathSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Git } from "@mako/git"
@@ -10,6 +10,7 @@ import { gitRepository, nodeFileSystem, watcherEvents } from "@mako/host/attribu
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { watchTree } from "@mako/host/workspaces/tree-watcher"
 import { childBackend, childHistory } from "@mako/host/workspaces/watch-backend"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * The tracker on the host's real watcher child and the system's history, on
@@ -96,8 +97,8 @@ try {
   }
 } finally {
   await tracker.close()
-  rmSync(root, { recursive: true, force: true })
-  rmSync(storage, { recursive: true, force: true })
+  removeScratch(root)
+  removeScratch(storage)
 }
 console.log("attribution watcher: ok")
 process.exit(0)

@@ -4,6 +4,7 @@ import { Keys } from "@/components/ui/kit"
 import { formatChord } from "@/extend/commands"
 import { tildePath } from "@/lib/project-query"
 import { loadFound, newFound, openProject, openProjectPalette, useOpenProject, useRecentProjects } from "@/state/open-project"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** Found checkouts the empty rail offers. */
 const OFFERED = 3
@@ -27,7 +28,7 @@ export function FirstProject() {
         <FolderOpenIcon />
       </div>
       <p className="text-ui font-medium text-foreground">Open a project to start</p>
-      <p className="max-w-[30ch] text-ui leading-relaxed text-faint">Pick a folder you already work in. Mako finds the ones on this Mac.</p>
+      <p className="max-w-[30ch] text-ui leading-relaxed text-faint">{localWords("Pick a folder you already work in. Mako finds the ones on this Mac.")}</p>
       <div className="mt-3 flex w-full flex-col gap-0.5">
         {offered.map((checkout) => (
           <button key={checkout.path} type="button" data-first-project-found={checkout.path} onClick={() => void openProject(checkout.path)} title={tildePath(checkout.path, home)} className={row}>
@@ -36,7 +37,7 @@ export function FirstProject() {
             <span className="shrink-0 text-label text-faint group-hover:text-foreground">Open</span>
           </button>
         ))}
-        {found?.state === "scanning" && offered.length === 0 ? <p className="flex h-9 items-center px-2.5 text-label text-faint">Looking for projects on this Mac…</p> : null}
+        {found?.state === "scanning" && offered.length === 0 ? <p className="flex h-9 items-center px-2.5 text-label text-faint">{localWords("Looking for projects on this Mac…")}</p> : null}
         <button type="button" onClick={() => openProjectPalette()} className={row}>
           <FolderOpenIcon className="size-3.5 shrink-0 text-faint group-hover:text-foreground/80" aria-hidden />
           <span className="min-w-0 flex-1 truncate">Open project…</span>

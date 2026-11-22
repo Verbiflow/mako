@@ -17,6 +17,7 @@ import { AccountLimits } from "@/components/identity/account-usage"
 import { useDeskIdentity, type DeskIdentity, type SignInMethod } from "@/components/identity/desk-identity"
 import { cn } from "@/lib/utils"
 import type { CloudAccountState } from "@/lib/types"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Who the desk is working as: the person on top — their Mako account, or
@@ -146,7 +147,7 @@ function MakoSignIn({ state }: { state: Exclude<CloudAccountState, { status: "si
     <Connection
       mark={<MakoTile className="size-8" />}
       markClassName="bg-transparent"
-      title={notice ? "This Mac was signed out" : "Mako account"}
+      title={notice ? localWords("This Mac was signed out") : "Mako account"}
       detail={failure ?? notice?.message ?? "Sign in, or create one, in your browser."}
       tone={failure || notice ? "negative" : undefined}
     >

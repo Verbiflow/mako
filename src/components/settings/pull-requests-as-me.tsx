@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils"
 import { MAKO_GITHUB_APP, NEW_PERSON_TOKEN_URL, PERSON_TOKEN, PERSON_TOKEN_PERMISSIONS } from "@mako/host/contracts/github-person"
 import { expiryWords, useGitHubToken, type GitHubTokens } from "@/state/github-token"
 import { AUTHORSHIP_UNAVAILABLE, AUTHORSHIP_UNREAD, authorshipChoosable, authorshipWords, FALLBACK_WORDS, TOKEN_KEPT_WORDS, useGitHubAuthorship, type GitHubAuthorships } from "@/state/github-authorship"
+import { localWords } from "@mako/protocol/computer-words"
 
 const inputClass = cn(FIELD, "flex-1 font-mono placeholder:font-sans")
 
@@ -34,7 +35,7 @@ export function PullRequestsAsMe({ tokens, authorships, repository }: { tokens: 
       <div>
         <h3 className="text-ui font-medium">Commits and pull requests in the cloud</h3>
         <p className="mt-0.5 text-label leading-relaxed text-muted-foreground">
-          Who GitHub shows for what cloud Threads commit and open. Your Mac uses your own Git identity and GitHub sign-in.
+          {localWords("Who GitHub shows for what cloud Threads commit and open. Your Mac uses your own Git identity and GitHub sign-in.")}
         </p>
       </div>
       <ListCard>

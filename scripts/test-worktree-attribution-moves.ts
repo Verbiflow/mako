@@ -4,7 +4,7 @@ import { execFileSync, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { Git } from "@mako/git"
@@ -115,7 +115,7 @@ async function fixture(name: string, files: Record<string, string> = {}) {
   const ledger: MoveLedger = {
     settled: () => tracker.settled(),
     track: async () => {},
-    head: (repository) => [...tracker.rootStates().values()].find((state) => state.root.path === repository)?.root.head,
+    head: (repository) => [...tracker.rootStates().values()].find((state) => resolve(state.root.path) === resolve(repository))?.root.head,
     partition: (checkout, thread, options) => partition(view, checkout, thread, options),
     shares: (checkout, thread) => shares(view, checkout, thread),
     mako: (write) => tracker.mako(write),
@@ -327,7 +327,7 @@ test("what only T1's command or background work was running for comes on a best 
   assert.equal(background?.certainty === "window" && background.reached, "path", "a file T1 had read")
   const notes = f.tracker.blame("repo", "docs/notes.md")?.at(-1)?.author
   assert.ok(notes?.certainty === "window" && notes.reached === undefined, `timing alone, in a folder T1 never went near: ${JSON.stringify(notes)}`)
-  const relative = (paths: string[]) => paths.map((path) => path.slice(f.repo.length + 1)).sort()
+  const relative = (paths: string[]) => paths.map((path) => path.slice(f.repo.length + 1).replaceAll("\\", "/")).sort()
   assert.deepEqual(relative(view.likely.files), ["bg/state.ts", "gen/out.ts"], "timing names them, and T1's work had reached them")
   assert.deepEqual(relative(view.thread.files), ["bg/state.ts", "gen/out.ts", "shared.ts"], "and they're T1's, which a move takes")
   assert.deepEqual(relative(view.uncertain.files), ["docs/notes.md"], "the person's save waits for Bring them")
@@ -500,7 +500,7 @@ test("a project folder of two repositories: one worktree per repository, each wi
   const ledger: MoveLedger = {
     settled: () => tracker.settled(),
     track: async () => {},
-    head: (repository) => [...tracker.rootStates().values()].find((state) => state.root.path === repository)?.root.head,
+    head: (repository) => [...tracker.rootStates().values()].find((state) => resolve(state.root.path) === resolve(repository))?.root.head,
     partition: (checkout, thread, options) => partition(view, checkout, thread, options),
     shares: (checkout, thread) => shares(view, checkout, thread),
     mako: (write) => tracker.mako(write),
@@ -551,7 +551,8 @@ async function crash(step: string, count = 1, meddle = false) {
   const configPath = join(f.base, "child.json")
   writeFileSync(configPath, JSON.stringify(config))
   const child = spawnSync(process.execPath, [...process.execArgv, here, "child", configPath], { encoding: "utf8", env: process.env })
-  assert.equal(child.signal, "SIGKILL", `the move was killed at ${step}: ${child.stderr}`)
+  // Killed outright: by that signal, or on Windows, which has none, by ending with 1 and no word.
+  assert.ok(child.signal === "SIGKILL" || (process.platform === "win32" && child.status === 1), `the move was killed at ${step}: ${child.stderr}`)
   if (meddle) writeFileSync(join(f.repo, "person.ts"), "someone else\n")
   if (meddle) writeFileSync(join(made.path, "shared.ts"), "the agent already edited this\n")
   const { worktrees: next } = service(f, stubLedger(config))
@@ -623,7 +624,8 @@ async function crashAdjusting(adjust: "bring" | string[], step: string, count: n
   const configPath = join(f.base, "child.json")
   writeFileSync(configPath, JSON.stringify(config))
   const child = spawnSync(process.execPath, [...process.execArgv, here, "child", configPath], { encoding: "utf8", env: process.env })
-  assert.equal(child.signal, "SIGKILL", `killed at ${step} ${count}: ${child.stderr}`)
+  // Killed outright: by that signal, or on Windows, which has none, by ending with 1 and no word.
+  assert.ok(child.signal === "SIGKILL" || (process.platform === "win32" && child.status === 1), `killed at ${step} ${count}: ${child.stderr}`)
   const { worktrees: next } = service(f, stubLedger(config))
   await next.tidy()
   const receipt = JSON.parse(readFileSync(join(f.base, "worktrees", "receipts", `${id}.json`), "utf8"))

@@ -84,6 +84,7 @@ import type { HostOwner } from "./create-host.js"
 import { backgroundWork } from "./contracts/background-work.js"
 import { withChildren } from "./contracts/native-agents.js"
 import { projectFolder, projectFolderOf, worktreeIn } from "./contracts/worktree-paths.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 type WebHost = Awaited<ReturnType<typeof startWebHost>>
 
@@ -912,7 +913,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // keeps its Thread's records instead; a fixture desk sends nothing.
   let uploads: SessionUploads | undefined
   // The work its looks run as, on a change and on the slow reconcile alike.
-  const UPLOADS_WORK = "keep this Mac's Sessions in the account"
+  const UPLOADS_WORK = localWords("keep this Mac's Sessions in the account")
   // The reconcile: what changes without an event (the catalog's progress, the power, a link given late).
   const UPLOADS_RECONCILE_MS = 60_000
   // The first retry of a look that left something undone; each after waits twice as long, up to the reconcile.
@@ -1086,7 +1087,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         streams: (lease) => (lease.resource.ref === "ios-simulator" ? [{ name: "screen", kind: "video" }] : []),
         lent,
         upload: async (lease, file, name) => {
-          if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
+          if (!late.cloud?.borrow) throw new Error(localWords("This Mac isn't signed in to Mako."))
           return late.cloud.borrow.artifact(lease, name, file, (await stat(file)).size)
         },
         words: (lease) => ({ what: operationWords(lease.resource.ref), for: lease.borrower.place.kind === "machine" ? "a cloud Thread" : "a Thread on another device" }),
@@ -1097,9 +1098,9 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     : undefined
   late.lending = lending
   // Beats only while it serves a lease: with nothing lent there's nothing to keep alive.
-  const lendsNow = shell.jobs.demand("this Mac lends something")
+  const lendsNow = shell.jobs.demand(localWords("this Mac lends something"))
   lent.subscribe(() => lendsNow.set(lent.count() > 0))
-  if (lending) shell.jobs.every("beat for what this Mac lends", LEND_BEAT_MS, () => lending.beat(), { needs: [lendsNow] })
+  if (lending) shell.jobs.every(localWords("beat for what this Mac lends"), LEND_BEAT_MS, () => lending.beat(), { needs: [lendsNow] })
   declareFinDefaultMethods(methods, finDefaults, () => {
     const reading = finCapacity.reading()
     return lent.count() ? { ...reading, lent: lent.words() } : reading
@@ -1456,7 +1457,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     const simulatorFacts = async (): Promise<SimulatorFacts | undefined> => {
       // Only a Mac has Xcode and iOS simulators to say: elsewhere there are none, as control's own reading would find.
       if (!onMac()) return undefined
-      const { simulators, simulatorSetup } = await control.load("what this Mac can serve")
+      const { simulators, simulatorSetup } = await control.load(localWords("what this Mac can serve"))
       const [listed, setup] = await Promise.all([simulators.list({ kind: "person" }), simulatorSetup.read()])
       if ("refused" in listed) return undefined
       const here = listed.hosts.find((host) => host.kind === "local")
@@ -1495,12 +1496,12 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       log: (message, fields) => hostLog("borrowing", message, fields),
     })
     late.advertiser = advertiser
-    jobs.every("advertise what this Mac can serve", ADVERTISE_EVERY_MS / 12, () => advertiser.probe(), { firstAfterMs: 10_000 })
+    jobs.every(localWords("advertise what this Mac can serve"), ADVERTISE_EVERY_MS / 12, () => advertiser.probe(), { firstAfterMs: 10_000 })
     // Its room moves only while agents work here (its Fins' places, and the capacity the room watch reads then): looked
     // at every 15 s then, and once as work starts or ends. An idle Mac's room stands still and says nothing.
-    jobs.every("advertise this Mac's room", 15_000, () => advertiser.roomChanged(), { needs: [atWork] })
+    jobs.every(localWords("advertise this Mac's room"), 15_000, () => advertiser.roomChanged(), { needs: [atWork] })
     atWork.onChange(() => advertiser.roomChanged())
-    jobs.every("advertise what this Mac can serve, hourly", ADVERTISE_EVERY_MS / 4, () => advertiser.due())
+    jobs.every(localWords("advertise what this Mac can serve, hourly"), ADVERTISE_EVERY_MS / 4, () => advertiser.due())
   }
   // A message held until a time (a usage limit's reset) sends itself within a tick of it, across restarts.
   // Held messages' times: one timer, armed for the soonest (`LiveConversations.armWakes`), once the host has started.
@@ -1616,7 +1617,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   if (cloudMoves) {
     const unpark = () => void cloudMoves.unpark().catch((error: Error) => hostWarn("moves", "turns paused as this Mac went off couldn't go on yet", { error: error.message }))
     // Asking the account goes on only while Sessions are held from a going-away; on at the start until a look says.
-    const awayHeld = shell.jobs.demand("Sessions held as this Mac went away")
+    const awayHeld = shell.jobs.demand(localWords("Sessions held as this Mac went away"))
     awayHeld.set(true)
     late.awayNotes = new AwayNotes({
       file: join(environment.dataRoot, "cloud", "away.json"),
@@ -1635,7 +1636,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     })
     late.cloud?.checkAccountWaiting?.()
     // Asked again while any waits and the account couldn't answer: on the account's next link too, through the owner check.
-    shell.jobs.every("ask the account whose the Sessions held as this Mac went away are", 30_000, async () => {
+    shell.jobs.every(localWords("ask the account whose the Sessions held as this Mac went away are"), 30_000, async () => {
       // A going-away that didn't happen (this Mac still runs long after) is over: asking goes on.
       late.awayNotes?.lapse()
       if (late.awayNotes?.any() && !cloudConversations?.ownerCheck(false)) await late.awayNotes.ask()
@@ -1690,7 +1691,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     git,
     readCheckpoint: async (cloudThread, sha256, file) => {
       const account = late.cloud
-      if (!account) throw new Error("This Mac signed out of Mako Cloud.")
+      if (!account) throw new Error(localWords("This Mac signed out of Mako Cloud."))
       await account.readCheckpoint(cloudThread, sha256, file)
     },
     callThread: (cloudThread, channel, args) => cloudConversations.callThread(cloudThread, channel, args),
@@ -1821,7 +1822,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       noted: async (sent) => late.readiness?.noted(sent),
       refused: async (note, threads) => late.readiness?.refused(note, threads),
       quiet: async (note, record) => {
-        if (!late.cloud?.quiet) throw new Error("This Mac isn't signed in to Mako Cloud.")
+        if (!late.cloud?.quiet) throw new Error(localWords("This Mac isn't signed in to Mako Cloud."))
         return late.cloud.quiet(note, record)
       },
       accepted: async (note, sessions) => late.awayNotes?.noted(note, sessions),
@@ -1830,7 +1831,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       rows: async () => {
         const cloud = late.cloud
         const [device, listed] = await Promise.all([cloud?.deviceId(), cloud?.sessionListings?.()])
-        if (!device || !listed) throw new Error("This Mac's rows can't be read from the account now.")
+        if (!device || !listed) throw new Error(localWords("This Mac's rows can't be read from the account now."))
         return new Map(listed.sessions.filter((row) => row.runsOn.kind === "device" && row.runsOn.deviceId === device).map((row) => [row.session, row.state]))
       },
     },
@@ -1910,7 +1911,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   if (keepAwake) {
     void keepAwake.refresh()
     // While agents work, a helper that failed is tried again within a minute; with none, nothing is held to keep.
-    shell.jobs.every("keep this Mac awake while agents work", 60_000, () => {
+    shell.jobs.every(localWords("keep this Mac awake while agents work"), 60_000, () => {
       recountWork(true)
       return keepAwake.refresh()
     }, { needs: [atWork] })
@@ -2269,7 +2270,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       leaseOf: (via, thread) => late.lending?.leaseOf(via, thread, "ios-simulator")?.id,
       used: (lease, verb) => late.lending?.used(lease, verb),
       artifact: async (lease, file, name) => {
-        if (!late.lending) throw new Error("This Mac lends nothing")
+        if (!late.lending) throw new Error(localWords("This Mac lends nothing"))
         return late.lending.artifact(lease, file, name)
       },
     }, borrowedSimulators)
@@ -2358,13 +2359,13 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         account: {
           snapshot: async (since) => (await late.cloud?.borrow?.snapshot(since)) ?? null,
           answer: async (ask, answer) => {
-            if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
+            if (!late.cloud?.borrow) throw new Error(localWords("This Mac isn't signed in to Mako."))
             const decided = await late.cloud.borrow.answer(ask, answer)
             // The person's yes to a session this Mac serves: it's served from now, before the link says so.
             if (decided && "lease" in decided) await late.lending?.lent(decided.lease)
           },
           revoke: async (grant) => {
-            if (!late.cloud?.borrow) throw new Error("This Mac isn't signed in to Mako.")
+            if (!late.cloud?.borrow) throw new Error(localWords("This Mac isn't signed in to Mako."))
             await late.cloud.borrow.revoke(grant)
           },
         },

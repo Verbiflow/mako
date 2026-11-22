@@ -5,6 +5,7 @@ import { MOVE_CHECKPOINT_MAX_BYTES, type MoveCheckpoint } from "@mako/protocol/m
 import { contentRef, type Partition, type PartitionFile } from "../attribution/index.js"
 import { commitIn, privateStore, writeCheckpoint } from "./move-checkpoint.js"
 import { mapLimit, onDisk, sidesOf, type MoveLedger } from "./worktree-move.js"
+import { kept } from "../base/path-style.js"
 
 /**
  * One Thread's changes in a checkout others work in too, as a checkpoint a cloud machine continues from: HEAD, with the
@@ -200,7 +201,7 @@ async function settledBy(ledger: Pick<MoveLedger, "settled">, by: number | undef
 
 /** The repository's own files of a partition: a partition reaches every tracked root around or inside the folder. */
 export function own(result: Partition, repoRoot: string): PartitionFile[] {
-  const roots = new Set(result.roots.filter((root) => root.path === repoRoot).map((root) => root.root))
+  const roots = new Set(result.roots.filter((root) => root.path === kept(repoRoot)).map((root) => root.root))
   return result.files.filter((file) => roots.has(file.root))
 }
 

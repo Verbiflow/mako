@@ -12,6 +12,7 @@ import type { TurnFileHunks, TurnFileWriters, TurnUndone, TurnUndoPreview, TurnU
 import { treeDiff, treeFiles } from "../git/index.js"
 import { turnFileHunks } from "./turn-hunks.js"
 import { MovePlanSchema, MoveRefused, resumeMove, rewriteInPlace, type CheckpointComparison, type InPlaceFile, type MovePlan } from "../workspaces/index.js"
+import { kept, within } from "../base/path-style.js"
 
 /*
  * Changes › Turn and "Undo this turn", for any turn of a conversation, live
@@ -325,7 +326,7 @@ export class LiveTurnReview {
  */
 export function undoneTurns(requests: readonly LiveRequest[], scope: TurnUndoScope, checkout: string): Set<string> {
   if (scope.kind === "turn") return new Set(requests.some((request) => request.id === scope.requestId) ? [scope.requestId] : [])
-  const inside = (root: string) => root === checkout || root.startsWith(`${checkout}/`) || checkout.startsWith(`${root}/`)
+  const inside = (root: string) => within(kept(checkout), root) || within(root, kept(checkout))
   return new Set(requests.filter((request) => !request.undone && countedChanges(request.changes)?.files.some((file) => file.own !== undefined && inside(turnFileRoot(file)))).map((request) => request.id))
 }
 

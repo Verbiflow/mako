@@ -1,5 +1,6 @@
 import type { BuildFailure, BuildPhase, UpdateBuildFrom } from "../contracts/app-lifecycle.js"
 import { shortRevision } from "../contracts/update-source-text.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Why an update stopped, in the person's words: which step, whether it's the
@@ -47,11 +48,11 @@ export interface FailureContext {
  */
 const MACHINE: { pattern: RegExp; what: string; next: string }[] = [
   { pattern: /ENOSPC|no space left on device|Not enough free disk space/i, what: "The disk filled up", next: "Free some disk space, then build again." },
-  { pattern: /ENOMEM|JavaScript heap out of memory|Cannot allocate memory/i, what: "The Mac ran out of memory", next: "Close some apps or wait for agents to finish, then build again." },
-  { pattern: /EMFILE|ENFILE|too many open files/i, what: "The Mac ran out of open files", next: "Wait for agents and builds to finish, then build again." },
-  { pattern: /exceeded its time limit|timed out after|didn't finish within/i, what: "A step took longer than its limit", next: "The Mac may be very busy. Build again when it's quieter." },
-  { pattern: /exited with a signal|SIGKILL|SIGTERM/, what: "A step was killed before it finished", next: "Build again. If it keeps happening, the Mac may be short of memory." },
-  { pattern: /Mako is already running|address already in use|EADDRINUSE/i, what: "A check collided with something already running on this Mac", next: "Build again. If it keeps happening, quit any extra Mako windows started from a terminal." },
+  { pattern: /ENOMEM|JavaScript heap out of memory|Cannot allocate memory/i, what: localWords("The Mac ran out of memory"), next: "Close some apps or wait for agents to finish, then build again." },
+  { pattern: /EMFILE|ENFILE|too many open files/i, what: localWords("The Mac ran out of open files"), next: "Wait for agents and builds to finish, then build again." },
+  { pattern: /exceeded its time limit|timed out after|didn't finish within/i, what: "A step took longer than its limit", next: localWords("The Mac may be very busy. Build again when it's quieter.") },
+  { pattern: /exited with a signal|SIGKILL|SIGTERM/, what: "A step was killed before it finished", next: localWords("Build again. If it keeps happening, the Mac may be short of memory.") },
+  { pattern: /Mako is already running|address already in use|EADDRINUSE/i, what: localWords("A check collided with something already running on this Mac"), next: "Build again. If it keeps happening, quit any extra Mako windows started from a terminal." },
   { pattern: /errSecInternalComponent|User interaction is not allowed|keychain/i, what: "macOS wouldn't let Mako sign the app", next: "Unlock your login keychain, then build again." },
   { pattern: /ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|ECONNREFUSED|network|registry\.npmjs/i, what: "The network didn't answer", next: "Check your connection, then build again." },
 ]
@@ -80,7 +81,7 @@ export function describeFailure(error: Error, context: FailureContext, fallback:
   const details = error instanceof StepError ? error.details ?? raw : raw
   if (error instanceof StepError && error.blame && error.next) return { step, blame: error.blame, what: error.message, next: error.next, ...details !== error.message && { details } }
   const machine = MACHINE.find(({ pattern }) => pattern.test(raw) || pattern.test(details))
-  if (machine) return { step, blame: "machine", what: `${STEP_WORDS[step]} failed: ${machine.what.charAt(0).toLowerCase()}${machine.what.slice(1)}.`, next: `This is the Mac, not the code. ${machine.next}`, details }
+  if (machine) return { step, blame: "machine", what: `${STEP_WORDS[step]} failed: ${machine.what.charAt(0).toLowerCase()}${machine.what.slice(1)}.`, next: localWords(`This is the Mac, not the code. ${machine.next}`), details }
   const script = error instanceof StepError && error.script ? ` (${error.script})` : ""
   const code = whose(context)
   const next = context.from === "upstream"

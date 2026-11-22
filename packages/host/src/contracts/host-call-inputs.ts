@@ -985,7 +985,11 @@ const inputs = {
           .optional(),
       }),
       z.string().min(1).max(4_096),
-      z.string().min(2).max(4_096).startsWith("/"),
+      z
+        .string()
+        .min(2)
+        .max(4_096)
+        .regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/),
     ]),
   "mako:clear-crashes": () => z.tuple([]),
   "mako:clear-queue": () => z.tuple([]),
@@ -2038,7 +2042,11 @@ const inputs = {
         .array(
           z.object({
             callId: z.string().min(1).max(512),
-            path: z.string().min(2).max(4_096).startsWith("/"),
+            path: z
+              .string()
+              .min(2)
+              .max(4_096)
+              .regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/),
             evidence: z.enum([
               "shown",
               "produced",
@@ -2646,7 +2654,11 @@ const inputs = {
         .array(
           z.object({
             callId: z.string().min(1).max(512),
-            path: z.string().min(2).max(4_096).startsWith("/"),
+            path: z
+              .string()
+              .min(2)
+              .max(4_096)
+              .regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/),
             evidence: z.enum([
               "shown",
               "produced",

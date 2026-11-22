@@ -1,5 +1,5 @@
 import { access, stat } from "node:fs/promises"
-import { basename, isAbsolute, join, relative, sep } from "node:path"
+import { absoluteFrom, insideOf, kept, nameOf, separatorOf, under, within as inFolder } from "../base/path-style.js"
 import { inSlices, type Steps } from "@mako/sessions/slices"
 import type { CarriedEffect, CarriedName } from "@mako/protocol"
 import { homedir } from "node:os"
@@ -175,9 +175,9 @@ export class ThreadFiles {
     const work = await this.workOf(store, roots, thread)
     const touched = await inSlices(touchesOf(work.activity, work.writes))
     const used = [...touched]
-      .filter(([path]) => within(path, old) && path !== old && !relative(old, path).split(sep).some((part) => QUIET.has(part)))
+      .filter(([path]) => within(path, old) && path !== old && !insideOf(old, path).split("/").some((part) => QUIET.has(part)))
       .sort((a, b) => b[1].at - a[1].at)
-    const rebind = (path: string) => (within(path, old) ? join(next, relative(old, path)) : path)
+    const rebind = (path: string) => (within(path, old) ? under(next, insideOf(old, path)) : path)
     const drafts: ({ was: string; now: string } | { stayed: string })[] = []
     // One line a file: its latest spelling, when several of the agent's led to it.
     const named = new Set<string>()
@@ -204,7 +204,8 @@ export class ThreadFiles {
 
   private toplevel(folder: string): Promise<string | undefined> {
     return this.deps.git.run({ cwd: folder, args: ["rev-parse", "--show-toplevel"], read: true })
-      .then((result) => result.stdout.toString("utf8").trim() || undefined)
+      // Git names a Windows folder its own way (`C:/site`): kept as the record keeps one.
+      .then((result) => { const top = result.stdout.toString("utf8").trim(); return top ? kept(top) : undefined })
       .catch(() => undefined)
   }
 
@@ -298,7 +299,7 @@ export class ThreadFiles {
       for (const entry of page) {
         const root = byId.get(entry.root)
         const certain = entry.certainty === "exact" || entry.certainty === "named"
-        if (root && certain && entry.kind !== "delete") writes.push({ path: join(root, entry.path), at: entry.at })
+        if (root && certain && entry.kind !== "delete") writes.push({ path: under(root, entry.path), at: entry.at })
       }
       if (page.length < WORK_PAGE) break
       seq = page.at(-1)!.seq
@@ -417,7 +418,7 @@ export class ThreadFiles {
       const repository = root.repository && !gone ? await this.repository(root.path) : undefined
       places.push({
         root: root.path,
-        name: basename(root.path),
+        name: nameOf(root.path),
         current: current(root.path),
         ...(repository && { repository }),
         ...(gone && { gone }),
@@ -427,10 +428,10 @@ export class ThreadFiles {
     await Promise.all(elsewhere.map(async (root) => {
       const gone = missing.has(root.path)
       const repository = root.repository && !gone ? await this.repository(root.path) : undefined
-      places.push({ root: root.path, name: basename(root.path), current: current(root.path), ...(repository && { repository }), ...(gone && { gone }) })
+      places.push({ root: root.path, name: nameOf(root.path), current: current(root.path), ...(repository && { repository }), ...(gone && { gone }) })
     }))
     for (const checkout of untracked)
-      if (missing.has(checkout)) places.push({ root: checkout, name: basename(checkout), current: false, gone: true })
+      if (missing.has(checkout)) places.push({ root: checkout, name: nameOf(checkout), current: false, gone: true })
     return places
   }
 
@@ -440,7 +441,7 @@ export class ThreadFiles {
       found = this.deps.git.run({ cwd: root, args: ["rev-parse", "--git-common-dir"], read: true })
         .then((result) => {
           const dir = result.stdout.toString("utf8").trim()
-          return dir ? (isAbsolute(dir) ? dir : join(root, dir)) : undefined
+          return dir ? (absoluteFrom(root, dir)) : undefined
         })
         .catch(() => undefined)
       this.repositories.set(root, found)
@@ -502,7 +503,7 @@ function* touchesOf(activity: readonly Worked[], writes: ThreadWork["writes"], u
   const touched = new Map<string, Touch>()
   const touch = (path: string | undefined, kind: TouchKind, at: number, cwd?: string) => {
     if (!path) return
-    const absolute = isAbsolute(path) ? path : cwd ? join(cwd, path) : undefined
+    const absolute = absoluteFrom(cwd, path)
     if (!absolute) return
     const seen = touched.get(absolute)
     if (!seen || STRENGTH[kind] < STRENGTH[seen.kind] || (kind === seen.kind && at > seen.at)) touched.set(absolute, { kind, at })
@@ -546,7 +547,7 @@ function renamedTo(store: JournalStore, rootOf: (path: string) => StoredRoot | u
       continue
     }
     if (!root || !local || local.kind !== "rename" || local.from !== inside) break
-    current = join(root.path, local.path)
+    current = under(root.path, local.path)
     since = local.at
     after = { root: root.id, seq: local.seq }
   }
@@ -604,15 +605,16 @@ function renamedInGit(histories: ReadonlyMap<string, RenameHistory>, path: strin
   let root: string | undefined
   for (const candidate of histories.keys()) if (within(path, candidate) && (!root || candidate.length > root.length)) root = candidate
   if (!root || path === root) return undefined
-  const to = histories.get(root)!.follow(relative(root, path), since)
-  return to ? join(root, to) : undefined
+  const to = histories.get(root)!.follow(insideOf(root, path), since)
+  return to ? under(root, to) : undefined
 }
 
-const within = (path: string, root: string) => path === root || path.startsWith(root + sep)
+const within = (path: string, root: string) => inFolder(root, path)
 
 /** `path`, then each folder above it, the nearest first: exactly the `root`s `within(path, root)` holds for. */
 function* above(path: string): Generator<string> {
   yield path
+  const sep = separatorOf(path)
   for (let at = path.lastIndexOf(sep); at >= 0; at = at > 0 ? path.lastIndexOf(sep, at - 1) : -1) yield path.slice(0, at)
 }
 

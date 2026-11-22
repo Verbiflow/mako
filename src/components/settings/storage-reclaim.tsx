@@ -5,6 +5,7 @@ import { Action, Check, Chip, IconAction, ListCard, ListCardRow, Meter } from "@
 import { IfCanReveal } from "@/components/ui/machine-gate"
 import { formatBytes, formatRelative } from "@/lib/format"
 import { desktop } from "@/state/desktop"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** How many rows a class's preview draws; the rest are counted. */
 const SHOWN_ITEMS = 150
@@ -24,7 +25,7 @@ const CLASSES = {
   },
   approve: {
     title: "Needs your OK",
-    body: "Nothing uses these either, but they belong to Threads you haven't archived, to Threads this Mac no longer lists, or to a project's app data every Thread there shares.",
+    body: localWords("Nothing uses these either, but they belong to Threads you haven't archived, to Threads this Mac no longer lists, or to a project's app data every Thread there shares."),
   },
   keep: {
     title: "Kept",

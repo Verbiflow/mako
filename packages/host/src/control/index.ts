@@ -56,6 +56,7 @@ import { LocalSimulatorHost, localDriving } from "./simulators/local-host.js"
 import { declareSimulatorMethods } from "./simulators/methods.js"
 import type { SimulatorAgent } from "../contracts/simulators.js"
 import { SimulatorTools } from "./simulators/mcp.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 export { applyControlEnvironment, controlLine, controlNote } from "./launch.js"
 export { ControlResidency } from "./residency.js"
@@ -472,7 +473,7 @@ export function declareControlMethods(methods: MethodTable, control: Control, ap
       await grantDesktopPermissions(linux, control.desktopGrants)
       return control.computerPermissions()
     }
-    if (!desktop.answers("computer-permissions-request")) throw new Error("Open Mako's desktop app on this Mac to grant computer permissions.")
+    if (!desktop.answers("computer-permissions-request")) throw new Error(localWords("Open Mako's desktop app on this Mac to grant computer permissions."))
     return desktop.ask("computer-permissions-request", {})
   })
   methods.handle("mako:computer-permissions-revoke", async () => {

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -14,6 +14,7 @@ import { applyContextChange, WriterContextChangeSchema, type HeldContext } from 
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { residentOf } from "@mako/host/conversations/live-runtime"
 import { LiveTurnChanges, type TurnLedger } from "@mako/host/conversations/live-turn-changes"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * What crosses between the host and the journal's writer, and how often: the host's context once a change, a
@@ -159,7 +160,7 @@ test("the tracker says once when changes are settled through a point", async (t)
     assert.equal(said.filter((through) => through >= changedAt).length, 1, "and not again while nothing moves")
   } finally {
     await tracker.close()
-    await rm(storage, { recursive: true, force: true })
+    await removeScratch(storage)
   }
 })
 
@@ -199,6 +200,6 @@ test("a turn's settled count follows the writer's word instead of asking again a
   } finally {
     t.mock.timers.reset()
     await journal.close()
-    await rm(folder, { recursive: true, force: true })
+    await removeScratch(folder)
   }
 })

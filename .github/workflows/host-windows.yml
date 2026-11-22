@@ -126,11 +126,51 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
+  # The record of which Thread changed which file, on Windows: its own suites, each run and counted.
+  attribution:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    # The suites assert the sentences a Mac shows (`computer-words.ts`).
+    env:
+      MAKO_COMPUTER_WORDS: mac
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: 24
+          package-manager-cache: false
+      - uses: ./.github/actions/install-dependencies
+      - name: Build the host
+        run: npm run build:control-runtime
+      # The suites make repositories and compare what they wrote: Git leaves their line ends as written, and the
+      # temporary folder is named in full (the runner's own is under a short name, RUNNER~1).
+      - name: The attribution suites
+        shell: pwsh
+        env:
+          TEMP: ${{ runner.temp }}
+          TMP: ${{ runner.temp }}
+          MAKO_SUITE_LOGS: ${{ runner.temp }}/attribution-logs
+        run: |
+          git config --global core.autocrlf false
+          node scripts/windows-host/run-attribution-suites.mjs
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: attribution-suite-logs
+          path: ${{ runner.temp }}/attribution-logs/
+          retention-days: 14
+          if-no-files-found: ignore
+
   # The same changes on Linux, which must behave as before: the host's suites, the headless client end to end, the
   # typecheck and the repository's own rules.
   ubuntu:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    # The suites assert the sentences a Mac shows (`computer-words.ts`).
+    env:
+      MAKO_COMPUTER_WORDS: mac
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:

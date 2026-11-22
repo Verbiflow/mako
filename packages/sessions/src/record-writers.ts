@@ -1,6 +1,7 @@
 import { z } from "zod"
 import type { RecordRow, RecordValue } from "./harness-records.js"
 import { compareVersions, namesBuild } from "./runtime-version.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Which build of a harness wrote a session's records, kept with each
@@ -305,7 +306,7 @@ export function outdatedOf(gate: RestoreGate): OutdatedRuntime | null {
 export function outdatedText(label: string, outdated: OutdatedRuntime): string {
   const program = outdated.line ?? label
   if (outdated.lacks?.length) {
-    const here = outdated.installed === null ? "" : `, and this Mac has ${program} ${outdated.installed}`
+    const here = outdated.installed === null ? "" : localWords(`, and this Mac has ${program} ${outdated.installed}`)
     return `${program}'s store here has no ${outdated.lacks.join(", ")}, which this session's records hold: a newer ${program} wrote it${here}.`
   }
   if (outdated.reader !== undefined) {
@@ -314,7 +315,7 @@ export function outdatedText(label: string, outdated: OutdatedRuntime): string {
     if (outdated.upTo) return `Mako can't tell which ${program} version wrote this session; it may have been as new as ${outdated.upTo}, and ${reads}.`
     return `Mako can't tell which ${program} version wrote this session, and ${reads}.`
   }
-  const here = outdated.installed === null ? `no ${program} is installed here` : `this Mac has ${program} ${outdated.installed}`
+  const here = outdated.installed === null ? `no ${program} is installed here` : localWords(`this Mac has ${program} ${outdated.installed}`)
   if (outdated.wrote) return `${program} ${outdated.wrote.version} wrote this session, and ${here}, which may not read it.`
   if (outdated.upTo) return `Mako can't tell which ${program} version wrote this session; it may have been as new as ${outdated.upTo}, and ${here}.`
   return outdated.installed === null

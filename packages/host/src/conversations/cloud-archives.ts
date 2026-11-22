@@ -5,6 +5,7 @@ import { CloudArchiver, type ArchiveInputs, type CloudArchivePlans } from "../co
 import type { CloudArchiveOutcome, CloudArchiveStep } from "../contracts/thread-lifecycle.js"
 import type { EncodedValue } from "../contracts/runtime-value.js"
 import type { CloudAccount } from "../usage/index.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * A cloud Thread archived by its person from this Mac: the procedure every device runs (`contracts/cloud-archive.ts`),
@@ -33,13 +34,13 @@ export class CloudArchives {
       plans: filePlans(options.folder),
       account: () => {
         const account = options.account()
-        if (!account) throw new Error("This Mac signed out of Mako Cloud.")
+        if (!account) throw new Error(localWords("This Mac signed out of Mako Cloud."))
         return account
       },
       callThread: (...args) => options.cloud.callThread(...args),
       step: (step) => options.step(step),
       log: { info: (message, fields) => hostLog("archives", message, fields), warn: (message, fields) => hostWarn("archives", message, fields) },
-      self: "This Mac",
+      self: localWords("This Mac"),
     })
   }
 

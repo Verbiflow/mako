@@ -23,6 +23,7 @@ import {
 } from "../contracts/model-connections.js"
 import { MODEL_WIRES, routeAccepted, type HarnessModelRoutes, type ModelRoute, type ModelRoutesCapability } from "../contracts/model-routes.js"
 import type { RoutedLaunch } from "./model-routes.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** A saved connection's key is the saved key `connection/<id>`. */
 const SECRET_PREFIX = "connection/"
@@ -92,9 +93,9 @@ export function connectionUrl(provider: ModelConnectionProvider, entered: string
   }
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
   if ((url.protocol !== "https:" && !(local && url.protocol === "http:")) || url.username || url.password || url.search || url.hash)
-    throw new ConnectionError("Use HTTPS, or HTTP on this Mac. The URL can't hold credentials, a query or a fragment.")
+    throw new ConnectionError(localWords("Use HTTPS, or HTTP on this Mac. The URL can't hold credentials, a query or a fragment."))
   if (provider.kind === "local" && !local)
-    throw new ConnectionError("A local server is one on this Mac: localhost, 127.0.0.1 or [::1].")
+    throw new ConnectionError(localWords("A local server is one on this Mac: localhost, 127.0.0.1 or [::1]."))
   const home = provider.kind === "gateway" ? new URL(provider.baseUrl ?? provider.urlHint ?? "").hostname : undefined
   if (home && url.hostname !== home) throw new ConnectionError(`${provider.name}'s URL is on ${home}.`)
   if (provider.urlHint && /<[^>]*>/.test(raw))

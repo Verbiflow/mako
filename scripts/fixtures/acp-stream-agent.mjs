@@ -2,6 +2,8 @@
 // host under load: a few words every MEASURE_CHUNK_MS, a thought now and then,
 // and a shell command with a page of output every two seconds.
 import { randomUUID } from "node:crypto"
+import { writeFileSync } from "node:fs"
+import { resolve } from "node:path"
 import { Readable, Writable } from "node:stream"
 import { AgentSideConnection, ndJsonStream } from "@agentclientprotocol/sdk"
 
@@ -13,6 +15,10 @@ const untilCancelled = process.env.MEASURE_UNTIL_CANCELLED
 // How long a cancelled prompt takes to answer that it was cancelled, as a harness under load does: a Stop is asked
 // at once, and its turn reads as stopped only once the harness says so.
 const cancelAnswer = Number(process.env.MEASURE_CANCEL_ANSWER_MS ?? 0)
+// A file (in the agent's folder unless absolute) each turn writes through an edit tool call, as an agent edits one:
+// for checks of what a turn changed.
+const editFile = process.env.MEASURE_EDIT_FILE
+let turns = 0
 const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 const words = "the host reads each update decodes it journals it and sends it to every window watching".split(" ")
 const output = Array.from({ length: 40 }, (_, line) => `line ${line}: ${words.join(" ")}`).join("\n")
@@ -38,6 +44,13 @@ new AgentSideConnection((connection) => {
       const began = Date.now()
       const held = Boolean(untilCancelled) && prompt.some((block) => block.text?.includes(untilCancelled))
       let step = 0
+      if (editFile) {
+        const path = resolve(editFile)
+        const content = `edited by turn ${++turns} of ${sessionId}\n`
+        await update({ sessionUpdate: "tool_call", toolCallId: `edit-${turns}`, title: `Edit ${editFile}`, kind: "edit", status: "in_progress", locations: [{ path }], rawInput: { file_path: path, content } })
+        writeFileSync(path, content)
+        await update({ sessionUpdate: "tool_call_update", toolCallId: `edit-${turns}`, status: "completed", content: [{ type: "diff", path, oldText: null, newText: content }] })
+      }
       while (!cancelled && (held || Date.now() - began < duration)) {
         step++
         const text = Array.from({ length: 4 }, (_, index) => words[(step * 4 + index) % words.length]).join(" ")

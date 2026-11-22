@@ -27,6 +27,7 @@ import { JournalStore } from "@mako/host/attribution/journal-store"
 import { JournalReader } from "@mako/host/attribution/journal-reader"
 import { contentRef } from "@mako/host/attribution/content"
 import { attribute, Evidence, reaches } from "@mako/host/attribution/evidence"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * Shapes of failures found by replaying real concurrent sessions through the
@@ -968,7 +969,7 @@ test("a root asleep whose folder went is let go when it wakes or the host opens"
   const w = await world({ "src/a.ts": "export const a = 1\n" }, { sleepAfterMs: HOUR })
   await w.tracker.close()
   w.clock.advance(2 * HOUR)
-  rmSync(w.repo, { recursive: true, force: true })
+  removeScratch(w.repo)
   const reopened = await w.open()
   await reopened.settled()
   assert.equal(reopened.rootStates().size, 0)
@@ -1192,8 +1193,8 @@ test("the journal opens before its roots catch up, and a turn while one catches 
   // Caught up from the history, the change is the call's that ran when it landed.
   assert.match(certainty(changes[0]!.author), /^(exact|window):T1$/, "and given to the Thread whose call made it")
   await tracker.close()
-  rmSync(project, { recursive: true, force: true })
-  rmSync(storage, { recursive: true, force: true })
+  removeScratch(project)
+  removeScratch(storage)
 })
 
 test("lines there before tracking are given to the session whose record wrote them, and only those", async () => {
@@ -2007,7 +2008,7 @@ test("an attribution backlog yields to I/O and takes evidence arriving during it
     clearInterval(timer)
     release()
     await tracker.close()
-    rmSync(storage, { recursive: true, force: true })
+    removeScratch(storage)
   }
 })
 
@@ -2161,7 +2162,7 @@ test("no attribution slice blocks the event loop long on a 1,500-change backlog 
   } finally {
     release()
     await tracker.close()
-    rmSync(storage, { recursive: true, force: true })
+    removeScratch(storage)
   }
 })
 
@@ -2342,6 +2343,6 @@ test("counting a long renamed file chain yields between bounded indexed reads", 
     await assert.rejects(stopping, StepsStopped, "closing between slices cancels before another SQL read")
   } finally {
     if (!store.closed) store.close()
-    rmSync(folder, { recursive: true, force: true })
+    removeScratch(folder)
   }
 })

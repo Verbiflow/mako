@@ -7,6 +7,7 @@ import { hostLog, hostWarn, hostError } from "../base/host-log.js"
 import type { AttributionDeps, CataloguedSession } from "./index.js"
 import type { BackfillResult } from "./backfill.js"
 import { FromWriterSchema, WriterSnapshotSchema, WriterCommandResults, type WriterReply, type WriterStateMessage, type WriterCommandResult, type WriterHostResult, type ToWriter, type WriterCommand, type WriterHostRequest, type WriterSettings, type WriterSnapshot, type WriterContextChange } from "./writer-protocol.js"
+import { kept } from "../base/path-style.js"
 
 const ASK_MS = 30_000
 const PROBE_MS = 5_000
@@ -246,7 +247,8 @@ export class AttributionWriter {
       case "repository": {
         const found = await locate(this.deps.git, request.root).catch(() => null)
         if (generation.closed) throw new Error("The writing owner has stopped.")
-        if (found?.root !== request.root) return null
+        // Git names a Windows folder its own way (`C:/site`); the record keeps it as Windows does.
+        if (!found || kept(found.root) !== kept(request.root)) return null
         const watchGitDir = this.deps.watchGitDir
         const repository = { ...(watchGitDir && { watchHead: (moved: () => void) => watchGitDir(request.root, moved) }) }
         generation.repositories.set(request.root, repository)

@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path"
+import { folderOf, joined } from "../base/path-style.js"
 import { z } from "zod"
 import { scriptRuns, type ScriptRun } from "@mako/sessions/tool-effect-reading"
 
@@ -71,7 +71,7 @@ async function follow(run: ScriptRun, read: ScriptReader, keep: (text: string, f
       // A program run by its path is a script only by its first line, which also says whether a shell runs it.
       if (run.shell === undefined && !text.startsWith("#!")) return []
       const shell = run.shell ?? SHELL_LINE.test(text)
-      if (!keep(text, [dirname(run.path), run.cwd], `file:${run.path}:${run.cwd}`)) return []
+      if (!keep(text, [folderOf(run.path), run.cwd], `file:${run.path}:${run.cwd}`)) return []
       return shell ? [[text, run.cwd]] : []
     }
     case "package": {
@@ -107,7 +107,7 @@ const PackageSchema = z.object({ scripts: z.record(z.string(), z.string()).optio
 async function packageScripts(cwd: string, read: ScriptReader): Promise<{ folder: string; scripts: Partial<Record<string, string>> } | undefined> {
   let folder = cwd
   for (let level = 0; level < PACKAGE_LEVELS; level++) {
-    const text = await read(join(folder, "package.json"))
+    const text = await read(joined(folder, "package.json"))
     if (text === undefined) return undefined
     if (text !== null) {
       let json: unknown
@@ -119,7 +119,7 @@ async function packageScripts(cwd: string, read: ScriptReader): Promise<{ folder
       const parsed = PackageSchema.safeParse(json)
       return parsed.success && parsed.data.scripts ? { folder, scripts: parsed.data.scripts } : undefined
     }
-    const up = dirname(folder)
+    const up = folderOf(folder)
     if (up === folder) return undefined
     folder = up
   }
@@ -128,7 +128,7 @@ async function packageScripts(cwd: string, read: ScriptReader): Promise<{ folder
 
 async function firstMakefile(cwd: string, read: ScriptReader): Promise<{ path: string; text: string | null | undefined } | undefined> {
   for (const name of MAKEFILES) {
-    const path = join(cwd, name)
+    const path = joined(cwd, name)
     const text = await read(path)
     if (text !== null) return { path, text }
   }

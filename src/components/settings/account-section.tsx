@@ -24,6 +24,7 @@ import { TurnOnCard } from "@/components/settings/cloud-turn-on"
 import { formatDay, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import type { CloudAccountState, CloudBrowserSession, CloudKeptSignIn, CloudPerson, CloudSignInRow } from "@/lib/types"
+import { localWords } from "@mako/protocol/computer-words"
 
 type SignedIn = Extract<CloudAccountState, { status: "signed-in" }>
 
@@ -65,7 +66,7 @@ function SignedOutView({ state, cloud }: { state: Exclude<CloudAccountState, Sig
           : waiting
             ? "Waiting for your browser"
             : notice?.kind === "removed" || notice?.kind === "reused"
-              ? "This Mac was signed out"
+              ? localWords("This Mac was signed out")
               : "Sign in to Mako"}
       </h3>
       <p className="mt-1.5 max-w-[25rem] text-ui leading-relaxed text-pretty text-muted-foreground">
@@ -75,12 +76,12 @@ function SignedOutView({ state, cloud }: { state: Exclude<CloudAccountState, Sig
             ? "Choose your account on the page that opened. Mako carries on by itself once you have."
             : notice?.kind === "removed" || notice?.kind === "reused"
               ? notice.message
-              : "Connect this Mac to your Mako account, or create one. Signing in happens in your browser with GitHub or Google, so Mako never sees your password."}
+              : localWords("Connect this Mac to your Mako account, or create one. Signing in happens in your browser with GitHub or Google, so Mako never sees your password.")}
       </p>
 
       {state.status === "signed-out" && state.finishing ? (
         <p data-sign-out-finishing className="mt-4 max-w-[25rem] text-label leading-relaxed text-faint">
-          Removing this Mac from your account in the cloud. It couldn't be reached just now, so Mako keeps trying until it has.
+          {localWords("Removing this Mac from your account in the cloud. It couldn't be reached just now, so Mako keeps trying until it has.")}
         </p>
       ) : null}
       {notice && notice.kind !== "removed" && notice.kind !== "reused" ? (
@@ -196,7 +197,7 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
             {cloud ? `Signed in to ${hostOf(cloud)}` : "Signed in"}
             {account.signedInWith ? ` ${SIGNED_IN_WITH[account.signedInWith]}` : null}
             {state.kept === "keychain"
-              ? ", kept in this Mac's keychain"
+              ? localWords(", kept in this Mac's keychain")
               : state.kept === "fixture"
                 ? ". A fixture desk keeps this only until it quits"
                 : null}
@@ -205,7 +206,7 @@ function SignedInView({ state, cloud }: { state: SignedIn; cloud: string | null 
       </div>
 
       {state.kept === "memory" ? (
-        <Note tone="caution">This Mac's keychain isn't available, so you'll sign in again after Mako quits.</Note>
+        <Note tone="caution">{localWords("This Mac's keychain isn't available, so you'll sign in again after Mako quits.")}</Note>
       ) : null}
       {failure?.action === "sign-out" ? <Note tone="negative">{failure.message}</Note> : null}
 
@@ -239,15 +240,15 @@ function CloudSignIns({ account }: { account: string }) {
       <ListCard>
         <ListCardRow className="flex items-center justify-between gap-6">
           <div className="min-w-0">
-            <div className="text-ui font-medium">Use this Mac's sign-ins</div>
+            <div className="text-ui font-medium">{localWords("Use this Mac's sign-ins")}</div>
             <p className="mt-0.5 max-w-[30rem] text-label leading-relaxed text-pretty text-muted-foreground">
-              Cloud Threads run each agent as it's signed in here. Mako Cloud keeps those sign-ins fresh for this Mac and the cloud alike, so cloud Threads keep working while this Mac sleeps.
+              {localWords("Cloud Threads run each agent as it's signed in here. Mako Cloud keeps those sign-ins fresh for this Mac and the cloud alike, so cloud Threads keep working while this Mac sleeps.")}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
             {busy ? <Spinner className="size-3.5 text-faint" /> : null}
             <Toggle
-              label="Use this Mac's sign-ins in the cloud"
+              label={localWords("Use this Mac's sign-ins in the cloud")}
               on={sharing}
               disabled={!signIns || busy}
               onChange={() => void cloudAccount.shareSignIns(!sharing)}
@@ -262,7 +263,7 @@ function CloudSignIns({ account }: { account: string }) {
         <Note tone="negative">{failure}</Note>
       ) : lapsing ? (
         <p className="px-1 text-label leading-relaxed text-pretty text-faint">
-          Some keys last only hours, and this Mac sends fresh ones while it's awake.
+          {localWords("Some keys last only hours, and this Mac sends fresh ones while it's awake.")}
         </p>
       ) : null}
     </div>
@@ -287,14 +288,14 @@ function HandOffSettings() {
       <ListCard>
         <ListCardRow className="flex items-center justify-between gap-6">
           <div className="min-w-0">
-            <div className="text-ui font-medium">Hand off when this Mac sleeps</div>
+            <div className="text-ui font-medium">{localWords("Hand off when this Mac sleeps")}</div>
             <p className="mt-0.5 max-w-[30rem] text-label leading-relaxed text-pretty text-muted-foreground">
               {settings?.unavailable ??
-                "Close the lid while agents work and they go on in the cloud: each turn pauses, moves with its Thread, and continues there. To fit in the few seconds sleep allows, a Thread at work keeps a cloud machine ready, paused, and sends its changes ahead every half minute while this is on. Anything that can't go in time stays here and goes on when the Mac wakes."}
+                localWords("Close the lid while agents work and they go on in the cloud: each turn pauses, moves with its Thread, and continues there. To fit in the few seconds sleep allows, a Thread at work keeps a cloud machine ready, paused, and sends its changes ahead every half minute while this is on. Anything that can't go in time stays here and goes on when the Mac wakes.")}
             </p>
           </div>
           <Toggle
-            label="Hand off to the cloud when this Mac sleeps"
+            label={localWords("Hand off to the cloud when this Mac sleeps")}
             on={onSleep && !settings?.unavailable}
             disabled={!settings || settings.unavailable !== undefined}
             onChange={() => void handOff.setOnSleep(!onSleep)}
@@ -304,7 +305,7 @@ function HandOffSettings() {
           <div className="min-w-0">
             <div className="text-ui font-medium">When you quit while agents work</div>
             <p className="mt-0.5 max-w-[30rem] text-label leading-relaxed text-pretty text-muted-foreground">
-              Ask each time, keep them working on this Mac, or hand them to the cloud. Stopping them is always asked.
+              {localWords("Ask each time, keep them working on this Mac, or hand them to the cloud. Stopping them is always asked.")}
             </p>
           </div>
           <Segmented
@@ -333,15 +334,15 @@ type RowView = {
 
 /** Why the provider stopped taking a sign-in, and that signing in again here brings cloud Threads back too. */
 const REFUSED = {
-  revoked: (name: string) => `${name} signed this sign-in out. Sign in again on this Mac and cloud Threads follow.`,
-  interrupted: (name: string) => `A refresh was cut off before it was saved. Sign in to ${name} again on this Mac.`,
-  unavailable: (name: string) => `Mako Cloud can't read this sign-in any more. Sign in to ${name} again on this Mac.`,
+  revoked: (name: string) => localWords(`${name} signed this sign-in out. Sign in again on this Mac and cloud Threads follow.`),
+  interrupted: (name: string) => localWords(`A refresh was cut off before it was saved. Sign in to ${name} again on this Mac.`),
+  unavailable: (name: string) => localWords(`Mako Cloud can't read this sign-in any more. Sign in to ${name} again on this Mac.`),
 } satisfies Record<NonNullable<CloudKeptSignIn["problem"]>["reason"], (name: string) => string>
 
 /** Why Mako Cloud last refreshed a sign-in, where it tells something: held while this Mac slept, or for cloud Threads. */
 const REFRESHED_BECAUSE = {
   schedule: "",
-  returned: ", as this Mac woke",
+  returned: localWords(", as this Mac woke"),
   machines: ", for cloud Threads",
   operator: "",
   lapsing: "",
@@ -352,12 +353,12 @@ function rotatingView(row: CloudSignInRow, name: string): RowView {
   const kept = row.kept
   if (row.status === "failed") return { detail: row.problem, negative: true }
   if (kept?.state === "needs-reconnect") return { detail: REFUSED[kept.problem?.reason ?? "revoked"](name), negative: true, signIn: true }
-  if (row.status === "signed-out") return { detail: "Not signed in on this Mac", signIn: true }
+  if (row.status === "signed-out") return { detail: localWords("Not signed in on this Mac"), signIn: true }
   if (!kept) return { chip: { tone: "neutral", label: "Syncing" }, detail: row.label ?? undefined }
   const refreshed = `Refreshed ${ago(kept.refreshedAt ?? kept.connectedAt)}${REFRESHED_BECAUSE[kept.refreshedBecause ?? "schedule"]}`
   if (kept.state === "retrying")
     return { chip: { tone: "neutral", label: "Retrying" }, detail: [kept.label, `${name} didn't answer; Mako Cloud tries again shortly`].filter(Boolean).join(" · ") }
-  if (!kept.mine) return { chip: { tone: "neutral", label: "From another Mac" }, detail: [kept.label, refreshed].filter(Boolean).join(" · ") }
+  if (!kept.mine) return { chip: { tone: "neutral", label: localWords("From another Mac") }, detail: [kept.label, refreshed].filter(Boolean).join(" · ") }
   return { chip: { tone: "positive", label: "In sync" }, detail: [kept.label, refreshed].filter(Boolean).join(" · ") }
 }
 
@@ -371,7 +372,7 @@ const SIGN_IN_CHIPS = {
 /** A key, sent as it is. */
 function keyView(row: CloudSignInRow): RowView {
   if (row.status === "failed") return { detail: row.problem, negative: true }
-  if (row.status === "signed-out") return { detail: "Not signed in on this Mac", signIn: true }
+  if (row.status === "signed-out") return { detail: localWords("Not signed in on this Mac"), signIn: true }
   return { chip: SIGN_IN_CHIPS[row.status], detail: [row.label, lasts(row.expiresAt)].filter(Boolean).join(" · ") }
 }
 
@@ -398,7 +399,7 @@ function CloudSignInRowView({ row }: { row: CloudSignInRow }) {
         <Action
           tone={view.negative ? "solid" : "outline"}
           size="xs"
-          aria-label={`Sign in to ${name} on this Mac`}
+          aria-label={localWords(`Sign in to ${name} on this Mac`)}
           onClick={() => window.dispatchEvent(new CustomEvent("mako:settings", { detail: "agents" }))}
         >
           Sign in
@@ -419,7 +420,7 @@ function ago(at: string): string {
 function lasts(expiresAt: string | null): string {
   if (!expiresAt) return "Doesn't lapse"
   const hours = hoursLeft(expiresAt)
-  if (hours <= 0) return "Lapsed; refreshing on this Mac"
+  if (hours <= 0) return localWords("Lapsed; refreshing on this Mac")
   if (hours < 1) return `Good for ${Math.max(1, Math.round(hours * 60))} min`
   if (hours < 48) return `Good for ${Math.round(hours)} h`
   return `Good for ${Math.round(hours / 24)} days`

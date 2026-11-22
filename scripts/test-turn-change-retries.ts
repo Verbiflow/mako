@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -8,6 +8,7 @@ import { TURN_CHANGES_VERSION } from "@mako/host/contracts/turn-changes"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { residentOf } from "@mako/host/conversations/live-runtime"
 import { LiveTurnChanges, type TurnLedger } from "@mako/host/conversations/live-turn-changes"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 const microtasks = async () => { for (let i = 0; i < 60; i++) await Promise.resolve() }
 
@@ -43,6 +44,6 @@ for (const incomplete of [false, true]) for (const recovers of [true, false]) te
   } finally {
     t.mock.timers.reset()
     await journal.close()
-    await rm(folder, { recursive: true, force: true })
+    await removeScratch(folder)
   }
 })

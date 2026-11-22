@@ -44,6 +44,7 @@ import { checkoutUpstream, seedDependencies } from "./upstream-copy.js"
 import { runProcessGroup } from "./process-group.js"
 import { DependencyInstallError, installDependencies, missingDependencies, uninstalledPackages } from "./local-update-dependencies.js"
 import type { Git } from "@mako/git"
+import { localWords } from "@mako/protocol/computer-words"
 
 const execute = hostCommand
 
@@ -587,7 +588,7 @@ export class LocalUpdates {
         const machine = /didn't finish within|ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNRESET|network/i.test(error.message)
         throw new StepError("installing", error.message, {
           blame: machine ? "machine" : "checkout",
-          next: machine ? "This is the network or the Mac, not the code. Build again when it's back."
+          next: machine ? localWords("This is the network or the Mac, not the code. Build again when it's back.")
             : from === "upstream" ? `Mako installs into its own copy, never your checkout. Build again; if it fails the same way, ${upstream?.name ?? "the upstream"}'s package-lock.json is the problem.`
             : "Mako installs into its own copy, never your checkout.",
           cause: error,
@@ -681,7 +682,7 @@ export class LocalUpdates {
     const reading = this.options.ciPassed
       ? await this.options.ciPassed(commit)
       : repository ? await readCi((path) => githubApi(source, path), repository, upstream.slice(slash + 1), commit) : { passed: false as const, why: "its upstream isn't on GitHub" }
-    hostLog("updates", reading.passed ? "CI passed this commit; only this Mac's checks run" : "every check runs", { revision: commit.slice(0, 12), ...reading.passed ? { run: reading.run } : { why: reading.why } })
+    hostLog("updates", reading.passed ? localWords("CI passed this commit; only this Mac's checks run") : "every check runs", { revision: commit.slice(0, 12), ...reading.passed ? { run: reading.run } : { why: reading.why } })
     return reading.passed
   }
 }
@@ -760,9 +761,9 @@ export async function checkPerformance(npm: string, checkout: string, script: st
   })
   if (failure) {
     if (slower.length)
-      throw new StepError("checking", `The performance check found ${slower.length === 1 ? "a timing" : `${slower.length} timings`} clearly slower than the code before it, measured beside it on this Mac: ${slower.join("; ")}.`, {
+      throw new StepError("checking", localWords(`The performance check found ${slower.length === 1 ? "a timing" : `${slower.length} timings`} clearly slower than the code before it, measured beside it on this Mac: ${slower.join("; ")}.`), {
         blame: "code",
-        next: "That's the code, not the Mac: a Mac too busy to tell reads as unsure, never slower. Build again once a fix lands.",
+        next: localWords("That's the code, not the Mac: a Mac too busy to tell reads as unsure, never slower. Build again once a fix lands."),
         details: failure.message,
         script,
       })

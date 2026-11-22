@@ -9,6 +9,7 @@ import { desktop } from "@/state/desktop"
 import { deviceEvidence, placeCounts } from "@/lib/device-places"
 import { shallowEqual } from "@/state/store"
 import type { CloudAccountState, CloudDevice } from "@/lib/types"
+import { localWords } from "@mako/protocol/computer-words"
 
 type SignedIn = Extract<CloudAccountState, { status: "signed-in" }>
 
@@ -71,7 +72,7 @@ function AccountDevices({ state, cloud }: { state: SignedIn; cloud: string | nul
       form="desk"
       devices={list}
       current={current.id}
-      currentLabel="This Mac"
+      currentLabel={localWords("This Mac")}
       currentReach={state.runtime ? REACH_WORDS[state.runtime] : undefined}
       runs={runs}
       quiet={quiet}

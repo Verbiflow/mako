@@ -1,5 +1,6 @@
 import type { SyncFailureKind } from "@mako/sessions/scoped-uploads"
 import { z } from "zod"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * How this device's Sessions stand in the account (`mako:sync-status`), for Settings › Account. With Mako Cloud,
@@ -62,8 +63,8 @@ export interface SyncFailureWords {
 const FAILURE_WORDS = {
   refused: { what: "The account turned down part of it", next: "Mako sends it again on its own, less often each time. If it keeps happening, copy the details." },
   unreachable: { what: "Mako can't reach the account", next: "It sends it again on its own once the account answers." },
-  conflict: { what: "It went on in two places", next: "Mako sends this Mac's copy in its place on its own. Nothing on this Mac is lost." },
-  unread: { what: "Mako couldn't read it on this Mac", next: "It reads it again at the Session's next change." },
+  conflict: { what: "It went on in two places", next: localWords("Mako sends this Mac's copy in its place on its own. Nothing on this Mac is lost.") },
+  unread: { what: localWords("Mako couldn't read it on this Mac"), next: "It reads it again at the Session's next change." },
   failed: { what: "It couldn't be sent", next: "Mako sends it again on its own." },
 } satisfies Record<SyncFailureKind, SyncFailureWords>
 
@@ -114,8 +115,8 @@ export type SyncStatus = z.infer<typeof SyncStatusSchema>
  * not synced's correlation ID, which leads to the gateway's log.
  */
 export function describeSending(status: SyncStatus): string {
-  if (status.state === "off") return status.reason === "signed-out" ? "Nothing leaves this Mac: it isn't signed in." : "Nothing leaves this Mac: the account has no cloud."
-  if (status.state === "starting") return `Reading ${plural(status.sessions, "Session")} on this Mac.`
+  if (status.state === "off") return status.reason === "signed-out" ? localWords("Nothing leaves this Mac: it isn't signed in.") : localWords("Nothing leaves this Mac: the account has no cloud.")
+  if (status.state === "starting") return localWords(`Reading ${plural(status.sessions, "Session")} on this Mac.`)
   const parts: string[] = []
   const notSynced = status.notSynced ?? status.failures.length
   const [first] = status.failures

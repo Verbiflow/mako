@@ -14,6 +14,7 @@ import { followCheckouts, useCheckoutHead } from "@/state/checkout-heads"
 import { APEX_WORD, FIN_WORD } from "@mako/host/contracts/agents"
 import { backToApex, childConversation, apexConversation, threadChildren, unaddress, useAddressee, useApexView, useThreadChildren, type FinInApex } from "@/state/apex-fins"
 import { useOnScreen } from "@/state/thread-sessions"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** The Fin open in place on screen, with its entry in its Apex's roster: nothing while anything else is shown. */
 function useFinInApex(): { open: FinInApex; agent: NativeAgent | undefined } | null {
@@ -62,7 +63,7 @@ export function ChildBreadcrumb() {
       <span className="min-w-0 truncate text-ui font-medium text-foreground">{agent?.title ?? FIN_WORD}</span>
       <span className="flex min-w-0 shrink items-center gap-1.5 overflow-hidden pl-1">
         {elsewhere ? <PlaceMark place={runPlace(elsewhere === CLOUD_WHERE, elsewhereKind)} /> : null}
-        <span className="truncate">{elsewhere ? capitalized(elsewhere) : "This Mac"}</span>
+        <span className="truncate">{elsewhere ? capitalized(elsewhere) : localWords("This Mac")}</span>
         {branch ? <span className="truncate font-mono text-label">· {branch}</span> : null}
       </span>
       {working ? (

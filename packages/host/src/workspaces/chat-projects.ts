@@ -11,6 +11,7 @@ import { chatFolderOf } from "../contracts/chat-folders.js"
 import type { WorkspaceConversations } from "./conversations.js"
 import { onWindows } from "../base/platform.js"
 import { expandPath, trimmedPath, typedWholePath, wholePathAdvice } from "./project-folders.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** A chat to turn into a project: its folder under `~/Mako/Chats`, and where the project goes (`~/…` or `/…`). */
 export const ChatProjectRequestSchema = z.lazy(() => z.object({ folder: z.string().min(1).max(4096), to: z.string().min(1).max(4096) }).strict())
@@ -47,7 +48,7 @@ export async function makeChatProject(
   if (holds(root, path)) throw new Error("A project goes outside the Chats folder.")
   if (await lstat(path).then(() => true, () => false)) throw new Error(`${path} already exists. Pick another name.`)
   const parent = await realpath(dirname(path)).catch(() => undefined)
-  if (!parent || !(await stat(parent).then((found) => found.isDirectory(), () => false))) throw new Error(`${dirname(path)} isn't a folder on this Mac.`)
+  if (!parent || !(await stat(parent).then((found) => found.isDirectory(), () => false))) throw new Error(localWords(`${dirname(path)} isn't a folder on this Mac.`))
   const target = join(parent, basename(path))
   // Compared again where both really are: a link or another case of a name can't put the project inside the Chats.
   if (holds(await realpath(root).catch(() => root), target)) throw new Error("A project goes outside the Chats folder.")

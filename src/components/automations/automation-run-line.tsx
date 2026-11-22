@@ -4,6 +4,7 @@ import { causeWords, localTime, nextRunOf, nextRunTitle, whenAheadIn } from "@/l
 import { activeAcp, useAcp } from "@/state/acp"
 import { automations, automationView, useAutomations } from "@/state/automations"
 import { showAutomation } from "@/state/automations-view"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Over a Thread an automation started: "Run of Nightly triage · <what started it> · next tomorrow 7:00", the
@@ -49,7 +50,7 @@ export function AutomationRunLine() {
       ) : view && !view.local.enabled ? (
         <>
           {heard ? <span aria-hidden>·</span> : null}
-          <span className="shrink-0">off on this Mac</span>
+          <span className="shrink-0">{localWords("off on this Mac")}</span>
         </>
       ) : null}
     </nav>

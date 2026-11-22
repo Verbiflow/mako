@@ -5,8 +5,9 @@ import { SESSION_VARIABLE } from "@mako/host/contracts/agent-tools"
 import { AUTOMATION_TOOL, HARNESS_TOOL, SETTINGS_TOOL, THREAD_ACT_TOOL, THREAD_MOVE_TOOL, type AutomationActInput, type HarnessActInput, type SettingsInput, type ThreadActInput, type ThreadsMoveInput } from "@mako/host/contracts/thread-tools"
 import { ThreadMoveAnswerSchema, threadToolText } from "@mako/host/conversations/thread-move-tool"
 import { localHost } from "./transport.js"
+import { localWords } from "@mako/protocol/computer-words"
 
-export const THREAD_HELP = `  mako thread move cloud|back [--conversation <id>] [--key <k>]
+export const THREAD_HELP = localWords(`  mako thread move cloud|back [--conversation <id>] [--key <k>]
                     cloud: Move to the cloud, or Continue in the cloud for another device's Thread while it's off.
                     back: Bring it back to this Mac. From a Thread's shell (${SESSION_VARIABLE}) it moves that Thread,
                     as thread_move does; from your own shell, name the conversation, and it waits for the move's end.
@@ -19,7 +20,7 @@ export const THREAD_HELP = `  mako thread move cloud|back [--conversation <id>] 
                     Install and Update in Settings › Harnesses, as the harness tool does.
   mako automation list | get <id> | runs <id> | run_now <id> | disable <id> | enable <id> | delete <id>
                     The person's automations, as the automation tool does; run, on and off still name
-                    run_now, enable and disable. From a shell outside any Thread they apply at once.`
+                    run_now, enable and disable. From a shell outside any Thread they apply at once.`)
 
 const OPTIONS = {
   conversation: { type: "string" },

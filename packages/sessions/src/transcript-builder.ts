@@ -32,6 +32,7 @@ import type { ChildState } from "./children.js"
 import { describeToolDetails, type AttachmentContent, type ToolDetail } from "./content.js"
 import { isReplyEntry, type Entry, type EntryOf } from "./entries.js"
 import { TRANSCRIPT_NOTE_CLOSE, TRANSCRIPT_NOTE_OPEN, withoutMakoFraming } from "./format.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 export interface TranscriptInput {
   /** The conversation's entries in order, up to the point carried (whole entries, no caps). */
@@ -339,8 +340,8 @@ function lossesOf(input: TranscriptInput): string[] {
   if (previews) losses.push(`${previews} entr${previews === 1 ? "y was" : "ies were"} read as a page's preview, without all of its content`)
   const incomplete = { partial: 0, missing: 0 }
   for (const child of input.children ?? []) if (child.state.kind !== "complete") incomplete[child.state.kind] += 1
-  if (incomplete.partial) losses.push(`${incomplete.partial} child agent${incomplete.partial === 1 ? "'s transcript is" : "s' transcripts are"} partial on this Mac`)
-  if (incomplete.missing) losses.push(`${incomplete.missing} child agent${incomplete.missing === 1 ? "'s transcript isn't" : "s' transcripts aren't"} on this Mac`)
+  if (incomplete.partial) losses.push(localWords(`${incomplete.partial} child agent${incomplete.partial === 1 ? "'s transcript is" : "s' transcripts are"} partial on this Mac`))
+  if (incomplete.missing) losses.push(localWords(`${incomplete.missing} child agent${incomplete.missing === 1 ? "'s transcript isn't" : "s' transcripts aren't"} on this Mac`))
   return losses
 }
 
@@ -899,7 +900,7 @@ class Writer {
 
   private childReference(child: TranscriptChild): string {
     const title = child.title ? ` ${oneLine(child.title)}` : ""
-    const where = child.transcript ? `, ${child.transcript.link}` : child.state.kind === "missing" ? ", whose transcript isn't on this Mac" : ""
+    const where = child.transcript ? `, ${child.transcript.link}` : child.state.kind === "missing" ? localWords(", whose transcript isn't on this Mac") : ""
     return `child agent ${this.children.number.get(child) ?? "?"}${title} (${child.state.kind}${where})`
   }
 

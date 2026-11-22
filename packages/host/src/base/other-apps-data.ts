@@ -1,4 +1,4 @@
-import { sep } from "node:path"
+import { windowsPath } from "@mako/protocol/attribution"
 import { nodePlatform } from "./platform.js"
 
 /**
@@ -17,6 +17,8 @@ export const OTHER_APPS_DATA = ["Library/Containers", "Library/Group Containers"
  * macOS the match ignores case, as APFS usually does: `~/library/containers/…` is the same folder.
  */
 export function otherAppsData(path: string, home: string, platform: NodeJS.Platform = nodePlatform()): string | undefined {
+  // The separator the home folder is written with, whichever system this runs on.
+  const sep = windowsPath(home) ? "\\" : "/"
   const fold = platform === "darwin" ? (text: string) => text.toLowerCase() : (text: string) => text
   const base = home.endsWith(sep) ? home.slice(0, -1) : home
   const folded = fold(path)

@@ -5,6 +5,7 @@ import { BriefSchema, PlaceSchema, ReportStatusSchema, type Brief } from "./agen
 import { knownTimezone, parseCron } from "./automation-cron.js"
 import { automationClientKey, scheduleOccurrence } from "@mako/protocol/automations-cloud"
 import type { JsonValue } from "./json.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Automations: a stored `agents_start` and what starts it.
@@ -51,7 +52,7 @@ export const RunWhenSchema = z.string().trim().min(1).max(500)
 export const ScheduleTriggerSchema = z.lazy(() => z.object({
   kind: z.literal("schedule"),
   cron: z.string().trim().min(1).max(120).refine((cron) => parseCron(cron).ok, { message: "Not a five-field cron schedule." }),
-  timezone: z.string().min(1).max(64).default("UTC").refine(knownTimezone, { message: "Not an IANA timezone this Mac knows." }),
+  timezone: z.string().min(1).max(64).default("UTC").refine(knownTimezone, { message: localWords("Not an IANA timezone this Mac knows.") }),
   runWhen: RunWhenSchema.optional(),
 }))
 

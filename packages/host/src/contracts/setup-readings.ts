@@ -2,6 +2,7 @@ import type { CarriedFilesView } from "./cloud-carried-files.js"
 import type { CloudSignInsState } from "./cloud-sign-ins.js"
 import type { RecipeView } from "./project-app.js"
 import { bytes, type PlaceReading, type SetupPlace, type SyncState } from "./setup.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * A place's own readings as Setup rows, from what a device already knows: the recipe's carry, prepare and processes,
@@ -75,7 +76,7 @@ export function carriedCloudRows(view: CarriedFilesView, from: string): ReadingR
       reading: "carried-cloud",
       part: "files",
       icon: "folder",
-      name: view.decision === "declined" ? "Kept on this Mac" : "Not copied yet",
+      name: view.decision === "declined" ? localWords("Kept on this Mac") : "Not copied yet",
       mono: false,
       detail: `Add copies ${list(view.files.map((file) => file.path))} from ${from}, encrypted, to every cloud Thread of this project; agents see names only`,
       sync: { state: "missing" },
@@ -132,7 +133,7 @@ export function savedKeyRows(names: readonly string[]): ReadingRow[] {
 export function cloudSignInRows(state: CloudSignInsState | undefined, labels: (harness: string) => string): ReadingRow[] {
   if (!state) return []
   if (!state.sharing || state.blocked)
-    return [{ reading: "sign-in", part: "access", icon: "key", name: "Your sign-ins", mono: false, detail: "Add shares every harness sign-in on this Mac with all your cloud Threads, in every project; agents never see them", scope: "account", sync: { state: "missing" }, target: "share-sign-ins" }]
+    return [{ reading: "sign-in", part: "access", icon: "key", name: "Your sign-ins", mono: false, detail: localWords("Add shares every harness sign-in on this Mac with all your cloud Threads, in every project; agents never see them"), scope: "account", sync: { state: "missing" }, target: "share-sign-ins" }]
   const sent = state.harnesses.filter((row) => row.status === "sent")
   const failed = state.harnesses.filter((row) => row.status === "failed")
   const rows: ReadingRow[] = []

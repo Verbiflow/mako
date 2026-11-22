@@ -24,6 +24,7 @@ import { startProjectSetup, useSetupAgent } from "@/state/project-setup"
 import { changeWithAgent } from "@/state/recipe-change"
 import { threadAppDriver } from "@/state/thread-app"
 import { readWorktreeBranches } from "@/state/worktrees"
+import { localWords } from "@mako/protocol/computer-words"
 
 const HOME = /^\/(?:Users|home)\/[^/]+(?=\/)/
 const shortPath = (path: string) => path.replace(HOME, "~")
@@ -399,7 +400,7 @@ function Cloud({ settings }: { settings: ProjectSettingsView | null }) {
           <span className="min-w-0 flex-1">
             <span className="block text-ui font-medium text-foreground">GitHub repository</span>
             <span className="mt-0.5 block text-label leading-relaxed text-muted-foreground">
-              {cloud ? "Cloud Threads and automations of this project clone it. Mako reads it from the folder’s origin." : "The folder’s origin isn’t on GitHub, so its Threads run on this Mac only."}
+              {cloud ? "Cloud Threads and automations of this project clone it. Mako reads it from the folder’s origin." : localWords("The folder’s origin isn’t on GitHub, so its Threads run on this Mac only.")}
             </span>
           </span>
           {cloud ? (

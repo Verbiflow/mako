@@ -26,6 +26,7 @@ import type { ObservedAccountCapability } from "../account-capability.js"
 import { chainFingerprint, instant, objectValue, placeSecret, removeSecret, WITHHELD, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
 import { claudeOAuthUsage } from "../claude/accounts.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 interface OpenCodeCredential {
   type: OpenCodeAuthType
@@ -327,7 +328,7 @@ const openCodeMirror: CloudSignInMirror = {
     const credentials = z.array(z.object({ provider: z.string().min(1), label: z.string(), value: z.record(z.string(), z.json()) })).parse(chain.payload.credentials)
     const found = await databaseLogins(env)
     const path = found?.path ?? openCodeDatabasePaths(env).find((candidate) => existsSync(candidate))
-    if (!path) throw new Error("OpenCode has no database on this Mac yet; run it once")
+    if (!path) throw new Error(localWords("OpenCode has no database on this Mac yet; run it once"))
     const db = await openLogins(path)
     try {
       db.exec("BEGIN IMMEDIATE")

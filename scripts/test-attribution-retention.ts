@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -10,6 +10,7 @@ import { TURN_CHANGES_VERSION, type TurnChanges } from "@mako/host/contracts/tur
 import { countTurnInSlices, storedView, threadSummary } from "@mako/host/attribution/queries"
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { turnOnlyPair, turnWriters, undoPlan } from "@mako/host/attribution/turn-lines"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * Retention of the journal's records (`LaptopTracker.prune`), the footprint table's rebuild, the tables that keep
@@ -24,7 +25,7 @@ async function world() {
   const clock = new FakeClock(), events = new FakeEventSource(), fs = new FakeFileSystem(clock, events)
   const open = () => LaptopTracker.open({ storage, fs, clock, events, device: "test" })
   const raw = () => new DatabaseSync(join(storage, "journal.sqlite"))
-  return { storage, clock, fs, open, raw, close: () => rm(storage, { recursive: true, force: true }) }
+  return { storage, clock, fs, open, raw, close: () => removeScratch(storage) }
 }
 
 /** One turn of `thread` in the checkout, with one call that may write: what `write` changes is its, by timing. */

@@ -6,6 +6,7 @@ import { desktop } from "@/state/desktop"
 import { fileEvents } from "@/state/file-events"
 import { degradedText, lagText, restartedText, spanText } from "@/lib/file-events-text"
 import { formatBytes, formatTime } from "@/lib/format"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** The latest samples listed; the rest are in the copied readings. */
 const LISTED = 6
@@ -79,7 +80,7 @@ function nowText(service: FileEventsService): string {
   const memory = service.residentBytes !== undefined ? `fseventsd${service.pid ? ` (pid ${service.pid})` : ""} holds ${formatBytes(service.residentBytes)}.` : ""
   const held = [
     service.settlingUntil ? `Just restarted, so only its memory is judged until ${formatTime(service.settlingUntil)}.` : "",
-    service.busy ? "This Mac is busy with other work, so a late file change isn't held against it." : "",
+    service.busy ? localWords("This Mac is busy with other work, so a late file change isn't held against it.") : "",
   ].filter(Boolean).join(" ")
   return `${healthyText(service, memory)} ${held}`.trim()
 }

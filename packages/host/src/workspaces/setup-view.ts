@@ -13,6 +13,7 @@ import { SECRET_KINDS, type SecretKind } from "../base/secrets.js"
 import { setupView, SetupActSchema, sourceAskOf, type AskAnswer, type Asker, type BorrowSnapshot, type BrokerReading, type PlaceReading, type Platform, type SetupAct, type SetupActOutcome, type SetupAsk, type SetupPlace, type SetupView } from "../contracts/setup.js"
 import { CARRIED_ALL, carriedCloudRows, carryRows, cloudSignInRows, prepareRows, processRows, repositoryRow, savedKeyRows, signInRows } from "../contracts/setup-readings.js"
 import { CHECKOUT_GRANTS, checkoutSource, LOCAL_DEVICE } from "./checkout-borrowing.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** One of this device's own brokers, as Setup reads and answers it: the worktrees' checkouts, the saved secrets. */
 export type LocalBroker = Pick<LocalBorrowing, "device" | "account" | "grants" | "leases" | "events" | "asks" | "answer" | "revoke">
@@ -235,7 +236,7 @@ export class SetupViews {
     if (row.origin.from === "reading" && row.origin.reading === "recipe-carry")
       return { done: false, why: `Put ${row.name} in the main checkout; each new worktree copies it from there.` }
     if (act.action === "stop" && row.origin.from !== "reading" && row.origin.from !== "ask") return this.#revoke(row.origin.grant)
-    return { done: false, why: "That needs the account's broker, which this Mac doesn't reach yet." }
+    return { done: false, why: localWords("That needs the account's broker, which this Mac doesn't reach yet.") }
   }
 
   /** The person's yes or no to a source's ask: a yes says what this device has now, by its version, never its value. */
@@ -247,8 +248,8 @@ export class SetupViews {
     if (answer === "decline") said = { answer: "no", by: { kind: "person", account: ask.borrower.account } }
     else if (ask.resource.kind === "file" || ask.resource.kind === "tree") said = await checkoutSource({ ...ask, borrower: { ...ask.borrower, repository: root } })
     else if (ask.resource.kind === "credential") said = await this.#credential(ask.ref)
-    else return { done: false, why: "This Mac can't run or reach that for another place yet; only Decline answers it." }
-    if (said.answer === "unavailable") return { done: false, why: ask.resource.kind === "credential" ? `Nothing is saved on this Mac as ${ask.ref}.` : `${ask.ref} isn't in the main checkout as it is now.` }
+    else return { done: false, why: localWords("This Mac can't run or reach that for another place yet; only Decline answers it.") }
+    if (said.answer === "unavailable") return { done: false, why: ask.resource.kind === "credential" ? localWords(`Nothing is saved on this Mac as ${ask.ref}.`) : `${ask.ref} isn't in the main checkout as it is now.` }
     if (held.held.from === "local") await held.held.broker.answer(id, said)
     else await this.#deps.borrowing?.account?.answer(id, said)
     return { done: true }
@@ -270,7 +271,7 @@ export class SetupViews {
         await broker.revoke(grant, { kind: "person", account: broker.account })
         return { done: true }
       }
-    if (!borrowing?.account) return { done: false, why: "That grant isn't this Mac's, and the account's broker can't be reached." }
+    if (!borrowing?.account) return { done: false, why: localWords("That grant isn't this Mac's, and the account's broker can't be reached.") }
     await borrowing.account.revoke(grant)
     return { done: true }
   }

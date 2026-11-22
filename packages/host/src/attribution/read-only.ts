@@ -58,7 +58,7 @@ function readOnlyPart(part: string): boolean {
   while (words.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(words[0]!)) words.shift()
   const [program, ...rest] = words
   if (!program) return true
-  const name = program.split("/").at(-1)!
+  const name = program.split(/[\\/]/).at(-1)!.replace(/\.(exe|cmd|bat)$/i, "")
   if (name === "git") {
     // `--output=<file>` (`git diff`, `git log`, `git format-patch`) writes the file, whatever the subcommand.
     if (rest.some((word) => word.startsWith("--output"))) return false

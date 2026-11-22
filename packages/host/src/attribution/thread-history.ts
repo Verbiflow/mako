@@ -1,4 +1,4 @@
-import { isAbsolute, join } from "node:path"
+import { absoluteFrom, under } from "../base/path-style.js"
 import {
   CarriedActivitySchema,
   ThreadFileHistorySchema,
@@ -85,7 +85,7 @@ function ownPart(store: JournalStore, thread: string, now: number): ThreadHistor
   for (const entry of store.entriesBy("thread", thread)) {
     const root = byId.get(entry.root)
     const certain = entry.author.certainty === "exact" || entry.author.certainty === "named"
-    const path = root && join(root.path, entry.path)
+    const path = root && under(root.path, entry.path)
     if (path && certain && entry.kind !== "delete" && path.length <= MAX_PATH) writes.push({ seq: entry.seq, at: entry.at, path })
   }
   const used = new Set<string>()
@@ -127,8 +127,8 @@ function followNames(store: JournalStore, roots: readonly StoredRoot[], path: st
   for (let hops = 0; hops < MAX_HOPS; hops++) {
     const last = store.last(root.id, inside, after)
     if (!last) return
-    const at = join(root.path, inside)
-    const to = last.kind === "rename" && last.from === inside ? join(root.path, last.path) : undefined
+    const at = under(root.path, inside)
+    const to = last.kind === "rename" && last.from === inside ? under(root.path, last.path) : undefined
     const seen = names.get(at)
     if (to && to.length > MAX_PATH) return
     if (!seen || seen.seq < last.seq) names.set(at, to ? { seq: last.seq, at: last.at, path: at, to } : { seq: last.seq, at: last.at, path: at })
@@ -141,7 +141,7 @@ function followNames(store: JournalStore, roots: readonly StoredRoot[], path: st
 /** A journal's activity row as a Thread's history carries it: paths made absolute, a command's text left behind. */
 function carriedActivity(item: StoredActivity): CarriedActivity {
   const absolute = (path: string | undefined, cwd = item.cwd) => {
-    const resolved = path === undefined ? undefined : isAbsolute(path) ? path : cwd ? join(cwd, path) : undefined
+    const resolved = path === undefined ? undefined : absoluteFrom(cwd, path)
     return resolved !== undefined && resolved.length <= MAX_PATH ? resolved : undefined
   }
   const effects = (item.effects ?? []).flatMap((effect): CarriedEffect[] => {

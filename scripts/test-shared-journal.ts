@@ -1,10 +1,11 @@
 import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync, spawn } from "node:child_process"
-import { mkdirSync, mkdtempSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readdirSync, realpathSync, writeFileSync } from "node:fs"
 import { connect, createServer, type Socket } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
@@ -16,6 +17,7 @@ import type { LiveBatch } from "@mako/host/contracts/live-conversations"
 import { openAttribution, type Attribution, type TreeWatcher } from "@mako/host/attribution/index"
 import { SHARED_FORMAT, SharedJournal, ownerAddress, sharedJournalFolder, type JournalWrites, type OwnedJournal } from "@mako/host/attribution/shared-journal"
 import { ranOut } from "./lib/ran-out.ts"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * One record of changes per device: two hosts on one Mac (the installed app
@@ -52,7 +54,7 @@ function handWatcher() {
     return { ready: Promise.resolve(), close: () => set.delete(changed) }
   }
   const emit = (path: string) => {
-    for (const [root, set] of listeners) if (path.startsWith(`${root}/`)) for (const changed of set) changed([path])
+    for (const [root, set] of listeners) if (path.startsWith(`${root}/`) || path.startsWith(`${root}\\`)) for (const changed of set) changed([path])
   }
   return { watch, emit }
 }
@@ -87,6 +89,11 @@ async function until(what: string, check: () => boolean, ms = 10_000): Promise<v
 
 const authorOf = (journal: Attribution, repo: string, path: string) =>
   journal.hunks(repo).find((hunk) => hunk.path === path)?.writers.map((writer) => `${writer.certainty}${"thread" in writer && writer.thread ? `:${writer.thread}` : ""}`)
+
+// On Windows an owner listens on a pipe it draws and proves itself on, published under its family's name
+// (`@mako/lazy/private-pipe`): a bare socket on the address itself, as this case's stand-in makes or opens, is nothing a
+// host there would talk to. The owner and follower of that are checked by `test-windows-pipes.ts` and the cases above.
+const rawSocket = process.platform === "win32" ? { skip: "its stand-in speaks on the bare address, which Windows hosts never use" } : {}
 
 if (process.argv[2] === "owner-child") {
   // A host in its own process, to be killed outright.
@@ -142,8 +149,8 @@ if (process.argv[2] === "owner-child") {
     } finally {
       await owner.close()
       await follower.close()
-      rmSync(repo, { recursive: true, force: true })
-      rmSync(userRoot, { recursive: true, force: true })
+      removeScratch(repo)
+      removeScratch(userRoot)
     }
   })
 
@@ -180,8 +187,8 @@ if (process.argv[2] === "owner-child") {
     } finally {
       child.kill("SIGKILL")
       await follower?.close()
-      rmSync(repo, { recursive: true, force: true })
-      rmSync(userRoot, { recursive: true, force: true })
+      removeScratch(repo)
+      removeScratch(userRoot)
     }
   })
 
@@ -203,8 +210,19 @@ if (process.argv[2] === "owner-child") {
     const legacyRoot = mkdtempSync(join(tmpdir(), "mako-shared-journal-legacy-"))
     mkdirSync(join(legacyRoot, "attribution"))
     const shared = join(sharedJournalFolder(before), "journal.sqlite")
-    execFileSync("sqlite3", [shared, `VACUUM INTO '${join(legacyRoot, "attribution", "journal.sqlite")}'`])
-    const oldId = execFileSync("sqlite3", [shared, "SELECT value FROM meta WHERE key = 'journal'"], { encoding: "utf8" }).trim()
+    // With Node's own SQLite: a Windows machine has no `sqlite3` to run.
+    const journalId = (file: string) => {
+      const database = new DatabaseSync(file, { readOnly: true })
+      try {
+        return String(database.prepare("SELECT value FROM meta WHERE key = 'journal'").get()?.value ?? "")
+      } finally {
+        database.close()
+      }
+    }
+    const source = new DatabaseSync(shared)
+    source.exec(`VACUUM INTO '${join(legacyRoot, "attribution", "journal.sqlite").replaceAll("'", "''")}'`)
+    source.close()
+    const oldId = journalId(shared)
 
     const userRoot = mkdtempSync(join(tmpdir(), "mako-shared-journal-user-"))
     const journal = await openAttribution({
@@ -238,7 +256,7 @@ if (process.argv[2] === "owner-child") {
       assert.deepEqual(authorOf(isolated, repo, "a.ts") ?? [], [], "nothing of the person's journal")
     } finally {
       await isolated.close()
-      rmSync(isolatedRoot, { recursive: true, force: true })
+      removeScratch(isolatedRoot)
     }
     try {
       assert.equal(journal.status().sharing.role, "owner")
@@ -246,12 +264,12 @@ if (process.argv[2] === "owner-child") {
       await journal.settled()
       assert.deepEqual(authorOf(journal, repo, "a.ts"), ["exact:TA"], "what the old journal knew is kept")
       await journal.close()
-      const newId = execFileSync("sqlite3", [join(sharedJournalFolder(userRoot), "journal.sqlite"), "SELECT value FROM meta WHERE key = 'journal'"], { encoding: "utf8" }).trim()
+      const newId = journalId(join(sharedJournalFolder(userRoot), "journal.sqlite"))
       assert.match(newId, /^[0-9a-f-]{36}$/)
       assert.notEqual(newId, oldId, "under a new id, so no peer mixes the two histories")
     } finally {
       await journal.close()
-      for (const folder of [repo, before, legacyRoot, userRoot]) rmSync(folder, { recursive: true, force: true })
+      for (const folder of [repo, before, legacyRoot, userRoot]) removeScratch(folder)
     }
   })
 
@@ -294,7 +312,7 @@ if (process.argv[2] === "owner-child") {
       assert.equal(await read, false)
     } finally {
       blocked.resolve(); t.mock.timers.reset()
-      await owner.close(); rmSync(folder, { recursive: true, force: true })
+      await owner.close(); removeScratch(folder)
     }
   })
 
@@ -319,11 +337,11 @@ if (process.argv[2] === "owner-child") {
     } finally {
       blocked.resolve()
       await follower.close(); await owner.close()
-      rmSync(folder, { recursive: true, force: true })
+      removeScratch(folder)
     }
   })
 
-  test("a follower carries a Thread's history past a message's size to the owner through the journal's folder, and nothing else is read", async () => {
+  test("a follower carries a Thread's history past a message's size to the owner through the journal's folder, and nothing else is read", rawSocket, async () => {
     const folder = mkdtempSync(join(tmpdir(), "mako-shared-journal-folder-"))
     const first = recorder()
     const second = recorder()
@@ -364,7 +382,7 @@ if (process.argv[2] === "owner-child") {
     } finally {
       await follower.close()
       await owner.close()
-      rmSync(folder, { recursive: true, force: true })
+      removeScratch(folder)
     }
   })
 
@@ -372,7 +390,7 @@ if (process.argv[2] === "owner-child") {
   const call = (id: string): ReportedCall => ({ thread: "T1", session: "T1-session", call: id, status: "completed", effects: [] })
   const quiet = () => undefined
 
-  test("what an owner heard but never applied reaches the next owner, after what's still running, and a request waiting on it is answered", async () => {
+  test("what an owner heard but never applied reaches the next owner, after what's still running, and a request waiting on it is answered", rawSocket, async () => {
     const folder = mkdtempSync(join(tmpdir(), "mako-shared-journal-folder-"))
     // An owner that welcomes and listens, but never applies anything.
     const lock = await acquireHostLock(folder, { purpose: "owner" })
@@ -422,7 +440,7 @@ if (process.argv[2] === "owner-child") {
       assert.equal(shared.status().unsent, 0)
     } finally {
       await shared.close()
-      rmSync(folder, { recursive: true, force: true })
+      removeScratch(folder)
     }
   })
 
@@ -454,13 +472,13 @@ if (process.argv[2] === "owner-child") {
     } finally {
       await other.close()
       await owner.close()
-      rmSync(folder, { recursive: true, force: true })
+      removeScratch(folder)
     }
   })
 
   test("the shared journal's folder is named for its format, so another build keeps another", () => {
     const folder = sharedJournalFolder("/Users/someone/.mako")
-    assert.match(folder, /^\/Users\/someone\/\.mako\/attribution\/[0-9a-f]{16}$/)
+    assert.match(folder.replaceAll("\\", "/"), /^\/Users\/someone\/\.mako\/attribution\/[0-9a-f]{16}$/)
     assert.ok(Buffer.byteLength(ownerAddress(folder, "darwin")) <= 100)
     assert.match(ownerAddress(folder, "linux"), /^\0mako-attribution-[0-9a-f]{24}$/)
     const deep = join("/private/tmp/xx/yyyyyyyyyyyyyyyyyyyyyyyyyyyy/T", "a".repeat(80), "attribution", "0123456789abcdef")

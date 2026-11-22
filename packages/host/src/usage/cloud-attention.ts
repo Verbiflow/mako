@@ -1,6 +1,7 @@
 import { hostCommand } from "../base/host-command.js"
 import type { HostJobs, JobDemand } from "../base/host-jobs.js"
 import type { MachineCapability } from "../base/machine.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 const run = hostCommand
 
@@ -55,7 +56,7 @@ export class CloudAttention {
    */
   start(jobs: Pick<HostJobs, "every">, watched?: JobDemand): void {
     if (this.#cancel) return
-    const cancel = jobs.every("tell the account whether the person is at this Mac", EVERY_MS, () => this.look(), { firstAfterMs: 0, ...(watched && { needs: [watched] }) })
+    const cancel = jobs.every(localWords("tell the account whether the person is at this Mac"), EVERY_MS, () => this.look(), { firstAfterMs: 0, ...(watched && { needs: [watched] }) })
     const stopWatching = watched?.onChange((on) => {
       if (!on) void this.gone()
     })
@@ -94,7 +95,7 @@ export class CloudAttention {
       // Here: said each minute, as the account forgets it. Gone: said once.
       if (!attending && this.#said !== true) return
       await this.#say(attending)
-      if (attending !== this.#said) this.#log(attending ? "the person is at this Mac; the account holds their notices" : "the person left this Mac; the account sends what waited", idle === undefined ? {} : { idleSeconds: idle })
+      if (attending !== this.#said) this.#log(attending ? localWords("the person is at this Mac; the account holds their notices") : localWords("the person left this Mac; the account sends what waited"), idle === undefined ? {} : { idleSeconds: idle })
       this.#said = attending
       this.#failing = false
     } catch (error) {

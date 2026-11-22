@@ -47,6 +47,7 @@ import { terminalActions, terminalStore } from "@/state/terminal"
 import { terminalGroupFor } from "@/lib/terminal-layout"
 import { toast } from "sonner"
 import { chooseInFinder, openProjectPalette } from "@/state/open-project"
+import { localWords } from "@mako/protocol/computer-words"
 
 const openPalette = () => {
   window.dispatchEvent(new CustomEvent("mako:palette"))
@@ -286,7 +287,7 @@ const DESK_COMMANDS: DeskCommand[] = [
     title: "Open project…",
     section: "Workspace",
     keys: "mod+o",
-    hint: "A recent project, a folder on this Mac, a path, or a GitHub repository to clone",
+    hint: localWords("A recent project, a folder on this Mac, a path, or a GitHub repository to clone"),
     keywords: "project folder open clone github repository new empty directory path",
     when: () => store.get().machine.chooseFolder,
     run: () => openProjectPalette(),

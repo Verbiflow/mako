@@ -91,7 +91,7 @@ export const ToolDetailSchema = z.lazy(() => z.discriminatedUnion("type", [
     via: z.enum(["show", "produced"]),
     title: z.string().max(200).optional(),
     files: z.array(z.object({
-      path: z.string().min(2).startsWith("/"),
+      path: z.string().min(2).regex(/^(?:\/|[A-Za-z]:[\\/]|\\\\)/),
       caption: z.string().max(500).optional(),
       /** The SHA-256 of the copy Mako kept when it showed the file. */
       digest: z.string().regex(/^[a-f0-9]{64}$/).optional(),

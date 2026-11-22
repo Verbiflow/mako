@@ -1,11 +1,12 @@
 import assert from "node:assert/strict"
-import { mkdtemp, rm } from "node:fs/promises"
+import { mkdtemp } from "node:fs/promises"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, posix } from "node:path"
 import { afterEach, beforeEach, mock, test } from "node:test"
 import { FakeClock, FakeEventSource, FakeFileSystem } from "@mako/protocol/attribution-conformance"
 import type { TrackerChangeListener } from "@mako/protocol"
 import { LaptopTracker, type TrackerRepository } from "@mako/host/attribution/tracker"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 beforeEach(() => mock.timers.enable({ apis: ["Date", "setTimeout"], now: 1_800_000_000_123 }))
 afterEach(() => mock.timers.reset())
@@ -16,14 +17,14 @@ async function world(lagMs = 0) {
   const clock = new FakeClock(Date.now()), events = new FakeEventSource(), fs = new FakeFileSystem(clock, events)
   const base = new Map([["a.ts", "a original\n"], ["b.ts", "b original\n"], ["old.ts", "rename original\n"]])
   const disk = new Set(base.keys()), tracked = [...base.keys()]
-  for (const [path, text] of base) fs.write(join("/repo", path), text)
+  for (const [path, text] of base) fs.write(posix.join("/repo", path), text)
   let inventories = 0, fail = false
   const repo: TrackerRepository = {
     head: async () => "head",
     inventory: async () => {
       inventories++
       if (fail) throw new Error("Git helper failed")
-      return { tracked, untracked: [...disk].filter((path) => !base.has(path) && !path.startsWith("ignored/")), changed: tracked.filter((path) => fs.text(join("/repo", path)) !== base.get(path)) }
+      return { tracked, untracked: [...disk].filter((path) => !base.has(path) && !path.startsWith("ignored/")), changed: tracked.filter((path) => fs.text(posix.join("/repo", path)) !== base.get(path)) }
     },
     ignored: async (paths) => new Set(paths.filter((path) => path.startsWith("ignored/"))),
     ignoredEntries: async () => ["ignored/"],
@@ -46,12 +47,12 @@ async function world(lagMs = 0) {
     tracker, fs, clock, advance, start, finish, activity,
     deliver: () => listener?.changed(["a.ts"]),
     drain: async (thread = "one") => { activity(thread, "turn", "end"); await advance(Math.max(3100, lagMs)); await tracker.settled({ rescans: false, checkouts: ["/repo"] }); await tracker.settled() },
-    write: (path: string, content: string) => { disk.add(path); fs.write(join("/repo", path), content) },
-    remove: (path: string) => { disk.delete(path); fs.remove(join("/repo", path)) },
-    rename: (from: string, to: string) => { disk.delete(from); disk.add(to); fs.rename(join("/repo", from), join("/repo", to)) },
+    write: (path: string, content: string) => { disk.add(path); fs.write(posix.join("/repo", path), content) },
+    remove: (path: string) => { disk.delete(path); fs.remove(posix.join("/repo", path)) },
+    rename: (from: string, to: string) => { disk.delete(from); disk.add(to); fs.rename(posix.join("/repo", from), posix.join("/repo", to)) },
     inventories: () => inventories,
     fail: (value: boolean) => { fail = value },
-    close: async () => { await tracker.close(); await rm(storage, { recursive: true, force: true }) },
+    close: async () => { await tracker.close(); await removeScratch(storage) },
   }
 }
 

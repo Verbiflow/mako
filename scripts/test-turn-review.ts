@@ -2,10 +2,10 @@ import "./lib/scratch-git.mjs"
 import assert from "node:assert/strict"
 import { execFileSync, spawnSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { DatabaseSync } from "node:sqlite"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 import { Git } from "@mako/git"
@@ -24,6 +24,7 @@ import { LiveTurnReview, undoneTurns, type TurnReviewLedger } from "@mako/host/c
 import { patchHunks, textHunks } from "@mako/host/conversations/turn-hunks"
 import { TURN_HUNK_LIMITS } from "@mako/host/contracts/turn-review"
 import { rewriteInPlace, type InPlaceFile } from "@mako/host/workspaces/worktree-move"
+import { removeScratch } from "./lib/remove-scratch.mjs"
 
 /*
  * Reviewing and undoing one turn, on a real repository: three turns of one
@@ -201,7 +202,7 @@ test("turn 2 of 3: the record, who wrote each changed line, and only its own lin
   assert.equal(only.after, final)
   assert.equal(only.before, lines(20, { 2: "line 2 by turn 1", 8: "line 8 by you", 12: "line 12 by T2" }))
   await f.tracker.close()
-  rmSync(f.base, { recursive: true, force: true })
+  removeScratch(f.base)
 })
 
 test("Changes › Turn reads turn 2 of 3 from a conversation nobody has open", async () => {
@@ -261,7 +262,7 @@ test("Changes › Turn reads turn 2 of 3 from a conversation nobody has open", a
   assert.deepEqual((await review.files(id, R3, f.repo)).files.map((file) => file.path), ["util.ts"])
   assert.equal((await review.diff(id, R1, "app.ts")).newFile?.contents, app.r1)
   await f.tracker.close()
-  rmSync(f.base, { recursive: true, force: true })
+  removeScratch(f.base)
 })
 
 test("a turn's diff in stretches: a few rows for a line in a long file, numbered on each side, bounded", () => {
@@ -335,7 +336,7 @@ test("undo turn 2 keeps the person's line, the other Thread's and turn 1's", asy
   assert.deepEqual([...undoneTurns(requests, { kind: "thread" }, f.repo)].sort(), [R1, R3].sort())
   assert.deepEqual([...undoneTurns(requests, { kind: "thread" }, join(f.base, "elsewhere"))], [], "nothing of theirs is in another checkout")
   await f.tracker.close()
-  rmSync(f.base, { recursive: true, force: true })
+  removeScratch(f.base)
 })
 
 test("undo leaves a stretch someone edited since, and one where a removed line came back, and names them", async () => {
@@ -355,7 +356,7 @@ test("undo leaves a stretch someone edited since, and one where a removed line c
     ["util.ts", "line-restored-by-another-writer", { start: 9, length: 1 }, ["other"]],
   ])
   await f.tracker.close()
-  rmSync(f.base, { recursive: true, force: true })
+  removeScratch(f.base)
 })
 
 test("what Git wrote is nobody's: the writer runs don't name it and an undo keeps it", async () => {
@@ -374,7 +375,7 @@ test("what Git wrote is nobody's: the writer runs don't name it and an undo keep
   const next = plan.writes.find((write) => write.path === "util.ts")?.next
   assert.equal(next?.kind === "text" ? next.text : null, `${lines(10, {}, "util")}util 11 from the pull\n`, "the thread's lines out, Git's kept")
   await f.tracker.close()
-  rmSync(f.base, { recursive: true, force: true })
+  removeScratch(f.base)
 })
 
 test("undo puts a line the turn replaced back where it stood, when the person since changed the line above it", async () => {
@@ -392,7 +393,7 @@ test("undo puts a line the turn replaced back where it stood, when the person si
   const next = plan.writes.find((write) => write.path === "util.ts")?.next
   assert.equal(next?.kind === "text" ? next.text : null, lines(10, { 4: "util 4 by you" }, "util"), "util 5 back on line 5, below the person's line 4")
   await f.tracker.close()
-  rmSync(f.base, { recursive: true, force: true })
+  removeScratch(f.base)
 })
 
 test("undo is refused while a run is on in the checkout", async () => {
@@ -406,14 +407,14 @@ test("undo is refused while a run is on in the checkout", async () => {
   assert.equal(f.read("app.ts"), final, "nothing written")
   f.mark("turn", "T2", "x9", "end")
   // A run of this host's own (the journal hasn't heard it yet) refuses as well.
-  const local = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: (folder) => folder === f.repo, plans: join(f.base, "undos"), undone: () => {} })
+  const local = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: (folder) => resolve(folder) === resolve(f.repo), plans: join(f.base, "undos"), undone: () => {} })
   await assert.rejects(local.undo("c", { kind: "turn", requestId: R2 }, preview.token), /An agent is working/)
   // A preview read before the files changed doesn't undo what's there now.
   await f.person("app.ts", `${final}tail by you\n`)
   const free = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: () => false, plans: join(f.base, "undos"), undone: () => {} })
   await assert.rejects(free.undo("c", { kind: "turn", requestId: R2 }, preview.token), /changed since this preview/)
   await f.tracker.close()
-  rmSync(f.base, { recursive: true, force: true })
+  removeScratch(f.base)
 })
 
 test("the writer rolls back a failure and keeps the backup ref; a process killed mid-write is finished on the next start", async () => {
@@ -447,7 +448,8 @@ test("the writer rolls back a failure and keeps the backup ref; a process killed
   const config = join(f.base, "child.json")
   writeFileSync(config, JSON.stringify({ repoRoot: f.repo, head, plans, crashAt: "wrote", files: files.map((file) => ({ path: file.path, before: file.before?.toString("base64") ?? null, after: file.after?.toString("base64") ?? null })) }))
   const child = spawnSync(process.execPath, [...process.execArgv, here, "child", config], { encoding: "utf8" })
-  assert.equal(child.signal, "SIGKILL", child.stderr)
+  // Killed outright: by that signal, or on Windows, which has none, by ending with 1 and no word.
+  assert.ok(child.signal === "SIGKILL" || (process.platform === "win32" && child.status === 1), child.stderr)
   assert.equal(readdirSync(plans).filter((name) => name.endsWith(".json")).length, 1, "its plan is saved")
   const review = new LiveTurnReview({ git: runner, ledger: () => f.ledger, request: () => undefined, cwd: () => f.repo, checkpoints: () => undefined, busy: () => false, plans, undone: () => {} })
   await review.resume()
@@ -455,7 +457,7 @@ test("the writer rolls back a failure and keeps the backup ref; a process killed
   assert.equal(f.read("util.ts"), lines(10, {}, "util"))
   assert.deepEqual(readdirSync(plans).filter((name) => name.endsWith(".json")), [])
   await f.tracker.close()
-  rmSync(f.base, { recursive: true, force: true })
+  removeScratch(f.base)
 })
 
 test("a save after the turn began, before it first wrote the file, is named on the checkpoints' diff as the journal has it, not nobody's", async () => {
@@ -481,7 +483,7 @@ test("a save after the turn began, before it first wrote the file, is named on t
   const shown = { before: lines(20).split(/(?<=\n)/), after: after.split(/(?<=\n)/) }
   assert.deepEqual(runsOf(turnWriters(f.view, "T1", R1, file, shown)), ["-1 maybe", "+1 maybe", "-4 turn", "+4 turn"])
   await f.tracker.close()
-  rmSync(f.base, { recursive: true, force: true })
+  removeScratch(f.base)
 })
 
 test("the journal's reader answers a turn's writers, its own lines and an undo's plan as the journal read on its caller's thread does", async () => {
@@ -527,6 +529,6 @@ test("the journal's reader answers a turn's writers, its own lines and an undo's
   } finally {
     await reader.close()
     await f.tracker.close()
-    rmSync(f.base, { recursive: true, force: true })
+    removeScratch(f.base)
   }
 })

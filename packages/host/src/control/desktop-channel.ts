@@ -18,6 +18,7 @@ import {
 } from "../contracts/desktop-channel.js"
 import type { DeskPage } from "./desk-browser.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 type JsonObject = DesktopResult<"desk-page-send">
 
@@ -170,7 +171,7 @@ export class DesktopChannel {
   ask<Method extends DesktopMethod>(method: Method, params: DesktopParams<Method>): Promise<DesktopResult<Method>> {
     const desktop = this.desktop
     if (!desktop?.methods.has(method))
-      return Promise.reject(new Error("Open Mako's desktop app on this Mac to do that."))
+      return Promise.reject(new Error(localWords("Open Mako's desktop app on this Mac to do that.")))
     const id = ++this.asks
     return new Promise<DesktopResult<Method>>((resolve, reject) => {
       const timer = setTimeout(() => {

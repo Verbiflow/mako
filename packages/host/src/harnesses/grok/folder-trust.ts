@@ -2,6 +2,7 @@ import { homedir } from "node:os"
 import { z } from "zod"
 import type { JsonObject } from "../../contracts/json.js"
 import type { AcpVendorRequest } from "../acp-source.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Grok's folder trust, from grok 1.0.46's source (`folder_trust_prompt.rs`).
@@ -66,7 +67,7 @@ export function folderTrustRequest(params: JsonObject, home = homedir()): AcpVen
         title: "Trust this project in Grok?",
         detail: [
           `Grok ignores the ${skipped} in ${workspace} until you trust it.`,
-          "A project's settings can run commands on this Mac, so trust only one you know.",
+          localWords("A project's settings can run commands on this Mac, so trust only one you know."),
           later ? "Instructions, skills and language servers apply from the next conversation." : "",
         ].filter(Boolean).join(" "),
         options: [

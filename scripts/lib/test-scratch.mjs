@@ -2,6 +2,7 @@ import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, rea
 import { ChildProcess } from "node:child_process"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
+import { removeScratch } from "./remove-scratch.mjs"
 
 /**
  * A test's scratch folder, gone when the test ends however it ends. A UI test's Chromium profile and Vite cache come to
@@ -93,7 +94,7 @@ function keepEvidence(folder) {
   const runs = readdirSync(KEPT).flatMap((name) => ifStillThere(() => [{ path: join(KEPT, name), at: statSync(join(KEPT, name)).mtimeMs }]) ?? [])
   for (const { path } of runs.sort((left, right) => right.at - left.at)) {
     held += ifStillThere(() => sizeOf(path)) ?? 0
-    if (held > KEPT_BYTES) ifStillThere(() => rmSync(path, { recursive: true, force: true }))
+    if (held > KEPT_BYTES) ifStillThere(() => removeScratch(path))
   }
   console.error(`Kept from this failed run: ${into}`)
 }
@@ -106,7 +107,7 @@ function finish(failed) {
       try {
         if (failed) ifStillThere(() => keepEvidence(folder))
       } finally {
-        rmSync(folder, { recursive: true, force: true, maxRetries: 3 })
+        removeScratch(folder)
       }
     }
     // A stopped Electron can write once more after its wrapper has gone: the note leaves that to the next sweep.

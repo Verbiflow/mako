@@ -4,6 +4,7 @@ import { lstat, readFile } from "node:fs/promises"
 import { physicalFileSystem } from "../base/physical-files.js"
 import { join, resolve } from "node:path"
 import { z } from "zod"
+import { absolutePath, kept, windowsStyle } from "../base/path-style.js"
 import type { RootPath, TrackerChangeListener, TrackerEventSource, TrackerFileStat, TrackerFileSystem } from "@mako/protocol"
 import type { TrackerRepository } from "./tracker.js"
 
@@ -117,7 +118,9 @@ export function watcherEvents(watch: TreeWatcher, history: SystemHistory | undef
   return {
     async watch(root, listener: TrackerChangeListener) {
       const dropped = (why: "dropped" | "polling" | "listening") => (why === "listening" ? listener.heard() : listener.lost(why === "polling" ? "muted" : "dropped"))
-      const watching = watch(root, (paths) => listener.changed(paths), () => listener.lost("gone"), dropped)
+      // Inside its root a path is `/`-separated, whatever the system's watcher writes.
+      const inside = windowsStyle(root) ? (paths: string[]) => paths.map((path) => (absolutePath(path) ? kept(path) : path.replaceAll("\\", "/"))) : (paths: string[]) => paths
+      const watching = watch(root, (paths) => listener.changed(inside(paths)), () => listener.lost("gone"), dropped)
       if (!watching) throw new Error(`${root} can't be watched.`)
       await watching.ready
       return watching

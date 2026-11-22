@@ -19,6 +19,7 @@ import {
 import type { AskCard } from "@/lib/ask-card"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * Each project's Setup, by the folder it was read for (`mako:setup`): what each place has for the project and where
@@ -196,7 +197,7 @@ export function setupDrafter(open: (root: string) => Promise<boolean>, compose: 
 
 async function draftInNewThread(root: string, text: string): Promise<boolean> {
   if (!drafter) {
-    toast("Ask for this from a Thread on your Mac")
+    toast(localWords("Ask for this from a Thread on your Mac"))
     return false
   }
   const drafted = await drafter(root, text)
@@ -234,7 +235,7 @@ export function rebuildBase(folder: string) {
 }
 
 const ADD_REQUESTS = {
-  files: (place: string) => `Add a file or folder this project's Threads need from this Mac to its recipe's carry, for ${place}. Ask me which one first.`,
+  files: (place: string) => localWords(`Add a file or folder this project's Threads need from this Mac to its recipe's carry, for ${place}. Ask me which one first.`),
   access: (place: string) => `Set up access to a service for this project's Threads on ${place}: ask me which one, and never print or read back its value.`,
   tools: (place: string) => `Add a tool to this project's recipe prepare, so Threads on ${place} have it. Ask me which one first.`,
   code: () => "Let this project's Threads read another of the owner's repositories. Ask me which one first.",

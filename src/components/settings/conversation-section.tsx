@@ -4,6 +4,7 @@ import { conversationSettings, useConversationSettings } from "@/state/conversat
 import { togglePref, usePrefs } from "@/state/prefs"
 import { keepAwake, keepAwakeWarning, useKeepAwake } from "@/state/keep-awake"
 import { KEEP_AWAKE_BATTERY_FLOOR } from "@mako/host/contracts/keep-awake"
+import { localWords } from "@mako/protocol/computer-words"
 
 export function ConversationSection() {
   const showThinking = usePrefs((prefs) => prefs.showThinking)
@@ -46,12 +47,12 @@ export function ConversationSection() {
         />
       </SettingRow>
       <SettingRow
-        title="Keep this Mac awake while agents work"
+        title={localWords("Keep this Mac awake while agents work")}
         warning={keepAwakeWarning(awake?.hold)}
-        description={awake?.unavailable ?? `Holds off idle sleep while an agent here works or runs a command, not while it waits on you. ${awakeLid ? "" : "Closing the lid still sleeps it. "}Below ${KEEP_AWAKE_BATTERY_FLOOR}% battery, Mako lets the Mac sleep and says so`}
+        description={awake?.unavailable ?? localWords(`Holds off idle sleep while an agent here works or runs a command, not while it waits on you. ${awakeLid ? "" : "Closing the lid still sleeps it. "}Below ${KEEP_AWAKE_BATTERY_FLOOR}% battery, Mako lets the Mac sleep and says so`)}
       >
         <Toggle
-          label="Keep this Mac awake while agents work"
+          label={localWords("Keep this Mac awake while agents work")}
           on={awakeOn && !awakeOff}
           disabled={awakeOff}
           onChange={() => void keepAwake.set({ on: !awakeOn })}

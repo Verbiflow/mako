@@ -5,6 +5,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { carryContinue, continuePath, ContinueProblemSchema, continueReadings, ContinueRecorder, problemWords, type ContinueAsk, type ContinueReading } from "../contracts/cloud-continues.js"
 import type { ThreadContinueOffer, ThreadContinueOutcome, ThreadContinueStep } from "../contracts/cloud-threads.js"
 import type { CloudAccount } from "../usage/index.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** How long a follow is held open at the account at most: within a request's own time here (`REQUEST_MS`, 15 s). */
 const HOLD_MS = 12_000
@@ -136,7 +137,7 @@ export class CloudContinues {
   #ask(): (request: Parameters<ContinueAsk>[0], route: "continues.offer" | "continues.press" | "continues.follow") => ReturnType<ContinueAsk> {
     const account = this.#options.account()
     const askContinue = account?.askContinue
-    if (!account || !askContinue) throw new Error("This Mac isn't signed in to Mako.")
+    if (!account || !askContinue) throw new Error(localWords("This Mac isn't signed in to Mako."))
     return ({ method, path, correlationId }, route) => askContinue.call(account, route, method, path, correlationId)
   }
 }

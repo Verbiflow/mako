@@ -32,6 +32,7 @@ import {
   type SchedulePreset,
 } from "@/lib/automation-words"
 import { cn } from "@/lib/utils"
+import { localWords } from "@mako/protocol/computer-words"
 
 /**
  * An automation's triggers, each a sentence whose words are its controls ("Every [weekday] at [9:00] in
@@ -183,7 +184,7 @@ function TriggerRow({ index, trigger, cloudRegistered, problem, onChange, onRemo
       {waits || triggerInCloud(trigger) ? (
         <p data-trigger-waits className="flex items-center gap-1.5 pl-[22px] text-label text-faint">
           <CloudIcon aria-hidden className="size-3" />
-          {waits ?? "Fired by your cloud account, whether or not this Mac is on."}
+          {waits ?? localWords("Fired by your cloud account, whether or not this Mac is on.")}
         </p>
       ) : null}
       {problem ? <p role="alert" data-trigger-problem className="pl-[22px] text-label text-negative">{problem}</p> : null}

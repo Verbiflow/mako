@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto"
 import { homedir } from "node:os"
-import { join, sep } from "node:path"
 import { within } from "./paths.js"
+import { folderOf, insideOf, joined } from "../base/path-style.js"
 
 /**
  * The folders the harnesses keep their sessions in, from where their
@@ -12,11 +12,11 @@ export function harnessStores(sessionFiles: readonly string[], home = homedir())
   const folders = new Set<string>()
   for (const path of sessionFiles) {
     if (!within(home, path)) continue
-    const [first, second, third] = path.slice(home.length + 1).split("/")
+    const [first, second, third] = insideOf(home, path).split("/")
     if (!first || !second) continue
     // Under Library, the application's own folder (`Library/Application Support/<app>`).
-    if (first === "Library" && second && third) folders.add(join(home, first, second, third))
-    else if (first.startsWith(".")) folders.add(join(home, first))
+    if (first === "Library" && second && third) folders.add(joined(home, first, second, third))
+    else if (first.startsWith(".")) folders.add(joined(home, first))
   }
   return [...folders].sort()
 }
@@ -28,7 +28,7 @@ export function harnessStores(sessionFiles: readonly string[], home = homedir())
  */
 export function harnessScratch(home: string): string[] {
   const uid = process.getuid?.()
-  return [join(home, ".claude.json"), ...(uid === undefined ? [] : [`/private/tmp/claude-${uid}`])]
+  return [joined(home, ".claude.json"), ...(uid === undefined ? [] : [`/private/tmp/claude-${uid}`])]
 }
 
 /** What `sessionFolders` and backfill read of a catalogued session. */
@@ -79,7 +79,7 @@ export function outsideFolders(sessions: readonly CataloguedSession[], running: 
   for (const session of sessions) {
     if (!active.has(session.path)) continue
     for (const folder of [session.cwd, session.currentCwd, ...(session.worktrees ?? []).map((worktree) => worktree.path)])
-      if (folder && folder !== home && folder !== sep && !out.has(folder)) out.set(folder, `${session.harness} session ${session.nativeId.slice(0, 8)}, outside this Mako`)
+      if (folder && folder !== home && folderOf(folder) !== folder && !out.has(folder)) out.set(folder, `${session.harness} session ${session.nativeId.slice(0, 8)}, outside this Mako`)
   }
   return [...out].map(([folder, why]) => ({ folder, why }))
 }

@@ -76,6 +76,7 @@ import {
   inPlace,
   placedProofs,
 } from "./thread-recipe.js"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** Under the minute most harnesses' MCP clients give a tool call; longer waits come back as "still starting". */
 const SETTLE_MS = 25_000
@@ -324,7 +325,7 @@ type StartOutcome =
 
 /** recipe_save's line on whom publishing reaches: the project's other checkouts that have run its app, those running now, and the versions those run. */
 export function reachLine({ others, up, versions }: { others: number; up: number; versions: readonly number[] }): string {
-  if (!others) return "No other checkout of this project has run its app on this Mac, so once it's published the next ones start with it."
+  if (!others) return localWords("No other checkout of this project has run its app on this Mac, so once it's published the next ones start with it.")
   const them = others === 1 ? "the other checkout of this project that has run its app" : `the ${others} other checkouts of this project that have run its app`
   const pinned = versions.length ? ` (${versions.map((version) => `version ${version}`).join(", ")})` : ""
   const running = !up
@@ -332,7 +333,7 @@ export function reachLine({ others, up, versions }: { others: number; up: number
     : up === others
       ? `${up === 1 ? "It runs now and keeps the version it" : "All run now and keep the version they"} started with${pinned} until app_restart.`
       : `${up === 1 ? "One running now keeps the version it" : `${up} running now keep the version they`} started with${pinned} until app_restart; the rest take it at their next start.`
-  return `Published, it reaches ${them} on this Mac. ${running}`
+  return localWords(`Published, it reaches ${them} on this Mac. ${running}`)
 }
 
 /** What every command Mako runs for an app starts from: the host's environment without Mako's own secrets, with the Thread's values when there's a Thread. */
@@ -599,12 +600,12 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       const short = await shortFor(checkout)
       return { notes: short ? [...notes, `${short}; the app starts anyway.`] : notes }
     }
-    if (level !== "critical") return { notes: [...notes, "This Mac is short of memory; the app starts anyway."] }
+    if (level !== "critical") return { notes: [...notes, localWords("This Mac is short of memory; the app starts anyway.")] }
     const running = (await deps.processes.active()).filter((entry) => entry.app !== app)
       .map((entry) => `${deps.whose?.(entry.app) || entry.app} (${bytes(entry.memoryBytes)}, used ${minutes(now - entry.usedAt)} ago)`)
     return {
       notes,
-      refused: `Waiting in line for memory: this Mac is critically short of memory${running.length ? `, with these apps running: ${running.join(", ")}` : ""}. Nothing has started yet; Mako starts it by itself once there's room, and app_status shows when. If it can't wait, ask the user whether to stop one of those apps; app_stop takes it out of the line.`,
+      refused: localWords(`Waiting in line for memory: this Mac is critically short of memory${running.length ? `, with these apps running: ${running.join(", ")}` : ""}. Nothing has started yet; Mako starts it by itself once there's room, and app_status shows when. If it can't wait, ask the user whether to stop one of those apps; app_stop takes it out of the line.`),
     }
   }
   const packagesSummary = async (read: Read, checkout: string) => {
@@ -761,7 +762,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     if (outcome.kind === "blocked") return outcome.message
     if (outcome.kind === "waiting") return [...outcome.notes, outcome.message].join("\n")
     if (outcome.kind === "elsewhere")
-      return `Only one copy of this project's app runs at a time on this Mac (the recipe sets oneAtATime), and ${outcome.whose} has it running, so nothing started here. Ask the user whether to stop that copy; never stop it yourself.`
+      return localWords(`Only one copy of this project's app runs at a time on this Mac (the recipe sets oneAtATime), and ${outcome.whose} has it running, so nothing started here. Ask the user whether to stop that copy; never stop it yourself.`)
     return [
       ...outcome.notes,
       ...outcome.lines,
@@ -1315,7 +1316,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
       up(entry, "process") && (entry.project ?? (entry.checkout ? await rootOf(entry.checkout) : undefined)) === root))).filter(Boolean).length
     const queued = line.get(app)
     return [
-      `memory ${level}; ${running} app${running === 1 ? "" : "s"} running on this Mac`,
+      localWords(`memory ${level}; ${running} app${running === 1 ? "" : "s"} running on this Mac`),
       fitText(await fitOf(root, free?.freeBytes, copies, (await recentMemory(ROOM_MEMORY_MS))?.containerRuntime), free?.freeBytes),
       queued ? `waiting in line for memory since ${minutes((deps.now ?? Date.now)() - queued.since)} ago; it starts by itself once there's room` : undefined,
     ].filter(Boolean).join("; ")
@@ -1416,7 +1417,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
         ? [{ ms: run.state.at - run.startedAt, at: run.state.at, passed: run.state.code === 0 }]
         : []))
     const last = runs.sort((a, b) => b.at - a.at)[0]
-    if (!last) return [`The ${tier} check hasn't run on this Mac yet; the guide's target is ${CHECK_TARGETS[tier].words}.`]
+    if (!last) return [localWords(`The ${tier} check hasn't run on this Mac yet; the guide's target is ${CHECK_TARGETS[tier].words}.`)]
     const changed = before !== undefined && JSON.stringify(before.checks[tier]) !== JSON.stringify(after.checks[tier]) ? ", before this change to it" : ""
     const over = last.ms > CHECK_TARGETS[tier].ms
     const elsewhere = tier === "quick" ? "checks.full, or into an agent's own shell for the work that needs it" : "an agent's own shell for the work that needs it"
@@ -1463,7 +1464,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     steps.map((step) => `${step.name} ${step.passed ? "passed" : "failed"}${step.ms === undefined ? "" : ` in ${elapsed(step.ms)}`}`).join(", ")
   const proofRecord = (current: Ready, steps: RecipeProofStep[], by: string | undefined): RecipeProof => {
     const place = current.read.where?.place ?? "local"
-    const proof: RecipeProof = { at: (deps.now ?? Date.now)(), on: place === "cloud" ? "a cloud machine" : "this Mac", place, checkout: current.checkout, steps }
+    const proof: RecipeProof = { at: (deps.now ?? Date.now)(), on: place === "cloud" ? "a cloud machine" : localWords("this Mac"), place, checkout: current.checkout, steps }
     if (by) proof.by = by
     return proof
   }
@@ -1920,7 +1921,7 @@ export function environmentTools(deps: Deps): EnvironmentTools {
     async port(conversationId, port) {
       const { environment } = await context(conversationId)
       const owner = await deps.processes.portOwner(port)
-      if (!owner) return `Nothing on this Mac listens on port ${port}.`
+      if (!owner) return localWords(`Nothing on this Mac listens on port ${port}.`)
       return deps.processes.describeHolder(port, environment.app)
     },
     save,
@@ -2201,7 +2202,7 @@ function describe(status: RunStatus | undefined): string {
     return `starting; its ready command (${status.ready}) hasn't passed yet: its latest try ${failure.code === null ? "was stopped or couldn't run" : `exited ${failure.code}`}`
   }
   if (state.kind === "exited") return state.code === 0 ? "finished (exit 0)" : `crashed (exit ${state.code})`
-  if (state.kind === "ended") return "ended without an exit code (something outside Mako stopped it, or the Mac restarted)"
+  if (state.kind === "ended") return localWords("ended without an exit code (something outside Mako stopped it, or the Mac restarted)")
   return "stopped"
 }
 
@@ -2504,7 +2505,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
     "app_start",
     {
       description:
-        "Run this Thread's own copy of the app when you need it running to try or test your change, instead of starting a dev server yourself. Starts the recipe's processes (or one target's, such as web or desktop) on this Thread's ports and waits up to about 25 seconds for each to be ready: its port answering, or its ready command passing. They keep running after your turn and after Mako restarts, and stay out of other Threads' way. A process whose port something else holds is refused, naming who holds it; when this Mac is critically short of memory, the start waits in line and goes ahead by itself once there's room. Returns each process's state and, for one that crashed, the end of its log; for one whose ready command hasn't passed, what its latest try printed. In plan mode, app_status, app_logs and app_probe still read the app; if this is refused, the user can press Run app.",
+        localWords("Run this Thread's own copy of the app when you need it running to try or test your change, instead of starting a dev server yourself. Starts the recipe's processes (or one target's, such as web or desktop) on this Thread's ports and waits up to about 25 seconds for each to be ready: its port answering, or its ready command passing. They keep running after your turn and after Mako restarts, and stay out of other Threads' way. A process whose port something else holds is refused, naming who holds it; when this Mac is critically short of memory, the start waits in line and goes ahead by itself once there's room. Returns each process's state and, for one that crashed, the end of its log; for one whose ready command hasn't passed, what its latest try printed. In plan mode, app_status, app_logs and app_probe still read the app; if this is refused, the user can press Run app."),
       inputSchema: aimed,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
@@ -2636,7 +2637,7 @@ export function registerEnvironmentTools(server: McpServer, tools: EnvironmentTo
   server.registerTool(
     "port_holder",
     {
-      description: "Who holds a port on this Mac: one of this Thread's app processes, another Thread's (named by its title), or a process Mako didn't start. Ask before assuming a port is free, and instead of stopping whatever holds it.",
+      description: localWords("Who holds a port on this Mac: one of this Thread's app processes, another Thread's (named by its title), or a process Mako didn't start. Ask before assuming a port is free, and instead of stopping whatever holds it."),
       inputSchema: z.object({ port: z.number().int().min(1).max(65_535) }).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

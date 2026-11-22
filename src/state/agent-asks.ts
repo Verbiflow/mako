@@ -3,6 +3,7 @@ import { AgentAskAnswerSchema, AgentAskWantSchema, agentAskLine, agentAskWords, 
 import type { AskCard } from "@/lib/ask-card"
 import { getMako, hasBridge } from "@/lib/bridge"
 import type { LiveAcpConversation } from "@/state/acp-state"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** What the agent of a conversation asks the person through Mako's tools, first asked first. */
 export function agentAskOf(conversation: Pick<LiveAcpConversation, "control"> | undefined): AgentAsk | undefined {
@@ -32,7 +33,7 @@ export function agentAskCard(conversationId: string, ask: AgentAsk, harness: str
   if (ask.want.kind === "automation-proposal") {
     const want = ask.want
     const decline = { answer: "keep" as const, label: words.keep, choose: () => answerAgentAsk(conversationId, ask, false) }
-    if (!review) return { ...said, note: "Approve it where its change is shown: the Inbox or Automations on the Mac", choices: [decline] }
+    if (!review) return { ...said, note: localWords("Approve it where its change is shown: the Inbox or Automations on the Mac"), choices: [decline] }
     return {
       ...said,
       choices: [

@@ -36,6 +36,7 @@ import type { JsonObject } from "./json.js"
 import { warmAppshots, type AppshotRead } from "./native-appshot.js"
 import { createControlDirectory, createPrivateControlSocket } from "./private-socket.js"
 import { requireProof, restrictPipes } from "@mako/lazy/private-pipe"
+import { onMac } from "./platform.js"
 
 /**
  * The one owner of Mako's connection to its native driver daemon. Every
@@ -305,7 +306,7 @@ export class DriverBroker {
     const deadline = Date.now() + 5_000
     for (;;) {
       const socket = await this.options.socket()
-      if (!socket) throw new DriverNotDispatchedError("Mako's computer-use driver isn't available on this Mac; nothing was dispatched.")
+      if (!socket) throw new DriverNotDispatchedError(`Mako's computer-use driver isn't available on ${onMac() ? "this Mac" : "this computer"}; nothing was dispatched.`)
       const owned = this.options.daemon?.() ?? {}
       // The owner replaced its daemon between the two questions: that key is another endpoint's. Ask again.
       if (owned.path !== undefined && owned.path !== socket) {

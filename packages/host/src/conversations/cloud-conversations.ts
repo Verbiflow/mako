@@ -38,6 +38,7 @@ import { conversationCallId } from "../contracts/conversation-calls.js"
 import type { ConversationRoutingResult } from "./shared-conversations.js"
 import { COPY_PAGE, CopyHistory, copySnapshot, copyThreadPage, type CopyCall, type CopyCapture, type CopyConversation, type CopySource } from "../contracts/copy-history.js"
 import type { CopyPage } from "@mako/sessions/copy-reader"
+import { localWords } from "@mako/protocol/computer-words"
 
 /** The newest this many are kept, and followed while they're open. */
 const KEPT = 50
@@ -320,7 +321,7 @@ const ReadyAddressSchema = z.object({ kind: z.literal("ready"), address: z.objec
 /** The host log's line as a cloud Thread's machine changes, as this Mac knows it. */
 const MACHINE_WORDS = {
   asleep: "a cloud Thread's machine is asleep",
-  waking: "a call of this Mac's is waking a cloud Thread's machine",
+  waking: localWords("a call of this Mac's is waking a cloud Thread's machine"),
   awake: "a cloud Thread's machine is awake",
 } as const satisfies Record<CloudMachineState, string>
 /** A window following a cloud conversation's folder reads its Git again at most this often while its agent works. */
@@ -746,7 +747,7 @@ export class CloudConversations {
       await this.start()
       const runtime = execution.owner.runtime
       const sibling = [...this.#entries.values()].find((entry) => cloudRuntimeOf(entry.threadId) === runtime)
-      if (!sibling) throw new Error("This Thread runs in the cloud, but this Mac no longer follows it there, so it can't start a conversation in it.")
+      if (!sibling) throw new Error(localWords("This Thread runs in the cloud, but this Mac no longer follows it there, so it can't start a conversation in it."))
       const returning = this.#options.returning?.(sibling.threadId)
       if (!returning) return { threads, sibling, session }
       await returning
@@ -766,7 +767,7 @@ export class CloudConversations {
     if (!placed) throw new Error("That tab's Session isn't in a Thread any more.")
     let entry = this.#entries.get(options.conversationId)
     if (!entry) {
-      if (this.#options.returning?.(sibling.threadId)) throw new Error("This Thread is on its way back to this Mac; open a new tab once it's here.")
+      if (this.#options.returning?.(sibling.threadId)) throw new Error(localWords("This Thread is on its way back to this Mac; open a new tab once it's here."))
       entry = { conversationId: options.conversationId, threadId: sibling.threadId, harness, repository: sibling.repository, createdAt: Date.now(), created: true, seq: sibling.seq }
       this.#entries.set(entry.conversationId, entry)
       await this.#save()
@@ -796,9 +797,9 @@ export class CloudConversations {
     const threads = this.#options.threads?.()
     const placed = threads?.journalPlacement(entry.conversationId)
     if (placed) {
-      if (input.thread === "new") throw new Error("A conversation in the cloud forks within its Thread there. Fork it into a new Thread once it's back on this Mac.")
-      if (input.worktree || input.move) throw new Error("A conversation in the cloud works in its machine's checkout. Fork it into a worktree once it's back on this Mac.")
-      if (!this.#entries.has(input.id) && this.#options.returning?.(entry.threadId)) throw new Error("This Thread is on its way back to this Mac; fork it once it's here.")
+      if (input.thread === "new") throw new Error(localWords("A conversation in the cloud forks within its Thread there. Fork it into a new Thread once it's back on this Mac."))
+      if (input.worktree || input.move) throw new Error(localWords("A conversation in the cloud works in its machine's checkout. Fork it into a worktree once it's back on this Mac."))
+      if (!this.#entries.has(input.id) && this.#options.returning?.(entry.threadId)) throw new Error(localWords("This Thread is on its way back to this Mac; fork it once it's here."))
     }
     // A fork of a Thread from this Mac goes into a Session named here, from the fork's own ID: a repeat names the same,
     // and no machine's randomness decides it (copies of one snapshot once drew the same IDs).
@@ -1168,7 +1169,7 @@ export class CloudConversations {
     const account = this.#account()
     const repository = entry.repository
     // A start this Mac made names its repository; only a conversation listed from another device has none, and isn't started here.
-    if (!repository) throw new Error("That conversation runs on another device; it isn't started from this Mac.")
+    if (!repository) throw new Error(localWords("That conversation runs on another device; it isn't started from this Mac."))
     if (!entry.created) {
       await this.#carried(folder, "a cloud Thread started")
       await account.createThread(entry.threadId, repository, { harness })
@@ -1501,7 +1502,7 @@ export class CloudConversations {
 
   #account(): CloudAccount {
     const account = this.#options.account()
-    if (!account) throw new Error("This Mac isn't signed in to Mako.")
+    if (!account) throw new Error(localWords("This Mac isn't signed in to Mako."))
     return account
   }
 
@@ -1509,7 +1510,7 @@ export class CloudConversations {
   async #connected(): Promise<{ session: ClientSessionOverSockets; deviceId: string }> {
     const account = this.#account()
     const deviceId = await account.deviceId()
-    if (!deviceId) throw new Error("This Mac isn't signed in to Mako.")
+    if (!deviceId) throw new Error(localWords("This Mac isn't signed in to Mako."))
     if (this.#session?.deviceId !== deviceId) {
       this.#session?.session.close()
       this.#session = { deviceId, session: account.session() }
