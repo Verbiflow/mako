@@ -32,7 +32,7 @@
   "dependencies": {
     "acorn": "8.18.0",
     "devtools-protocol": "0.0.1692173",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   },
   "engines": {
     "node": ">=24"

@@ -6,9 +6,9 @@
   "dependencies": {
     "@mako/lazy": "file:packages/lazy",
     "@mako/control": "file:packages/control",
-    "@modelcontextprotocol/sdk": "1.30.0",
-    "sharp": "0.35.3",
-    "zod": "4.4.3",
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "sharp": "0.35.5",
+    "zod": "4.6.7",
     "@mako/control-runtime": "file:packages/control-runtime"
   }
 }

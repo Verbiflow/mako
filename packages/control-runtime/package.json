@@ -41,12 +41,12 @@
   "dependencies": {
     "@mako/control": "0.1.0",
     "@mako/lazy": "0.1.0",
-    "@modelcontextprotocol/sdk": "1.30.0",
+    "@modelcontextprotocol/sdk": "1.32.2",
     "devtools-protocol": "0.0.1692173",
-    "image-size": "2.0.2",
+    "image-size": "2.0.4",
     "mediabunny": "1.66.2",
-    "sharp": "0.35.3",
+    "sharp": "0.35.5",
     "ws": "8.21.3",
-    "zod": "4.4.3"
+    "zod": "4.6.7"
   }
 }

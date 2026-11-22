@@ -44,7 +44,7 @@ export const SDK_SCHEMAS = [
   },
   {
     package: "@modelcontextprotocol/sdk",
-    version: "1.30.0",
+    version: "1.32.2",
     build: "dist/esm",
     module: "types.js",
     exported: /^export const ([A-Za-z0-9_]+Schema) = /,
