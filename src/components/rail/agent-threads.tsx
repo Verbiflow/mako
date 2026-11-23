@@ -1,7 +1,7 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { nudgeProject, startProjectDrag, useProjectDrag } from "@/components/rail/project-drag"
 import { ProjectDragLayer } from "@/components/rail/project-drag-layer"
-import { orderByHand, useProjectOrder } from "@/state/project-order"
+import { orderByHand, placedByHand, useProjectOrder } from "@/state/project-order"
 import { WorkGlyph } from "@/components/rail/work-status"
 import { foldedAsDone, useThreadMarks } from "@/state/thread-marks"
 import { rowThread } from "@/state/thread-groups"
@@ -24,8 +24,11 @@ import type { ThreadRef } from "@/lib/types"
 import { ROW_SURFACE, ThreadRow } from "@/components/rail/thread-row"
 import { harnessLabels, harnessLabel } from "@/components/rail/harness-meta"
 import {
+  coldBefore,
+  folderIsCold,
   groupThreadFolders,
   heldFolderRanks,
+  listedThreadFolders,
   orderThreadFolders,
   settledFolderRanks,
   showsInRecent,
@@ -136,8 +139,10 @@ import {
  * all. What a thread needs from you is its mark and its folder's chip, and
  * the Inbox above the list is the one place that gathers it, across every
  * Thread and Fin. Rows that do move glide there. Each folder holds the same handful of rows
- * and a quiet "More" for the rest; folders gone cold collapse to a single
- * line. No chips, no toggles, no permanent search box — search and the
+ * and a quiet "More" for the rest; folders gone cold, or with no row to
+ * draw, wait behind "N more folders", and one kept in the list all the same
+ * (pinned, or placed there by hand) collapses to a single line. No chips,
+ * no toggles, no permanent search box — search and the
  * harness filter live behind two small glyphs in the header and take space
  * only while in use. A row is one line: the harness's mark, the title, and
  * how long ago.
@@ -152,11 +157,12 @@ const FOLDER_LEAD_ROWS = 4
 const PAGE_ROWS = 5
 const PINNED_ROWS = 8
 const FOLDER_ROWS = 6
-/** Folders quiet longer than this start out collapsed. */
-const COLD_MS = 7 * 24 * 3600_000
 const LIVE_TIME_MS = 60_000
 /** How long ⌘ is held alone before the rows show their keys: a ⌘K or ⌘N pressed at once shows none. */
 const JUMP_HINT_MS = 200
+
+/** A hidden project with a run going or waiting on you stays until that's done, so work never vanishes from view. */
+const staysHidden = (folder: ThreadFolder, hidden: readonly string[]) => folder.cwd !== null && hidden.includes(folder.cwd) && !folder.running && !folder.needsInput
 
 /** Conversations in a folder, the one that moved last first: another device's by its listed time, this Mac's by its start. */
 function byLatestMove(left: AcpPresence, right: AcpPresence): number {
@@ -541,11 +547,9 @@ export function AgentThreads() {
     const save = setTimeout(() => saveFolderRanks(workedRanks), SAVE_QUIET_MS)
     return () => clearTimeout(save)
   }, [loaded, unfiltered, workedRanks])
-  // The order the person dragged projects to comes first; the rest keep the order they were last worked in.
-  const handOrder = useProjectOrder((state) => state.order)
   const folders = useMemo(
-    () => orderByHand(orderThreadFolders(grouped, hold?.folderRanks ? heldFolderRanks(hold.folderRanks, folderRanks) : folderRanks, sortBy), sortBy === "recent" ? handOrder : []),
-    [grouped, hold, folderRanks, sortBy, handOrder]
+    () => orderThreadFolders(grouped, hold?.folderRanks ? heldFolderRanks(hold.folderRanks, folderRanks) : folderRanks, sortBy),
+    [grouped, hold, folderRanks, sortBy]
   )
   // Open for this reveal only (`reveal.open`); the person's stored choice for the folder is left as it was.
   const revealedOpen = reveal?.open ? reveal.key : null
@@ -579,10 +583,32 @@ export function AgentThreads() {
   ].sort((a, b) => b.at.localeCompare(a.at)).slice(0, 80), [byProject, shownRefs, shownRanks, threadActivity, shownLive])
   const showPages = useCallback((key: string, next: number) => setPages((prev) => ({ ...prev, [key]: next })), [])
   const hiddenFold = useFoldAway(!showHidden)
+  // The folders that would draw a header and nothing under it, by key: every Thread in them is pinned or folded as
+  // Done, and no conversation is in them. Kept as one string, so a mark changing elsewhere draws nothing again.
+  const rowlessKeys = useThreadMarks((state) => {
+    let keys = ""
+    for (const folder of folders)
+      if (!liveByFolder.get(folder.key)?.length && folder.refs.every((ref) => foldedAsDone(state.byThread[rowThread(ref, threadOf) ?? ""], now))) keys += `${folder.key}\n`
+    return keys
+  })
+  const handOrder = useProjectOrder((state) => state.order)
+  const revealed = reveal?.key
+  // The projects as listed: a cold one, or one with no row to draw, waits behind "N more folders" unless the person
+  // placed it there themselves or just added it; a search or a filter lists whatever it found. Then the places the
+  // person dragged projects to, among the ones listed; the rest keep the order they were last worked in.
+  const { listed, resting } = useMemo(() => {
+    const rowless = new Set(rowlessKeys.split("\n"))
+    const placed = placedByHand(handOrder)
+    const split = listedThreadFolders(
+      folders.filter((folder) => folder.cwd !== null && !staysHidden(folder, hiddenProjects)),
+      unfiltered ? { now, rowless: (folder) => rowless.has(folder.key), kept: (key) => key === revealed || placed.has(key) } : undefined
+    )
+    return sortBy === "recent" && handOrder.length ? { listed: orderByHand(split.listed, handOrder), resting: split.resting } : split
+  }, [folders, hiddenProjects, rowlessKeys, handOrder, unfiltered, now, revealed, sortBy])
   // The rows' order can change only when one of these does; the glide reads the page again then, and at no other draw.
   const rowOrder = useMemo(
-    () => ({ folders, held, recent, liveByFolder, pages, collapsed, hiddenProjects, showAllPinned, showAllFolders, showHidden }),
-    [folders, held, recent, liveByFolder, pages, collapsed, hiddenProjects, showAllPinned, showAllFolders, showHidden]
+    () => ({ folders, listed, resting, held, recent, liveByFolder, pages, collapsed, hiddenProjects, showAllPinned, showAllFolders, showHidden }),
+    [folders, listed, resting, held, recent, liveByFolder, pages, collapsed, hiddenProjects, showAllPinned, showAllFolders, showHidden]
   )
   useRowFlip(scroller, `${grouping}:${searchActive}`, rowOrder)
   const inboxOpen = useInboxView((state) => state.open || state.automations)
@@ -591,21 +617,18 @@ export function AgentThreads() {
     ? quietPinned
     : quietPinned.slice(0, PINNED_ROWS)
   const hiddenPinned = quietPinned.length - shownPinned.length
-  // A hidden project with a run going or waiting on you stays until that's done, so work never vanishes from view.
-  const isHidden = (folder: ThreadFolder) => folder.cwd !== null && hiddenProjects.includes(folder.cwd) && !folder.running && !folder.needsInput
-  const workspaceFolders = folders.filter((folder) => folder.cwd !== null && !isHidden(folder))
-  const hiddenList = folders.filter(isHidden)
+  const hiddenList = folders.filter((folder) => staysHidden(folder, hiddenProjects))
   const sessions = folders.find((folder) => folder.cwd === null)
-  const priorityFolders = workspaceFolders.filter(
+  const priorityFolders = listed.filter(
     (folder) => folder.current || folder.pinned
   ).length
   const shownFolders = showAllFolders
-    ? workspaceFolders
+    ? [...listed, ...resting]
     : visibleThreadFolders(
-        workspaceFolders,
+        listed,
         Math.max(FOLDER_ROWS, priorityFolders)
       )
-  const hiddenFolders = workspaceFolders.length - shownFolders.length
+  const hiddenFolders = listed.length + resting.length - shownFolders.length
   const folderSection = (folder: ThreadFolder, hidden = false) => (
     <FolderSection
       key={folder.key}
@@ -1180,11 +1203,6 @@ function hideProject(folder: ThreadFolder & { cwd: string }, hidden: boolean) {
   })
 }
 
-/** A cold folder starts closed, a warm one open (`COLD_MS`). */
-function folderStartsClosed(folder: ThreadFolder, now: number): boolean {
-  return !folder.current && !folder.priority && folder.latest !== "" && now - Date.parse(folder.latest) > COLD_MS
-}
-
 interface FolderSectionProps {
   folder: ThreadFolder
   now: number
@@ -1250,7 +1268,7 @@ const FolderSection = memo(function FolderSection({
 }: FolderSectionProps) {
   // A cold folder starts closed, a warm one open; the stored flag means
   // "the user flipped this one from its default", so both kinds remember.
-  const cold = folderStartsClosed(folder, now)
+  const cold = folderIsCold(folder, coldBefore(now))
   const chosenClosed = collapsed ? !cold : cold
   // A reveal opens it for this view alone; folding it hands it back to the stored choice, closed.
   const closed = revealed ? false : chosenClosed

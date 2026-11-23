@@ -24,6 +24,9 @@ export interface ThreadWorktree {
  */
 export const PROJECT_CHECKOUT_FILE = ".mako-project.json"
 
+/** What `PROJECT_CHECKOUT_FILE` holds for a checkout of `project`, to the byte. */
+export const projectCheckoutText = (project: string) => `${JSON.stringify({ project })}\n`
+
 /**
  * The folder a Thread works in that this worktree is part of. A project of
  * one repository: the worktree itself. A project folder holding several

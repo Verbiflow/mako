@@ -10,7 +10,7 @@ import { getMako, hasBridge } from "@/lib/bridge"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
 import { landedFor, removable, removedNote, type CheckoutDetail } from "@/lib/worktree-removal"
 import { mapWorktreeFolders, type FolderMap } from "@/lib/thread-folders"
-import { pathInside, plainPath, worktreeIn } from "@mako/host/contracts/worktree-paths"
+import { pathInside, plainPath, projectEnd, projectFolderOf, worktreeIn } from "@mako/host/contracts/worktree-paths"
 import { chatFoldersStore, chatGroupOf } from "@/state/chat-folders"
 import { checkoutHeadsStore } from "@/state/checkout-heads"
 import { confirmAction } from "@/state/confirm"
@@ -120,26 +120,26 @@ function stateOf(worktrees: readonly ThreadWorktree[]): WorktreesState {
   // Everything it reads is fixed when it's made, so each path is worked out once: the rail asks for every row's folder
   // each time it groups them.
   const mapped = new Map<string, string | undefined>()
+  /** What a folder in one of this window's places was made from: one worktree back, which may be another worktree. */
+  const madeFrom = (path: string): string | undefined => {
+    const made = worktreeAt(worktrees, path)
+    if (made) return projectFolderOf(made, path)
+    const found = worktreeAt(outside, path)
+    return found ? `${found.worktree.repoRoot}${found.inside}` : mirroredFolder(mirrorsByPath, path)
+  }
   return {
     worktrees,
     outside,
     mirrors,
     folderMap: (path) => {
       if (mapped.has(path)) return mapped.get(path)
-      const found = worktreeAt(outside, path)
-      const folder = projectIn(worktrees, path) ?? (found ? `${found.worktree.repoRoot}${found.inside}` : mirroredFolder(mirrorsByPath, path) ?? chatGroupOf(path, chats))
+      const from = madeFrom(path)
+      // A Fin's worktree is made from its Apex's: the project is where that ends, across whichever list knows each.
+      const folder = from === undefined ? chatGroupOf(path, chats) : projectEnd(path, from, madeFrom)
       mapped.set(path, folder)
       return folder
     },
   }
-}
-
-/** `projectFolder` (the host's contract) over the indexed list. */
-function projectIn(worktrees: readonly ThreadWorktree[], path: string): string | undefined {
-  const found = worktreeAt(worktrees, path)
-  if (!found) return undefined
-  const { worktree, inside } = found
-  return pathInside(worktree.path, path) ? `${worktree.repoRoot}${inside}` : `${worktree.project}${inside}`
 }
 
 const placesKeys = new WeakMap<object, string>()

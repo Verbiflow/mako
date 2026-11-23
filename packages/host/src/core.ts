@@ -796,9 +796,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       // rows by 108 worktrees a report, 50 to 113 ms of the loop twenty times in five minutes.
       worktree: (folder) => {
         const found = worktreeIn(made, folder)
-        const project = found && projectFolderOf(found, folder)
+        const project = found && projectFolderOf(found, folder, made)
         return found && project ? { project, branch: found.worktree.branch } : undefined
       },
+      origin: (folder) => threads.origins.projectFolder(folder),
       head: listedHead,
       repository: (folder) => repositories.of(folder),
       background: heldWork,
