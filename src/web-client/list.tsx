@@ -4,7 +4,6 @@ import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, I
 import { askWords, childLine, childStateOf, childWord, finsAsChildren, rollup, rollupLabel } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { WORK_STATUS_WORDS } from "@mako/host/contracts/thread-marks"
-import { ApexAvatar } from "@/components/rail/rail-avatars"
 import { WorkGlyph } from "@/components/rail/work-status"
 import { finMarkState, motionOf } from "@/lib/live-mark-state"
 import { avatarHue, monogram } from "@/lib/rail-marks"
@@ -265,7 +264,7 @@ function ProjectGroup({ group, rowProps, placedByApex, onOpen }: { group: RailGr
       </button>
       {closed ? null : (
         <>
-          <ul role="list" className="web-rows">
+          <ul role="list" className="web-rows web-nest">
             {rows(group.threads)}
           </ul>
           {group.done.length ? (
@@ -276,7 +275,7 @@ function ProjectGroup({ group, rowProps, placedByApex, onOpen }: { group: RailGr
                 <ChevronRightIcon aria-hidden className={cn("size-3.5 transition-transform duration-200 ease-[var(--ease-out)]", doneShown && "rotate-90")} />
               </button>
               {doneShown ? (
-                <ul role="list" className="web-rows" data-done-rows>
+                <ul role="list" className="web-rows web-nest" data-done-rows>
                   {rows(group.done)}
                 </ul>
               ) : null}
@@ -326,9 +325,15 @@ function ListedThread({ placed = NO_THREADS, onOpenThread, ...row }: RowProps & 
 const NO_THREADS: readonly WebThread[] = []
 
 /** What hangs under an Apex: its placed Fins and its own to show, what each asks the person, and how many finished. */
+/** A Fin's ask of the person: the whole of it for a reader, and the question alone for the few words its row has room for. */
+interface HungAsk {
+  words: string
+  question: string
+}
+
 interface HungFins {
   placed: readonly WebThread[]
-  fins: ReadonlyArray<{ agent: NativeAgent; ask: string | undefined }>
+  fins: ReadonlyArray<{ agent: NativeAgent; ask: HungAsk | undefined }>
   finished: number
 }
 
@@ -348,14 +353,14 @@ function hungFins(roster: readonly NativeAgent[], placed: readonly WebThread[], 
     placed: [...placed.filter((thread) => waiting.has(thread.id)), ...(open ? placed.filter((thread) => !waiting.has(thread.id)) : [])],
     fins: [...asking, ...live].map((agent) => {
       const ask = asks.get(agent.child?.thread ?? "")
-      return { agent, ask: ask ? askWords(ask) : undefined }
+      return { agent, ask: ask ? { words: askWords(ask), question: ask.question } : undefined }
     }),
     finished: open ? fins.filter((agent) => !asked(agent) && childStateOf(agent).kind === "ended").length : 0,
   }
 }
 
 /**
- * An Apex's Fins under its row, as the desk's rail hangs them: a 1 px line from the Apex's tile and a square elbow into
+ * An Apex's Fins under its row, as the desk's rail hangs them: a 1 px line from the Apex's fin and a square elbow into
  * each, the finished as one line at the end. A Fin opens its Apex, where its card answers it; one placed on another
  * device opens its own Thread, where that device answers.
  */
@@ -381,9 +386,9 @@ function ApexFins({ apex, hung, open, onOpen }: { apex: WebThread; hung: HungFin
 }
 
 /** One Fin of an Apex: its mark, its title, and what it asks the person beside it. */
-function FinRow({ agent, ask, last, onOpen }: { agent: NativeAgent; ask: string | undefined; last: boolean; onOpen: () => void }) {
+function FinRow({ agent, ask, last, onOpen }: { agent: NativeAgent; ask: HungAsk | undefined; last: boolean; onOpen: () => void }) {
   const state = childStateOf(agent)
-  const line = ask ?? childLine(state)
+  const line = ask?.words ?? childLine(state)
   return (
     <button
       type="button"
@@ -402,7 +407,7 @@ function FinRow({ agent, ask, last, onOpen }: { agent: NativeAgent; ask: string 
       <span data-asking-title className={cn("min-w-0 flex-1 truncate text-ui", ask ? "text-foreground" : "text-foreground/65")}>{agent.title}</span>
       {ask ? (
         <span data-asking-line className="max-w-[48%] shrink truncate text-label text-faint">
-          {ask}
+          {ask.question}
         </span>
       ) : null}
     </button>
@@ -567,7 +572,7 @@ function useTick(on: boolean): number {
 /** An Apex's row's fold: whether its Fins are all shown, whether any is at work, their counts, and the tap that folds. */
 export interface ApexFold {
   open: boolean
-  /** Fins hang under it: its tile's line runs down to them. */
+  /** Fins hang under it: its fin's line runs down to them. */
   hangs: boolean
   finsWorking: boolean
   counts: string
@@ -586,7 +591,7 @@ function titleTone(selected: boolean, thread: WebThread, unread: boolean, marks:
 }
 
 /**
- * One Thread in the list, in the desk's rail's anatomy at touch size: its live mark (an Apex's tile, which folds and
+ * One Thread in the list, in the desk's rail's anatomy at touch size: its live mark (an Apex's fin, which folds and
  * unfolds its Fins), its title, what it waits on the person for beside it, then at its end its Fins at work, where it
  * runs when that's not a Mac, its Status and its time. Under a finger it opens as the finger lifts, offers its menu
  * when held, and swipes left to Archive (`row-gestures.ts`). News (a run that finished since it was last opened here, a
@@ -644,6 +649,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, marks
             <button
               type="button"
               data-row-fold
+              data-apex-mark
               aria-label={apex.open ? "Fold its Fins" : "Show all its Fins"}
               aria-expanded={apex.open}
               onClick={(event) => {
@@ -652,7 +658,7 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, marks
               }}
               className="web-row-mark web-apex-fold"
             >
-              <ApexAvatar seed={thread.id} className="size-5" />
+              <WebThreadMark thread={thread} unread={unread} />
             </button>
           </>
         ) : (

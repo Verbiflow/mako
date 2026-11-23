@@ -1367,7 +1367,7 @@ const FolderSection = memo(function FolderSection({
         )}
       >
         {/* `data-folding`: its rows are back with the fold, and come in with it, not each on its own (`useRowFlip`). */}
-        <div className="min-h-0 overflow-hidden" data-folding={rows.folding || undefined}>
+        <div className="rail-nest min-h-0 overflow-hidden" data-folding={rows.folding || undefined}>
           {rows.drawn ? <>
           {unsent ? (
             <div data-active data-unsent-thread className={cn(ROW_SURFACE, "pl-2")} aria-current="page">
@@ -1384,7 +1384,7 @@ const FolderSection = memo(function FolderSection({
               type="button"
               onClick={() => onPages(folder.key, pages + 1)}
               data-folder-more={more}
-              className="flex h-7 w-full items-center pl-9 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              className="flex h-7 w-full items-center pl-[34px] text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
               Show {more} more
             </button>
@@ -1393,7 +1393,7 @@ const FolderSection = memo(function FolderSection({
               type="button"
               onClick={() => onPages(folder.key, 0)}
               data-folder-less
-              className="flex h-7 w-full items-center pl-9 text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
+              className="flex h-7 w-full items-center pl-[34px] text-left text-label text-faint transition-colors duration-100 hover:bg-fill-hover hover:text-muted-foreground"
             >
               Show less
             </button>

@@ -125,7 +125,8 @@ async function checkDesk() {
     // A project row is its avatar (a letter or a picture) and its name.
     const folders = await evaluate("[...document.querySelectorAll('[data-folder-toggle]')].map(node => node.querySelector('.rail-fade')?.textContent.trim() ?? '')")
     assert.ok(folders.some((name) => name.startsWith("mako")) && folders.some((name) => name.startsWith("api")), `the rail's projects: ${JSON.stringify(folders)}`)
-    assert.ok((await evaluate("document.querySelectorAll('[data-thread-row][data-thread-indent]').length")) >= 4, "Threads are indented under their project")
+    const indents = await evaluate("(() => { const project = document.querySelector('[data-folder-toggle]').firstElementChild.getBoundingClientRect().left; return [...document.querySelectorAll('[data-thread-row][data-thread-indent]')].map((row) => Math.round(row.firstElementChild.getBoundingClientRect().left - project)) })()")
+    assert.ok(indents.length >= 4 && indents.every((by) => by >= 10), `Threads are indented under their project: ${JSON.stringify(indents)}`)
     // Its Sessions are its tip's (the calm rail draws no count on the row).
     assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].filter((row) => /(^|\\n)4 sessions/.test(row.dataset.tip ?? '') || /4 sessions/.test(row.getAttribute('aria-label') ?? '')).length"), 1, "the busy Thread is one row for its four Sessions")
     assert.equal(await evaluate("Boolean(document.querySelector('[data-thread-row][data-active]'))"), true, "the open Thread's row is lit")

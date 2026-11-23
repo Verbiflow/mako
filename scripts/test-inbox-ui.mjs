@@ -114,7 +114,7 @@ async function checkWindow() {
   const rollup = () => evaluate(`document.querySelector('.thread-jump-scope [data-apex-row]')?.dataset.finCounts ?? ''`)
 
   await window.loadURL(`${base}?mock&app=apex`)
-  await until(`document.querySelector('[data-rail-top]') !== null && document.querySelector('.thread-jump-scope [data-apex-row] [data-apex-avatar]') !== null`, "the rail with the Apex")
+  await until(`document.querySelector('[data-rail-top]') !== null && document.querySelector('.thread-jump-scope [data-apex-row] [data-apex-mark]') !== null`, "the rail with the Apex")
   await evaluate(`import('/src/state/prefs.ts').then(({prefsStore}) => prefsStore.set({railGrouping: 'project', railWidth: 264, theme: 'dark'}))`)
   await frames()
 

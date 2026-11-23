@@ -134,7 +134,7 @@ async function check() {
 
   // No Fin needs the person, so the Apex's row stops saying so; its ring says its Fins work on.
   await until("![...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes('Mobile polish'))?.innerText.includes('Needs you')", "the Apex's row standing down from Needs you")
-  assert.equal(await evaluate("Boolean([...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes('Mobile polish')).querySelector('[data-apex-avatar]'))"), true, "the Apex wears its avatar, not a fin")
+  assert.equal(await evaluate("Boolean([...document.querySelectorAll('[data-thread-row]')].find((row) => row.innerText.includes('Mobile polish')).querySelector('[data-apex-mark]'))"), true, "the Apex wears a Thread's fin, which folds its Fins")
 
   // Nothing says the Apex waits: its turn ended, and its Fins are the Shiver card's, not a background line's.
   assert.equal(await evaluate("Boolean(document.querySelector('[data-background-work]'))"), false, "no background line beside the Shiver card")

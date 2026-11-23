@@ -115,6 +115,7 @@ function withThreadId(ref: ThreadRef): ThreadRef {
 
 /** The fixture GitHub owner's avatar: a mark on its own ground, as an owner's logo is. */
 const ACME_AVATAR = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#24292f"/><path d="M32 12 52 50H12Z" fill="#f6f8fa"/><path d="M32 30 41 47H23Z" fill="#24292f"/></svg>')}`
+const HARBOR_AVATAR = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="#0b5c6b"/><circle cx="32" cy="32" r="16" fill="#e8f4f6"/></svg>')}`
 
 const MOCK_PULLS: PullRequestListing[] = [
   { number: 812, title: "Retry billing webhooks with backoff", state: "open", draft: false, url: "https://github.com/you/mako/pull/812", head: "mako/billing-webhooks", base: "main", author: "you", updatedAt: "2026-10-12T09:10:00Z" },
@@ -778,7 +779,8 @@ export function installMockBridge() {
   const projectBases = new Map<string, string>()
   const projectSettingsOf = (folder: string): ProjectSettingsView => {
     const baseBranch = projectBases.get(folder) ?? null
-    const cloud = folder === "/Users/you/api" ? "acme/api" : folder === "/Users/you/mako" ? "acme/mako" : null
+    // Two projects of one owner and one of another's: the rail gives an owner's picture only to a project alone under it.
+    const cloud = folder === "/Users/you/api" ? "acme/api" : folder === "/Users/you/mako" ? "acme/mako" : folder === "/Users/you/site" ? "harbor/site" : null
     return { folder, repository: folder, baseBranch, automatic: "origin/main", missing: false, cloud }
   }
   const makeWorktree = async (conversationId: string, cwd: string, thread: ThreadId, name: string | undefined, start: WorktreeStart | undefined): Promise<ThreadWorktree | undefined> => {
@@ -1866,8 +1868,8 @@ export function installMockBridge() {
       return sinceOpen
     },
     rerunChecks: async () => 0,
-    // The fixture's GitHub owner (`acme`, `projectSettingsOf`) has a picture; any other owner has none.
-    repoAvatar: async (owner: string) => (owner.split("/")[0] === "acme" ? ACME_AVATAR : undefined),
+    // The fixture's GitHub owners (`acme` and `harbor`, `projectSettingsOf`) each have a picture; any other owner has none.
+    repoAvatar: async (owner: string) => ({ acme: ACME_AVATAR, harbor: HARBOR_AVATAR })[owner.split("/")[0]!],
     // A GitHub-style identicon, so screenshots of the identity show a picture as GitHub would draw one.
     userAvatar: async () =>
       new URLSearchParams(globalThis.location?.search).get("github") === "off" ? undefined : MOCK_GITHUB_AVATAR,

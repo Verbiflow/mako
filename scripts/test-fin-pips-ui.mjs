@@ -8,7 +8,7 @@ import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
 
 /**
- * An Apex's row through the production rail and phone list, on the mock bridge's Apex (`?mock&app=apex`): its avatar,
+ * An Apex's row through the production rail and phone list, on the mock bridge's Apex (`?mock&app=apex`): its fin,
  * one line, its Fins counted in its tip as `rollup` counts them (the pips are the Overview's); folded, each Fin that
  * needs the person hung under it with its ask and nothing else of the Shiver in the rail; a Fin going to needs-you nests and leaves once answered, rows below it moving
  * by that row alone while every other row keeps its place, the folder's paging untouched; a nested row opens its Fin
@@ -79,7 +79,7 @@ async function check() {
     const apex = [...document.querySelectorAll('.thread-jump-scope [data-apex-row]')].find((row) => row.innerText.includes('Mobile polish'))
     return {
       label: (apex?.dataset.tip ?? '').split('\\n').find((line) => /^\\d+ Fins?\\b/.test(line)),
-      avatar: apex?.querySelector('[data-apex-avatar]') !== null,
+      fin: apex?.querySelector('[data-apex-mark]') !== null,
       height: Math.round(apex?.getBoundingClientRect().height),
       asking: [...document.querySelectorAll('.thread-jump-scope [data-asking-fin]')].map((row) => ({ thread: row.dataset.askingFin, text: row.innerText.replace(/\\s+/g, ' '), active: row.dataset.active === 'true' || row.hasAttribute('data-active') })),
       rail: document.querySelector('.thread-jump-scope').innerText,
@@ -97,7 +97,7 @@ async function check() {
 
   // The desk, as a window boots: the Apex's row from its host's summary, its asking Fins once the Inbox reads its roster.
   await load("/?mock&app=apex")
-  await until(`Boolean(document.querySelector('.thread-jump-scope [data-apex-row] [data-apex-avatar]'))`, "the Apex's row in the rail")
+  await until(`Boolean(document.querySelector('.thread-jump-scope [data-apex-row] [data-apex-mark]'))`, "the Apex's row in the rail")
   await until(`document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2`, "the Apex's asking Fins under it")
   const roster = await rosterOf()
   assert.equal(roster.length, 12)
@@ -105,7 +105,7 @@ async function check() {
   let rail = await evaluate(railState)
   assert.equal(rail.label, rollupLabel(counts), "the Apex's tip counts its Fins as `rollup` does")
   assert.equal(rail.label, "12 Fins: 2 need you · 5 working · 2 queued · 1 idle · 2 done")
-  assert.equal(rail.avatar, true, "the Apex wears its avatar")
+  assert.equal(rail.fin, true, "the Apex wears a Thread's fin")
   assert.equal(rail.height, 28, "the Apex's row is one line, 28 px")
   const asking = orderedChildren(roster).filter((agent) => childGroup(childStateOf(agent)) === "needs")
   assert.deepEqual(rail.asking.map((row) => row.thread), asking.map((agent) => agent.child.thread), "the Fins that need you hang under the Apex, oldest first")
