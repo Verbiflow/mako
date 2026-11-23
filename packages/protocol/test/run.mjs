@@ -6,7 +6,7 @@ import { SSH_ACK_EVERY_BYTES, SSH_CHUNK_BYTES, SSH_WINDOW_BYTES, SshIncoming, Ss
 import { SSH_VERSION } from "../dist/version.js"
 import { CORRELATION_HEADER, GatewayHttpError, RETRY_AFTER_MOST_MS, gatewayCalls, retryAfterMs } from "../dist/gateway-http.js"
 import { recordsOverHttp } from "../dist/records-http.js"
-import { MOVE_CHECKPOINT_MAX_BYTES, MoveAnswerSchema, MoveCheckpointSchema, MoveClaimRequestSchema, ReturnStateSchema, ReturnBeginRequestSchema } from "../dist/moves.js"
+import { MOVE_CHECKPOINT_MAX_BYTES, MoveAnswerSchema, MoveCheckpointSchema, MoveClaimRequestSchema, ReturnStateSchema, ReturnBeginRequestSchema, treeCut, treeCutWords } from "../dist/moves.js"
 import { RECIPE_WIRE_BYTES, recipeFits } from "../dist/recipes.js"
 import { recipesOverHttp } from "../dist/recipes-http.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
@@ -16,7 +16,7 @@ import { AccessChoicesAnswerSchema, AccessChoosingSchema, applyAccessChoosing, s
 import { WaitingInputSchema, WaitingMessageSchema, sameWaiting } from "../dist/waiting.js"
 import { ATTENTION_SUMMARY_FROM, ATTENTION_WORDS, AttentionKindSchema, asks, attentionFact, attentionHeadline, attentionKey, attentionLine, attentionSummary, foldedBody, needsYouWaiting, questionWaiting, requestWaiting, rowWaitingFor, factStands, noticeTag, readNotice } from "../dist/attention.js"
 import { ASKING_VERSION, CONTINUE_VERSION, FIN_STATES_VERSION, FINS_VERSION, FORKS_VERSION, BORROW_LINK_VERSION, SESSION_ORDER_VERSION } from "../dist/version.js"
-import { CONTINUE_APPLIED_MAX, ContinueOfferSchema, ContinueStateSchema, cloudRuntimeOf, continueCloudThread, continueHandOver, continueRefusal, continueRefusalText, namedUuid as continueUuid } from "../dist/continues.js"
+import { CONTINUE_APPLIED_MAX, ContinueOfferSchema, ContinueStateSchema, cloudRuntimeOf, continueCloudThread, continueHandOver, continueRefusal, continueRefusalText, continueTreeCut, namedUuid as continueUuid } from "../dist/continues.js"
 import { ArchivedThreadSchema, LISTED_FINS, ListedSessionSchema, QuietDeviceSchema, ReportedSessionSchema, SessionListingsSchema, SessionsReportSchema, mayReplace, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { CHUNK_HEADER_BYTES, RecordBundleSchema, RecordConflictError, decodeChunkPack, encodeChunkPack, planRecordImport, recordChunks } from "../dist/records.js"
 import { BorrowPushSchema } from "../dist/borrow.js"
@@ -2554,6 +2554,51 @@ describe("a Session continued in the cloud while its device is off", () => {
     assert.equal(continueRefusal({ ...row, runsOn: { kind: "cloud", threadId: "t-1" } }, [], quiet), "cloud")
     assert.match(continueRefusalText("working", "Ana's MacBook"), /Ana's MacBook says the turn ended/)
     assert.equal(ContinueOfferSchema.parse({ offer: false, why: "working", detail: "x" }).why, "working")
+  })
+
+  test("a Thread in a tree of agents moves only when that wouldn't cut the tree: an Apex stays with its Fins that haven't ended, a Fin with its Apex", () => {
+    const fin = (name, state) => ({ thread: `0a0a0a0a-0000-4000-8000-${name.padEnd(12, "0").slice(0, 12).replace(/[^0-9a-f]/g, "a")}`, name, harness: "claude", state, startedAt: "2026-10-24T20:00:00.000Z" })
+    // The rule itself, for whoever weighs a move: the device that holds the tree, and the account for a quiet one.
+    assert.equal(treeCut({}), undefined, "a Thread in no tree moves")
+    assert.equal(treeCut({ fins: [{ state: { kind: "ended" } }, { state: { kind: "ended" } }] }), undefined, "an Apex whose Fins all ended moves")
+    assert.deepEqual(treeCut({ fins: [{ state: { kind: "idle" } }, { state: { kind: "queued" } }, { state: { kind: "starting" } }, { state: { kind: "working" } }, { state: { kind: "blocked" } }, { state: { kind: "ended" } }] }), { kind: "open-fins", open: 5 }, "a Fin holds it until it has ended, idle or at work")
+    assert.deepEqual(treeCut({ apex: { title: "Ship the importer" }, fins: [{ state: { kind: "working" } }] }), { kind: "fin", apex: "Ship the importer" }, "a Fin that leads Fins of its own is a Fin first")
+    assert.deepEqual(treeCut({ apex: { away: true } }), { kind: "fin", away: true })
+    assert.equal(treeCutWords({ kind: "open-fins", open: 2 }), "This Thread leads 2 Fins that haven't ended, and their reports reach it only on this Mac. It can move once they finish or are stopped.")
+    assert.equal(treeCutWords({ kind: "open-fins", open: 1 }), "This Thread leads a Fin that hasn't ended, and its reports reach it only on this Mac. It can move once that Fin finishes or is stopped.")
+    assert.equal(treeCutWords({ kind: "fin", apex: "Ship the importer" }), 'This Thread is one of "Ship the importer"\'s Fins. It reports to its Apex on this Mac, so it stays where its Apex is.')
+    assert.equal(treeCutWords({ kind: "fin" }), "This Thread is a Fin. It reports to its Apex on this Mac, so it stays where its Apex is.")
+    assert.equal(treeCutWords({ kind: "fin", away: true }), "This Thread is a Fin of an Apex on another device. Its reports reach its Apex from this Mac, so it stays here.")
+
+    // Continue in the cloud, by the account's list alone: an Apex's row says its Fins, and names its Fins' Threads.
+    const idle = fin("idle", { kind: "idle" })
+    const done = fin("done", { kind: "ended", outcome: "done" })
+    const stopped = fin("stopped", { kind: "ended", outcome: "stopped" })
+    const apex = { ...row, threadTitle: "Ship the importer", fins: [idle, done] }
+    assert.equal(continueRefusal(apex, [apex], quiet), "open-fins", "an idle Apex with a Fin that hasn't ended doesn't continue away from it")
+    assert.deepEqual(continueTreeCut(apex, [apex]), { kind: "open-fins", open: 1 })
+    const tab = { ...row, session: "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918" }
+    assert.equal(continueRefusal(tab, [tab, apex], quiet), "open-fins", "whichever of its Sessions is asked about")
+    const ended = { ...row, fins: [done, stopped] }
+    assert.equal(continueRefusal(ended, [ended], quiet), undefined, "an Apex whose Fins all ended may continue")
+    assert.equal(continueRefusal(apex, [apex], []), "reachable", "a device that's on is said first: it runs there")
+    assert.equal(continueRefusal({ ...apex, state: "working" }, [{ ...apex, state: "working" }], quiet), "open-fins", "the tree is said before a turn that will end")
+    const finRow = { ...row, session: "6d5c4b3a-2918-4070-8f6e-5d4c3b2a1908", thread: idle.thread, conversation: "9c8b7a69-5847-4362-9150-4f3e2d1c0b9a" }
+    assert.equal(continueRefusal(finRow, [finRow, apex], quiet), "fin", "a Fin doesn't continue apart from its Apex")
+    assert.deepEqual(continueTreeCut(finRow, [finRow, apex]), { kind: "fin", apex: "Ship the importer" })
+    const doneRow = { ...finRow, thread: done.thread }
+    assert.equal(continueRefusal(doneRow, [doneRow, apex], quiet), "fin", "nor one that ended: its next message opens it again under its Apex")
+    const elsewhere = { ...apex, runsOn: { kind: "device", deviceId: phone } }
+    assert.equal(continueRefusal(finRow, [finRow, elsewhere], quiet), "fin", "a Fin placed apart from its Apex has a row of its own, and its Apex's row on another device names it")
+    assert.equal(continueRefusal(finRow, [finRow], quiet), undefined, "a row no Apex's row names stands on its own")
+    assert.equal(continueRefusalText("open-fins", "Ana's MacBook", { kind: "open-fins", open: 1 }), "It leads a Fin that hasn't ended, and its reports reach it only on Ana's MacBook. It can continue in the cloud once that Fin finishes or is stopped.")
+    assert.equal(continueRefusalText("open-fins", "Ana's MacBook", { kind: "open-fins", open: 3 }), "It leads 3 Fins that haven't ended, and their reports reach it only on Ana's MacBook. It can continue in the cloud once they finish or are stopped.")
+    assert.equal(continueRefusalText("open-fins", "Ana's MacBook"), "It leads Fins that haven't ended, and their reports reach it only on Ana's MacBook. It can continue in the cloud once they finish or are stopped.", "said without the count by a caller that has only the reason")
+    assert.equal(continueRefusalText("fin", "Ana's MacBook", { kind: "fin", apex: "Ship the importer" }), 'It\'s one of "Ship the importer"\'s Fins, and its reports reach its Apex from Ana\'s MacBook, so it continues only there.')
+    assert.equal(continueRefusalText("fin", "Ana's MacBook"), "It's a Fin of another Thread, and its reports reach its Apex from Ana's MacBook, so it continues only there.")
+    // On the wire only in the account's offer: this build reads both reasons there.
+    assert.equal(ContinueOfferSchema.parse({ offer: false, why: "open-fins", detail: "x" }).why, "open-fins")
+    assert.equal(ContinueOfferSchema.parse({ offer: false, why: "fin", detail: "x" }).why, "fin")
   })
 
   test("the hand-over is the device's own move, composed by the account: one Thread, IDs of the op, the arrival first", async () => {

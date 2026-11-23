@@ -271,7 +271,11 @@ function completeMove(conversationId: string, move: string, step: Extract<Thread
   // Richer host metadata updates the existing toast under its same ID; identical/partial completions repeat nothing.
   if (!previous || JSON.stringify([previous.continued, previous.carried, previous.whileAway]) !== JSON.stringify([completed.continued, completed.carried, completed.whileAway])) {
     const carried = carriedSentence(completed.carried)
-    if (completed.whileAway) toast.success("Continued in the cloud", { id: `move:${move}`, duration: completed.whileAway.behind ? Infinity : undefined, description: whileAwaySentence(completed.whileAway.behind) })
+    // With Fins left here it stays until the person acts on it: Bring it back is what joins them to it again.
+    if (completed.whileAway) toast.success("Continued in the cloud", {
+      id: `move:${move}`, duration: completed.whileAway.behind || completed.whileAway.finsLeft ? Infinity : undefined, description: whileAwaySentence(completed.whileAway.behind, completed.whileAway.finsLeft),
+      ...completed.whileAway.finsLeft && { action: { label: "Bring it back", onClick: () => void bringBack(conversationId) } },
+    })
     else if (completed.continued) toast.success("Handed off to the cloud", { id: `move:${move}`, description: ["Its turn goes on in a cloud machine, at the same folder, where it left off.", carried].filter(Boolean).join(" ") })
     else toast.success("Moved to the cloud", { id: `move:${move}`, description: ["It goes on in a cloud machine, at the same folder. Its worktree here follows each turn there.", carried].filter(Boolean).join(" ") })
   }
@@ -281,10 +285,14 @@ function completeMove(conversationId: string, move: string, step: Extract<Thread
   }
 }
 
-/** A Thread another device continued in the cloud while this Mac was off, as this Mac says it once it let go. */
-export function whileAwaySentence(behind: boolean): string {
+/**
+ * A Thread another device continued in the cloud while this Mac was off, as this Mac says it once it let go. `finsLeft`:
+ * the Fins it led that hadn't ended, which stayed here, and the one thing that joins them to it again.
+ */
+export function whileAwaySentence(behind: boolean, finsLeft?: number): string {
   const base = localWords("It went on in a cloud machine while this Mac was off, so this Mac let go of it. Its worktree here follows each turn there; bring it back any time.")
-  return behind ? localWords(`${base} The last turns you read may not have reached the cloud before this Mac went quiet: they stay in this Mac's history.`) : base
+  const fins = finsLeft ? localWords(` ${finsLeft === 1 ? "The Fin it leads" : `Its ${finsLeft} Fins`} stayed on this Mac, where ${finsLeft === 1 ? "its" : "their"} reports can't reach it: bring it back and ${finsLeft === 1 ? "it reports" : "they report"} to it again.`) : ""
+  return behind ? localWords(`${base}${fins} The last turns you read may not have reached the cloud before this Mac went quiet: they stay in this Mac's history.`) : `${base}${fins}`
 }
 
 /** Why a path stayed behind, in a few words. */

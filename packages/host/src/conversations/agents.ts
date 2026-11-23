@@ -17,6 +17,7 @@ import type { WorktreeRestored } from "../contracts/thread-worktrees.js"
 import { isLimitAsk, limitNoticeId, limitNoticeLine, limitNoticeWords, movedLine, movedWords, outOfAccountsLine, placeKey, stepKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep, type FinMove } from "../contracts/fin-fallback.js"
 import { errorMessage } from "../base/error-message.js"
 import { z } from "zod"
+import type { TreePlace } from "@mako/protocol/moves"
 import { homedir } from "node:os"
 import { ACCESS_TIER_NAMES, accessModeId, sessionAccessTier, type AccessTier } from "../contracts/access.js"
 import {
@@ -1384,6 +1385,27 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.roster(conversation).length) return true
     const thread = this.store()?.journalPlacement(conversation)?.thread
     return thread !== undefined && this.store()?.edges().of(thread)?.role === APEX_ROLE
+  }
+
+  /**
+   * Where a Thread stands in its tree, for the one rule every move of it asks (`treeCut`). A Fin by its edge, open or
+   * closed: a stop or a finished close only pauses its delegation, the next message to it opens the edge again
+   * (`reopen`), and nothing ever removes one, so its Apex still lists it, reads it and sends to it. Not one whose
+   * Apex's Thread is archived here, every Session of it: nothing leads it any more, and it's the person's to drive as
+   * any Thread. An Apex by the Fins its roster says, each as it stands, a start still held among them.
+   */
+  treePlace(thread: string): TreePlace {
+    const store = this.store()
+    if (!store) return {}
+    const edge = store.edges().of(thread)
+    if (edge?.remote) return { apex: { away: true } }
+    const led = edge ? this.conversationsOfThread(edge.parent).filter((conversation) => !this.deps.archived?.(conversation)) : []
+    if (edge && led.length) {
+      const front = this.frontOf(edge.parent, edge.parentSession)
+      const title = (front ? this.deps.live.session(front)?.title : undefined) ?? store.thread(ThreadIdSchema.parse(edge.parent))?.title
+      return { apex: { ...(title && { title }) } }
+    }
+    return { fins: [...store.edges().children(thread).map((child) => ({ state: this.stateOf(child) })), ...this.queuedOf(thread).map(() => ({ state: { kind: "queued" } }))] }
   }
 
   /**

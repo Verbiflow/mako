@@ -70,6 +70,11 @@ const script: Script = async (turn) => {
     await turn.world.hold(turn.conversation)
     return "Cut short."
   }
+  // A Fin's first turn ends on a wait for the person, so it sits open and idle, not done.
+  if (turn.text.includes("You're fin:")) {
+    await turn.world.agents.report(turn.caller, { status: "progress", summary: "Reviewed; it needs merging.", waitingOn: [{ kind: "person", what: "merge" }], clientKey: "said" })
+    return "Over to the person."
+  }
   return "Done."
 }
 
@@ -255,6 +260,7 @@ async function host(name: string, options: { readyNever?: boolean; unserved?: bo
     account: () => account,
     threads: () => world.store,
     moves: world.live.moves,
+    tree: (thread) => world.agents.treePlace(thread),
     session: (id) => world.live.session(id),
     checkout: (id) => worktrees.threadCheckout(id),
     ownBranch,
@@ -734,6 +740,70 @@ try {
     await h.close()
   }
 
+  // A tree of agents stays whole as the Mac goes away. An Apex whose Fin sits idle isn't at work at all; one mid-turn
+  // with a Fin that hasn't ended, and a Fin mid-turn, are left as they are: not paused, not named in the note, so the
+  // account continues neither away from its tree, and neither holds the note back for a pause that would never settle.
+  // The Thread in no tree is paused, parked and named exactly as before.
+  {
+    const h = await host("tree")
+    const plain = await h.thread("claude", "Plain")
+    assert.equal(await h.ownBranch(plain), plain)
+    const lead = async (title: string, name: string) => {
+      const apex = await h.thread("codex", title)
+      const started = await h.world.agents.start(h.world.caller(apex), { brief: { objective: `Check ${name}` }, harness: "claude", name, clientKey: name, cwd: h.project })
+      assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+      const fin = started.conversation
+      await until(`${name}'s first turn to end`, () => h.world.live.snapshot(fin)?.requests.at(-1)?.status === "completed" && h.world.live.snapshot(apex)?.session.status !== "running")
+      return { apex, fin }
+    }
+    const idle = await lead("Idle lead", "idler")
+    const busy = await lead("Busy lead", "worker")
+    await h.world.settle(300)
+    assert.deepEqual(h.world.agents.roster(idle.apex).map((agent) => agent.child?.state?.kind), ["idle"], "its Fin hasn't ended: it waits, open")
+    const threadOf = (id: string) => h.world.store.journalPlacement(id)!.thread
+    const atWorkNow = () => workingThreads({ live: h.world.live, threads: h.world.store, cloud: () => false }).map((each) => each.thread)
+    assert.ok(h.world.live.snapshot(idle.apex)?.nativeAgents?.agents.some((agent) => agent.child && agent.state.kind === "waiting"), "the idle Fin sits open in its Apex's roster")
+    assert.deepEqual(atWorkNow(), [], "an Apex whose only Fin sits idle isn't at work, and nor is the Fin: nothing to hand off")
+    assert.match(h.cloudMoves.treeKeeps(idle.apex) ?? "", /^This Thread leads a Fin that hasn't ended, and its reports reach it only on this Mac\. It can move once that Fin finishes or is stopped\.$/)
+    assert.equal(h.cloudMoves.treeKeeps(idle.fin), 'This Thread is one of "Idle lead"\'s Fins. It reports to its Apex on this Mac, so it stays where its Apex is.')
+    assert.equal(h.cloudMoves.treeKeeps(plain), undefined)
+    await h.working(plain)
+    await h.working(busy.apex)
+    await h.working(busy.fin)
+    for (const id of [plain, idle.apex, busy.apex]) h.listed.add(id)
+    assert.deepEqual(atWorkNow().sort(), [plain, busy.apex, busy.fin].map(threadOf).sort(), "each Thread with a turn of its own is at work")
+    assert.deepEqual((await h.handOffs.candidates()).map((each) => [each.thread, Boolean(each.refusal)]).sort(), [[threadOf(plain), false], [threadOf(busy.apex), true], [threadOf(busy.fin), true]].sort(), "a quit's sheet says why the two in the tree stay")
+    const began = Date.now()
+    const results = await h.handOffs.handOff(randomUUID(), "shutdown", Date.now() + 9_000)
+    assert.ok(Date.now() - began < 6_000, `the note wasn't held for a Fin to go quiet: ${Date.now() - began} ms`)
+    assert.equal(h.notes.length, 1)
+    assert.deepEqual(h.notes[0]!.threads.map((each) => each.thread), [threadOf(plain)], "the note names the Thread in no tree, and no Apex or Fin")
+    assert.equal(h.notes[0]!.threads[0]!.parked?.length, 1, "its turn parked, as before")
+    assert.notEqual(h.world.live.snapshot(plain)!.session.status, "running", "and paused, as before")
+    const kept = new Map(results.map((each) => [each.conversationId, each.outcome.kind === "kept-here" ? each.outcome.reason : ""]))
+    assert.match(kept.get(busy.apex) ?? "", /^This Thread leads a Fin that hasn't ended/, "the Apex stays, saying why")
+    assert.match(kept.get(busy.fin) ?? "", /^This Thread is one of "Busy lead"'s Fins/, "and so does its Fin")
+    for (const id of [busy.apex, busy.fin]) {
+      assert.equal(h.world.live.snapshot(id)!.session.status, "running", "its turn was left running: nothing of it waits on an account that takes none of it")
+      assert.equal(h.awayNotes.holds(h.world.store.journalPlacement(id)!.session), undefined, "and its Session isn't held for the account's word")
+    }
+    // Who is a Fin, by the engine's own edge. Stopped, it's a Fin still: the stop pauses its delegation, and the next
+    // message opens it again; its Apex, with no Fin left that hasn't ended, may move. Once the person archived its
+    // Apex's Thread nothing leads it, and it's theirs to move as any Thread.
+    const stopped = await h.world.agents.stop(h.world.caller(idle.apex), { child: "idler", reason: "enough" })
+    assert.ok(!("refused" in stopped), JSON.stringify(stopped))
+    assert.notEqual(h.world.store.edges().of(threadOf(idle.fin))?.closedAt, undefined, "its edge is closed")
+    assert.match(h.cloudMoves.treeKeeps(idle.fin) ?? "", /^This Thread is one of "Idle lead"'s Fins/, "a stopped Fin stays where its Apex is")
+    assert.equal(h.cloudMoves.treeKeeps(idle.apex), undefined, "an Apex whose Fins all ended may move")
+    h.world.archived.add(idle.apex)
+    assert.equal(h.cloudMoves.treeKeeps(idle.fin), undefined, "a Fin whose Apex was archived is led by nothing")
+    h.world.archived.delete(idle.apex)
+    assert.match(h.cloudMoves.treeKeeps(idle.fin) ?? "", /Fins/, "restored, it leads it again")
+    h.world.release(busy.apex)
+    h.world.release(busy.fin)
+    await h.close()
+  }
+
   // A project folder of two repositories: named ahead, its Thread's worktree is the first repository's, by path, where the
   // move then makes it; a folder of one repository alone inside isn't named, its worktree being laid out otherwise.
   {
@@ -762,7 +832,7 @@ try {
     assert.equal(await h.worktrees.plannedCheckout(randomUUID(), join(h.base, "one"), "Alone"), undefined)
     await h.close()
   }
-  console.log("PASS: as this Mac sleeps and as it shuts down, each Thread at work, in the project folder or its own worktree, is paused and parked here with nothing moved, its own changes in the cloud already, and the account told before the Mac goes quiet, naming each Thread, its Sessions at their generations and the checkpoint the cloud acknowledged; back, the Sessions the account took wait for its word with no timer, the one a continue took is joined and the other goes on here; with a gateway that takes no notes yet, both wait parked and go on here once the Mac is back")
+  console.log("PASS: as this Mac sleeps and as it shuts down, each Thread at work, in the project folder or its own worktree, is paused and parked here with nothing moved, its own changes in the cloud already, and the account told before the Mac goes quiet, naming each Thread, its Sessions at their generations and the checkpoint the cloud acknowledged; back, the Sessions the account took wait for its word with no timer, the one a continue took is joined and the other goes on here; with a gateway that takes no notes yet, both wait parked and go on here once the Mac is back; an Apex with a Fin that hasn't ended and a Fin are left whole, unpaused and out of the note, while the Thread in no tree is noted as before")
 } finally {
   await git.close()
   rmSync(root, { recursive: true, force: true })

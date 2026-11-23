@@ -505,7 +505,9 @@ its reason (`closedReason`) before it cancels the turn. The cut turn then report
 nothing and wakes no one, and the Fin reads as stopped in those words. A
 stop is a pause: a message from its Apex (`agents_send`, the person's
 `direct`) or the person writing in its own Thread opens the delegation again
-(`ThreadStore.reopenEdge`, `ThreadParent.resumed`) in the same Session, and
+(`ThreadStore.reopenEdge`, `ThreadParent.resumed`) in the same Session, so a
+stopped Fin is a Fin still wherever its edge is read, a move to the cloud
+included (`treeCut`: no Thread leaves its tree's device apart from it), and
 a stopped or failed Fin reads beneath that message when and why it stopped
 and what moved since (`finResumedText`): its checkout (`checkoutSince`) and
 its branch against the one it goes into, with commits landed there touching
@@ -5079,7 +5081,20 @@ cloud as a Mac goes off, as it sleeps (the sleep watch holds the sleep,
 off within `SHUTDOWN_HOLD_MS`, its own stop waiting for what's still under
 way as long again; a quit's Apple event fires no `shutdown`, and isn't held,
 since a quit held during a shutdown reads as refusing it) and from the quit
-sheet (`CloudHandOffs`). A Thread
+sheet (`CloudHandOffs`). A Thread in a tree of agents moves only when that
+wouldn't cut the tree (`treeCut` in `@mako/protocol/moves`, the one rule): the
+tree's record stays where its Apex runs, so an Apex with Fins that haven't
+ended stays, and so does a Fin, by its edge, open or closed, unless its Apex's
+Thread is archived (`Agents.treePlace`). A move's plan refuses it before
+anything is made, handed off or not, and `thread_move` before it asks anyone
+(`CloudMoves.treeKeeps`), in words that say how many Fins and what clears it;
+Continue in the cloud refuses it by the account's rows (`continueRefusal`'s
+`open-fins` and `fin`). An Apex isn't at work for the Fins open in its roster
+(`workingThreads`), and a Mac going away leaves a Thread its tree keeps as it
+is, unpaused and out of its note. A continue made of an Apex all the same is
+joined with only its own work weighed (`MoveScope`), since an idle Fin never
+goes quiet: its steps say how many Fins stayed (`MoveWhileAway.finsLeft`) and
+offer Bring it back. A Thread
 in the project folder is paused first and goes onto its own branch as the
 same session with only its own changes (`ownBranch`'s `asItself`), then to
 the cloud. One a Mac going off couldn't release in time stays with its turns
@@ -5093,7 +5108,9 @@ make, named ahead from the same names a move tries and with nothing made
 (`ThreadWorktreeService.plannedCheckout`), so a handoff takes a machine
 already up rather than one it boots.
 `test-handoff-going-off.ts` runs it on the host's own parts with scripted
-harnesses and a stand-in cloud. A Thread's name is the
+harnesses and a stand-in cloud, a tree of agents among them;
+`test-cloud-moves.ts`, `test-continues.ts` and `test-thread-move-tool.ts`
+cover the plan, the join and the tool. A Thread's name is the
 list's to say too: no batch carries it, and a followed conversation once kept
 its old one on a second Mac while the phone showed the rename. The
 account's archived cloud Threads are said only from a list the account

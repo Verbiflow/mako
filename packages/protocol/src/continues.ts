@@ -2,7 +2,7 @@ import { z } from "zod"
 import type { Actor, Operation } from "./envelope.js"
 import { ThreadIdSchema } from "./ids.js"
 import { CONTINUE_REASON_MAX, ContinuePhaseSchema, ContinueRepositorySchema } from "./continue-rows.js"
-import { MOVE_ARRIVAL_OP, MoveCheckpointSchema, type MoveHandOverRequest } from "./moves.js"
+import { MOVE_ARRIVAL_OP, MoveCheckpointSchema, treeCut, type MoveHandOverRequest, type TreeCut } from "./moves.js"
 import { Payload } from "./payload.js"
 import type { ListedSession, QuietDevice } from "./thread-listing.js"
 import { PROTOCOL_VERSION } from "./version.js"
@@ -107,9 +107,10 @@ export const CONTINUE_WAIT_MS = 20_000
 /**
  * Why a Session can't continue in the cloud now, in words a person reads: its device is reachable (send it there),
  * it was at work or waiting when its device went quiet, it isn't in a worktree of its own on a pushed branch, or its
- * device's Mako is from before continues, or the account's plan has no cloud (the gateway's word alone).
+ * device's Mako is from before continues, or the account's plan has no cloud (the gateway's word alone); or the
+ * continue would cut a tree of agents (`treeCut`): it leads Fins that haven't ended (`open-fins`), or it's a Fin (`fin`).
  */
-export const ContinueRefusalSchema = z.enum(["reachable", "working", "waiting", "moving", "continuing", "not-mako", "no-worktree", "no-repository", "older-device", "cloud", "no-cloud"])
+export const ContinueRefusalSchema = z.enum(["reachable", "working", "waiting", "moving", "continuing", "not-mako", "no-worktree", "no-repository", "older-device", "cloud", "no-cloud", "open-fins", "fin"])
 export type ContinueRefusal = z.infer<typeof ContinueRefusalSchema>
 
 /** `GET /v1/sessions/:session/continue`: whether its Thread may continue in the cloud now, and what from. */
@@ -131,13 +132,30 @@ export const ContinueOfferSchema = z.lazy(() => z.discriminatedUnion("offer", [
 export type ContinueOffer = z.infer<typeof ContinueOfferSchema>
 
 /** A row a continue may take: its owner's Session, on a device. */
-type OfferRow = Pick<ListedSession, "session" | "thread" | "state" | "runsOn" | "move" | "capture" | "nativeId" | "worktree" | "folder" | "repository" | "continued" | "conversation">
+type OfferRow = Pick<ListedSession, "session" | "thread" | "state" | "runsOn" | "move" | "capture" | "nativeId" | "worktree" | "folder" | "repository" | "continued" | "conversation"> & Pick<Partial<ListedSession>, "fins" | "threadTitle" | "title">
+
+/**
+ * The tree a continue of `row`'s Thread would cut (`treeCut`), read from the account's list alone: its own rows say
+ * the Fins it leads, and another Thread's row that names its Thread among its Fins is its Apex's, wherever that Apex
+ * runs (a Fin has a row of its own only where it was placed apart from its Apex). A Fin by its Apex's word however it
+ * stands, as on its device: a stopped or finished one opens again with its next message. Undefined when it would cut
+ * none, or when its device's Mako says no Fins on its rows (link version 19 on).
+ */
+export function continueTreeCut(row: OfferRow, rows: readonly OfferRow[]): TreeCut | undefined {
+  const apex = rows.find((each) => each.thread !== row.thread && each.fins?.some((fin) => fin.thread === row.thread))
+  const title = apex?.threadTitle ?? apex?.title
+  // Every row of a Thread says the same Fins, its owner's roster: the first that says any is read.
+  const fins = rows.find((each) => each.thread === row.thread && each.fins)?.fins
+  return treeCut({ ...apex && { apex: { ...title && { title } } }, ...fins && { fins } })
+}
 
 /**
  * Whether the Thread of `row` may continue in the cloud now, by every device's one rule: its rows (`rows`, the
  * account's list) all its device's, that device quiet and from a Mako that takes a continue back, each row ready for
  * its next message (`idle` or `failed`) with its native session known, in a worktree of the Thread's own whose branch
- * its origin on GitHub has, and no move or continue under way. Undefined when it may; else why not.
+ * its origin on GitHub has, no move or continue under way, and no tree of agents the continue would cut
+ * (`continueTreeCut`): the Fins it leads that haven't ended report to it only on its device, and a Fin's reports reach
+ * its Apex only from its own. Undefined when it may; else why not.
  */
 export function continueRefusal(row: OfferRow, rows: readonly OfferRow[], quiet: readonly QuietDevice[]): ContinueRefusal | undefined {
   if (row.runsOn.kind === "cloud") return "cloud"
@@ -148,6 +166,8 @@ export function continueRefusal(row: OfferRow, rows: readonly OfferRow[], quiet:
   if (thread.some((each) => each.runsOn.kind !== "device" || each.runsOn.deviceId !== device)) return "moving"
   if (thread.some((each) => each.continued && each.continued.phase !== "failed")) return "continuing"
   if (thread.some((each) => each.move || each.state === "moving")) return "moving"
+  const cut = continueTreeCut(row, rows)
+  if (cut) return cut.kind
   if (thread.some((each) => each.state === "working")) return "working"
   if (thread.some((each) => each.state === "waiting")) return "waiting"
   if (thread.some((each) => each.capture || !each.nativeId || !z.uuid().safeParse(each.conversation).success)) return "not-mako"
@@ -157,8 +177,8 @@ export function continueRefusal(row: OfferRow, rows: readonly OfferRow[], quiet:
   return undefined
 }
 
-/** Each refusal as a person reads it, `device` naming the Session's device. */
-export function continueRefusalText(why: ContinueRefusal, device: string): string {
+/** Each refusal as a person reads it, `device` naming the Session's device; `cut`, the tree it would cut (`continueTreeCut`). */
+export function continueRefusalText(why: ContinueRefusal, device: string, cut?: TreeCut): string {
   switch (why) {
     case "reachable": return `${device} is on, so this Session runs there.`
     case "working": return `It was working when ${device} went quiet. It can continue in the cloud once ${device} says the turn ended.`
@@ -171,6 +191,10 @@ export function continueRefusalText(why: ContinueRefusal, device: string): strin
     case "older-device": return `${device} hasn't connected on a Mako that takes Continue in the cloud. Once it has, its Threads can continue here while it's off.`
     case "cloud": return "It runs in the cloud already."
     case "no-cloud": return "This account's plan doesn't include the cloud."
+    case "open-fins": return cut?.kind === "open-fins" && cut.open === 1
+      ? `It leads a Fin that hasn't ended, and its reports reach it only on ${device}. It can continue in the cloud once that Fin finishes or is stopped.`
+      : `It leads ${cut?.kind === "open-fins" ? `${cut.open} ` : ""}Fins that haven't ended, and their reports reach it only on ${device}. It can continue in the cloud once they finish or are stopped.`
+    case "fin": return `It's ${cut?.kind === "fin" && cut.apex ? `one of "${cut.apex}"'s Fins` : "a Fin of another Thread"}, and its reports reach its Apex from ${device}, so it continues only there.`
   }
 }
 

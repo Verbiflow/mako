@@ -92,9 +92,10 @@ export type ThreadMoveStep =
 /**
  * A move another device made while this Mac was off (Continue in the cloud), which this Mac joined when it was back.
  * `behind`: the account's copy of what the person read took something after this Mac's originals last did, so the
- * newest turns may not be in what the cloud continued from; they stay here.
+ * newest turns may not be in what the cloud continued from; they stay here. `finsLeft`: it led that many Fins that
+ * hadn't ended, which stayed on this Mac, where their reports no longer reach it; bringing it back joins them again.
  */
-export type MoveWhileAway = { behind: boolean }
+export type MoveWhileAway = { behind: boolean; finsLeft?: number }
 
 /** How much of a move's checkout has gone to the cloud: `bytes` of `of`, which grows as each repository's is packed. */
 export type MoveSent = { bytes: number; of: number }

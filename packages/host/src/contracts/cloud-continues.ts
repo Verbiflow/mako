@@ -258,10 +258,11 @@ function seconds(ms: number): string {
 
 /**
  * The refusals a person can do something about, which every device says beside a Thread whose device is off (it was
- * working or waiting, its branch isn't pushed, its device's Mako is older); the rest are said nowhere.
+ * working or waiting, its branch isn't pushed, its device's Mako is older, it leads Fins that haven't ended); the rest
+ * are said nowhere.
  */
 export function continueRefusalShown(why: ContinueRefusal): boolean {
-  return why === "working" || why === "waiting" || why === "no-repository" || why === "older-device"
+  return why === "working" || why === "waiting" || why === "no-repository" || why === "older-device" || why === "open-fins"
 }
 
 /** A continue's steps in the order they're taken, each in its words, as every device shows its progress. */

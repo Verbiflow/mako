@@ -3,6 +3,7 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setImmediate as tick } from "node:timers/promises"
+import { treeCutWords } from "@mako/protocol/moves"
 import { keepHostLog, openHostLog } from "@mako/host/base/host-log"
 import { ThreadMoveTool, type HostMoves } from "@mako/host/conversations/thread-move-tool"
 import { CloudMoves, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
@@ -50,6 +51,7 @@ async function runTool(key: string, action: HostMoves["move"], handsOff = false)
         catch (error) { complete(); throw error }
       },
       refusal: async () => undefined,
+      treeKeeps: () => undefined,
       bringBack: async () => { throw new Error("unexpected return") },
       continue: async () => { throw new Error("unexpected continue") },
     }),
@@ -128,6 +130,11 @@ try {
   for (const [label, value] of [["number", 23], ["null", null], ["object", { toString() { throw new Error("NO_COERCION") } }]] as const) await check(`helper withholds nonstring message ${label}`, async () => {
     const error = Object.defineProperty(new Error(), "message", { value })
     assert.deepEqual(diagnostics.moveDiagnosticReason({ error }), { reason: "The move failed; its private error details were withheld.", reasonRedacted: true })
+  })
+  await check("a tree's refusal is summarised without the titles it names", async () => {
+    assert.deepEqual(diagnostics.moveDiagnosticReason({ error: new Error(treeCutWords({ kind: "fin", apex: "A private title" })) }), { reason: "The Thread is a Fin; it stays with its Apex.", reasonRedacted: true })
+    assert.deepEqual(diagnostics.moveDiagnosticReason({ error: new Error(treeCutWords({ kind: "fin", away: true })) }), { reason: "The Thread is a Fin; it stays with its Apex.", reasonRedacted: true })
+    assert.deepEqual(diagnostics.moveDiagnosticReason({ error: new Error(treeCutWords({ kind: "open-fins", open: 3 })) }), { reason: "The Thread leads Fins that haven't ended.", reasonRedacted: true })
   })
   await check("descriptor traps, revoked proxies and unknown shapes fail closed without coercion", async () => {
     let traps = 0

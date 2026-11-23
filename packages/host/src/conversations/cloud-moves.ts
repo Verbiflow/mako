@@ -5,12 +5,12 @@ import { z } from "zod"
 import type { Git } from "@mako/git"
 import { encodeOperation, type ThreadFileHistory } from "@mako/protocol"
 import type { ContinueState, ListedContinue } from "@mako/protocol/continues"
-import { MOVE_ANSWER_WAIT_MS, MoveCarryRefSchema, MoveCarrySchema, MoveCheckpointSchema, type MoveAnswer, type MoveCarryRepository, type MoveCheckpoint, type MoveLeft } from "@mako/protocol/moves"
+import { MOVE_ANSWER_WAIT_MS, MoveCarryRefSchema, MoveCarrySchema, MoveCheckpointSchema, treeCut, treeCutWords, type MoveAnswer, type MoveCarryRepository, type MoveCheckpoint, type MoveLeft, type TreePlace } from "@mako/protocol/moves"
 import { RecordHoldingsSchema, describeSync, withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
-import { CloudRepositorySchema, goesOff, type CloudRepository, type MoveCarried, type MoveSent, type ThreadHandOff, type ThreadMoveOutcome, type ThreadMoveStep } from "../contracts/cloud-threads.js"
+import { CloudRepositorySchema, goesOff, type CloudRepository, type MoveCarried, type MoveSent, type MoveWhileAway, type ThreadHandOff, type ThreadMoveOutcome, type ThreadMoveStep } from "../contracts/cloud-threads.js"
 import { hostCallInput, toHostOperation } from "../contracts/host-operations.js"
 import { decodeRuntimeValue, type EncodedValue } from "../contracts/runtime-value.js"
 import type { LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
@@ -23,7 +23,7 @@ import type { ReadyPlan, TakenReady } from "./cloud-readiness.js"
 import type { ThreadHarnessCheck } from "../contracts/cloud-harnesses.js"
 import type { MoveHaste } from "../contracts/workspace-moves.js"
 import type { CheckedSession } from "./harness-check.js"
-import { MoveNotQuietError } from "./live-moves.js"
+import { MoveNotQuietError, type MoveScope } from "./live-moves.js"
 import { logMoveDiagnostic, moveDiagnosticReason } from "./move-diagnostics.js"
 import { localWords } from "@mako/protocol/computer-words"
 
@@ -52,6 +52,9 @@ import { localWords } from "@mako/protocol/computer-words"
  * A Thread the account continued in the cloud while this Mac was off (`@mako/protocol/continues`) is one more move,
  * that this Mac joins when it's back (`joinContinue`): it releases the Thread at the generation the account's handoff
  * named, so nothing runs it here, then takes the cloud's answer as for any move it handed over.
+ *
+ * A Thread in a tree of agents moves only when that wouldn't cut the tree (`treeCut`, the one rule): an Apex with Fins
+ * that haven't ended and a Fin both stay, refused by the plan before anything is made, whoever asked.
  */
 
 /** A UUID fixed by a name: version 8 (named by its maker), variant 10, from the name's SHA-256. */
@@ -195,10 +198,11 @@ export const MovePlanSchema = z.lazy(() => z.object({
   }).optional(),
   reason: z.string().optional(),
   /**
-   * A continue this Mac joined (`joinContinue`): the device it was pressed on, and whether the cloud continued from
-   * before this Mac's last turns (`behind`), which stay in its records here.
+   * A continue this Mac joined (`joinContinue`): the device it was pressed on, whether the cloud continued from
+   * before this Mac's last turns (`behind`), which stay in its records here, and how many Fins it led that hadn't
+   * ended as this Mac let go of it (`finsLeft`), which stayed here.
    */
-  continued: z.object({ by: z.string(), at: z.string(), behind: z.boolean().default(false) }).optional(),
+  continued: z.object({ by: z.string(), at: z.string(), behind: z.boolean().default(false), finsLeft: z.number().int().positive().optional() }).optional(),
   /**
    * The branch this Mac's worktree was on when it joined a continue: the machine cloned the branch pushed, by the
    * remote's name (`checkpoint`'s), which the worktree here may name otherwise (`onBranchHere`). Absent for a move this
@@ -257,13 +261,18 @@ export type CloudMovesOptions = {
   } | undefined
   moves: {
     /** What keeps the Thread from leaving, once a turn's own bookkeeping has passed (`LiveMoves.settledBlockers`); empty when it could go. */
-    settledBlockers(thread: ThreadId, waitMs?: number): Promise<string[]>
+    settledBlockers(thread: ThreadId, waitMs?: number, scope?: MoveScope): Promise<string[]>
     begin(input: { move: MoveId; thread: ThreadId; target: ExecutionOwner; actor: Actor }): void
     cancel(input: { operationId: string; move: MoveId; actor: Actor }): void
-    release(input: { operationId: string; move: MoveId; actor: Actor }): Promise<Handoff>
+    release(input: { operationId: string; move: MoveId; actor: Actor }, scope?: MoveScope): Promise<Handoff>
     confirm(input: { operationId: string; receipt: ClaimReceipt; actor: Actor }): void
     reclaim(input: { operationId: string; refusal: Refusal; actor: Actor }): void
   }
+  /**
+   * Where the Thread stands in a tree of agents (`Agents.treePlace`): the Fins it leads and the Apex that leads it,
+   * which the one rule for moving it reads (`treeCut`). Absent on a host with no trees.
+   */
+  tree?(thread: ThreadId): TreePlace
   /** Resident or listed session metadata only: planning never loads or flushes a conversation journal. */
   session(conversationId: string): Pick<LiveSnapshot["session"], "harness" | "nativeId" | "nativePath" | "cwd" | "currentMode"> | undefined
   /** The Thread's own checkout here, its worktree (a folder of them, one a repository, in a project of several); undefined for a Thread in the main checkout. */
@@ -345,6 +354,11 @@ function carriedOf(plan: Plan): MoveCarried | undefined {
     ? { repositories: manifest.repositories.length, outside: manifest.outside.length, left: manifest.left }
     : { repositories: 1, outside: 0, left: [...manifest.outside.map(({ path }): MoveLeft => ({ path, why: "older-cloud" })), ...manifest.left] }
   return carried.repositories > 1 || carried.outside || carried.left.length ? carried : undefined
+}
+
+/** A joined continue as its steps say it (`MoveWhileAway`). */
+function whileAway(continued: NonNullable<Plan["continued"]>): MoveWhileAway {
+  return { behind: continued.behind, ...continued.finsLeft && { finsLeft: continued.finsLeft } }
 }
 
 /** Said at most this often while a move's checkout goes ahead: often enough for a bar to move, rarely enough for a link. */
@@ -481,6 +495,21 @@ export class CloudMoves {
   }
 
   /**
+   * Why the tree the Thread of `conversationId` is part of keeps it here (`treeCut`), in the words a move of it is
+   * refused with; undefined when it's in none a move would cut. Read from memory, so whoever asks hears it at once: an
+   * agent's `thread_move` before it asks the person, a going-away before it pauses anything.
+   */
+  treeKeeps(conversationId: string): string | undefined {
+    const thread = this.#options.threads()?.journalPlacement(conversationId)?.thread
+    const cut = thread && this.#cut(thread)
+    return cut ? treeCutWords(cut) : undefined
+  }
+
+  #cut(thread: ThreadId) {
+    return treeCut(this.#options.tree?.(thread) ?? {})
+  }
+
+  /**
    * What the Thread of `conversationId`'s harnesses here and in the cloud mean for moving it (`HarnessCheck`), read
    * without making or changing anything; throws, saying why, when it couldn't move for any other reason.
    */
@@ -552,8 +581,9 @@ export class CloudMoves {
    * says it), joined as a move this Mac handed over: the account is asked to carry it on (a press whose client went
    * away is finished here), this Mac releases the Thread at the generation the account released it at, and the
    * cloud's claim is confirmed (or its refusal takes the Thread back), as for any move. Once per continue; a Thread at
-   * work here waits for its turn to end (its row changes then, which joins it again). A continue that failed changes
-   * nothing here. While it's joined, nothing of its Sessions runs here (`joining`); a message typed here meanwhile
+   * work here waits for its turn to end (its row changes then, which joins it again). The Fins it leads don't hold it:
+   * a continue of an Apex cut its tree already, so they stay here as they are, and the move's steps say how many
+   * (`MoveWhileAway.finsLeft`), for the person to bring it back to them. A continue that failed changes nothing here. While it's joined, nothing of its Sessions runs here (`joining`); a message typed here meanwhile
    * goes to the cloud Thread once it's claimed.
    */
   joinContinue(session: string, listed: ListedContinue): void {
@@ -604,11 +634,16 @@ export class CloudMoves {
     }
     if (mine.length !== state.sessions.length || mine.some((each) => !state.sessions.some((carried) => carried.session === each.session)))
       throw new Error("Its Sessions here aren't the ones the account continued.")
-    const busy = await this.#options.moves.settledBlockers(thread, 0)
+    // Its own work alone holds it (`MoveScope`): the account's continue already cut its tree, so the Fins it leads stay
+    // here whatever they do. Waited for, one that sits idle would hold the join for ever, the Thread claimed in the
+    // cloud and never given up here.
+    const busy = await this.#options.moves.settledBlockers(thread, 0, "provider")
     if (busy.length) {
       hostWarn("continues", "a Thread continued in the cloud is at work here; it's given up once its turn ends", { move, thread, busy: busy.join("; ") })
       return { kind: "unsettled", reason: `It's at work here: ${busy.join("; ")}.` }
     }
+    const left = this.#cut(thread)
+    const finsLeft = left?.kind === "open-fins" ? left.open : undefined
     const branch = await this.#options.git.run({ cwd: state.folder, args: ["symbolic-ref", "--short", "--quiet", "HEAD"], codes: [0, 1, 128] })
       .then((read) => (read.code === 0 ? read.stdout.toString("utf8").trim() : undefined), () => undefined)
     const plan: Plan = {
@@ -618,7 +653,7 @@ export class CloudMoves {
         const session = this.#options.session(carried.conversation)
         return { session: carried.session, conversationId: carried.conversation, harness: carried.harness, nativeId: carried.nativeId, path: session?.nativePath ?? "", ...carried.folder !== state.folder && { cwd: carried.folder }, ...carried.holdings && { holdings: carried.holdings } }
       }),
-      continued: { by: state.by, at: state.at, behind: state.sessions.some((carried) => carried.freshness?.behind === true) },
+      continued: { by: state.by, at: state.at, behind: state.sessions.some((carried) => carried.freshness?.behind === true), ...finsLeft && { finsLeft } },
       ...state.start && { checkpoint: state.start },
       ...branch && { branch },
     }
@@ -626,7 +661,7 @@ export class CloudMoves {
     const actor = threads.person()
     this.#options.moves.begin({ move, thread, target: { kind: "cloud", runtime: cloudRuntimeOf(plan.cloudThread) }, actor })
     try {
-      plan.handoff = await this.#options.moves.release({ operationId: stepOperation(move, "release"), move, actor })
+      plan.handoff = await this.#options.moves.release({ operationId: stepOperation(move, "release"), move, actor }, "provider")
     } catch (error) {
       if (threads.moveStatus(move)?.phase === "leaving") this.#options.moves.cancel({ operationId: stepOperation(move, "cancel"), move, actor })
       throw error
@@ -635,6 +670,7 @@ export class CloudMoves {
     await this.#write(plan)
     hostLog("continues", "a Thread continued in the cloud while this Mac was off was given up here", {
       move, thread, cloudThread: plan.cloudThread, phase: state.phase, by: state.by, sessions: plan.sessions.length, behind: plan.continued?.behind ?? false,
+      ...finsLeft && { finsLeft },
     })
     this.#reach(plan, "released")
     return this.#resume(plan, state)
@@ -729,6 +765,10 @@ export class CloudMoves {
         ? localWords("This Thread runs in the cloud already. Bring it back to this Mac first to move it again.")
         : executionRefusal(execution) ?? "This Thread is moving already.")
     }
+    // The tree stays whole (`treeCut`), handed off or not: a handoff pauses a turn, never a Fin that sits open, so it
+    // would make a machine, wait out its pause and stay all the same.
+    const cut = this.#cut(placed.thread)
+    if (cut) throw new Error(treeCutWords(cut))
     // Asked before anything is made: a busy Thread starts no machine. The release asks again, with no wait before it
     // commits. A handoff pauses what works instead, once everything ahead is done.
     if (!handOff) {
@@ -831,7 +871,7 @@ export class CloudMoves {
     }
     if (plan.phase === "handed" && !answer) {
       this.#reach(plan, "handed")
-      step({ kind: "resuming", ...plan.continued && { whileAway: { behind: plan.continued.behind } } })
+      step({ kind: "resuming", ...plan.continued && { whileAway: whileAway(plan.continued) } })
       answer = await this.#awaitAnswer(plan)
       if (!answer) {
         const reason = localWords("The cloud carries this Thread through, and this Mac hasn't heard how it went yet. It asks again; the Thread runs nowhere until it hears.")
@@ -867,7 +907,7 @@ export class CloudMoves {
       hostLog("moves", "a Thread moved to the cloud", { move: plan.move, cloudThread: plan.cloudThread, sessions: plan.sessions.length, ...plan.timings })
     }
     const carried = carriedOf(plan)
-    step({ kind: "moved", conversations: plan.sessions.map((session) => session.conversationId), ...plan.handingOff?.paused.length && { continued: true }, ...carried && { carried }, ...plan.continued && { whileAway: { behind: plan.continued.behind } } })
+    step({ kind: "moved", conversations: plan.sessions.map((session) => session.conversationId), ...plan.handingOff?.paused.length && { continued: true }, ...carried && { carried }, ...plan.continued && { whileAway: whileAway(plan.continued) } })
     return { kind: "moved", cloudThread: plan.cloudThread, ...plan.from && { conversation: plan.asked } }
   }
 

@@ -112,7 +112,8 @@ try {
 
   // What holds a Mac awake is what an agent does itself. A turn stopped on the person doesn't, even though it still reads
   // running with its request dispatching; what it left running does. A Fin is a Thread of its own, counted by its own
-  // conversation, so an Apex with an idle one open isn't working. A handoff still takes all of these.
+  // conversation, so an Apex with an idle one open isn't working, and a handoff takes nothing of it: its Thread stays
+  // with its Fins (`treeCut`). A handoff still takes the rest, what waits on the person included.
   const asking: LivePermissionRequest[] = [{ id: "p", sessionId: "s", title: "Run a command", options: [] }]
   const dispatching: WorkingSnapshot["requests"] = [{ status: "dispatching" }]
   const agent = (nativeId: string, child?: { thread: string; origin: "started" }): NativeAgent => ({ nativeId, title: nativeId, bindingId: "binding", provider: "codex", observedAt: 1, state: { kind: "working" }, ...child && { child } })
@@ -131,7 +132,7 @@ try {
     threads: { journalPlacement: () => ({ thread: ThreadIdSchema.parse(randomUUID()), session: SessionIdSchema.parse(randomUUID()) }), execution: () => ({ state: "here" as const }) },
     cloud: () => false,
   }
-  assert.deepEqual(workingThreads(sources).map((thread) => thread.conversationId), [...snapshots.keys()])
+  assert.deepEqual(workingThreads(sources).map((thread) => thread.conversationId), ["turn", "approval", "approval-at-rest", "approval-with-background", "background", "subagent"])
   assert.deepEqual(workingThreads({ ...sources, ownWork: true }).map((thread) => thread.conversationId), ["turn", "approval-with-background", "background", "subagent"])
 
   {

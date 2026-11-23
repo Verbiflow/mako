@@ -18,6 +18,7 @@ import type {
 } from "./conversation-control.js"
 import type { ThreadPage } from "@mako/sessions"
 import type { ContinueRefusal, ListedContinue } from "@mako/protocol/continues"
+import type { TreeCut } from "@mako/protocol/moves"
 import type { ThreadPurposeKind } from "./thread-purposes.js"
 import type { WorktreeStart } from "./thread-worktrees.js"
 import type {
@@ -620,8 +621,11 @@ export interface LiveSummary {
  */
 export type ListedRail = Pick<ReportedSession, "project" | "worktree" | "lineage" | "background" | "openElsewhere" | "forkOf">
 
-/** Whether a quiet device's Thread may continue in the cloud now (no `refusal` when it may), and the continue the account carries of it. */
-export type ListedContinueChoice = { refusal?: ContinueRefusal; continued?: ListedContinue }
+/**
+ * Whether a quiet device's Thread may continue in the cloud now (no `refusal` when it may), the tree of agents a
+ * refusal for one names (`continueTreeCut`), and the continue the account carries of it.
+ */
+export type ListedContinueChoice = { refusal?: ContinueRefusal; tree?: TreeCut; continued?: ListedContinue }
 
 /** A native session, as the catalog reads it. */
 export interface BaseSource {

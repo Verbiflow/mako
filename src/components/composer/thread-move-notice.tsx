@@ -111,7 +111,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
         tone: "progress",
         title: "Continued in the cloud",
         description: localWords("While this Mac was off"),
-        detail: <p>{whileAwaySentence(moving.step.whileAway.behind)}</p>,
+        detail: <p>{whileAwaySentence(moving.step.whileAway.behind, moving.step.whileAway.finsLeft)}</p>,
         data: { "data-thread-move": "resuming", "data-thread-while-away": true },
       }
     return {

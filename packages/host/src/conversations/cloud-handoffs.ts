@@ -7,7 +7,7 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { goesOff, SHUTDOWN_HOLD_MS, type HandOffCandidate, type HandOffResult, type HandOffSettings, type ThreadHandOff, type ThreadMoveOutcome } from "../contracts/cloud-threads.js"
 import type { LiveSnapshot, LiveSummary } from "../contracts/live-conversations.js"
-import { isBusyNativeAgent } from "../contracts/native-agents.js"
+import { isBusyProviderWork } from "../contracts/native-agents.js"
 import type { SessionExecution } from "../contracts/thread-execution.js"
 import type { SessionId, ThreadPlacement } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
@@ -26,6 +26,8 @@ export type CloudHandOffsOptions = {
   moves: {
     move(conversationId: string, move: string, handOff?: ThreadHandOff, options?: { answer?: "released" | "handed" }): Promise<ThreadMoveOutcome>
     refusal(conversationId: string): Promise<string | undefined>
+    /** Why the tree the Thread is part of keeps it here, read from memory (`CloudMoves.treeKeeps`); undefined when none does. */
+    treeKeeps?(conversationId: string): string | undefined
     /** Whether a move of `thread` runs in this host now (`CloudMoves.leaving`). */
     leaving(thread: string): boolean
     /** Waits until `deadline` at most for every move running here to settle; answers how many still run (`CloudMoves.settled`). */
@@ -94,7 +96,9 @@ export type CloudHandOffsOptions = {
  * Handing this Mac's working agents to the cloud, all at once: when the person quits and chooses to, and as the Mac
  * goes to sleep when they let it. Each Thread at work moves by `CloudMoves`' handoff (its turns paused, carried and
  * continued there), one move per Thread, all at the same time. Each move is named by the handoff and the Thread, so a
- * handoff asked again joins its moves rather than starting others.
+ * handoff asked again joins its moves rather than starting others. A Thread in a tree of agents that a move would cut
+ * (`treeCut`: an Apex with Fins that haven't ended, a Fin) stays whole: a quit's move of it is refused by its plan, and
+ * a Mac going away leaves it as it is, unpaused and out of its note, so the account continues nothing of it.
  */
 export class CloudHandOffs {
   readonly #options: CloudHandOffsOptions
@@ -174,13 +178,20 @@ export class CloudHandOffs {
    * sent, `FLUSH_MS` and the Mac's deadline at most; then the account told this Mac is going away, naming each Thread,
    * its Sessions at their generations and the checkpoint the cloud acknowledged, from which it may continue the Thread
    * while the Mac is quiet. Nothing here waits for that: a Thread the account doesn't take goes on here once the Mac is back.
+   * A Thread its tree keeps here (`treeKeeps`) is left as it is: named, the account could continue it away from its
+   * tree; paused, it would wait out the pause for Fins that never go quiet, and hold the note for every other Thread.
    */
   async #goAway(goingAway: NonNullable<CloudHandOffsOptions["goingAway"]>, handOff: string, why: "sleep" | "shutdown", releaseBy: number | undefined): Promise<HandOffResult[]> {
     const began = performance.now()
     const deadline = releaseBy ?? Number.POSITIVE_INFINITY
     const unavailable = await this.#options.unavailable()
-    const working = this.#options.working().filter(({ thread }) => !this.#options.moves.leaving(thread))
-    if (unavailable || !working.length) return working.map(({ conversationId }) => ({ conversationId, outcome: { kind: "kept-here", reason: unavailable ?? "" } }))
+    const here = this.#options.working().filter(({ thread }) => !this.#options.moves.leaving(thread))
+    const kept = unavailable ? [] : here.flatMap(({ conversationId }): HandOffResult[] => {
+      const reason = this.#options.moves.treeKeeps?.(conversationId)
+      return reason ? [{ conversationId, outcome: { kind: "kept-here", reason } }] : []
+    })
+    const working = here.filter(({ conversationId }) => !kept.some((each) => each.conversationId === conversationId))
+    if (unavailable || !working.length) return [...working.map(({ conversationId }): HandOffResult => ({ conversationId, outcome: { kind: "kept-here", reason: unavailable ?? "" } })), ...kept]
     goingAway.going?.()
     const handing: ThreadHandOff = { why, ...releaseBy !== undefined && { releaseBy } }
     const parked = await Promise.all(working.map(async (each) => {
@@ -252,6 +263,7 @@ export class CloudHandOffs {
       hostLog("handoff", "agents at work paused as this Mac went away", {
         why,
         threads: working.length,
+        ...kept.length && { keptByTree: kept.length },
         noted: threads.length,
         withCheckpoint: threads.filter((each) => each.checkpoint).length,
         ...rows && { notIdle: sessions.filter((session) => rows.has(session) && rows.get(session) !== "idle").length },
@@ -262,7 +274,7 @@ export class CloudHandOffs {
         ms: Math.round(performance.now() - began),
         ...parked.some((each) => "error" in each) && { stayed: parked.flatMap((each) => ("error" in each ? [`${each.conversationId}: ${each.error}`] : [])).join("; ") },
       })
-      return results
+      return [...results, ...kept]
     } catch (error) {
       hostWarn("handoff", "going away stopped partway; it settles, and the held Sessions are asked about once this Mac is back or two minutes on", { why, error: errorMessage({ error }) })
       throw error
@@ -407,18 +419,29 @@ export type WorkingSources = {
   threads: { journalPlacement(conversationId: string): ThreadPlacement | undefined; execution(session: SessionId): Pick<SessionExecution, "state"> | undefined } | undefined
   /** Whether a conversation runs on a cloud machine already (`CloudConversations.has`). */
   cloud(conversationId: string): boolean
-  /** Only what an agent does itself (`doingItself`), not what waits on the person; a handoff takes both, so it's off by default. */
+  /**
+   * Only what an agent does itself (`doingItself`), not what waits on the person; a handoff takes both, so it's off by
+   * default. Neither counts a Fin open in its roster (`providerWorks`).
+   */
   ownWork?: boolean
 }
 
 /**
  * Whether an agent here is doing something itself. A turn stopped on an approval or a question still reads running with
- * its request dispatching, but it's the person who's awaited; what it left running goes on regardless. A Fin is a Thread
- * of its own, counted by its own conversation, so one open in a roster is no work of this one's.
+ * its request dispatching, but it's the person who's awaited; what it left running goes on regardless.
  */
 function doingItself(snapshot: WorkingSnapshot, running: boolean): boolean {
   if (running && snapshot.permissions.length === 0) return true
-  return Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some((agent) => isBusyNativeAgent(agent) && !agent.child)
+  return Boolean(snapshot.session.backgroundTasks) || providerWorks(snapshot)
+}
+
+/**
+ * Whether work its own provider holds is under way (`isBusyProviderWork`). A Fin is a Thread of its own, counted by its
+ * own conversation, so one open in a roster is no work of this one's: an Apex whose Fins sit open, or work, has nothing
+ * a handoff could take, and its Thread stays with them (`treeCut`).
+ */
+function providerWorks(snapshot: WorkingSnapshot): boolean {
+  return (snapshot.nativeAgents?.agents ?? []).some(isBusyProviderWork)
 }
 
 /** One conversation's work as the working Threads count it: its Thread, and whether its agent works at all and by itself. */
@@ -444,7 +467,7 @@ function conversationWork(sources: Omit<WorkingSources, "ownWork">, id: string):
   const placed = threads.journalPlacement(id)
   if (!placed || threads.execution(placed.session)?.state !== "here") return undefined
   const running = snapshot.session.status === "running" || snapshot.requests.some((request) => request.status === "dispatching")
-  const working = running || snapshot.permissions.length > 0 || Boolean(snapshot.session.backgroundTasks) || (snapshot.nativeAgents?.agents ?? []).some(isBusyNativeAgent)
+  const working = running || snapshot.permissions.length > 0 || Boolean(snapshot.session.backgroundTasks) || providerWorks(snapshot)
   return { conversationId: id, thread: placed.thread, harness: snapshot.session.harness, running, working, own: doingItself(snapshot, running), ...snapshot.session.title && { title: snapshot.session.title } }
 }
 
@@ -462,8 +485,9 @@ function oneEach(works: Iterable<ConversationWork>, ownWork: boolean): WorkingTh
 
 /**
  * This Mac's Threads whose agents are working now: a turn running, an approval or a question waiting, or work the turn
- * left running in the background. One conversation each, a running one first, the one a handoff asks from. It reads
- * every listed conversation, so nothing that runs as conversations change calls it: that reads `WorkingSet`.
+ * left running in the background, never a Fin open in its roster. One conversation each, a running one first, the one
+ * a handoff asks from. It reads every listed conversation, so nothing that runs as conversations change calls it: that
+ * reads `WorkingSet`.
  */
 export function workingThreads(sources: WorkingSources): WorkingThread[] {
   if (!sources.threads) return []

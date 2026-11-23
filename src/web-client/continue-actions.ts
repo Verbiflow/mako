@@ -1,5 +1,5 @@
 import { carryContinue, ContinueRecorder, type ContinueAsk } from "@mako/host/contracts/cloud-continues"
-import { continueRefusal, continueRefusalText, ContinueOfferSchema, type ContinueOffer, type ContinueRefusal, type ContinueState } from "@mako/protocol/continues"
+import { continueRefusal, continueRefusalText, continueTreeCut, ContinueOfferSchema, type ContinueOffer, type ContinueRefusal, type ContinueState } from "@mako/protocol/continues"
 import { quietDevice, type ListedSession } from "@mako/protocol/thread-listing"
 import { whileBusy } from "./busy"
 import type { WebClient } from "./client"
@@ -26,7 +26,7 @@ export type ContinueChoice = { offer: true; mac: MoveMac } | { offer: false; why
 export function continueChoice(session: WebSession, rows: readonly ListedSession[], quiet: ReadonlyMap<string, string>, continues: ReadonlySet<string>): ContinueChoice {
   const devices = [...quiet].map(([deviceId, since]) => quietDevice(deviceId, since, continues.has(deviceId)))
   const why = continueRefusal(session.row, rows, devices)
-  if (why) return { offer: false, why, text: continueRefusalText(why, session.where) }
+  if (why) return { offer: false, why, text: continueRefusalText(why, session.where, continueTreeCut(session.row, rows)) }
   if (session.row.runsOn.kind !== "device") return { offer: false, why: "cloud", text: continueRefusalText("cloud", session.where) }
   return { offer: true, mac: { deviceId: session.row.runsOn.deviceId, name: session.where } }
 }

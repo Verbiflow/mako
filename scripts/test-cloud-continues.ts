@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import type { ContinueState } from "@mako/protocol/continues"
+import { continueRefusalText, type ContinueState } from "@mako/protocol/continues"
 import { quietDevice, type ListedSession } from "@mako/protocol/thread-listing"
-import { carryContinue, continuePath, continueReadings, continueTimings, ContinueRecorder, describeContinue, type ContinueAnswer, type ContinueAsk } from "@mako/host/contracts/cloud-continues"
+import { carryContinue, continuePath, continueReadings, continueRefusalShown, continueTimings, ContinueRecorder, describeContinue, type ContinueAnswer, type ContinueAsk } from "@mako/host/contracts/cloud-continues"
 import { listedContinueChoice } from "@mako/host/contracts/listed-conversations"
 import type { ThreadContinueStep } from "@mako/host/contracts/cloud-threads"
 import { CloudContinues } from "@mako/host/conversations/cloud-continues"
@@ -158,6 +158,19 @@ const row: ListedSession = {
   assert.deepEqual(listedContinueChoice({ ...row, state: "working" }, [{ ...row, state: "working" }], [quietDevice(mac, at, true)]), { refusal: "working" })
   const continued = { op, phase: "making" as const, from: mac, by, cloudThread, at }
   assert.deepEqual(listedContinueChoice({ ...row, continued }, [{ ...row, continued }], [quietDevice(mac, at, true)]), { refusal: "continuing", continued })
+  // An Apex's row says its Fins: with one that hasn't ended it isn't offered, the tree named for its words, which a
+  // window shows; a Fin isn't offered apart from its Apex; an Apex whose Fins all ended is offered as any Thread.
+  const fin = (name: string, state: NonNullable<ListedSession["fins"]>[number]["state"]) => ({ thread: randomUUID(), name, harness: "claude", state, startedAt: at })
+  const open = fin("checker", { kind: "idle" })
+  const apex: ListedSession = { ...row, threadTitle: "Ship the importer", fins: [open, fin("done", { kind: "ended", outcome: "done" })] }
+  assert.deepEqual(listedContinueChoice(apex, [apex], [quietDevice(mac, at, true)]), { refusal: "open-fins", tree: { kind: "open-fins", open: 1 } })
+  assert.equal(continueRefusalShown("open-fins"), true, "said beside the Thread: it clears once its Fins finish or are stopped")
+  assert.equal(continueRefusalText("open-fins", "Ana's MacBook", { kind: "open-fins", open: 1 }), "It leads a Fin that hasn't ended, and its reports reach it only on Ana's MacBook. It can continue in the cloud once that Fin finishes or is stopped.")
+  const led: ListedSession = { ...row, session: randomUUID(), thread: open.thread, conversation: randomUUID() }
+  assert.deepEqual(listedContinueChoice(led, [led, apex], [quietDevice(mac, at, true)]), { refusal: "fin", tree: { kind: "fin", apex: "Ship the importer" } })
+  assert.equal(continueRefusalShown("fin"), false)
+  const ended: ListedSession = { ...row, fins: [fin("done", { kind: "ended", outcome: "stopped" })] }
+  assert.deepEqual(listedContinueChoice(ended, [ended], [quietDevice(mac, at, true)]), {})
 }
 
 // A Mac's host pressing it for another device's Thread: its steps said once, in order, a second press of its op joined.

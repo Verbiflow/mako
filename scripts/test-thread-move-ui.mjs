@@ -339,6 +339,26 @@ async function checkMoveState() {
     assert.equal(JSON.stringify(w.effects), enrichedEffects)
     assert.equal(w.calls.length, 1)
   })
+  await check("a continue joined with Fins left here says they stayed and offers the way back", async (make) => {
+    const w = make(() => pending(), {}, () => ({ kind: "back" }))
+    w.api.threadMoveStepped("c", "joined", { kind: "resuming", whileAway: { behind: false, finsLeft: 2 } })
+    w.api.threadMoveStepped("c", "joined", { kind: "moved", conversations: ["c"], whileAway: { behind: false, finsLeft: 2 } })
+    const said = w.effects.filter(([kind]) => kind === "success").at(-1)[1]
+    assert.equal(said[0], "Continued in the cloud")
+    assert.match(said[1].description, /Its 2 Fins stayed on this Mac, where their reports can't reach it: bring it back and they report to it again\.$/)
+    assert.equal(said[1].duration, Infinity, "it stays until the person acts on it")
+    assert.equal(said[1].action.label, "Bring it back")
+    said[1].action.onClick()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    assert.deepEqual(w.returns.map(([conversation]) => conversation), ["c"], "its one action brings the Thread back to its Fins")
+    assert.match(w.api.whileAwaySentence(true, 1), /The Fin it leads stayed on this Mac, where its reports can't reach it: bring it back and it reports to it again\. The last turns you read/)
+    const plain = make(() => pending())
+    plain.api.threadMoveStepped("c", "joined", { kind: "resuming", whileAway: { behind: false } })
+    plain.api.threadMoveStepped("c", "joined", { kind: "moved", conversations: ["c"], whileAway: { behind: false } })
+    const usual = plain.effects.filter(([kind]) => kind === "success").at(-1)[1]
+    assert.equal(usual[1].action, undefined, "a Thread that led none says nothing of Fins")
+    assert.doesNotMatch(usual[1].description, /Fin/)
+  })
   await check("A membership cannot reclaim its target after new B or B dismissal", async (make) => {
     let count = 0
     const w = make(() => ++count === 1 ? { kind: "moved", cloudThread: "fixture-cloud" } : pending())

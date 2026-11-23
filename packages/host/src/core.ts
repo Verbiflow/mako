@@ -1567,6 +1567,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     account: () => late.cloud,
     threads: () => threads.store ?? undefined,
     moves: live.moves,
+    tree: (thread) => late.conversations?.agents?.treePlace(thread) ?? {},
     session: (id) => live.session(id),
     checkout: (id) => workspaces.worktrees?.threadCheckout(id),
     // A Thread in the main checkout goes onto its own branch first, as the person's "Move to its own branch" does, its
@@ -1730,6 +1731,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     moves: () => cloudMoves && cloudReturns && cloudContinues ? {
       move: (id, move, handOff) => cloudMoves.move(id, move, handOff),
       refusal: (id) => cloudMoves.refusal(id),
+      treeKeeps: (id) => cloudMoves.treeKeeps(id),
       bringBack: (id, move) => cloudReturns.bringBack(id, move),
       continue: (id, op) => cloudContinues.press(id, op),
     } : undefined,
