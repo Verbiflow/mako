@@ -816,8 +816,9 @@ async function checkPage({ window, page, shots, base }) {
     const turn = ${WAKE}
     return {
       line: turn.querySelector('[data-turn-fold] [data-fold-title]')?.innerText.replace(/\\s+/g, ' '),
-      open: [...turn.querySelectorAll('[data-standing-reports] [data-fin-report]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
-      options: turn.querySelectorAll('[data-standing-reports] [data-fin-report-option]').length,
+      open: [...turn.querySelectorAll('[data-standing-reports] :is([data-fin-report], [data-report-line])')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
+      options: turn.querySelectorAll('button[data-fin-report-option], button[data-fin-answer]').length,
+      answer: turn.querySelector('[data-report-line][data-report-waits] [data-report-answer]')?.innerText,
       hidden: turn.querySelectorAll('[data-turn-fold="closed"]').length,
     }
   })()`
@@ -827,7 +828,10 @@ async function checkPage({ window, page, shots, base }) {
   console.log("SHIVER UPDATE", JSON.stringify(update))
   assert.ok(update.open.some((text) => text.includes("Quiet-hours push wording") && text.includes("asks you")), `what needs the person is named, as theirs: ${JSON.stringify(update.open)}`)
   assert.equal(update.open.length, 1, "only what needs the person stays open")
-  assert.ok(update.options >= 2, "with its answers live")
+  // One place answers it: the Shiver card under the transcript. Its line in the turn says who asked what, and where to answer.
+  assert.equal(update.options, 0, "its line in the turn has no answer buttons of its own")
+  assert.equal(update.answer, "Answer below", "and says where it's answered")
+  assert.equal(await evaluate(`document.querySelectorAll('[data-shiver-row="${pushWording}"] button[data-fin-answer]').length`), 2, "the Shiver card holds its answers")
   assert.match(update.line ?? "", /^5 Fins finished/, `the rest fold into one line that says what the wake carried: ${update.line}`)
   assert.equal(update.hidden, 1, "closed until it's opened")
   // Only the person's own scroll lets the transcript stop following its end: a wheel up first, then to the update.
@@ -837,17 +841,113 @@ async function checkPage({ window, page, shots, base }) {
   await new Promise((done) => setTimeout(done, 400))
   await capture("shiver-update")
   await evaluate(`${WAKE}.querySelector('[data-turn-fold] > button').click(); true`)
-  await until(`${WAKE}.querySelectorAll('[data-fin-report]').length === 6`, "the line opens every report")
+  await until(`${WAKE}.querySelectorAll(':is([data-fin-report], [data-report-line])').length === 6`, "the line opens every report")
   // A decision left to the Apex isn't the person's to pick: its options aren't drawn as buttons that do nothing.
   const settled = await evaluate(`[...${WAKE}.querySelectorAll('[data-fin-report]')].filter((node) => node.innerText.includes('asks its Apex')).map((node) => node.querySelectorAll('[data-fin-report-option]').length)`)
   assert.deepEqual(settled, [0], `an Apex's decision shows no inert options: ${JSON.stringify(settled)}`)
   await capture("shiver-update-shown")
+  // Answered in the card, its line says it was asked and what the answer was, with nothing left to press.
+  await evaluate(`${WAKE}.querySelector('[data-report-answer]').click(); true`)
+  await until(`(() => { const card = document.querySelector('[data-shiver]')?.getBoundingClientRect(); return Boolean(card) && card.top < innerHeight && card.bottom > 0 })()`, "Answer below brings the Shiver card into view")
+  await click(`[data-shiver-row="${pushWording}"] button[data-fin-answer="0"]`)
+  await until(`!${WAKE}.querySelector('[data-report-waits]')`, "the turn's line letting the question go")
+  const answeredLine = await evaluate(`${WAKE}.querySelector('[data-standing-reports] [data-report-line]').innerText.replace(/\\s+/g, ' ')`)
+  assert.match(answeredLine, /^Quiet-hours push wording asked you Which tone .* You answered: Plain$/, `the answered question reads as one line with its answer: ${answeredLine}`)
+  await capture("shiver-update-answered")
   window.setContentSize(390, 844)
   await navigate(window, `${base}scripts/phone-apex.html?app=apex&wake=shiver&open=1ead1ead-0000-4000-8000-000000001ead`)
   await until("Boolean(document.querySelector('[data-standing-reports]'))", "the phone's Shiver update")
   await evaluate(`${WAKE}.scrollIntoView({ block: 'start' }); true`)
   await both("shiver-update-phone")
   console.log("PASS: a wake of six reports is one Shiver update, open where it needs the person, the rest behind one line")
+
+  // A dozen Fins through an afternoon: the turns their reports woke, between two of the person's messages, are one row.
+  window.setContentSize(1440, 900)
+  await navigate(window, `${base}?mock&app=apex&wake=afternoon`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, afternoon")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await evaluate("window.apexScene.setRunning(false); true")
+  await until("Boolean(document.querySelector('[data-report-run]'))", "the afternoon's run of reports")
+  const RUN = "document.querySelector('[data-report-run]')"
+  const READ_RUN = `(() => {
+    const run = ${RUN}
+    return {
+      turns: Number(run.dataset.reportRun),
+      runs: document.querySelectorAll('[data-report-run]').length,
+      line: run.querySelector('[data-report-run-line] [data-fold-title]').innerText.replace(/\\s+/g, ' '),
+      kept: [...run.querySelectorAll('[data-report-run-kept] [data-report-line]')].map((node) => node.innerText.replace(/\\s+/g, ' ')),
+      drawn: run.querySelectorAll('[data-run-turn]').length,
+      options: run.querySelectorAll('button[data-fin-report-option], button[data-fin-answer]').length,
+      height: Math.round(run.getBoundingClientRect().height),
+      // The turns that stand on their own: the person's, and the wake its Apex answered at length.
+      standing: [...document.querySelectorAll('[data-transcript-viewport] [data-exchange]:not([data-report-run])')].map((node) => node.innerText.replace(/\\s+/g, ' ').slice(0, 40)),
+    }
+  })()`
+  const closed = await evaluate(READ_RUN)
+  console.log("AFTERNOON RUN", JSON.stringify(closed))
+  assert.equal(closed.runs, 1, "one row for the run")
+  assert.equal(closed.turns, 5, "five turns of reports stand behind it")
+  assert.equal(closed.line, "1 Fin needs you · 1 failed · 5 finished", `the row counts what was reported, what needs the person first: ${closed.line}`)
+  assert.equal(closed.kept.length, 2, `the question and the failure are named under the count: ${JSON.stringify(closed.kept)}`)
+  assert.match(closed.kept[0], /^Quiet-hours push wording asks you Which tone .* Answer below$/, `what needs the person is first: ${closed.kept[0]}`)
+  assert.match(closed.kept[1], /^Offline outbox retry failed The retry test hangs on CI/, `the failure is named with what it said: ${closed.kept[1]}`)
+  assert.equal(closed.drawn, 0, "its turns aren't drawn until it's opened")
+  assert.equal(closed.options, 0, "and nothing in it answers a question: the Shiver card does")
+  assert.ok(closed.height <= 120, `the run is a line and its two named reports, ${closed.height}px`)
+  assert.ok(closed.standing.some((text) => text.includes("Dictation fallback finished")), `a wake the Apex answered at length stands as its own turn: ${JSON.stringify(closed.standing)}`)
+  assert.ok(closed.standing.some((text) => text.startsWith("How are the queued ones doing?")), "as the person's own turn does")
+  await page.sendInputEvent({ type: "mouseWheel", x: 800, y: 400, deltaX: 0, deltaY: 1200 })
+  await new Promise((done) => setTimeout(done, 200))
+  await evaluate(`${RUN}.scrollIntoView({ block: 'center' }); true`)
+  await new Promise((done) => setTimeout(done, 400))
+  await capture("afternoon-run")
+  // Opened, every turn is there as it was: each report, and each thing the Apex said of it.
+  await evaluate(`${RUN}.querySelector('[data-report-run-line]').click(); true`)
+  await until(`${RUN}.querySelectorAll('[data-run-turn]').length === 5`, "the run opening onto its turns")
+  const opened = await evaluate(`${RUN}.innerText.replace(/\\s+/g, ' ')`)
+  for (const words of ["Haptics and the share sheet are in.", "Settings deep links finished; nothing follows from it.", "Offline outbox retry failed on its own test.", "Pull to refresh is done.", "Push wording's tone is yours to pick"])
+    assert.ok(opened.includes(words), `the Apex's own words are behind the row: ${words}`)
+  await evaluate(`[...${RUN}.querySelectorAll('[data-run-turn] [data-turn-fold] > button')].forEach((button) => button.click()); true`)
+  await until(`new Set([...${RUN}.querySelectorAll(':is([data-fin-report], [data-report-line])')].map((node) => node.dataset.fin)).size === 7`, "every Fin's report behind the row")
+  await evaluate(`${RUN}.scrollIntoView({ block: 'start' }); true`)
+  await capture("afternoon-run-open")
+  // Closed and opened again near the transcript's end, under scrollbars that take width as Linux and Windows draw
+  // them: the column gets shorter by a screenful, and the pane keeps its width while the timeline settles the scroll
+  // (`settleShrink`). Giving the scrollbar's width back there resized the pane inside its own observer, which the
+  // page reports as a ResizeObserver loop; a Mac's overlay scrollers never showed it.
+  await evaluate("(() => { const bars = document.createElement('style'); bars.dataset.widthTakingBars = ''; bars.textContent = '::-webkit-scrollbar { width: 15px; height: 15px }'; document.head.append(bars); return true })()")
+  await until("(() => { const pane = document.querySelector('[data-transcript-viewport]'); return pane.offsetWidth - pane.clientWidth >= 10 })()", "the transcript's scrollbar taking width")
+  for (let round = 0; round < 3; round++) {
+    await evaluate(`${RUN}.querySelector('[data-report-run-line]').click(); true`)
+    await until(`${RUN}.querySelector('[data-turn-fold]').dataset.turnFold === 'closed'`, "the run closing")
+    await new Promise((done) => setTimeout(done, 300))
+    if (round === 2) break
+    await evaluate(`${RUN}.querySelector('[data-report-run-line]').click(); true`)
+    await until(`${RUN}.querySelector('[data-turn-fold]').dataset.turnFold === 'open'`, "the run opening again")
+    await new Promise((done) => setTimeout(done, 300))
+    await evaluate(`${RUN}.scrollIntoView({ block: 'start' }); true`)
+  }
+  assert.deepEqual(errors.filter((message) => /ResizeObserver loop/.test(message)), [], "closing a run near the end resizes nothing inside an observer")
+  await evaluate("document.querySelector('style[data-width-taking-bars]').remove(); true")
+  console.log("PASS: a run closing near the end keeps the pane's width under scrollbars that take width")
+  // Answered in the Shiver card, the row stops saying it needs the person, and keeps naming the failure.
+  await evaluate("document.querySelector('[data-shiver]').scrollIntoView({ block: 'start' }); true")
+  await click(`[data-shiver-row="${pushWording}"] button[data-fin-answer="0"]`)
+  await until(`!${RUN}.querySelector('[data-report-waits]')`, "the run letting the question go")
+  const answeredRun = await evaluate(READ_RUN)
+  assert.equal(answeredRun.line, "1 Fin failed · 1 asked · 5 finished", `an answered question is counted as asked: ${answeredRun.line}`)
+  assert.equal(answeredRun.kept.length, 1, `only the failure stays named: ${JSON.stringify(answeredRun.kept)}`)
+  console.log(`PASS: an afternoon of reports is one row ("${closed.line}"), named where it needs the person or failed, every turn behind it`)
+
+  // The same row on the phone, which draws the same transcript.
+  window.setContentSize(390, 844)
+  await navigate(window, `${base}scripts/phone-apex.html?app=apex&wake=afternoon&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await until("Boolean(document.querySelector('[data-report-run]'))", "the phone's run of reports")
+  const phoneRun = await evaluate(`(() => { const run = ${RUN}; run.scrollIntoView({ block: 'center' }); return { line: run.querySelector('[data-fold-title]').innerText, kept: run.querySelectorAll('[data-report-line]').length, wide: run.scrollWidth > run.clientWidth + 1 } })()`)
+  assert.match(phoneRun.line, /1 failed · 5 finished$/, `the phone's row says the same: ${phoneRun.line}`)
+  assert.ok(phoneRun.kept >= 1 && !phoneRun.wide, `its named reports fit the phone's width: ${JSON.stringify(phoneRun)}`)
+  await both("afternoon-run-phone")
+  console.log("PASS: the phone draws the same row")
 
   // A done Fin's decision its Apex still has to make stays open in the update, among three finished ones: it isn't folded away.
   window.setContentSize(1440, 900)

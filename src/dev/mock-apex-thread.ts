@@ -432,6 +432,48 @@ const WAKE_TEXT = appendFinReports(
   ]
 )
 
+/**
+ * `&wake=afternoon`: six wakes between two of the person's messages, as a dozen Fins report through an afternoon.
+ * The first the Apex answers at length, so it stands as a turn; the five after it are a remark each, one on a
+ * failure, one with a message it sent, the last the wake every scene has. They read as one row (`foldReportRuns`).
+ */
+const AFTERNOON_WAKE = new URLSearchParams(globalThis.location?.search).get("wake") === "afternoon"
+const AFTERNOON: { minutes: number; reports: Parameters<typeof appendFinReports>[1]; said: string; sent?: string }[] = [
+  {
+    minutes: 44,
+    reports: [{ report: "report:dictation:done", fin: childThread(3), name: "Dictation fallback", harness: "claude", status: "done", line: "The keyboard's own mic takes over when ours can't start, with nothing said." }],
+    said: [
+      "Dictation fallback is in, and it changes what three of the others should do, so here is where the list stands.",
+      "The sheet and the composer chips both measured the keyboard's inset on their own; Dictation's change moves that into one place, so I've told Sheet motion and Composer chips to read it from there and drop their own. Push token refresh is unaffected. Offline outbox retry was waiting on the same module and can start its tests now.",
+      "Nothing here needs you yet.",
+    ].join("\n\n"),
+  },
+  {
+    minutes: 38,
+    reports: [
+      { report: "report:haptics:done", fin: childThread(7), name: "Haptics audit", harness: "claude", status: "done", line: "Listed 31 haptics; two fire twice on long-press." },
+      { report: "report:share-sheet:done", fin: childThread(8), name: "Share sheet copy", harness: "cursor", status: "done", line: "Worded the share sheet's actions in the app's voice.", artifacts: [{ kind: "pull-request", ref: "https://github.com/acme/phone/pull/215" }] },
+    ],
+    said: "Haptics and the share sheet are in. The two that fire twice go back to Haptics audit.",
+    sent: "haptics",
+  },
+  {
+    minutes: 29,
+    reports: [{ report: "report:deep-links:done", fin: childThread(10), name: "Settings deep links", harness: "claude", status: "done", line: "Every settings page opens from a link now." }],
+    said: "Settings deep links finished; nothing follows from it.",
+  },
+  {
+    minutes: 21,
+    reports: [{ report: "report:outbox:failed", fin: childThread(4), name: "Offline outbox retry", harness: "grok", status: "failed", line: "The retry test hangs on CI: npm test exits 1 in outbox.spec.ts after 120s." }],
+    said: "Offline outbox retry failed on its own test. I've sent it back with the log.",
+  },
+  {
+    minutes: 12,
+    reports: [{ report: "report:pull-refresh:done", fin: childThread(11), name: "Pull to refresh", harness: "grok", status: "done", line: "Pull to refresh reads fresh and keeps the cached list on screen until it lands." }],
+    said: "Pull to refresh is done.",
+  },
+]
+
 /** What stands in the Apex's conversation ahead of its own turns: the requests and the blocks that drew them. */
 interface EarlierTurns {
   requests: LiveRequest[]
@@ -500,6 +542,18 @@ export function apexSnapshot(): LiveSnapshot {
   const routed = { id: "1ead1ead-7000-4000-8000-000000000002", createdAt: ROUTED_AT, text: ROUTED_WORDS, attachments: [], status: "completed" as const }
   const wake = { id: "1ead1ead-7000-4000-8000-000000000004", createdAt: WAKE_AT, text: WAKE_TEXT, attachments: [], status: "completed" as const }
   const request = { id: "1ead1ead-7000-4000-8000-000000000003", createdAt: Date.now() - 60_000, text: "How are the queued ones doing?", attachments: [], status: idle ? ("completed" as const) : ("dispatching" as const) }
+  const afternoon = (AFTERNOON_WAKE ? AFTERNOON : []).map((wake, index) => {
+    const id = `1ead1ead-7000-4000-8000-0000000000${String(index + 10)}`
+    const text = appendFinReports([FROM_AGENTS, `${wake.reports.length} reported:`, ...wake.reports.map((report) => `  • "${report.name}": ${report.line}`)].join("\n"), wake.reports)
+    return {
+      request: { id, createdAt: Date.now() - wake.minutes * 60_000, text, attachments: [], status: "completed" as const },
+      blocks: [
+        { type: "user" as const, text, requestId: id },
+        ...(wake.sent ? [{ type: "tool" as const, id: `apex-afternoon-${index}`, name: "mcp__mako__agents_send", toolKind: "other" as const, title: "mako: agents send", input: JSON.stringify({ to: wake.sent, text: "Two fire twice on long-press: fix those." }), output: JSON.stringify({ child: childThread(7), name: wake.sent, request: id, delivery: "turn" }, null, 2), status: "completed" as const }] : []),
+        { type: "text" as const, text: wake.said },
+      ],
+    }
+  })
   const sent = { to: "sheet-motion", forward: true, clientKey: "sheet-keyboard" }
   const landed = { child: childThread(SHEET_MOTION), name: "sheet-motion", request: ROUTED_REQUEST, delivery: "steer" }
   return {
@@ -525,7 +579,7 @@ export function apexSnapshot(): LiveSnapshot {
     sessionId: APEX_SESSION,
     base: null,
     permissions: [],
-    requests: [...earlier.requests, first, routed, wake, request],
+    requests: [...earlier.requests, first, routed, ...afternoon.map((wake) => wake.request), wake, request],
     blocks: [
       ...earlier.blocks,
       { type: "user", text: first.text, requestId: first.id },
@@ -535,6 +589,7 @@ export function apexSnapshot(): LiveSnapshot {
       { type: "tool", id: "apex-send", name: "mcp__mako__agents_send", toolKind: "other", title: "mako: agents send", input: JSON.stringify(sent), output: JSON.stringify(landed, null, 2), status: "completed" },
       { type: "text", text: "That's Sheet motion's: it's measuring the container in split view now, so it takes this at its next step." },
       { type: "event", label: `You wrote to ${CHILDREN[DICTATION]!.name} directly`, body: DIRECT_WORDS, direct: { to: CHILDREN[DICTATION]!.name, fin: childThread(DICTATION), request: DIRECT_REQUEST, received: DIRECT_RECEIVED, delivery: "steer", at: DIRECT_AT } },
+      ...afternoon.flatMap((wake) => wake.blocks),
       { type: "user", text: wake.text, requestId: wake.id },
       { type: "text", text: "Push wording's tone is yours to pick; Thread list swipe finished with its PR." },
       ...(LIMIT_SCENE ? [{ type: "event" as const, label: LIMIT_RAN, detail: LIMIT_DID }] : []),

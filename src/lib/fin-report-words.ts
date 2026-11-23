@@ -42,3 +42,66 @@ export function reportsPhrase(cards: readonly FinReportCard[]): string {
   if (cards.length === 1) return `${cards[0]!.name} ${verb}`
   return `${replies ? `${cards.length} Apexes` : finsWord(cards.length)} ${verb}`
 }
+
+/** Whether a report is a question for the person, as its word says it (`said`). */
+export function asksPerson(card: FinReportCard): boolean {
+  return said(card).tone === "text-attention"
+}
+
+/**
+ * A question for the person as its line reads once the roster no longer holds it: a finished Fin's decision is a
+ * finished Fin again, and any other was asked. Never "answered": a Fin that was stopped, or whose Apex answered
+ * for the person, leaves the roster the same way.
+ */
+export function asked(card: FinReportCard): Said {
+  return card.status === "done" ? { word: "finished", tone: "text-positive" } : { word: "asked you", tone: "text-faint" }
+}
+
+/** What each of a run's phrases counts, in the order the line says them: what needs the person first, then what went wrong. */
+const RUN_WORDS = [
+  ["needs", "needs you", "need you"],
+  ["failed", "failed", "failed"],
+  ["unfinished", UNFINISHED_WORDS, UNFINISHED_WORDS],
+  ["asked", "asked", "asked"],
+  ["finished", "finished", "finished"],
+  ["reported", "reported", "reported"],
+  ["replied", "replied", "replied"],
+  ["silent", "didn't reply", "didn't reply"],
+] as const
+
+type RunWord = (typeof RUN_WORDS)[number][0]
+
+function runWord(card: FinReportCard, waits: boolean): RunWord {
+  if (card.apex) return card.status === "done" ? "replied" : "silent"
+  if (waits) return "needs"
+  if (card.status === "failed") return card.unfinished ? "unfinished" : "failed"
+  if (card.status === "done") return "finished"
+  return card.status === "progress" ? "reported" : "asked"
+}
+
+/**
+ * A run of reports as its one line counts them, each Fin once a phrase: "1 Fin needs you · 1 failed · 4 finished".
+ * The first phrase carries the noun for them all. `waits` says which questions for the person the roster still
+ * holds open; one it no longer holds reads as asked, as every question does where nothing says (a saved transcript,
+ * the navigator's label).
+ */
+export function runPhrase(cards: readonly FinReportCard[], waits: (card: FinReportCard) => boolean = () => false): string {
+  const fins = new Map<RunWord, Set<string>>()
+  for (const card of cards) {
+    const word = runWord(card, asksPerson(card) && waits(card))
+    fins.set(word, (fins.get(word) ?? new Set()).add(card.fin))
+  }
+  const phrases: string[] = []
+  let named = false
+  for (const [word, one, many] of RUN_WORDS) {
+    const count = fins.get(word)?.size
+    if (!count) continue
+    const verb = count === 1 ? one : many
+    if (word === "replied" || word === "silent") phrases.push(`${count} ${count === 1 ? "Apex" : "Apexes"} ${verb}`)
+    else {
+      phrases.push(named ? `${count} ${verb}` : `${finsWord(count)} ${verb}`)
+      named = true
+    }
+  }
+  return phrases.join(" · ")
+}

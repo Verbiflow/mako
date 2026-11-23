@@ -19,12 +19,16 @@ import {
   useState,
 } from "react"
 import { Exchange } from "@/components/transcript/exchange"
+import { ReportRun } from "@/components/transcript/report-run"
+import { FailedRequestsContext } from "@/components/transcript/failed-requests"
+import { foldReportRuns } from "@/lib/report-runs"
 import {
   NAVIGATOR_WIDTH,
   TurnNavigator,
 } from "@/components/transcript/turn-navigator"
 import { useNavigatorPrompts } from "@/components/transcript/navigator-prompts"
 import {
+  exchangeRequests,
   LEAD_EXCHANGE_ID,
   arrivedSince,
   continuedFrom,
@@ -149,7 +153,8 @@ const turnFacts = new WeakMap<ExchangeData, RowFacts>()
 function rowFacts(exchange: ExchangeData): RowFacts {
   let facts = turnFacts.get(exchange)
   if (!facts) {
-    facts = { chars: 0, lines: 0, tools: 0 }
+    // A run is its one line while closed, whatever its turns hold: its label is all its estimate reads.
+    facts = { chars: exchange.run?.label.length ?? 0, lines: 0, tools: 0 }
     for (const message of exchange.prompt ? [exchange.prompt, ...exchange.response] : exchange.response)
       for (const block of message.blocks) {
         if (block.type === "toolCall") facts.tools += 1
@@ -593,7 +598,7 @@ function ReleasedExchange({ id, label, height, viewport, load }: {
 export function ConversationTimeline({
   source = {},
   identity,
-  exchanges,
+  exchanges: turns,
   streamingId,
   interruptedId,
   interruptedRequests,
@@ -644,6 +649,22 @@ export function ConversationTimeline({
   entrance?: boolean
 }) {
   "use no memo"
+  /**
+   * The turns as the transcript draws them, each run of report turns as one (`foldReportRuns`). A turn that streams,
+   * was cut short, failed or ends on its failure row stands as itself, as does a prompt Mako sent for something else
+   * (a goal's step, a review). The list is the one given while it holds no run, and a run is the same object while
+   * its turns are (`runsBefore`), so a streamed token is a look-up a turn here and no row drawn again. Everything
+   * below reads this list: a run is windowed, measured, keyed and named in the navigator as any turn is.
+   */
+  const failedRequests = useContext(FailedRequestsContext)
+  const runsBefore = useRef<ExchangeData[]>([])
+  const exchanges = useMemo(() => {
+    const stands = (exchange: ExchangeData) =>
+      exchange.id === streamingId || exchange.id === interruptedId || exchange.id === failedId ||
+      exchangeRequests(exchange).some((request) => interruptedRequests?.has(request) || makoPrompts?.has(request) || failedRequests.has(request))
+    runsBefore.current = foldReportRuns(turns, stands, runsBefore.current)
+    return runsBefore.current
+  }, [turns, streamingId, interruptedId, failedId, interruptedRequests, makoPrompts, failedRequests])
   const sourceValue = useMemo(
     () => ({ threadPath: source.threadPath, liveId: source.liveId }),
     [source.threadPath, source.liveId]
@@ -1849,12 +1870,17 @@ export function ConversationTimeline({
       // Safari may already read back the clamped offset while still drawing the old one, so a drop in height near the
       // end counts though the offset looks right; one far above the end leaves a reader's own glide alone.
       if (!(shrank && node.scrollTop > end - node.clientHeight) && node.scrollTop <= end) return
+      // A scrollbar that takes width (Linux, Windows, a Mac set to always show them) gives that width back while the
+      // scroll is stopped: the pane and every line in it resize inside the observer that called this, which Chromium
+      // reports as a ResizeObserver loop, and the column flows twice in a frame. Its gutter is kept for that frame.
+      if (node.offsetWidth > node.clientWidth) node.style.scrollbarGutter = "stable"
       node.style.overflowY = "hidden"
       node.scrollTop = Math.min(node.scrollTop, end)
       cancelAnimationFrame(shrinkFrame)
       shrinkFrame = requestAnimationFrame(() => {
         shrinkFrame = 0
         node.style.overflowY = ""
+        node.style.scrollbarGutter = ""
       })
     }
     pin()
@@ -1885,7 +1911,7 @@ export function ConversationTimeline({
       pin()
     })
     structure.observe(node, { childList: true, characterData: true, subtree: true })
-    return () => { structure.disconnect(); grown.disconnect(); cancelAnimationFrame(shrinkFrame); node.style.overflowY = "" }
+    return () => { structure.disconnect(); grown.disconnect(); cancelAnimationFrame(shrinkFrame); node.style.overflowY = ""; node.style.scrollbarGutter = "" }
   }, [identity, isEmpty, owned, holdReader, keepSendRoom])
 
   // A turn arrived at the end, opened by a message the person just sent (the one the panel names, or one still in
@@ -2296,6 +2322,8 @@ export function ConversationTimeline({
       height={heights.current.get(`${readingSource}:${exchange.id}`) ?? 360} viewport={viewport.current}
       load={() => source.liveId ? loadReleasedLiveTurn(source.liveId, exchange.id)
         : source.threadPath ? loadReleasedThreadTurn(source.threadPath, exchange.id) : Promise.resolve()} />
+  ) : exchange.run ? (
+    <ReportRun key={keys.get(exchange.id) ?? exchange.id} exchange={exchange} />
   ) : (
     <Exchange
       key={keys.get(exchange.id) ?? exchange.id}

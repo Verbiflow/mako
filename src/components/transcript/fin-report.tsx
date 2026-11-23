@@ -1,20 +1,21 @@
 import { memo, use, useState } from "react"
 import { GitPullRequestIcon, LinkIcon } from "lucide-react"
 import type { FinReportCard } from "@mako/host/contracts/fin-reports"
-import { AgentAvatar } from "@/components/transcript/message-avatar"
+import { AgentAvatar, StillMark } from "@/components/transcript/message-avatar"
 import { RoutedOpenContext } from "@/components/transcript/routed-open"
 import { useTranscriptSource } from "@/components/transcript/source-context"
 import { formatTime } from "@/lib/format"
 import { harnessLabel, useHarnessIdentity } from "@/lib/harness-label"
 import { cn } from "@/lib/utils"
 import { useAcpConversation } from "@/state/acp-state"
-import { openFinInApex, useApexTitle, useThreadAsks, useThreadChildren } from "@/state/apex-fins"
-import { answerFin, type FinAnswer } from "@/state/fin-asks"
-import { reportsPhrase, reportStays, said } from "@/lib/fin-report-words"
+import { acpStore } from "@/state/acp"
+import { openFinInApex, threadChildren, useApexTitle, useThreadChildren } from "@/state/apex-fins"
+import { scrollShiverNeedsIntoView } from "@/state/shiver-card-view"
+import { asked, asksPerson, reportsPhrase, reportStays, said } from "@/lib/fin-report-words"
 import { Collapse } from "@/components/ui/collapse"
 import { FoldLine } from "@/components/transcript/fold-line"
 import { setTurnFoldOpen, turnFoldKey, useTurnFolds } from "@/state/turn-folds"
-import { useWakeReports } from "@/components/transcript/use-wake-reports"
+import { useWakeReports, type WakeReport } from "@/components/transcript/use-wake-reports"
 
 /** A pull request's short name from its link ("#369"), else its label or its ref. */
 function artifactName(artifact: NonNullable<FinReportCard["artifacts"]>[number]): string {
@@ -37,9 +38,9 @@ export const FinReports = memo(function FinReports({ reports: sent, timestamp }:
   const folded = reports.filter((report) => !reportStays(report.card, report.open))
   return (
     <div data-fin-reports={reports.length} className="flex flex-col gap-3">
-      {standing.map(({ card }) => (
-        <ReportBlock key={card.report} card={card} timestamp={timestamp} />
-      ))}
+      {standing.map((report) =>
+        asksPerson(report.card) ? <ReportLine key={report.card.report} report={report} /> : <ReportBlock key={report.card.report} card={report.card} timestamp={timestamp} />
+      )}
       {folded.length ? (
         <div data-turn-fold={shown ? "open" : "closed"} className="flex flex-col">
           <FoldLine title={reportsPhrase(folded.map((report) => report.card))} open={shown} onToggle={() => setTurnFoldOpen(foldKey, !shown)} />
@@ -60,8 +61,69 @@ export const FinReports = memo(function FinReports({ reports: sent, timestamp }:
 const LONG_REPORT = 240
 
 /**
- * A report that needs someone, never folded: in the answer's column, its Fin's mark and name (which opens it), one
- * word for what it did, and what it said held to four lines until it's opened. Its options answer it in place.
+ * A report as one line of the transcript: its Fin's mark and name, one word for what it did, and what it said, cut
+ * to the line until it's pressed (on a phone it takes the line under its name). A question for the person is always this line, never a card with buttons: the
+ * Shiver card under the transcript is where it's answered, so an open question has one place to answer it, and
+ * the line says where ("Answer below", which brings the card's Needs you back). Once the roster lets it go the
+ * line says it was asked, and with what it was answered while the roster says (`WakeReport.answered`). Told what
+ * it draws by whoever holds the wake (`useWakeReports`), so a line listens to nothing itself.
+ */
+export const ReportLine = memo(function ReportLine({ report }: { report: WakeReport }) {
+  const { card, waits, answered } = report
+  const source = useTranscriptSource()
+  const routed = use(RoutedOpenContext)
+  const [whole, setWhole] = useState(false)
+  // Its Fin is looked up when the name is pressed, from what the window holds then.
+  const openFin = () => {
+    const state = acpStore.get()
+    const apex = source.liveId ? state.conversations[source.liveId] : undefined
+    const fin = threadChildren(state, apex?.threadId).find((agent) => agent.child?.thread === card.fin)
+    if (!apex?.threadId || !fin) return
+    if (routed) routed(fin)
+    else openFinInApex(apex.threadId, apex.title ?? "Apex", fin)
+  }
+  const { word, tone } = asksPerson(card) && !waits ? asked(card) : said(card)
+  return (
+    <div data-report-line={card.status} data-fin={card.fin} data-report-waits={waits ? "" : undefined} className="flex min-h-7 min-w-0 items-start gap-2 py-0.5 text-ui">
+      <StillMark harness={card.harness} kind={card.apex ? "thread" : "fin"} size={16} cut="var(--surface)" label={card.name} className="mt-1 shrink-0" />
+      <div className="flex min-w-0 flex-1 flex-wrap items-baseline gap-x-2">
+        {card.apex ? (
+          <span className="max-w-[60%] shrink-0 truncate text-foreground">{card.name}</span>
+        ) : (
+          <button type="button" data-report-line-fin onClick={openFin} title={`Open ${card.name}`} className="pressable max-w-[60%] shrink-0 truncate text-foreground hover:underline">
+            {card.name}
+          </button>
+        )}
+        <span className={cn("shrink-0 text-label font-medium", tone)}>{word}</span>
+        {card.line ? (
+          <button
+            type="button"
+            data-report-line-words
+            aria-expanded={whole}
+            title={whole ? undefined : card.line}
+            onClick={() => setWhole((value) => !value)}
+            className={cn("min-w-0 flex-1 basis-48 text-left text-muted-foreground hover:text-foreground [overflow-wrap:anywhere]", !whole && "truncate")}
+          >
+            {card.line}
+          </button>
+        ) : (
+          <span className="flex-1" />
+        )}
+        {waits ? (
+          <button type="button" data-report-answer onClick={scrollShiverNeedsIntoView} className="pressable shrink-0 text-label text-faint hover:text-foreground">
+            Answer below
+          </button>
+        ) : answered ? (
+          <span data-report-answered className="max-w-[60%] shrink-0 truncate text-label text-faint">{answered}</span>
+        ) : null}
+      </div>
+    </div>
+  )
+})
+
+/**
+ * A report that needs someone and isn't the person's to answer, never folded: in the answer's column, its Fin's mark
+ * and name (which opens it), one word for what it did, and what it said held to four lines until it's opened.
  */
 export const ReportBlock = memo(function ReportBlock({ card, timestamp }: { card: FinReportCard; timestamp?: number }) {
   return <FinReport card={card} timestamp={timestamp} block />
@@ -74,23 +136,10 @@ export const FinReport = memo(function FinReport({ card, timestamp, block }: { c
   const thread = useAcpConversation(source.liveId, (conversation) => conversation?.threadId)
   const apexTitle = useApexTitle(source.liveId, source.threadPath)
   const children = useThreadChildren(card.apex ? undefined : thread)
-  const asks = useThreadAsks(card.apex ? undefined : thread)
   const fin = children.find((agent) => agent.child?.thread === card.fin)
-  // Its options answer the Fin while its ask is the person's and still open, through the Shiver card's own path.
-  const open = asks.find((ask) => ask.fin === card.fin && ask.ask.kind === "report" && ask.ask.id === card.report)
-  const [sent, setSent] = useState<number>()
   const [whole, setWhole] = useState(false)
   const { word, tone } = said(card)
-  const answer = (option: number) => {
-    if (!open || !source.liveId || sent !== undefined) return
-    setSent(option)
-    const choice: FinAnswer = { option }
-    void answerFin(source.liveId, open, choice).then((answered) => {
-      if (!answered) setSent(undefined)
-    })
-  }
   const routed = use(RoutedOpenContext)
-  const options = card.options ?? []
   const made = (card.artifacts ?? []).filter((artifact) => artifact.kind === "pull-request" || artifact.kind === "link")
   return (
     <div data-fin-report={card.status} data-fin={card.fin} data-report-block={block ? "" : undefined} className={cn("flex w-full gap-2.5", block ? "items-start" : "items-end justify-end")}>
@@ -125,37 +174,6 @@ export const FinReport = memo(function FinReport({ card, timestamp, block }: { c
           </button>
         ) : null}
         {card.waiting ? <p data-fin-report-waiting className="mt-0.5 text-label text-faint">{card.waiting}</p> : null}
-        {options.length && open ? (
-          <div className="mt-2.5 flex flex-wrap gap-1.5">
-            {options.map((option, index) => {
-              const recommended = index === card.recommended
-              const chosen = sent === index
-              const body = (
-                <>
-                  {option.label}
-                  {recommended ? <span className="opacity-65">Recommended</span> : null}
-                </>
-              )
-              const look = cn(
-                "flex h-7 items-center gap-1.5 px-2.5 text-label",
-                recommended || chosen ? "bg-foreground text-background" : "bg-fill-hover text-foreground"
-              )
-              return (
-              <button
-                key={option.label}
-                type="button"
-                data-fin-report-option={index}
-                disabled={sent !== undefined}
-                title={option.detail}
-                onClick={() => answer(index)}
-                className={cn("pressable disabled:opacity-60", look, !recommended && !chosen && "hover:bg-fill-selected")}
-              >
-                {body}
-              </button>
-              )
-            })}
-          </div>
-        ) : null}
         {made.length ? (
           <div className="mt-2 flex flex-wrap gap-1.5">
             {made.map((artifact) => {
