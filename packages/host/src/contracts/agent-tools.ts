@@ -1,7 +1,7 @@
 import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "./report-actions.js"
 import type { ReportAction, ReportActionTarget, ReportActionsPage, ReportDisposition } from "./report-actions.js"
 import type { AccessTier } from "./access.js"
-import { type AgentsCancelInput, type AgentsCancelled, type AgentsCapabilities, type AgentsNoticed, type AgentsNoticeInput, type AgentsPlaced, type AgentsPlaceInput, APEX_WORD, decisionWords, UNFINISHED_WORDS, FIN_WORD, SHIVER_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
+import { type AgentsCancelInput, type AgentsCancelled, type AgentsCapabilities, type AgentsNoticed, type AgentsNoticeCall, type AgentsPlaced, type AgentsPlaceInput, APEX_WORD, decisionWords, UNFINISHED_WORDS, FIN_WORD, SHIVER_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
 import type { Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
@@ -538,7 +538,8 @@ export type AgentVerb = keyof AgentOperations
 export interface PlacementOperations {
   capabilities(): AgentsCapabilities
   place(input: AgentsPlaceInput): Promise<AgentsPlaced | AgentRefused>
-  notice(input: AgentsNoticeInput): Promise<AgentsNoticed>
+  /** `account`: the Thread the account itself acts on in this call, when the call is its own delivery (`accountCall`). */
+  notice(input: AgentsNoticeCall, account?: string): Promise<AgentsNoticed>
   cancel(input: AgentsCancelInput): Promise<AgentsCancelled>
 }
 

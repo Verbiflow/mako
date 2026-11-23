@@ -123,7 +123,7 @@ export const HELD_BY_TABLE = new Map<string, "edges" | "threads" | "both" | "nei
   thread_parents: "edges", native_claims: "edges", sources: "edges",
   memberships: "both", threads: "both", sessions: "both",
   journals: "threads",
-  agent_answers: "neither", agent_cancels: "neither", agent_placings: "neither", agent_pull_wakes: "neither", agent_report_action_ops: "neither",
+  agent_answers: "neither", agent_cancels: "neither", agent_notice_refusals: "neither", agent_placings: "neither", agent_pull_wakes: "neither", agent_report_action_ops: "neither",
   agent_report_actions: "neither", agent_spawns: "neither", apex_messages: "neither", app_environments: "neither", executions: "neither", fin_moves: "neither",
   limit_notices: "neither", locators: "neither", moves: "neither", operations: "neither", placement_changes: "neither", principals: "neither",
   retired_worktrees: "neither", store_meta: "neither", store_migrations: "neither", thread_environments: "neither", thread_places: "neither",
@@ -385,6 +385,7 @@ const AnsweredAskRowSchema = z.object({ ask: z.string() })
 const ReportStampRowSchema = z.object({ seq: z.number(), count: z.number() })
 const AsksStampRowSchema = z.object({ reports: z.number(), reportCount: z.number(), answers: z.number(), answerCount: z.number() })
 const DeliveredAtRowSchema = z.object({ delivered_at: z.number().nullable() })
+const RefusedNoticeRowSchema = z.object({ report: z.string() })
 const PendingActionRowSchema = z.object({ child_thread: z.string(), owner: z.string().nullable() })
 const SessionDetailSchema = z.object({
   id: z.string(),
@@ -728,6 +729,7 @@ CREATE TABLE IF NOT EXISTS agent_report_action_ops (
 CREATE TABLE IF NOT EXISTS agent_spawns (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS agent_placings (op TEXT PRIMARY KEY, tree TEXT NOT NULL, record TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS agent_cancels (op TEXT PRIMARY KEY, at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS agent_notice_refusals (report TEXT PRIMARY KEY, reason TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS fin_moves (child_thread TEXT PRIMARY KEY, record TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS limit_notices (root_thread TEXT NOT NULL, id TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY (root_thread, id));
 CREATE TABLE IF NOT EXISTS agent_answers (
@@ -1485,6 +1487,20 @@ export class ThreadStore {
   startCancelled(op: string): boolean {
     this.syncVersion()
     return this.sql("SELECT op FROM agent_cancels WHERE op = ?").get(op) !== undefined
+  }
+
+  /**
+   * A report whose notice the account refused for good (`AgentPlaces`), kept by the report's ID in a table of its own:
+   * it's posted no more, after a restart too, and is never marked heard, since nobody heard it.
+   */
+  refuseNotice(report: string, reason: string, at: number): void {
+    this.write(() => this.sql("INSERT OR IGNORE INTO agent_notice_refusals (report, reason, at) VALUES (?, ?, ?)").run(report, reason, at))
+  }
+
+  /** The reports whose notices were refused for good (`refuseNotice`), by ID. */
+  refusedNotices(): ReadonlySet<string> {
+    this.syncVersion()
+    return new Set(this.sql("SELECT report FROM agent_notice_refusals").all().map((row) => RefusedNoticeRowSchema.parse(row).report))
   }
 
   /** A Fin moved to another harness: its edge says what it runs on now (`Agents.move`), nothing else of it changes. */
