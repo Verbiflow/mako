@@ -148,6 +148,18 @@ try {
   assert.deepEqual(await store.harnessOrder(), ["codex", "claude"], "disconnecting a model leaves the order alone")
   await store.saveHarnessOrder([])
   assert.deepEqual(await store.harnessOrder(), [], "an empty order goes back to Mako's")
+  // Thread titles are off until the person turns them on; only `true` in the file is on.
+  const stored = new UtilityWork({ models: store })
+  assert.equal(await stored.namesThreads(), false, "Threads aren't titled until the person says so")
+  assert.equal((await stored.settings()).titles, false)
+  await store.nameThreads(true)
+  assert.deepEqual(await store.choices(), { commit: "auto", titles: true })
+  assert.equal(await stored.namesThreads(), true)
+  assert.equal((await stored.settings()).titles, true, "Settings reads the switch")
+  await store.nameThreads(false)
+  assert.equal("titles" in JSON.parse(await readFile(join(root, "utility-work.json"), "utf8")), false, "off is the file without the choice")
+  await writeFile(join(root, "utility-work.json"), JSON.stringify({ titles: "on" }))
+  assert.equal(await stored.namesThreads(), false, "anything but true is off")
   // Every Mako on this Mac shares the file: a choice in a shape a newer one wrote, and a field this build doesn't name, stay through this build's change.
   const newer = { commit: { model: "google/gemini-flash", depth: "deep" }, order: ["claude"], review: "google/gemini-pro" }
   await writeFile(join(root, "utility-work.json"), JSON.stringify(newer))

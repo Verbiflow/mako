@@ -1,4 +1,5 @@
 import { getMako } from "@/lib/bridge"
+import type { THREAD_TITLES } from "@mako/host/contracts/utility-work"
 import type {
   UtilityCatalogInput,
   UtilityConnectionInput,
@@ -30,5 +31,5 @@ export const utilityModels = {
   disconnect: (provider: UtilityProvider) =>
     getMako().disconnectUtilityModel(provider),
   /** What does a small task: `auto`, `off` for titles, or a model `settings()` lists. */
-  choose: (task: UtilityTask, choice: string) => getMako().chooseUtilityModel(task, choice),
+  choose: (task: UtilityTask | typeof THREAD_TITLES, choice: string) => getMako().chooseUtilityModel(task, choice),
 }

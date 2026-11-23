@@ -2,7 +2,7 @@ import { createHook, createStore } from "./store"
 import { utilityModels } from "./model-runtime"
 import { prefsStore, setPref } from "./prefs"
 import { UTILITY_AUTOMATIC, type UtilityModelSettings } from "@/lib/types"
-import { utilityModelName } from "@mako/host/contracts/utility-work"
+import { THREAD_TITLES, utilityModelName } from "@mako/host/contracts/utility-work"
 
 /**
  * Which model drafts commits, and whether it can.
@@ -78,6 +78,16 @@ export async function chooseCommitModel(choice: string): Promise<void> {
   try {
     await utilityModels.choose("commit", choice)
     await inflight
+    snapshot.set({ settings: await utilityModels.settings(), error: null })
+  } catch (caught) {
+    snapshot.set({ error: caught instanceof Error ? caught.message : "The choice could not be saved. Try again." })
+  }
+}
+
+/** Turn generated Thread titles on or off, for every window (`THREAD_TITLES`); the snapshot follows. */
+export async function nameThreads(on: boolean): Promise<void> {
+  try {
+    await utilityModels.choose(THREAD_TITLES, on ? "on" : "off")
     snapshot.set({ settings: await utilityModels.settings(), error: null })
   } catch (caught) {
     snapshot.set({ error: caught instanceof Error ? caught.message : "The choice could not be saved. Try again." })

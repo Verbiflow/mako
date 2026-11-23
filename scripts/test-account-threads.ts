@@ -74,7 +74,7 @@ function host(summaries: LiveSummary[], options: { work?: LifecycleWork[]; execu
       const execution = options.executions?.[session]
       return execution ? [[session, execution] as const] : []
     })),
-    titles: (threads) => new Map(threads.map((thread) => [thread, options.title ? { title: options.title, titleSource: "user" } : { title: "made by an old build", titleSource: "auto" }] as const)),
+    titles: (threads) => new Map(threads.map((thread) => [thread, options.title ? { title: options.title, titleSource: "user" } : { title: "made by Mako", titleSource: "auto" }] as const)),
     now: () => NOW,
   }
 }
@@ -114,7 +114,7 @@ test("a host lists the Sessions it owns, at work first, then newest first, each 
   assert.equal(rows[0]?.waitingFor, "approval", "what it waits for is said, never left to be read from the words")
   assert.equal(rows[0]?.threadTitle, "Webhooks")
   assert.equal(rows.find((row) => row.conversation === "c-1")?.title, "Fix the flaky test")
-  assert.equal(ownedSessions(host([summary("c-1", NOW)]))[0]?.threadTitle, undefined, "an older build's automatic title isn't shown anywhere")
+  assert.equal(ownedSessions(host([summary("c-1", NOW)]))[0]?.threadTitle, "made by Mako", "a title Mako generated is the Thread's name on every device, as a rename is")
 })
 
 test("a fork's row says the Session it was forked from, read for every row in one call; a Session that began another way says nothing", () => {

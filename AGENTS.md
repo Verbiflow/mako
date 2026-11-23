@@ -4864,11 +4864,47 @@ A Thread's own name is `title` with `title_source` in the store: `user` for a
 person's rename (`renameThread`), `frozen` for a name Mako gave a Thread it
 started, and no source for a title an older build wrote, which counts as the
 user's. It names the whole Thread in the rail; each Session's tab keeps its
-own title, and a Thread without a name shows its first Session's. Mako
-doesn't name Threads automatically: the `auto_*` columns and
-`title_exchanges` that older builds wrote are kept for builds sharing the
-store, and a title they mark `auto` isn't shown. `scripts/test-thread-names.ts`
-covers it.
+own title, and a Thread without a name shows its first Session's.
+`scripts/test-thread-names.ts` covers it.
+
+A Thread nobody named can get a generated title: `title` with source `auto`,
+written by `ThreadTitler` (`threads/thread-titler.ts`), the one place that
+asks a model for a title. A row shows it as it shows a rename, through the
+same `thread-titles` event and `threadTitle` on a listed row, so no surface
+reads it specially; a person's rename and a frozen name replace it and it
+never replaces them (`UNNAMED`). It is off until the person turns on Settings
+› Git › Title Threads (`THREAD_TITLES` in the utility choices file), because a
+title sends the Thread's first prompt and the start of its first answer to
+the provider of the API connection commit messages use, which need not be
+the provider the Thread's harness talks to. It runs only on that connection
+(`UtilityWork.resolve("commit")`), never on a harness: with no key, or the
+switch off, nothing is asked and nothing is recorded against the Thread.
+
+A turn's end sets a timer (`QUIET_MS`), and the look that follows asks
+nothing for a Thread with a name, a Fin or a linked run (any Thread with a
+parent edge), a Thread started for a purpose, a conversation that isn't its
+Thread's first Session, one running a turn or with a message waiting, one
+whose record continues a history its harness held before (`firstExchange`),
+and one whose session already has a title that isn't just the start of its
+prompt (`promptCut`): a harness's own title is used when it has one, and
+Mako pays for one only when it has none. Once written, a generated title
+stays when the harness names its session later; the tab still shows the
+harness's. The request is the first prompt (1,200 characters at most) and
+the start of the first answer's prose (600), about 600 tokens in and ten
+out, one at a time across the host. The store counts requests in the claim
+(`claimGeneratedTitle`: `auto_context` goes `asked`, then `settled`), so a
+Thread is asked about once, once more at a later turn's end when the first
+request failed or its reply was no title (`generatedTitle`: longer than 50
+characters, empty, a refusal), and never a third time, across restarts and
+hosts sharing the store; `title_pending*` is the lease of the host asking.
+A rename or a dropped name settles it for good. Threads from before are not
+backfilled: one is titled the next time a turn of its first Session ends,
+if its record still begins with its first exchange. Each request is a helper
+run (`thread-title`) in Settings › Usage, and neither the prompt nor the
+reply is logged. Builds from before this read an `auto` title as no name and
+show the row as they did; `auto_title` and `title_exchanges`, which a build
+of October 2026 wrote, are kept and not read. `npm run test:thread-titles`
+covers it with a scripted model.
 
 Every Session also has an execution owner (this device or a named cloud
 runtime) and a generation that rises on every owner change, including to

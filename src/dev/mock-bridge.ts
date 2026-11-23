@@ -290,7 +290,7 @@ function mockUtilityWork(): UtilityWorkSettings {
     const resolved = choice === "auto" ? options[0] : options.find((option) => option.id === choice)
     return { choice, options, resolved, reason: resolved ? undefined : "Connect an API key in Settings › Git to generate commit messages." }
   }
-  return { commit: state("commit") }
+  return { commit: state("commit"), titles: utilityChoices.titles === true }
 }
 
 /** What the mock "person" picks: the fixture pricing page's trial button, drawn here for its crop. */
@@ -1613,8 +1613,9 @@ export function installMockBridge() {
       requests: 1,
     }),
     cancelCommitGeneration: async () => {},
-    chooseUtilityModel: async (task: UtilityTask, choice: string) => {
-      utilityChoices[task] = choice
+    chooseUtilityModel: async (task: UtilityTask | "titles", choice: string) => {
+      if (task === "titles") utilityChoices.titles = choice === "on"
+      else utilityChoices[task] = choice
     },
     saveHarnessOrder: async (order: string[]) => {
       mockHarnessOrder = [...order]

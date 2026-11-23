@@ -65,7 +65,7 @@ import { hostPlatform, nodePlatform, onMac, onWindows } from "./base/platform.js
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { KeepAwakeSettings } from "./contracts/keep-awake.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
-import { openThreads, declareThreadMethods, declareUnreadRecordMethods } from "./threads/index.js"
+import { openThreads, declareThreadMethods, declareUnreadRecordMethods, ThreadTitler } from "./threads/index.js"
 import type { Control, ControlService } from "./control/index.js"
 import type { SimulatorAgent, SimulatorCaller, SimulatorsListed } from "./contracts/simulators.js"
 import { accountBorrowing, BorrowedSimulators, ControlResidency, ControlSessions, SimulatorTools, controlLine, controlLoad, controlVideoMedia } from "./control/load.js"
@@ -262,6 +262,8 @@ interface LateParts {
   automations?: Automations
   /** A fast model's yes or no on an automation trigger's `runWhen`, once the utility models are open. */
   runWhen?: UtilityRunWhen
+  /** Titles a Thread from its first exchange, once the utility models are open (`ThreadTitler`). */
+  titles?: ThreadTitler
   updates?: Updates
   attribution?: Attribution
   /** On a cloud machine: its tracker (`openMachineTracker`), made once the conversations are. */
@@ -1403,6 +1405,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     turnEnded: (id, cwd) => {
       // A run's Thread ended its turn: its run settles with what it said.
       void late.automations?.turnEnded(id)
+      late.titles?.turnEnded(id)
       workspaces.worktrees?.turnEnded(cwd)
       workspaces.retention?.changed()
       workspaces.scratch?.changed()
@@ -2314,7 +2317,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   declareAttributionMethods(methods, () => late.attribution)
   declareMediaMethods(methods, turnMedia)
   const helperRuns = new HelperRuns(helperRunsRoot(environment.dataRoot))
-  late.runWhen = new UtilityRunWhen(declareGitMethods(methods, {
+  const utilityWork = declareGitMethods(methods, {
     worktrees: workspaces.worktrees,
     withHost,
     git,
@@ -2330,7 +2333,26 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       offer: (order, at) => preferences.offer("harnessOrder", order === undefined ? undefined : [...order], at),
       onChange: (listener) => void preferenceListeners.add(listener),
     },
-  }))
+  })
+  late.runWhen = new UtilityRunWhen(utilityWork)
+  // A fixture desk's store is read-only and its Threads aren't the person's, so it titles none.
+  if (store && !fixtureDesk) {
+    late.titles = new ThreadTitler({
+      store,
+      enabled: () => utilityWork.namesThreads(),
+      model: async (onUsage) => {
+        const resolved = await utilityWork.resolve("commit", undefined, onUsage).catch(() => undefined)
+        return resolved?.kind === "ready" ? resolved.model : undefined
+      },
+      held: (id) => live.held(id),
+      nativeTitle: (id) => {
+        const path = live.listedOne(id)?.session.nativePath
+        return path ? catalog.ref(path)?.title : undefined
+      },
+      emit: (titles) => emit({ type: "thread-titles", titles }),
+      record: helperRuns.record,
+    })
+  }
   declareHarnessMethods(methods, { harnesses, appRoot: environment.appRoot, workspace, emit })
   declareSetupMethods(
     methods,
@@ -2640,6 +2662,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     "harness updates": () => harnesses.updates.stop(),
     "catalog calls": () => catalog.stop(),
+    "thread titles": () => late.titles?.close(),
   } satisfies Record<string, () => void | Promise<void>>
   for (const [name, cancel] of Object.entries(outside)) shell.stopping.register(name, cancel)
   // A moment after the host answers its first clients, so a window's opening calls aren't behind a package's load.
