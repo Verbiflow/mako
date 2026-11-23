@@ -72,7 +72,9 @@ function readReportTurn(exchange: Exchange): readonly FinReportCard[] | undefine
  * person's messages that exist only because their Fins reported (`reportTurn`), `RUN_TURNS` or more in a row, so
  * a dozen reports through an afternoon are one row of the transcript, which windows, measures and names it as it
  * does any turn. `stands` says which turns stay their own whatever they hold: the one streaming, a stopped or
- * failed one.
+ * failed one. So does the transcript's newest turn while nothing follows it: what the Apex last said is read as a
+ * turn, where a row keeps it as a faint detail and a phone's row not at all. It joins the run above it once another
+ * turn stands below, and that run, the same row by the id it had, stays as open as it was.
  *
  * Costs a look-up a turn: a settled turn is the same object in every frame, and a run whose turns are the ones it
  * held is the same object too (`previous`), so a streamed token draws no row again. A run keeps the id it was
@@ -103,9 +105,10 @@ export function foldReportRuns(exchanges: Exchange[], stands: (exchange: Exchang
     folded.push({ id, run: { turns, cards, label: runPhrase(cards) }, response: [], system: [], timestamp: turns[0]!.timestamp })
   }
   let start = -1
+  const newest = exchanges.length - 1
   for (let index = 0; index < exchanges.length; index++) {
     const exchange = exchanges[index]!
-    const member = reportTurn(exchange) !== undefined && !stands(exchange)
+    const member = index < newest && reportTurn(exchange) !== undefined && !stands(exchange)
     if (member) {
       if (start < 0) start = index
       continue

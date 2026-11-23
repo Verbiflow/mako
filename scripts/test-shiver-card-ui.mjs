@@ -949,6 +949,57 @@ async function checkPage({ window, page, shots, base }) {
   await both("afternoon-run-phone")
   console.log("PASS: the phone draws the same row")
 
+  // Nothing follows the last wake: it stands as the newest turn under a row of the four before it, so what the Apex
+  // last said of its Fins is read as a turn, where the row kept it as a faint detail. Once another turn follows, it
+  // joins the row, and the row is the element it was, as open as it was.
+  window.setContentSize(1440, 900)
+  await navigate(window, `${base}?mock&app=apex&wake=afternoon&last=wake`)
+  await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the Apex's row, afternoon ending on its wake")
+  await evaluate("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].find((row) => row.innerText.includes('Mobile polish')).click(); true")
+  await until("Boolean(document.querySelector('[data-report-run]'))", "the run above the newest wake")
+  const NEWEST = `(() => {
+    const run = ${RUN}
+    const last = [...document.querySelectorAll('[data-transcript-viewport] [data-exchange]')].at(-1)
+    return {
+      turns: Number(run.dataset.reportRun),
+      line: run.querySelector('[data-report-run-line]').innerText.replace(/\\s+/g, ' '),
+      fold: run.querySelector('[data-turn-fold]').dataset.turnFold,
+      kept: run.__kept === true,
+      lastIsRun: last.hasAttribute('data-report-run'),
+      last: last.innerText.replace(/\\s+/g, ' '),
+    }
+  })()`
+  const newest = await evaluate(NEWEST)
+  console.log("NEWEST WAKE", JSON.stringify(newest))
+  assert.equal(newest.turns, 4, "the four report turns before the newest are the row")
+  assert.equal(newest.lastIsRun, false, "the newest report turn stands as its own turn")
+  assert.ok(newest.last.includes("Push wording's tone is yours to pick"), `with what the Apex said of it in full: ${newest.last.slice(0, 160)}`)
+  assert.ok(!newest.line.includes("Push wording's tone"), `and the row's line says what its own turns hold: ${newest.line}`)
+  await evaluate(`${RUN}.scrollIntoView({ block: 'center' }); true`)
+  await new Promise((done) => setTimeout(done, 400))
+  await capture("afternoon-newest-stands")
+  // Opened, then the person writes: the turn that stood is the row's fifth, and the row wasn't made again or closed.
+  await evaluate(`${RUN}.querySelector('[data-report-run-line]').click(); true`)
+  await until(`${RUN}.querySelectorAll('[data-run-turn]').length === 4`, "the row opening onto its four turns")
+  await evaluate(`${RUN}.__kept = true`)
+  await evaluate("void window.mako.livePrompt('1ead1ead-2000-4000-8000-000000001ead', crypto.randomUUID(), 'How are the queued ones doing?'); true")
+  await until(`Number(${RUN}.dataset.reportRun) === 5`, "the newest wake joining the row once the person wrote")
+  const joined = await evaluate(NEWEST)
+  assert.equal(joined.kept, true, "the row is the element it was")
+  assert.equal(joined.fold, "open", "and still open")
+  await until(`${RUN}.querySelectorAll('[data-run-turn]').length === 5`, "its fifth turn drawn in it")
+  assert.ok((await evaluate(`${RUN}.innerText.replace(/\\s+/g, ' ')`)).includes("Push wording's tone is yours to pick"), "what the Apex said is behind the row now")
+  await evaluate(`${RUN}.querySelector('[data-report-run-line]').click(); true`)
+  // The phone's row has no room for the remark at all: there the newest turn is the only place it reads.
+  window.setContentSize(390, 844)
+  await navigate(window, `${base}scripts/phone-apex.html?app=apex&wake=afternoon&last=wake&open=1ead1ead-0000-4000-8000-000000001ead`)
+  await until("Boolean(document.querySelector('[data-report-run]'))", "the phone's run above the newest wake")
+  const phoneNewest = await evaluate(`(() => { const last = [...document.querySelectorAll('[data-exchange]')].at(-1); last.scrollIntoView({ block: 'end' }); return { turns: Number(${RUN}.dataset.reportRun), lastIsRun: last.hasAttribute('data-report-run'), last: last.innerText.replace(/\\s+/g, ' ') } })()`)
+  assert.equal(phoneNewest.turns, 4, "the phone folds the same four")
+  assert.ok(!phoneNewest.lastIsRun && phoneNewest.last.includes("Push wording's tone is yours to pick"), `and reads the Apex's last words as a turn: ${JSON.stringify(phoneNewest).slice(0, 200)}`)
+  await both("afternoon-newest-stands-phone")
+  console.log("PASS: the newest report turn stands until something follows it, then joins its row without closing it")
+
   // A done Fin's decision its Apex still has to make stays open in the update, among three finished ones: it isn't folded away.
   window.setContentSize(1440, 900)
   await navigate(window, `${base}?mock&app=apex&wake=shiver&fins=decisions`)

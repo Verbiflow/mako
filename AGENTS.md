@@ -2779,7 +2779,9 @@ report turns one exchange (`Exchange.run`): two or more in a row, between two of
 prompt is Mako's digest with its reports as data (`readFinReports`) and whose answer is a remark (`reportTurn`: at
 most `REMARK_CHARS` of words, nothing shown or made, no plan or review, no failed call, no notice a turn's own fold
 keeps drawn). The person's own turns, an answer they'd read, and a turn that streams, stopped or failed always
-stand. The row (`ReportRun`) counts what was reported, what needs the person first (`runPhrase`: "1 Fin needs you ·
+stand. So does the transcript's newest turn while nothing follows it, so what the Apex last said reads as a turn,
+which the row keeps only as a faint detail and a phone's row not at all; it joins the run above it once another turn
+follows, and the run keeps its id, so its open fold. The row (`ReportRun`) counts what was reported, what needs the person first (`runPhrase`: "1 Fin needs you ·
 1 failed · 5 finished"), and under the closed line names each report a count must never be all that's said of it: a
 question still open, a failure, an end without a result, an open decision. Opened, it is its turns as they were.
 The timeline windows, measures, keys and names the row as any turn, so it is folded before all of that, from
@@ -2789,7 +2791,7 @@ in the transcript (`ReportLine`), never a card with buttons: the Shiver card und
 line says "Answer below" while the roster holds it open, then that it was asked, with the answer while the roster
 says it (`WakeReport.answered`). The Overview is the side rail's own surface and keeps its buttons.
 `scripts/test-report-runs.ts` holds the rule and the words, and `test:shiver-card-ui` the row, the one place to
-answer and the phone (`?mock&app=apex&wake=afternoon`).
+answer and the phone (`?mock&app=apex&wake=afternoon`, with `&last=wake` for a transcript that ends on a wake).
 
 ## Never lose a paragraph
 

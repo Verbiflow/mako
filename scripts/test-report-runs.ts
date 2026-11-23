@@ -10,7 +10,8 @@ import { foldReportRuns, REMARK_CHARS, reportTurn } from "../src/lib/report-runs
 /**
  * A run of an Apex's turns that its Fins' reports woke reads as one row (`foldReportRuns`): only turns whose prompt
  * is Mako's digest and whose answer is a remark, never the person's own turn or an answer they'd read; counted with
- * what needs the person first (`runPhrase`); and the same objects from one frame to the next.
+ * what needs the person first (`runPhrase`); the transcript's newest turn standing until something follows it; and
+ * the same objects from one frame to the next.
  */
 
 const card = (name: string, status: FinReportCard["status"], more: Partial<FinReportCard> = {}): FinReportCard => ({ report: `report:${name}:${status}`, fin: `thread-${name}`, name, status, line: `${name} said so.`, ...more })
@@ -69,6 +70,48 @@ const afternoon: LiveUpdate[] = [
   assert.equal(paged[0]!.id, run.id, "a run that grew upward keeps its id")
 }
 
+// The newest turn of the transcript stands while nothing follows it, so what the Apex last said is read as a turn. It
+// joins the run above it once it's no longer the last, and that run is the row it was: its id, so its open fold.
+{
+  const wakes = [
+    wake("w1", card("Haptics", "done")), text("a2", "Haptics is in."),
+    wake("w2", card("Outbox", "failed")), text("a3", "Outbox failed; sent back."),
+    wake("w3", card("Swipe", "done")), text("a4", "Swipe is in."),
+    wake("w4", card("Share sheet", "done")), text("a5", "The share sheet is in."),
+  ]
+  const upTo = (count: number, ...more: LiveUpdate[]) => exchangesOf([person("p1", "Split the list into Threads."), text("a1", "Twelve pieces."), ...wakes.slice(0, count * 2), ...more])
+  // One report turn, and two with the second the newest, are turns: a run is two behind the one that stands.
+  for (const count of [1, 2]) {
+    const exchanges = upTo(count)
+    assert.equal(foldReportRuns(exchanges, none), exchanges, `${count}: with no run the list is the one given`)
+  }
+  const three = upTo(3)
+  const folded = foldReportRuns(three, none)
+  assert.deepEqual(drawnRows(folded), ["turn", 2, "turn"], "two fold, and the newest stands under them")
+  assert.equal(folded[2], three[3], "as the turn it is")
+  const run = folded[1]!
+  assert.deepEqual(run.run!.cards.map((each) => each.name), ["Haptics", "Outbox"], "the row counts what's in it, not the turn that stands")
+  // A frame that changes nothing, or streams into the newest turn, keeps the run the same object.
+  assert.equal(foldReportRuns(three.slice(), none, folded)[1], run)
+  const streaming = [...three.slice(0, -1), { ...three[3]!, response: [...three[3]!.response, three[3]!.response.at(-1)!] }]
+  assert.equal(foldReportRuns(streaming, (exchange) => exchange.id === three[3]!.id, folded)[1], run)
+  // Another report turn follows: the one that stood joins the run, and the new one stands.
+  const four = upTo(4)
+  const grown = foldReportRuns(four, none, folded)
+  assert.deepEqual(drawnRows(grown), ["turn", 3, "turn"])
+  assert.equal(grown[1]!.id, run.id, "the run it joined is the same row: its id, and so its fold, as they were")
+  assert.deepEqual(grown[1]!.run!.turns.slice(0, 2), run.run!.turns, "its turns the same objects, the joined one after them")
+  assert.equal(grown[2], four[4])
+  // The person writes: every report turn is behind their message now, so all of them are the run.
+  const asked = upTo(4, person("p2", "How are the queued ones doing?"))
+  const behind = foldReportRuns(asked, none, grown)
+  assert.deepEqual(drawnRows(behind), ["turn", 4, "turn"])
+  assert.equal(behind[1]!.id, run.id)
+  // Two report turns and then the person's message: the run forms only now, by its first turn's id.
+  const late = upTo(2, person("p2", "How are the queued ones doing?"))
+  assert.deepEqual(drawnRows(foldReportRuns(late, none, foldReportRuns(upTo(2), none))), ["turn", 2, "turn"])
+}
+
 // An answer the person would read is never folded, whatever woke it: long words, or anything but words and calls.
 {
   const long = "The sheet and the chips both measured the inset. ".repeat(8)
@@ -97,4 +140,4 @@ const afternoon: LiveUpdate[] = [
   assert.equal(runPhrase([card("Docs", "done", { apex: true }), card("B", "needs-input")]), "1 Fin asked · 1 Apex replied")
 }
 
-console.log("report runs: a run of wakes is one row, the person's turns and real answers stand, and its words count what needs them first")
+console.log("report runs: a run of wakes is one row, the person's turns, real answers and the newest turn stand, and its words count what needs them first")
