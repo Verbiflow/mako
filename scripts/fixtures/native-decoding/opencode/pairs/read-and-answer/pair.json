@@ -1,14 +1,40 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.1"
   },
   "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10ae4823ffezQyvgzq3aU8h6r",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_df6667a58ffeuzNM535y7n0mEm",
+      "known": [
+        {
+          "side": "-",
+          "line": "thinking: The answer is in notes.md, so read it first.",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: I'll read the notes.",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "tool #1 read read {\"path\":\"/tmp/mako-pair/project/notes.md\"} -> Read file /tmp/mako-pair/project/notes.md, lines 1-2\\n1: The release ships on Friday.\\n2: QA signs off on Thursday. details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "thinking: The notes give a ship day and a sign-off day.",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: The notes say the release ships on Friday, after QA signs off on Thursday.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

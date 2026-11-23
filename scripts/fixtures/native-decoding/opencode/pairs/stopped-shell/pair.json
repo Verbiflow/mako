@@ -1,14 +1,24 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.1"
   },
   "about": "Run `tail -f notes.md` in the shell. A long shell command the person stops while it runs.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10acb889ffeDd3UX8lrqeAYMs",
+      "path": ".local/share/opencode/opencode.db#v2:ses_df664c7c2ffe2fmEWVFnZQOGVI",
       "known": [
+        {
+          "side": "-",
+          "line": "text: Following notes.md.",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "tool #1 shell shell {\"command\":\"tail -f notes.md\"} error -> The release ships on Friday.\\nQA signs off on Thursday.\\n\\n[full output saved to /tmp/mako-pair/home/.local/share/opencode/shell/9696fcb88a1b5bfea37b950f6913196f0f2a1378/sh_2099b389d001gJxsdtF51gsrwO.out]\\n\\nCommand interrupted by the user (shell ID: sh_2099b389d001gJxsdtF51gsrwO).",
+          "reason": ""
+        },
         {
           "side": "+",
           "line": "note: Interrupted",

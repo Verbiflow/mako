@@ -1,14 +1,35 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.1"
   },
   "about": "Run `sleep 3` in the shell, then tell me how it went. A message steered in while a shell command runs, which the harness reads at its next step, then the answer it asked for.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10aca77affe2D7LII2kgmCvbc",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_df664b382ffeUGNSzW74kruaJ2",
+      "known": [
+        {
+          "side": "-",
+          "line": "text: Waiting on the shell.",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "tool #1 shell shell {\"command\":\"sleep 3\"} -> (no output)",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "tool #2 read read {\"path\":\"/tmp/mako-pair/project/notes.md\"} -> Read file /tmp/mako-pair/project/notes.md, lines 1-2\\n1: The release ships on Friday.\\n2: QA signs off on Thursday. details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: The shell finished, and notes.md says the release ships on Friday.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

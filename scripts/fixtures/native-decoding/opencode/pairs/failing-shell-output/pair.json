@@ -1,14 +1,25 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.1"
   },
   "about": "Run exactly this shell command once, with nothing added before or after it: `cat notes.md missing.md`. Then tell me what it printed and how it exited. A shell command that prints output and an error, then exits non-zero.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10ae37a6fferIw7xR9UkGzkKp",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_df6665ef5ffeEeO89my7Tgbesw",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 shell shell {\"command\":\"cat notes.md missing.md\"} error -> The release ships on Friday.\\nQA signs off on Thursday.\\ncat: missing.md: No such file or directory\\n\\nExit code: 1",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: It printed notes.md, then failed on missing.md.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

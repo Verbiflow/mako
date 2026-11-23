@@ -1,14 +1,25 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.1"
   },
   "about": "Ask me with your question tool, once, whether the release should ship on Friday or Monday, then tell me what I picked. Don't run commands. A question with two options, answered with the first, then the answer.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10ae26e6ffe2xVWJ4xwTqLXYU",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_df66647b0ffeCz6sDuobGcGkX0",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 question question {\"questions\":[{\"header\":\"Release day\",\"options\":[{\"description\":\"Keep the day notes.md names.\",\"label\":\"Friday\"},{\"description\":\"Move it past the weekend.\",\"label\":\"Monday\"}],\"question\":\"Which day should the release ship?\"}]} -> User has answered your questions: \"Which day should the release ship?\"=\"Friday\". You can now continue with the user's answers in mind.",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: You picked Friday.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

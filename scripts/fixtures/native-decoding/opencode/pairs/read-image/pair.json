@@ -1,14 +1,25 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.1"
   },
   "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10acc173ffesifOU4EohlgQ4z",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_df664d256ffeQUL3Vz1rkxEiOZ",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 read read {\"path\":\"/tmp/mako-pair/project/swatch.png\"} -> Image read successfully details=[{\"path\":\"/tmp/mako-pair/project/swatch.png\",\"type\":\"location\"}] attachments=swatch.png image/png",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: swatch.png is a solid red square.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

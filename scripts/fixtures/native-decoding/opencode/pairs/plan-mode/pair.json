@@ -1,14 +1,40 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.1"
   },
   "about": "Plan how to move the release to Monday. Read notes.md first; don't change any file. Propose the plan when it's ready. / Thanks. Without changing anything, tell me in one line what the plan's first step is. A plan-mode turn that reads a file and proposes a plan, approved where the harness asks, then a turn in the session's own mode.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10ae22d6ffe74OVyZajjN6fKZ",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_df6664252ffeLJURUF29C2GozY",
+      "known": [
+        {
+          "side": "+",
+          "line": "note: <system-update> You are in Plan mode. Discuss the plan with the user directly in the conversation. Do not create or update plan files unless the user explicitly asks you to; when they do, write them only in: /tmp/mako-pair/home/.opencode/plan Do not modify any other files or ask a subagent to do so. You remain in Plan mode until the user switches agents. If the user asks you to implement changes, do not do so. Tell them they need to switch agents. </system-update>",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "tool #1 read read {\"path\":\"/tmp/mako-pair/project/notes.md\"} -> Read file /tmp/mako-pair/project/notes.md, lines 1-2\\n1: The release ships on Friday.\\n2: QA signs off on Thursday. details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "plan proposed: 1. Change Friday to Monday in notes.md.\\n2. Tell QA the new day.",
+          "reason": ""
+        },
+        {
+          "side": "+",
+          "line": "note: <system-update> You are NO LONGER in Plan mode. The previous Plan restrictions no longer apply. Any Plan mode instructions from earlier in this conversation are no longer active. </system-update>",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: Change Friday to Monday in notes.md.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

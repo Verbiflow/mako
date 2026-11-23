@@ -1,7 +1,7 @@
 {
   "harness": "opencode",
-  "version": "2.3.2",
-  "on": "2026-11-18",
+  "version": "2.4.1",
+  "on": "2026-11-23",
   "searched": "opencode.exe",
   "probed": 1,
   "missing": [],
