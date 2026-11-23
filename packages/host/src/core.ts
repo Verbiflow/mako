@@ -50,7 +50,7 @@ import { makoViews, type ThreadRef } from "@mako/sessions"
 import { unreadCounts } from "@mako/sessions/unread-index"
 import { watchWake } from "./base/wake.js"
 import { busySinceLastAsk } from "./base/machine-load.js"
-import { Advertiser, ADVERTISE_EVERY_MS, linkAdvertisement } from "./base/advertiser.js"
+import { Advertiser, ADVERTISE_EVERY_MS } from "./base/advertiser.js"
 import { deviceProbe, probeCapabilities, type SimulatorFacts } from "./base/capabilities.js"
 import { LentHere } from "./base/lent.js"
 import { operationWords } from "@mako/protocol/borrow-words"
@@ -101,8 +101,6 @@ const HEAD_ASK_AGAIN_MS = 60_000
  * At 30 s it was the one thing still listing the catalog whole: every 30 s, about 170 ms, on a quiet host.
  */
 const CATALOGUED_FRESH_MS = 10 * 60_000
-/** A Fin's notice on its way to the account, as a cloud machine's work lists it: nothing a person stops, and never a wait. */
-const NOTICE_WORK: LifecycleWork = { id: "notice:post", token: "notice:post", title: "Sending a Fin's report to its Apex", provider: "", cwd: "", status: "finishing", stoppable: false }
 /** How often automations look at what's due: a schedule fires within this of its minute. */
 const AUTOMATIONS_TICK_MS = 30_000
 const SavedOrderSchema = z.array(z.string()).catch([])
@@ -1127,11 +1125,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     ...(lending && {
       lending: {
-        // Each link is told again as it enrols, and with what's lent that this host takes its Fins' notices from the account.
-        advertisement: () => {
-          const current = late.advertiser?.current()
-          return current && linkAdvertisement(current)
-        },
+        advertisement: () => late.advertiser?.current(),
         frames: {
           asked: (ask) => void lending.asked(ask),
           lent: (lease) => void lending.lent(lease),
@@ -1339,8 +1333,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     writeHolds,
     // A person's own device reaches their others through the account; a fixture desk reaches none.
     ...(!fixtureDesk && { account: () => late.cloud }),
-    // A cloud machine has no device's sign-in: a Fin on it posts its notices to the account on the machine's credential.
-    ...(config.machineAgentFd !== undefined && { machineNotices: () => machineLink }),
     // Only a proof's isolated host opens cloud Fins (`HostConfig.cloudFinProof`); every other host refuses `place: cloud`.
     ...(!fixtureDesk && config.cloudFinProof && { cloudFinProof: () => late.cloud }),
     finDefaults,
@@ -1500,7 +1492,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
         return { slots: { used: opened.agents?.workingHere() ?? 0, of: capacity.atOnce }, load: capacity.why }
       },
       sinks: [
-        (advertisement) => late.cloud?.advertise?.(linkAdvertisement(advertisement)) ?? false,
+        (advertisement) => late.cloud?.advertise?.(advertisement) ?? false,
         async ({ capabilities, slots }) => {
           await Promise.all((await brokers()).map((broker) => broker.advertise(capabilities, slots)))
         },
@@ -2833,8 +2825,6 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     },
     machineLinked: async (link) => {
       machineLink = link
-      // Linked, or its credential renewed: the notices a Fin here kept for its Apex go now, not at their next retry.
-      if (link) late.conversations?.agents?.accountLinked()
       await catalog.syncRecords(machineRecords(link) ?? null)
     },
     restoreMachineSave: async (link, generation) => machineTracker?.restore(link, generation),
@@ -2855,8 +2845,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
     media: controlVideoMedia(() => control.current()?.previews),
     activeWork: () => application.lifecycle.snapshot().work.length > 0,
     deskBrowsing: () => control.current()?.deskBrowsing() ?? false,
-    // A Fin's notice on its way to the account is work too, though no turn runs: its machine isn't paused mid-post.
-    work: () => (late.conversations?.agents?.posting() ? [...application.lifecycle.snapshot().work, NOTICE_WORK] : application.lifecycle.snapshot().work),
+    work: () => application.lifecycle.snapshot().work,
     sessions,
     lifecycleBlocked: () => application.lifecycle.blocked,
     async stop() {

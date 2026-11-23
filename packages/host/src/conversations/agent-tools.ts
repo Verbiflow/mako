@@ -1,8 +1,8 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
-import { accountCall, machineCall, NOT_THE_PERSON } from "../base/host-client.js"
+import { machineCall, NOT_THE_PERSON } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
-import type { AgentCaller, AgentRefused, AgentsCancelInput, AgentsNoticeCall, AgentsPlaceInput } from "../contracts/agents.js"
+import type { AgentCaller, AgentRefused, AgentsCancelInput, AgentsNoticeInput, AgentsPlaceInput } from "../contracts/agents.js"
 import {
   AGENT_TOOLS,
   ROLE_HIDES,
@@ -43,9 +43,7 @@ export function declareAgentMethods(methods: MethodTable, agents: () => (AgentOp
   // Between hosts, for Fins placed across the person's devices: no door shows these to an agent.
   methods.handle("mako:agents-capabilities", () => agents()?.capabilities() ?? UNAVAILABLE)
   methods.handle("mako:agents-place", (input: AgentsPlaceInput) => agents()?.place(input) ?? UNAVAILABLE)
-  // Who sent a notice is read from how the call came (`accountCall`), never from the notice: only the account's own
-  // delivery may say `from`.
-  methods.handle("mako:agents-notice", (input: AgentsNoticeCall) => agents()?.notice(input, accountCall()) ?? UNAVAILABLE)
+  methods.handle("mako:agents-notice", (input: AgentsNoticeInput) => agents()?.notice(input) ?? UNAVAILABLE)
   methods.handle("mako:agents-cancel", (input: AgentsCancelInput) => agents()?.cancel(input) ?? UNAVAILABLE)
   methods.handle("mako:agents-start", (caller: AgentCaller, input: AgentsStartInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.start(caller, input) ?? UNAVAILABLE)
   methods.handle("mako:agents-move", (caller: AgentCaller, input: AgentsMoveInput) => machineAsPerson(caller) ? MACHINE_AS_PERSON : agents()?.move(caller, input) ?? UNAVAILABLE)

@@ -1015,25 +1015,7 @@ again after 5 s, doubling to 5 minutes, on a job that runs only while one
 waits; it never expires, so a device away for weeks takes them when it's
 back. The Apex's device tells its places it's back when its runtime's link
 opens and when its host starts (`knock`), and a place that hears from it
-sends at once. A Fin on a cloud machine has no device's sign-in to call its
-Apex's device with, so its host posts each report to the account instead
-(`accountNotices`, `machineNoticesPath`, on the machine's credential): the
-account holds it for the Apex's Session and delivers it as the same
-`mako:agents-notice`, saying who sent it (`from`, `tree-notices.ts`).
-Admitted there is taken here, as is `gone`; `rate` and `full` are waited
-out; `conflict`, `invalid`, `forbidden` and `too-large` end that report
-unheard (`agent_notice_refusals`, said in the log alone) and the Fin's later
-reports go on; a 401 waits for the machine's renewed credential. A post
-under way is the machine's work (`Agents.posting`), so it isn't paused with
-one half sent. The Apex's device takes `from` only from the account's own
-actor (`gateway:<its Apex's Thread>`, `accountCall`), never from a device's
-call, and holds a delivery to the start that made the Fin, its child, its
-Apex and its place before it keeps anything (`deliveredAmiss`): one machine
-can post another Fin's child under its own start, and only this device knows
-which start made which. Its link says it takes them in every advertisement
-(`linkAdvertisement`), and its `knock` leaves a cloud machine asleep.
-`scripts/test-fins-notices.ts` holds both ends against the protocol's
-gateway. `agents_list`, `agents_read`, `agents_send`,
+sends at once. `agents_list`, `agents_read`, `agents_send`,
 `agents_answer`, `agents_stop` and `agents_move` on a placed Fin are the
 same host calls on its device with the Apex as their caller (`ApexCaller`);
 a device that can't be reached is said, and list and read fall back to what

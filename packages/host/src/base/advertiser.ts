@@ -1,6 +1,5 @@
 import type { Advertisement } from "@mako/protocol"
 import { satisfies, type Capability, type Grant, type Slots } from "@mako/protocol/borrow"
-import { TREE_NOTICES_CAPABILITY } from "@mako/protocol/tree-notices"
 
 /** This device's room as Fins and lent operations share it: its own Fins at work, out of what it runs at once. */
 export type AdvertisedRoom = { slots: Slots; load?: string }
@@ -30,20 +29,6 @@ export function lentCapabilities(capabilities: readonly Capability[], grants: re
     grant.source.kind === "capable" && (!grant.source.devices || grant.source.devices.some((device) => devices.includes(device))) ? grant.source.requires : []
   )
   return capabilities.filter((capability) => lending.some((query) => satisfies([capability], [query])))
-}
-
-/** The most capabilities one `advertise` frame carries (`runtime-frames.ts`). */
-const FRAME_CAPABILITIES = 64
-
-/**
- * An advertisement as a device's runtime link carries it: what the person lends, and that this host takes its Fins'
- * notices from the account (`TREE_NOTICES_CAPABILITY`), which is no grant's to decide. The account reads that from
- * each link's own frames and carries it to no other link, and a frame without it takes it back, so every frame on
- * every link says it. This device's own brokers are told what's lent alone.
- */
-export function linkAdvertisement(advertisement: Advertisement): Advertisement {
-  const lent = advertisement.capabilities.filter((each) => each.capability !== TREE_NOTICES_CAPABILITY.capability)
-  return { ...advertisement, capabilities: [...lent.slice(0, FRAME_CAPABILITIES - 1), TREE_NOTICES_CAPABILITY] }
 }
 
 /** How often a device says what it can serve though nothing changed, so a broker never holds a stale picture of it. */

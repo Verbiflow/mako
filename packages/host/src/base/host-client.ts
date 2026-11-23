@@ -20,16 +20,6 @@ export function machineCall(client = hostClient()): boolean {
   return client.startsWith(MACHINE_CLIENT)
 }
 
-/**
- * The Thread the account itself acts on in this call: the gateway stamps its own calls as the runtime
- * `gateway:<thread>`, which reaches a host as `gateway:runtime:gateway:<thread>`. Undefined for every other caller: a
- * person's device, a machine, a borrower under any other name, and this host's own windows and doors.
- */
-export function accountCall(client = hostClient()): string | undefined {
-  const own = `${MACHINE_CLIENT}${GATEWAY_CLIENT}`
-  return client.startsWith(own) && client.length > own.length ? client.slice(own.length) : undefined
-}
-
 /** A person-only call's refusal for a machine: its words, the same at every door that refuses it. */
 export const NOT_THE_PERSON = "A machine calls as its Thread's agent, never as the person."
 

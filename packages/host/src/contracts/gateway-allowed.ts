@@ -131,8 +131,7 @@ export const GATEWAY_ALLOWED: ReadonlySet<string> = new Set(ALLOWED)
  * acting on a Thread (`gateway:<thread>`, `GATEWAY_RUNTIME_ALLOWED`), and a simulator borrower under a lease, which
  * stamps its own actor and so may say anything of itself. Neither runs a Thread on this host, so neither may act as a
  * Thread's agent here (`agents-*`, `threads-*`, `settings-act`, …: their caller names a session, and nothing ties
- * it to the runtime), nor as the person: a borrower reaches its simulator, and nothing else. The one `agents-*` call
- * the gateway makes as itself is a notice's delivery, which names no caller (`GATEWAY_RUNTIME`).
+ * it to the runtime), nor as the person: a borrower reaches its simulator, and nothing else.
  */
 const MACHINE_ALLOWED_CALLS: readonly string[] = [
   "mako:simulators-list", "mako:simulators-open", "mako:simulators-act", "mako:simulators-read", "mako:simulators-shot",
@@ -149,27 +148,17 @@ export const MACHINE_REFUSED = "A machine runs no Thread here, so it calls neith
 
 /**
  * The runtime id the gateway itself stamps when it acts on a Thread (`gateway:<thread>`). A borrower writes its own
- * actor, so this is no proof on its own: what it opens is only what the gateway sends a host as itself. To a machine
- * (the gateway's `#callMachine`) that is reading a conversation's state and a Thread's departure or stay. To a device
- * it is a Fin's notice the account held for its Apex's Session (`mako:agents-notice` as `TREE_NOTICE_OP` delivers it),
- * and nothing else of an agent's door, never a start. A host can't tell an operation the gateway made from one a
- * borrower wrote, so the notice rests on the account's own rule that a lease's calls reach a device only as the
- * operations of what it lent (a simulator's): under it a notice with this id is the account's alone. `Agents.notice`
- * takes the account's word on who sent one (`from`) from this caller only, and holds it to the Fin's own start, place
- * and Apex before it keeps anything.
+ * actor, so this is no proof on its own: what it opens is only what the gateway sends a machine as itself (the gateway's
+ * `#callMachine`), reading a conversation's state and a Thread's departure or stay, never a start or an agent's door.
  */
 export const GATEWAY_RUNTIME = "gateway:"
 
-/**
- * What the gateway itself asks of a host: of a machine as it packs a Thread off it, whether a conversation runs, and
- * the move; of a device, to take a notice it held for one of its Apexes.
- */
+/** What the gateway itself asks of a machine as it packs a Thread off it: whether a conversation runs, and the move. */
 export const GATEWAY_RUNTIME_ALLOWED: ReadonlySet<string> = new Set([
   "mako:live-state", "mako:move-depart", "mako:move-stay", "mako:move-stage", "mako:move-arrive", "mako:move-ready", "mako:move-follow",
-  "mako:agents-notice",
 ])
 
-/** Whether a runtime caller (`runtimeId`) may make `channel`: a borrower its simulator, the gateway also its moves and its notices. */
+/** Whether a runtime caller (`runtimeId`) may make `channel`: a borrower its simulator, the gateway also its moves. */
 export function runtimeAllows(channel: string, runtimeId: string): boolean {
   return MACHINE_ALLOWED.has(channel) || (runtimeId.startsWith(GATEWAY_RUNTIME) && GATEWAY_RUNTIME_ALLOWED.has(channel))
 }
