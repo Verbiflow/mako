@@ -3,7 +3,7 @@ import type { Waiting } from "@mako/protocol/attention"
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { z } from "zod"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -21,8 +21,6 @@ import { ACTIVITY_REPORT_MS, conversationShown, FINS_COALESCE_MS, finAsking, nat
 import { namedWork } from "@mako/host/base/event-loop"
 import type { ExternalThreadActivity } from "@mako/host/contracts/host-events-boot"
 import type { CheckoutHead } from "@mako/host/contracts/checkout-heads"
-import { projectFolderOf, worktreeIn } from "@mako/host/contracts/worktree-paths"
-import { WorktreeOrigins } from "@mako/host/threads/worktree-origins"
 import { SessionUploads, sessionTitles, syncStatusOf, uploadScope, UPLOAD_BATTERY_FLOOR, type UploadLinks } from "@mako/host/conversations/session-uploads"
 import { describeSending } from "@mako/host/contracts/sync-status"
 import { followHostLog } from "@mako/host/base/host-log"
@@ -377,50 +375,6 @@ test("a row says what its owner's rail shows of it: the project it's filed under
   heads.set("/Users/ana/api/src", { kind: "branch", name: "main" })
   assert.deepEqual(ownedSessions(sources).find((each) => each.conversation === "c-1")?.project?.head, { kind: "branch", name: "main" }, "once the project's checkout is read, its rows say it")
   assert.equal(conversationShown({ session: { id: "c-3", status: "running" }, working: "running", waitingOn: () => undefined, background: 3 }).background, undefined, "a turn at work is at work, whatever else runs")
-})
-
-test("a row in a worktree made from a worktree is filed under the project, live or not, and when the worktree between them is gone", () => {
-  const trees = "/Users/ana/.mako/worktrees"
-  const base = "0".repeat(40)
-  const thread = (n: number) => ThreadIdSchema.parse(`00000000-0000-4000-8000-00000000010${n}`)
-  // This Mac's Thread worktrees: an Apex's of the project, its Fin's made from that, and a Fin's whose Apex's was removed.
-  const made = [
-    { thread: thread(1), path: `${trees}/api-1/apex`, repoRoot: "/Users/ana/api", project: "/Users/ana/api", branch: "mako/apex", base, createdAt: 0 },
-    { thread: thread(2), path: `${trees}/apex-2/fin`, repoRoot: `${trees}/api-1/apex`, project: `${trees}/api-1/apex`, branch: "mako/fin", base, createdAt: 0 },
-    { thread: thread(3), path: `${trees}/old-3/fin/web`, repoRoot: `${trees}/suite-1/old/web`, project: `${trees}/suite-1/old`, branch: "mako/left", base, createdAt: 0 },
-  ]
-  // What hosts remember of checkouts that are gone: the removed Apex's, and a Fin's of it retired since.
-  const folder = mkdtempSync(join(tmpdir(), "mako-report-origins-"))
-  try {
-    const memory = join(folder, "worktree-origins.json")
-    const seenAt = Date.now()
-    writeFileSync(memory, JSON.stringify({ worktrees: { [`${trees}/suite-1/old`]: { repoRoot: "/Users/ana/suite", seenAt }, [`${trees}/old-3/retired`]: { repoRoot: `${trees}/suite-1/old`, seenAt } } }))
-    const origins = new WorktreeOrigins(memory)
-    const sources: ReportSources = {
-      ...host([
-        summary("c-1", NOW - 1_000, { cwd: `${trees}/apex-2/fin/src` }),
-        summary("c-2", NOW - 2_000, { cwd: `${trees}/old-3/fin` }),
-        summary("c-3", NOW - 3_000, { cwd: `${trees}/old-3/retired` }),
-        summary("c-4", NOW - 4_000, { cwd: "/Users/ana/site" }),
-      ], { native: [nativeRow(51, NOW - 5_000, { cwd: `${trees}/old-3/retired/web`, worktrees: [{ path: `${trees}/old-3/retired`, repoRoot: `${trees}/suite-1/old`, mirrors: true }] })] }),
-      // As the host answers them (`core.ts`): the store's worktrees followed to the project, then what hosts remember.
-      worktree: (at) => {
-        const found = worktreeIn(made, at)
-        return found && { project: projectFolderOf(found, at, made), branch: found.worktree.branch }
-      },
-      origin: (at) => origins.projectFolder(at),
-    }
-    const rows = ownedSessions(sources)
-    const project = (conversation: string) => rows.find((each) => each.conversation === conversation)?.project
-    assert.deepEqual(project("c-1"), { folder: "/Users/ana/api/src" }, "a Fin's worktree, made from its Apex's: the project's same folder")
-    assert.deepEqual(project("c-2"), { folder: "/Users/ana/suite" }, "a Fin's checkout whose Apex's is gone: the project that one mirrored, as hosts remember it")
-    assert.deepEqual(project("c-3"), { folder: "/Users/ana/suite" }, "a conversation in a checkout that's gone itself, which carries no worktrees")
-    assert.deepEqual(project("c-4"), { folder: "/Users/ana/site" }, "a project stays itself")
-    assert.deepEqual(rows.find((each) => each.capture)?.project, { folder: "/Users/ana/suite/web" }, "a terminal's session told what its checkout was made from")
-    assert.deepEqual(rows.find((each) => each.conversation === "c-2")?.worktree, { branch: "mako/left" }, "and its worktree is still its own")
-  } finally {
-    rmSync(folder, { recursive: true, force: true })
-  }
 })
 
 test("an Apex's row waits on its Fin's ask that's the person's, saying what it stood at under it, and its own ask goes first", () => {

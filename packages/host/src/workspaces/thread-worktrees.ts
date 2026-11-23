@@ -8,7 +8,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import type { ThreadStore } from "../threads/index.js"
 import type { ThreadId } from "../contracts/thread-identity.js"
-import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, PROJECT_CHECKOUT_FILE, projectCheckoutText, worktreeCheckout, worktreeSlug } from "../contracts/thread-worktrees.js"
+import { WORKTREE_BRANCH_PREFIX as BRANCH_PREFIX, PROJECT_CHECKOUT_FILE, worktreeCheckout, worktreeSlug } from "../contracts/thread-worktrees.js"
 import type { GitDiff } from "../contracts/git-workspace-search.js"
 import type { ThreadWorktree, ThreadWorktrees as ThreadWorktreeList, WorktreeDetail, WorktreeInventory, WorktreeLanding, WorktreeBranch, WorktreeMergeCheck, WorktreeReview, WorktreeReviewFile, WorktreeStart, WorktreeStartPoint, WorktreeStep, WorktreeBranchPull, WorktreeSummary, WorktreeSummariesHeld, WorktreeSummaryChanges, WorktreeRemoval, WorktreeUpdate, RetiredWorktree, WorktreeRestored } from "../contracts/thread-worktrees.js"
 import { inputsDigest, type PrepareStep } from "./thread-recipe.js"
@@ -2680,9 +2680,7 @@ export class ThreadWorktreeService {
     })
     const spare = existsSync(receipt.path) ? undefined : await this.fromSpare(receipt)
     await mkdir(receipt.path, { recursive: true, mode: 0o700 })
-    // Names the project, as a spare of it does: started from another Thread's checkout (a Fin from its Apex's), `source`
-    // is that checkout, which the repositories' worktrees are still made from, and the project is the one it's of.
-    await writeFile(join(receipt.path, PROJECT_CHECKOUT_FILE), projectCheckoutText(this.homeOf(source)), { mode: 0o600 })
+    await writeFile(join(receipt.path, PROJECT_CHECKOUT_FILE), `${JSON.stringify({ project: source })}\n`, { mode: 0o600 })
     await mapLimit(membersOf(receipt), 4, async (member) => {
       if (existsSync(join(member.path, ".git"))) {
         // A start cut short while placing a spare: its repository may still have the worktree where the spare was, and kept.

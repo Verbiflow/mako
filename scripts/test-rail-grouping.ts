@@ -4,9 +4,9 @@ import type { LinkedCheckout } from "@mako/host/contracts/checkout-heads"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { threadList, withListedRef } from "@mako/host/contracts/thread-list"
 import type { WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
-import { plainPath, projectEnd, projectFolder, projectFolderOf, worktreeAt as worktreeByPass, worktreeIn } from "@mako/host/contracts/worktree-paths"
+import { plainPath, projectFolder, worktreeAt as worktreeByPass, worktreeIn } from "@mako/host/contracts/worktree-paths"
 import { workspaceName } from "../src/lib/format"
-import { coldBefore, folderIsCold, groupThreadFolders, listedThreadFolders, threadFolderKey, visibleThreadFolders, type FolderMap, type ThreadFolder, type ThreadFolderActivity } from "../src/lib/thread-folders"
+import { groupThreadFolders, threadFolderKey, type FolderMap, type ThreadFolder, type ThreadFolderActivity } from "../src/lib/thread-folders"
 import type { ThreadRef } from "../src/lib/types"
 import type { AcpPresence } from "../src/state/acp-presence"
 import { chatFoldersStore, chatGroupOf } from "../src/state/chat-folders"
@@ -360,98 +360,4 @@ test("callers asking for the summaries at once share one ask out and one behind 
   } finally {
     Reflect.deleteProperty(globalThis, "window")
   }
-})
-
-// Worktrees made from worktrees: a Fin's from its Apex's, a Fin's Fin's from that. Each records the folder it was
-// started from, so the project is where following them ends.
-const thread = (n: number) => ThreadIdSchema.parse(`00000000-0000-4000-8000-0000000001${String(n).padStart(2, "0")}`)
-const trees = `${home}/.mako/worktrees`
-const one = (n: number, path: string, repoRoot: string) => ({ thread: thread(n), path, repoRoot, project: repoRoot, branch: `mako/${n}`, base, createdAt: 0 })
-const mirroring = (n: number, checkout: string, project: string) =>
-  ["api", "web"].map((name) => ({ thread: thread(n), path: `${checkout}/${name}`, repoRoot: `${project}/${name}`, project, branch: `mako/${n}`, base, createdAt: 0 }))
-const apexTree = `${trees}/app-1/apex`
-const finTree = `${trees}/apex-2/fin`
-const finFinTree = `${trees}/fin-3/fin-fin`
-const suiteApex = `${trees}/suite-1/apex`
-const suiteFin = `${trees}/apex-4/fin`
-const suiteFinFin = `${trees}/fin-5/fin-fin`
-
-test("a worktree made from a worktree stands for the project, not for the worktree it was made from", () => {
-  const chained = [one(1, apexTree, app), one(2, finTree, apexTree), one(3, finFinTree, finTree), ...mirroring(4, suiteApex, suite), ...mirroring(5, suiteFin, suiteApex), ...mirroring(6, suiteFinFin, suiteFin)]
-  assert.equal(projectFolder(chained, apexTree), app, "one made from the project, as before")
-  assert.equal(projectFolder(chained, `${finTree}/web`), `${app}/web`, "a Fin's worktree, made from its Apex's: the same folder of the project")
-  assert.equal(projectFolder(chained, finFinTree), app, "three deep")
-  assert.equal(projectFolder(chained, suiteFin), suite, "a checkout of several repositories made from another")
-  assert.equal(projectFolder(chained, `${suiteFin}/api/src`), `${suite}/api/src`, "and a folder in one of its repositories")
-  assert.equal(projectFolder(chained, `${suiteFinFin}/notes`), `${suite}/notes`, "three deep, outside its repositories")
-  const found = worktreeIn(chained, `${suiteFinFin}/web`)!
-  assert.equal(projectFolderOf(found, `${suiteFinFin}/web`, chained), `${suite}/web`, "the same from a worktree already found, given its list")
-  assert.equal(projectFolderOf(found, `${suiteFinFin}/web`), `${suiteFin}/web`, "and without the list, what it was made from")
-  assert.equal(projectFolder([one(2, finTree, apexTree)], finTree), apexTree, "a worktree whose own is listed nowhere is as far as the list knows")
-
-  // Records that name each other never loop: the answer is the last folder not yet been through.
-  const circular = [one(1, "/w/a", "/w/b"), one(2, "/w/b", "/w/c"), one(3, "/w/c", "/w/a")]
-  assert.equal(projectFolder(circular, "/w/a/x"), "/w/c/x")
-  assert.equal(projectFolder([one(1, "/w/a", "/w/b"), one(2, "/w/b", "/w/a")], "/w/a"), "/w/b")
-  assert.equal(projectFolder([one(1, "/w/a", "/w/a")], "/w/a"), "/w/a")
-  const long = Array.from({ length: 20 }, (_, index) => one(index, `/deep/${index}`, `/deep/${index + 1}`))
-  assert.equal(projectFolder(long, "/deep/0"), "/deep/8", "and a run of them is followed eight back")
-  let asked = 0
-  assert.equal(projectEnd("/s/0", "/s/1", (folder) => { asked += 1; return `/s/${Number(folder.slice(3)) + 1}` }), "/s/8")
-  assert.equal(asked, 7)
-})
-
-test("the window files a Fin's worktree under its project, whichever of its lists knows each worktree back", () => {
-  const held = worktreesStore.get().worktrees
-  // The Fin's worktree is this Mac's; its Apex's was removed and is known from its sessions alone, as `gone` is.
-  const apexSession = row("apex-gone", 30, suiteApex, { worktrees: [{ path: suiteApex, repoRoot: suite, mirrors: true }] })
-  const finSession = row("fin", 31, `${suiteFin}/api`)
-  const finOfFin = row("fin-fin", 32, finFinTree)
-  // A Fin whose own checkout is gone too, as a host from before told it: made from its Apex's.
-  const told = row("fin-told", 33, `${trees}/apex-4/old`, { worktrees: [{ path: `${trees}/apex-4/old`, repoRoot: suiteApex, mirrors: true }] })
-  worktreesStore.set({ ...worktreesStore.get(), worktrees: [one(1, apexTree, app), one(2, finTree, apexTree), one(3, finFinTree, finTree), ...mirroring(5, suiteFin, suiteApex)] })
-  // The sessions' checkouts are what makes the folder map again, over the worktrees now listed.
-  threadsStore.set({ ...threadsStore.get(), threads: [...refs, apexSession, finSession, finOfFin, told] })
-  try {
-    const { folderMap } = worktreesStore.get()
-    assert.equal(folderMap(finFinTree), app, "three deep in the Thread worktrees")
-    assert.equal(folderMap(`${suiteFin}/api`), `${suite}/api`, "from a Thread worktree to a checkout only sessions remember")
-    assert.equal(folderMap(suiteFin), suite)
-    assert.equal(threadFolderKey(finSession, folderMap), `${suite}/api`)
-    assert.equal(threadFolderKey(finOfFin, folderMap), app)
-    assert.equal(threadFolderKey(told, folderMap), suite, "and from what the host said to what the window knows")
-    const folders = groupThreadFolders({ refs: [apexSession, finSession, finOfFin, told], live: [], pinnedThreads: [], pinnedFolders: [], sortBy: "recent", folderMap })
-    assert.deepEqual(folders.map((folder) => folder.name).sort(), ["api", "app", "suite"], "no worktree's folder is a project of its own")
-  } finally {
-    worktreesStore.set({ ...worktreesStore.get(), worktrees: held })
-    threadsStore.set({ ...threadsStore.get(), threads: refs })
-  }
-})
-
-test("a project with nothing to list waits behind the rest, unless it's the window's, pinned, busy or kept by the person", () => {
-  const now = Date.parse(at(59))
-  const day = 24 * 3600_000
-  const folder = (key: string, fields: Partial<ThreadFolder> = {}): ThreadFolder =>
-    ({ key, name: key, cwd: key, refs: [row(key, 50, key)], current: false, pinned: false, pinRank: -1, latest: at(50), order: at(50), priority: 0, running: 0, needsInput: 0, failed: 0, unread: 0, active: 0, ...fields })
-  const cold = { latest: new Date(now - 8 * day).toISOString(), order: new Date(now - 8 * day).toISOString() }
-  const rowless = { refs: [] }
-  const list = [
-    folder("warm"), folder("cold", cold), folder("rowless", rowless), folder("six-days", { latest: new Date(now - 6 * day).toISOString(), order: new Date(now - 6 * day).toISOString() }),
-    // Its newer rows haven't landed in this window yet, and the place it kept from the last one says it was worked in.
-    folder("rows-to-come", { latest: cold.latest }),
-    folder("cold-current", { ...cold, current: true }), folder("cold-pinned", { ...cold, pinned: true, pinRank: 0 }), folder("cold-placed", cold), folder("cold-unread", { ...cold, unread: 1 }),
-    folder("rowless-current", { ...rowless, current: true, latest: "" }), folder("rowless-pinned", { ...rowless, pinned: true, pinRank: 1 }), folder("rowless-added", rowless),
-    folder("rowless-running", { ...rowless, running: 1, priority: 2 }), folder("rowless-waiting", { ...rowless, needsInput: 1, priority: 5 }), folder("done-only", { refs: [row("done", 50, "done-only")] }),
-  ]
-  const rest = { now, rowless: (each: ThreadFolder) => each.refs.length === 0 || each.key === "done-only", kept: (key: string) => key === "cold-placed" || key === "rowless-added" }
-  const { listed, resting } = listedThreadFolders(list, rest)
-  assert.deepEqual(resting.map((each) => each.key), ["cold", "rowless", "done-only"], "a cold project, one with no Thread to draw, and one whose Threads are all folded away")
-  assert.deepEqual(listed.map((each) => each.key), list.map((each) => each.key).filter((key) => !["cold", "rowless", "done-only"].includes(key)), "the rest stay, in the order they came in")
-  assert.deepEqual(listedThreadFolders(list, undefined), { listed: list, resting: [] }, "a search or a filter lists every folder it found")
-  // The first page is filled from the projects with something to list: a cold one no longer takes a row of it.
-  const many = [folder("cold-1", cold), folder("a"), folder("cold-2", cold), folder("b"), folder("c")]
-  assert.deepEqual(visibleThreadFolders(listedThreadFolders(many, rest).listed, 2).map((each) => each.key), ["a", "b"])
-  assert.equal(folderIsCold(folder("old", cold), coldBefore(now)), true)
-  assert.equal(folderIsCold(folder("running", { ...cold, priority: 2 }), coldBefore(now)), false, "a folder with a status to show isn't cold")
-  assert.equal(folderIsCold(folder("timeless", { latest: "" }), coldBefore(now)), false, "nor one whose rows carry no time")
 })

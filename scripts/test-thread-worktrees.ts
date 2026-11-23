@@ -1321,25 +1321,7 @@ await assert.rejects(worktrees.prepare(randomUUID(), empty, "x"), /no commits ye
   const suiteFin = await own.prepare(suiteFinId, suiteApex.path, "Suite Fin", { kind: "head" })
   assert.equal(suiteFin.spare, true, "a Fin from a project folder's worktree takes one of the project's")
   for (const name of ["web", "api"]) assert.equal(git(join(suiteFin.path, name), "rev-parse", "--abbrev-ref", "HEAD"), suiteFin.branch, `${name} is on its branch`)
-  // Its checkout names the project, as its Apex's does, not the Apex's checkout it was started from; its repositories'
-  // worktrees are still made from the Apex's, at the commit each had out.
-  assert.equal(await mirroredProject(suiteApex.path), folder)
-  assert.equal(await mirroredProject(suiteFin.path), folder, "a Fin's checkout names the project its Apex's is of")
-  assert.equal(await recipePath(gitRunner, join(root, "recipes"), suiteFin.path), await recipePath(gitRunner, join(root, "recipes"), folder), "and reads the project's recipe")
-  await own.attach(suiteFinId)
-  assert.deepEqual(threads.worktrees().filter((worktree) => worktree.path.startsWith(`${suiteFin.path}/`)).map(({ path, repoRoot, project }) => ({ path, repoRoot, project })).sort((a, b) => a.path.localeCompare(b.path)), [
-    { path: join(suiteFin.path, "api"), repoRoot: join(suiteApex.path, "api"), project: suiteApex.path },
-    { path: join(suiteFin.path, "web"), repoRoot: join(suiteApex.path, "web"), project: suiteApex.path },
-  ], "its rows still say what it was made from")
-  writeFileSync(join(suiteFin.path, "web", "work.txt"), "the Fin's\n")
-  git(join(suiteFin.path, "web"), "add", ".")
-  git(join(suiteFin.path, "web"), "commit", "-q", "-m", "the Fin's work")
-  const finOfFinId = randomUUID()
-  started(finOfFinId)
-  const finOfFin = await own.prepare(finOfFinId, suiteFin.path, "Fin of the Fin", { kind: "head" })
-  assert.equal(await mirroredProject(finOfFin.path), folder, "and a Fin's Fin's, three back")
-  assert.equal(readFileSync(join(finOfFin.path, "web", "work.txt"), "utf8"), "the Fin's\n", "started at what the Fin had out")
-  for (const id of [finOfFinId, suiteFinId, suiteApexId]) await own.abandon(id).catch(() => undefined)
+  for (const id of [suiteFinId, suiteApexId]) await own.abandon(id).catch(() => undefined)
   await own.settled()
 }
 

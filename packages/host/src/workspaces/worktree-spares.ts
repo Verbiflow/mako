@@ -5,7 +5,7 @@ import { basename, dirname, isAbsolute, join, relative } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
 import { z } from "zod"
 import { AppKeySchema } from "../contracts/thread-environments.js"
-import { PROJECT_CHECKOUT_FILE, projectCheckoutText } from "../contracts/thread-worktrees.js"
+import { PROJECT_CHECKOUT_FILE } from "../contracts/thread-worktrees.js"
 import { projectRepositories } from "../git/index.js"
 import { folderApp } from "./thread-environment.js"
 import { inputsDigest } from "./thread-recipe.js"
@@ -496,7 +496,7 @@ export class WorktreeSpares {
       if (members) {
         await mkdir(spare.path, { mode: 0o700 })
         // Names the project, so the spare reads its recipe as a Thread's checkout of it does.
-        await writeFile(join(spare.path, PROJECT_CHECKOUT_FILE), projectCheckoutText(repoRoot), { mode: 0o600 })
+        await writeFile(join(spare.path, PROJECT_CHECKOUT_FILE), `${JSON.stringify({ project: repoRoot })}\n`, { mode: 0o600 })
       }
       // A project folder's repositories each have their own turn for what their checkouts share, so their worktrees
       // are made side by side, two at a time: one after another, a spare of two repositories took the sum of both.

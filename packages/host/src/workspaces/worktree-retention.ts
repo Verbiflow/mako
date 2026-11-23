@@ -5,7 +5,7 @@ import { z } from "zod"
 import type { ThreadId } from "../contracts/thread-identity.js"
 import type { ReclaimItem } from "../contracts/storage.js"
 import type { ThreadWorktree, WorktreeRetentionReport, WorktreeRetentionSettings, WorktreeRetirement } from "../contracts/thread-worktrees.js"
-import { PROJECT_CHECKOUT_FILE, projectCheckoutText, worktreeCheckout } from "../contracts/thread-worktrees.js"
+import { PROJECT_CHECKOUT_FILE, worktreeCheckout } from "../contracts/thread-worktrees.js"
 
 export const WORKTREE_RETENTION_MS = 60 * 60_000
 export const MIN_RETIREMENT_PASS_MS = 10 * 60_000
@@ -22,9 +22,6 @@ export const DEFAULT_WORKTREE_RETENTION: WorktreeRetentionSettings = { mode: "pr
  * be dropped by its next save, turning removal back on. Absent, they're retired.
  */
 const FinishedFinsSchema = z.object({ keep: z.boolean() })
-const ProjectCheckoutSchema = z.object({ project: z.string().min(1) })
-/** A path is at most a few KB; a larger file by that name is nothing Mako wrote, and isn't read. */
-const MARKER_MAX_BYTES = 16 * 1024
 /** Why a finished Fin's checkout of several repositories stays: only one repository's worktree is made again by itself. */
 const SEVERAL_REPOSITORIES = "A checkout of several repositories isn't made again by itself, so a finished Fin's is kept."
 
@@ -330,10 +327,8 @@ export class WorktreeRetention {
           const inRepository = members.some(member => inside(member.path, file) || (entry.isDirectory() && (member.path === file || inside(file, member.path))))
           let marker = false
           if (!inRepository && entry.isFile() && file === join(path, PROJECT_CHECKOUT_FILE)) {
-            // Mako's own file, to the byte, whichever project it names: a checkout started from another Thread's is
-            // recorded as made from that one (`first.project`) and names the project that one is of.
-            const text = (await lstat(file)).size <= MARKER_MAX_BYTES ? await readFile(file, "utf8") : ""
-            marker = namesProject(text)
+            const expected = `${JSON.stringify({ project: first.project })}\n`
+            marker = (await lstat(file)).size === Buffer.byteLength(expected) && await readFile(file, "utf8") === expected
           }
           if (!inRepository && !marker) result.checkoutSkip = "Files outside the repositories keep this project checkout."
           if (!entry.isSymbolicLink()) {
@@ -380,17 +375,6 @@ export class WorktreeRetention {
   }
 
   #now(): number { return (this.#deps.now ?? Date.now)() }
-}
-
-/** Whether `text` is what Mako writes in a project checkout's `PROJECT_CHECKOUT_FILE` for some project, to the byte. */
-function namesProject(text: string): boolean {
-  let named: ReturnType<typeof ProjectCheckoutSchema.safeParse>
-  try {
-    named = ProjectCheckoutSchema.safeParse(JSON.parse(text))
-  } catch {
-    return false
-  }
-  return named.success && text === projectCheckoutText(named.data.project)
 }
 
 function inside(root: string, path: string): boolean {

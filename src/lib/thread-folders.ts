@@ -64,52 +64,6 @@ export function visibleThreadFolders(
   return folders.filter((folder) => visible.has(folder.key))
 }
 
-/** Folders quiet longer than this start out collapsed, and wait behind "N more folders". */
-const COLD_MS = 7 * 24 * 3600_000
-
-/** The time a folder's newest row must be older than for the folder to be cold, written as the rows' times are, so they compare as text. */
-export function coldBefore(now: number): string {
-  return new Date(now - COLD_MS).toISOString()
-}
-
-/** A cold folder: nothing in it moved since `before` (`coldBefore`), it isn't the window's, and nothing in it has a status to show. */
-export function folderIsCold(folder: ThreadFolder, before: string): boolean {
-  return !folder.current && !folder.priority && folder.latest !== "" && folder.latest < before
-}
-
-/** What says a folder has nothing to list, beyond what the folder holds itself. */
-export interface FolderRest {
-  now: number
-  /** Whether no row of the folder would be drawn: its Threads all pinned or folded as Done, and no conversation in it. */
-  rowless(folder: ThreadFolder): boolean
-  /** Whether the person keeps this folder listed themselves: one they placed by hand, or just added. */
-  kept(key: string): boolean
-}
-
-/**
- * Projects' folders in two, each in the order given: those listed, and those that wait behind "N more folders"
- * because they would draw a header and nothing under it, cold (`folderIsCold`) or without a row. The window's own
- * folder, a pinned one, one holding a Thread that is working, waiting on you or unread, and one the person keeps
- * (`FolderRest.kept`) are listed whatever they hold. Without `rest` every folder is listed: a search or a filter
- * shows what it found.
- *
- * A folder waits as cold only when the person last worked there (`order`, its place in the list) that long ago too.
- * A window has that from its first paint (`savedFolderRanks`), while `latest` is read from rows that land in steps:
- * by `latest` alone a project left the list until its newer rows came, and every project under it moved twice.
- */
-export function listedThreadFolders(folders: readonly ThreadFolder[], rest: FolderRest | undefined) {
-  const listed: ThreadFolder[] = []
-  const resting: ThreadFolder[] = []
-  const before = rest ? coldBefore(rest.now) : ""
-  for (const folder of folders) {
-    const stays =
-      !rest || folder.current || folder.pinned || folderIsBusy(folder) || rest.kept(folder.key) ||
-      !((folderIsCold(folder, before) && folder.order < before) || rest.rowless(folder))
-    ;(stays ? listed : resting).push(folder)
-  }
-  return { listed, resting }
-}
-
 function normalizedPath(path: string | undefined): string {
   const normalized = (path ?? "").replaceAll("\\", "/").replace(/\/+$/, "")
   return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized

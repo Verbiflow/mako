@@ -8,7 +8,7 @@ import { mock } from "node:test"
 import { Git } from "@mako/git"
 import type { AgentRefused } from "@mako/host/contracts/agents"
 import { ThreadIdSchema, type ThreadId } from "@mako/host/contracts/thread-identity"
-import { PROJECT_CHECKOUT_FILE, projectCheckoutText, type ThreadWorktree, type WorktreeRestored } from "@mako/host/contracts/thread-worktrees"
+import type { ThreadWorktree, WorktreeRestored } from "@mako/host/contracts/thread-worktrees"
 import { FINISHED_CLOSE_MS } from "@mako/host/conversations/agents"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import { MIN_RETIREMENT_PASS_MS, WorktreeRetention, WorktreeRetentionSettingsSchema } from "@mako/host/workspaces/worktree-retention"
@@ -152,17 +152,10 @@ try {
     await utimes(join(several, "api", "source.ts"), old, old)
     const member: ThreadWorktree = { thread, path: join(several, "api"), project: join(root, "pass", "projects"), repoRoot: join(root, "pass", "projects", "api"), branch: "fin/work", base: "a", createdAt: 1 }
     rows = [member, row(own, person)]
-    // Mako's own file in it is no work of anyone's, whichever project it names: a Fin's checkout made from its Apex's
-    // is recorded as made from that one and names the project.
-    await writeFile(join(several, PROJECT_CHECKOUT_FILE), projectCheckoutText(join(root, "pass", "home")))
     const report = await run()
     assert.deepEqual(removed, [])
     assert.match(report.checkouts.find((each) => each.path === several)?.checkoutSkip ?? "", /several repositories/)
     console.log("kept: a checkout of several repositories")
-    await writeFile(join(several, PROJECT_CHECKOUT_FILE), `${JSON.stringify({ project: join(root, "pass", "home"), notes: "mine" })}\n`)
-    await utimes(join(several, PROJECT_CHECKOUT_FILE), old, old)
-    assert.match((await plan(several)).checkoutSkip ?? "", /Files outside the repositories/, "a file by that name that isn't what Mako writes is someone's")
-    await rm(join(several, PROJECT_CHECKOUT_FILE))
     rows = [row(path, thread), row(own, person)]
 
     // The person's switch keeps them all, in a file of its own; the settings beside it stay as a build from before reads them.

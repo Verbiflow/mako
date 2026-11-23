@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { repoAvatar } from "@mako/host/git/github"
 import { AVATAR_HUES, avatarHue, monogram, titleTone } from "@/lib/rail-marks"
 import { githubOwner } from "@/state/repo-avatars"
-import { orderByHand, placeProject, placedByHand, projectOrderStore, UNPLACED } from "@/state/project-order"
+import { orderByHand, placeProject, projectOrderStore } from "@/state/project-order"
 import { clearPicked, pickRange, railSelectionStore, togglePicked, type PickedRow } from "@/state/rail-selection"
 import { phoneLinked } from "@/state/setup-checklist"
 import { failedAutomationRuns } from "@/state/automations"
@@ -45,31 +45,13 @@ try {
   rmSync(avatars, { recursive: true, force: true })
 }
 
-// Projects: each one the person dragged holds the place it was dropped at; the rest fill the other places as worked in.
+// Projects: the person's order first; the rest as worked in; a placed project not listed now keeps its place.
 const folders = ["a", "b", "c", "d"].map((key) => ({ key }))
-const keys = (list: readonly { key: string }[]) => list.map((folder) => folder.key)
-assert.deepEqual(keys(orderByHand(folders, [])), ["a", "b", "c", "d"])
-// A list from before places were kept one project at a time reads as it always did: its projects first, in its order.
-assert.deepEqual(keys(orderByHand(folders, ["c", "gone", "a"])), ["c", "a", "b", "d"])
-assert.deepEqual([...placedByHand(["c", "gone", "a"])], [], "and names no project the person placed themselves")
-projectOrderStore.set({ order: ["a", "b", "c", "d", "gone"] })
-assert.deepEqual(placeProject("d", "b", ["a", "b", "c", "d"]), [UNPLACED, "d", UNPLACED], "dropped before b: d holds the second place, and no other project is placed, though the list before placed them all")
-assert.deepEqual(keys(orderByHand(folders, projectOrderStore.get().order)), ["a", "d", "b", "c"], "the list reads as it was left")
-assert.deepEqual(keys(orderByHand(["c", "b", "a", "d"].map((key) => ({ key })), projectOrderStore.get().order)), ["c", "d", "b", "a"], "and the projects never dragged go on ordering as they are worked in, around it")
-assert.deepEqual(placeProject("a", null, ["a", "d", "b", "c"]), ["d", UNPLACED, UNPLACED, "a", UNPLACED], "dropped last: d keeps the place it now shows at, and a takes the fourth")
-assert.deepEqual([...placedByHand(projectOrderStore.get().order)].sort(), ["a", "d"])
-assert.deepEqual(keys(orderByHand(["c", "b", "a", "d"].map((key) => ({ key })), projectOrderStore.get().order)), ["d", "c", "b", "a"])
-assert.deepEqual(keys(orderByHand(["c", "b", "a", "d", "e", "f"].map((key) => ({ key })), projectOrderStore.get().order)), ["d", "c", "b", "a", "e", "f"], "a project worked in for the first time takes a place nobody chose")
-// One placed earlier and not shown now keeps a place after the ones shown; a place with no project left to fill it is passed over.
-assert.deepEqual(placeProject("c", "d", ["d", "c"]), ["c", "d", "a", UNPLACED])
-assert.deepEqual(keys(orderByHand(folders, ["c", "d", "a", UNPLACED])), ["c", "d", "a", "b"])
-assert.deepEqual(keys(orderByHand(folders, [UNPLACED, "gone", "c", "c", UNPLACED, UNPLACED, UNPLACED, UNPLACED, "b"])), ["a", "c", "d", "b"], "a project that's gone or named twice takes no place")
-projectOrderStore.set({ order: [] })
-assert.deepEqual(placeProject("b", "a", ["a", "b"]), ["b", UNPLACED], "the first drag")
-projectOrderStore.set({ order: Array.from({ length: 400 }, (_, index) => (index === 399 ? UNPLACED : `p-${index}`)) })
-const full = placeProject("new", "p-0", ["p-0"])
-assert.deepEqual([full.length, full[0], full.at(-1)], [400, "new", UNPLACED], "never more than the preference holds, and still told from a list from before")
-projectOrderStore.set({ order: [] })
+assert.deepEqual(orderByHand(folders, []).map((folder) => folder.key), ["a", "b", "c", "d"])
+assert.deepEqual(orderByHand(folders, ["c", "gone", "a"]).map((folder) => folder.key), ["c", "a", "b", "d"])
+projectOrderStore.set({ order: ["gone"] })
+assert.deepEqual(placeProject("d", "b", ["a", "b", "c", "d"]), ["a", "d", "b", "c", "gone"], "dropped before b, every shown project placed, the unseen kept after")
+assert.deepEqual(placeProject("a", null, ["a", "d", "b", "c"]), ["d", "b", "c", "a", "gone"], "dropped last")
 
 // Rows picked: ⌘ toggles one, ⇧ picks from the last picked through the clicked, in the rail's order.
 const rows: PickedRow[] = ["r1", "r2", "r3", "r4", "r5"].map((key) => ({ key, thread: `t-${key}`, target: { kind: "live", id: key } }))

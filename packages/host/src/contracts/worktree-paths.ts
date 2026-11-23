@@ -79,51 +79,14 @@ export function worktreeIn<Worktree extends { path: string; repoRoot?: string; p
   return undefined
 }
 
-/** How many worktrees back a project is looked for: a Fin's worktree is made from its Apex's, and a Fin's Fin's from that. */
-const PROJECT_HOPS = 8
-
-/**
- * The project `folder` is in, where `folder` is already what `path` stands for and `step` says what a folder stands
- * for in turn (undefined for one in no worktree). A worktree made from another worktree names that one, so one step
- * finds a worktree, not the project. It stops at `PROJECT_HOPS`, and before a folder it has been through, so records
- * that name each other end at the last new one.
- */
-export function projectEnd(path: string | undefined, folder: string, step: (folder: string) => string | undefined): string {
-  let seen: string[] | undefined
-  for (let hops = 1; hops < PROJECT_HOPS; hops += 1) {
-    const next = step(folder)
-    if (next === undefined || next === folder || next === path || seen?.includes(next)) break
-    ;(seen ??= []).push(folder)
-    folder = next
-  }
-  return folder
-}
-
-type Found = { worktree: { path: string; repoRoot: string; project?: string }; inside: string }
-
-/** The same folder in what a worktree was made from: its main checkout, or the project folder its checkout mirrors. */
-const madeFrom = ({ worktree, inside }: Found, path: string | undefined) =>
-  pathInside(worktree.path, path ?? "") ? `${worktree.repoRoot}${inside}` : `${worktree.project}${inside}`
-
-/** The same folder in the project, when `path` is in one of `worktrees`: in the main checkout, however many worktrees back that is. */
+/** The same folder in the main checkout, when `path` is in one of `worktrees`. */
 export function projectFolder(worktrees: readonly { path: string; repoRoot: string; project?: string }[] | undefined, path: string | undefined): string | undefined {
   const found = worktreeAt(worktrees, path)
-  return found && projectEnd(path, madeFrom(found, path), (folder) => {
-    const up = worktreeAt(worktrees, folder)
-    return up && madeFrom(up, folder)
-  })
+  return found && projectFolderOf(found, path)
 }
 
-/**
- * `projectFolder` of a worktree already found for `path` (`worktreeAt`, `worktreeIn`): no second look for it. Given
- * the indexed list it was found in, a worktree made from another of them is followed to the project; without, the
- * answer is what this worktree was made from.
- */
-export function projectFolderOf(found: Found, path: string | undefined, worktrees?: readonly { path: string; repoRoot: string; project?: string }[]): string {
-  const folder = madeFrom(found, path)
-  if (!worktrees) return folder
-  return projectEnd(path, folder, (at) => {
-    const up = worktreeIn(worktrees, at)
-    return up && madeFrom(up, at)
-  })
+/** `projectFolder` of a worktree already found for `path` (`worktreeAt`, `worktreeIn`): no second look for it. */
+export function projectFolderOf(found: { worktree: { path: string; repoRoot: string; project?: string }; inside: string }, path: string | undefined): string {
+  const { worktree, inside } = found
+  return pathInside(worktree.path, path ?? "") ? `${worktree.repoRoot}${inside}` : `${worktree.project}${inside}`
 }

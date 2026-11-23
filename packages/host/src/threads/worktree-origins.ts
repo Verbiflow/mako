@@ -5,7 +5,6 @@ import { dirname, join, resolve } from "node:path"
 import { z } from "zod"
 import type { LinkedCheckout } from "../contracts/checkout-heads.js"
 import { PROJECT_CHECKOUT_FILE } from "../contracts/thread-worktrees.js"
-import { projectEnd } from "../contracts/worktree-paths.js"
 import { gitDirPointer, pointedCheckout, spelledLike } from "../base/checkout-location.js"
 import { JsonObjectSchema, JsonValueSchema, jsonStoreAccess, unknownFields, type JsonObject } from "@mako/sessions/store-format"
 
@@ -115,10 +114,7 @@ function parseRemembered(text: string | null): Map<string, Remembered> {
  * in `file`, shared by every host of this user, so the sessions of a
  * worktree that was since removed still file under its project. A Thread's
  * checkout of a project folder holding several repositories is answered the
- * same way, marked `mirrors`, though Git has no worktree there. One made
- * from another Thread's checkout names that checkout, on disk and in `file`;
- * the answer names the project that one is of (`projectEnd`), read from
- * `file` where the checkout between them is gone.
+ * same way, marked `mirrors`, though Git has no worktree there.
  */
 export class WorktreeOrigins {
   private readonly file: string
@@ -134,28 +130,6 @@ export class WorktreeOrigins {
 
   /** The worktree holding `folder`, or undefined for a main checkout, no repository, or a folder never known as a worktree. */
   of(folder: string): LinkedCheckout | undefined {
-    const linked = this.madeFrom(folder)
-    if (!linked) return undefined
-    let mirrors = linked.mirrors
-    const repoRoot = projectEnd(linked.path, linked.repoRoot, (root) => {
-      const up = this.madeFrom(root)
-      if (!up) return undefined
-      // A checkout between them that's gone can't be read for what it mirrored; the one it was made from can.
-      mirrors ??= up.mirrors
-      return `${up.repoRoot}${root.slice(up.path.length)}`
-    })
-    if (repoRoot === linked.repoRoot) return linked
-    return mirrors ? { path: linked.path, repoRoot, mirrors } : { path: linked.path, repoRoot }
-  }
-
-  /** The same folder in the project, when `folder` is in a worktree or was in one that's since gone. */
-  projectFolder(folder: string): string | undefined {
-    const linked = this.of(folder)
-    return linked && `${linked.repoRoot}${folder.slice(linked.path.length)}`
-  }
-
-  /** `of`, one worktree back: the folder this one was made from, which is another worktree when its Thread was started in one. */
-  private madeFrom(folder: string): LinkedCheckout | undefined {
     const known = this.directories.get(folder)
     if (known !== undefined) return known ?? undefined
     const gone = this.missing.get(folder)

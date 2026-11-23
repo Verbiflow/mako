@@ -77,11 +77,6 @@ export type ReportSources = {
    */
   worktree?(folder: string): { project: string; branch: string } | undefined
   /**
-   * The same folder in the project, for a folder in a worktree no `worktree` or row names it by: one a tool other than
-   * Mako made, or one that's gone, as hosts remember it (`WorktreeOrigins.projectFolder`).
-   */
-  origin?(folder: string): string | undefined
-  /**
    * What a project folder has checked out, as far as this host has read it (`CheckoutHeadService.known`); undefined
    * until then, and the source starts reading it, so a later report says it.
    */
@@ -292,9 +287,7 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     const fields: Pick<ReportedSession, "project" | "worktree" | "lineage" | "repository"> = {}
     if (folder) {
       const made = sources.worktree?.(folder)
-      const named = made?.project ?? projectFolder(worktrees, folder) ?? folder
-      // A conversation's row carries no worktrees, and a worktree made from one since removed names a folder that's gone.
-      const project = sources.origin?.(named) ?? named
+      const project = made?.project ?? projectFolder(worktrees, folder) ?? folder
       const head = sources.head?.(project)
       fields.project = head ? { folder: project, head: listedHead(head) } : { folder: project }
       if (made) fields.worktree = { branch: made.branch }
