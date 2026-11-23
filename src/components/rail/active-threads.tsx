@@ -142,6 +142,18 @@ export const LiveAgentRow = memo(function LiveAgentRow({
     cwd: presence.cwd,
     archiveTargets,
   }
+  const mark = (
+    <ThreadMark
+            status={status}
+            state={!otherSession && presence.status === "starting" ? "starting" : unreadMark ? "unread" : undefined}
+            harness={markHarness}
+            lit={lit}
+            cut={lit ? "var(--raised)" : undefined}
+            label={otherSession ? undefined : label}
+            size={18}
+          />
+  )
+
   return (
     <>
     <ThreadContextMenu {...menu}>
@@ -190,18 +202,8 @@ export const LiveAgentRow = memo(function LiveAgentRow({
         className={cn("pressable", ROW_SURFACE)}
       >
         {apex && thread ? (
-          <ApexFold thread={thread} open={fins.open} label={otherSession ? threadStatusLabel(status, markHarness) : label} />
-        ) : (
-          <ThreadMark
-            status={status}
-            state={!otherSession && presence.status === "starting" ? "starting" : unreadMark ? "unread" : undefined}
-            harness={markHarness}
-            lit={lit}
-            cut={lit ? "var(--raised)" : undefined}
-            label={otherSession ? undefined : label}
-            size={18}
-          />
-        )}
+          <ApexFold thread={thread} open={fins.open} label={otherSession ? threadStatusLabel(status, markHarness) : label}>{mark}</ApexFold>
+        ) : mark}
         <span data-row-title className={cn("rail-fade min-w-0 flex-1 text-ui", titleTone(lit, status, { work, unread: unreadMark }))}>
           {title}
         </span>

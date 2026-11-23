@@ -126,11 +126,19 @@ async function checkWindow() {
   assert.equal(Math.round(top.height), 28, "top rows are 28 px")
   console.log("PASS: quiet top rows, Setup hidden, no Pull requests count")
 
-  // 2. Projects: an avatar each, the GitHub owner's where its origin is on GitHub; the header's controls under the pointer only.
+  // 2. Projects: an avatar each, the GitHub owner's only where no other project here is that owner's (the fixture's
+  // mako and api are one owner's, its site another's); the header's controls under the pointer only.
   await until(`document.querySelector('[data-project-avatar="github"] img') !== null`, "the GitHub owner's avatar")
-  const avatars = await evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-project-avatar]')].map((avatar) => ({ kind: avatar.dataset.projectAvatar, text: avatar.textContent, size: avatar.getBoundingClientRect().width }))`)
-  assert.ok(avatars.some((avatar) => avatar.kind === "monogram" && /^[A-Z0-9]$/.test(avatar.text)), `a project off GitHub wears its monogram: ${JSON.stringify(avatars)}`)
+  const avatars = await evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-folder-toggle]')].map((toggle) => { const avatar = toggle.querySelector('[data-project-avatar]'); return { name: toggle.querySelector('.rail-fade')?.textContent.trim(), kind: avatar?.dataset.projectAvatar, text: avatar?.textContent, size: avatar?.getBoundingClientRect().width } }).filter((each) => each.kind)`)
+  const avatarOf = (name) => avatars.find((avatar) => avatar.name === name)
+  assert.equal(avatarOf("site")?.kind, "github", `a project alone under its owner wears the owner's picture: ${JSON.stringify(avatars)}`)
+  assert.deepEqual([avatarOf("mako"), avatarOf("api")].map((avatar) => [avatar?.kind, avatar?.text]), [["monogram", "M"], ["monogram", "A"]], `two projects of one owner are told apart by their own letters: ${JSON.stringify(avatars)}`)
   assert.ok(avatars.every((avatar) => avatar.size === 16), "avatars are 16 px")
+  // A square is a project's alone, and its Threads sit a step in from it: the list's two shapes and two columns are its two kinds of row.
+  const columns = await evaluate(`(() => { const left = (node) => Math.round(node.getBoundingClientRect().left); const projects = [...document.querySelectorAll('.thread-jump-scope [data-folder-toggle] [data-project-avatar]')].map(left); const threads = [...document.querySelectorAll('.thread-jump-scope [data-thread-row][data-thread-indent]')].map((row) => left(row.firstElementChild)); return { projects: [...new Set(projects)], threads: [...new Set(threads)], squares: document.querySelectorAll('.thread-jump-scope [data-thread-row] .rail-avatar, .thread-jump-scope [data-fin-row] .rail-avatar').length } })()`)
+  assert.equal(columns.projects.length, 1, `projects share one column: ${JSON.stringify(columns)}`)
+  assert.ok(columns.threads.length >= 1 && columns.threads.every((x) => x >= columns.projects[0] + 10), `a Thread's mark starts right of its project's: ${JSON.stringify(columns)}`)
+  assert.equal(columns.squares, 0, "no Thread or Fin wears a square")
   const actionsAt = () => evaluate(`getComputedStyle(document.querySelector('[data-rail-header-actions]')).opacity`)
   await move(900, 500)
   await pause(250)
@@ -285,9 +293,9 @@ async function checkWindow() {
   await press("Escape", "Escape", 27)
   console.log("PASS: N to resolve opens the footer's lines")
 
-  // 12. An Apex: its avatar, folded to the Fins that need the person with their asks; open with →, every Fin in play.
+  // 12. An Apex: a Thread's fin, folded to the Fins that need the person with their asks; open with →, every Fin in play.
   await load("&app=apex")
-  await until(`document.querySelector('[data-apex-row] [data-apex-avatar]') !== null`, "the Apex's avatar")
+  await until(`document.querySelector('[data-apex-row] [data-apex-mark]') !== null`, "the Apex's fin")
   const folded = await evaluate(`({ fins: document.querySelectorAll('[data-fin-row]').length, asking: document.querySelectorAll('[data-asking-fin]').length, line: document.querySelector('[data-asking-line]')?.textContent, branch: document.querySelector('[data-fin-row] .rail-branch') !== null })`)
   assert.ok(folded.asking > 0 && folded.fins === folded.asking, `folded, only the Fins that need you: ${JSON.stringify(folded)}`)
   assert.ok(folded.line && folded.branch, "with their asks, hung on the Apex's line")

@@ -133,13 +133,20 @@
     @apply px-4 pb-1 text-label font-medium text-faint;
   }
   /*
-   * A row in the desk's rail's anatomy at touch size: one line, its 20px mark (a Thread's fin, an Apex's tile), its
+   * A row in the desk's rail's anatomy at touch size: one line, its 20px mark, a Thread's fin, its
    * title, and its end (Fins at work, the place, the Status, the time). 52px on a phone, 44px in a tablet's rail.
    */
   .web-row {
     @apply gap-3 py-1.5 pr-4 pl-4;
     min-height: 52px;
     transition: background-color 220ms ease;
+  }
+  /* A project's Threads sit a step in from it, as on the desk's rail (`.rail-nest`). */
+  .web-nest {
+    padding-left: 12px;
+  }
+  [data-list="rail"] .web-rows.web-nest {
+    padding-left: 20px;
   }
   .web-row-mark {
     @apply flex w-5 shrink-0 items-center justify-center;
@@ -149,7 +156,7 @@
   [data-list="rail"] .web-row-mark {
     --lm-cut: var(--shell);
   }
-  /* An Apex's tile folds and unfolds its Fins: a thumb's target round the 20px tile, the row's mark in place. */
+  /* An Apex's fin folds and unfolds its Fins: a thumb's target round the 20px mark, the row's mark in place. */
   .web-apex-fold {
     @apply relative -my-1.5 self-stretch;
   }
@@ -164,7 +171,7 @@
     @apply -my-2 flex h-9 w-7 items-center justify-center text-faint;
   }
   /*
-   * An Apex's Fins hang on a 1px line from its tile (`.rail-branch`, the desk's): the stem from under the tile to the
+   * An Apex's Fins hang on a 1px line from its fin (`.rail-branch`, the desk's): the stem from under the fin to the
    * row's foot, then a square elbow into each Fin. The line's x is the tile's centre in each form.
    */
   .web-list {
@@ -227,10 +234,10 @@
   /* A project's Done Threads past three days, as one line under its rows, opened in place. */
   .web-done-line {
     @apply flex h-10 w-full items-center gap-2 pr-4 text-left text-label text-faint;
-    padding-left: 48px;
+    padding-left: 60px;
   }
   [data-list="rail"] .web-done-line {
-    padding-left: 46px;
+    padding-left: 58px;
   }
   /* Finish setting up, at the top of a phone's list: raised on the list, its steps a thumb's height. */
   .web-setup-card {

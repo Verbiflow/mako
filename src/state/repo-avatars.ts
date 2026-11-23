@@ -56,5 +56,11 @@ export function askRepoAvatar(folder: string): void {
 
 export function useRepoAvatar(folder: string): string | undefined {
   useEffect(() => askRepoAvatar(folder), [folder])
-  return useRepoAvatars((state) => state.byFolder[folder] ?? undefined)
+  // One owner's picture on several projects tells none of them apart: only a project alone under its owner wears it.
+  return useRepoAvatars((state) => {
+    const image = state.byFolder[folder]
+    if (!image) return undefined
+    for (const other in state.byFolder) if (other !== folder && state.byFolder[other] === image) return undefined
+    return image
+  })
 }

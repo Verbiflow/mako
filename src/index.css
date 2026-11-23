@@ -2986,17 +2986,9 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   font-weight: 640;
   line-height: 1;
 }
-.rail-avatar-solid {
-  --avatar-bg: oklch(0.52 0.085 var(--avatar-hue));
-  --avatar-ink: oklch(0.97 0.01 var(--avatar-hue));
-}
 .light .rail-avatar {
   --avatar-bg: oklch(0.9 0.04 var(--avatar-hue));
   --avatar-ink: oklch(0.42 0.08 var(--avatar-hue));
-}
-.light .rail-avatar-solid {
-  --avatar-bg: oklch(0.62 0.09 var(--avatar-hue));
-  --avatar-ink: oklch(0.99 0.005 var(--avatar-hue));
 }
 .rail-avatar:has(img) {
   background: var(--fill-selected);
@@ -3034,6 +3026,10 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
  * A Shiver's connectors: one 1 px line dropping from the Apex avatar's centre, a square elbow (Mako's corners are
  * square) 10 px into each Fin; the last Fin's line stops at its centre.
  */
+/* A project's Threads sit a step in from it, so a project and what it holds are never one column of rows. */
+.rail-nest {
+  padding-left: 12px;
+}
 .rail-branch {
   position: absolute;
   left: var(--branch-x, 16.5px);

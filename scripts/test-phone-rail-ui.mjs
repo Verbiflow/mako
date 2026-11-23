@@ -152,11 +152,13 @@ async function checkRail() {
       const corners = await evaluate("[...document.querySelectorAll('.web-row, .web-fin-row, .web-project-row, [data-project-avatar], [data-setup-card]')].map((node) => getComputedStyle(node).borderRadius).filter((radius) => radius !== '0px')")
       assert.deepEqual(corners, [], `${where}: every corner square`)
 
-      // The Apex: its tile, its line, and folded only the Fins that need the person, each with its ask.
+      // The Apex: its fin, its line, and folded only the Fins that need the person, each with its ask.
       await until(`Boolean(document.querySelector('[data-hung-fins="${APEX_THREAD}"] [data-fin-row]'))`, `${where}: the Apex's Fins`)
-      const folded = await evaluate(`(() => { const fins = [...document.querySelectorAll('[data-hung-fins="${APEX_THREAD}"] [data-fin-row]')]; return { apex: document.querySelector('${row("apex")}').dataset.apexOpen, tile: Boolean(document.querySelector('${row("apex")} [data-apex-avatar]')), stem: Boolean(document.querySelector('${row("apex")} .web-apex-stem')), fins: fins.length, asking: fins.filter((fin) => fin.dataset.askingFin).length, lines: fins.map((fin) => fin.querySelector('[data-asking-line]')?.textContent ?? ''), branches: fins.map((fin) => fin.querySelector('.rail-branch')?.hasAttribute('data-last') ?? null), counts: document.querySelector('${row("apex")}').dataset.finCounts } })()`)
+      const folded = await evaluate(`(() => { const fins = [...document.querySelectorAll('[data-hung-fins="${APEX_THREAD}"] [data-fin-row]')]; return { apex: document.querySelector('${row("apex")}').dataset.apexOpen, fin: Boolean(document.querySelector('${row("apex")} [data-apex-mark] .live-mark, ${row("apex")} [data-apex-mark] svg')), stem: Boolean(document.querySelector('${row("apex")} .web-apex-stem')), fins: fins.length, asking: fins.filter((fin) => fin.dataset.askingFin).length, lines: fins.map((fin) => fin.querySelector('[data-asking-line]')?.textContent ?? ''), branches: fins.map((fin) => fin.querySelector('.rail-branch')?.hasAttribute('data-last') ?? null), counts: document.querySelector('${row("apex")}').dataset.finCounts } })()`)
       assert.equal(folded.apex, "false", `${where}: the Apex starts folded`)
-      assert.ok(folded.tile && folded.stem, `${where}: the Apex wears its tile, its line running down from it`)
+      const stepIn = await evaluate(`(() => { const left = (node) => Math.round(node.getBoundingClientRect().left); const group = document.querySelector('[data-project-group]'); return left(group.querySelector('.web-row .web-row-mark')) - left(group.querySelector('[data-project-row] [data-project-avatar]')) })()`)
+      assert.ok(stepIn >= 10, `${where}: a project's Threads sit a step in from it: ${stepIn}`)
+      assert.ok(folded.fin && folded.stem, `${where}: the Apex wears a Thread's fin, its line running down from it`)
       assert.ok(folded.fins >= 1 && folded.asking === folded.fins, `${where}: folded, only the Fins that need you hang under it: ${JSON.stringify(folded)}`)
       assert.ok(folded.lines.every((line) => line.length > 0), `${where}: each asking Fin says its ask beside its name: ${folded.lines}`)
       assert.deepEqual(folded.branches, folded.branches.map((_, index) => index === folded.branches.length - 1), `${where}: each Fin hangs on the line, the last on its elbow`)

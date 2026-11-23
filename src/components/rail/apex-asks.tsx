@@ -9,7 +9,7 @@ import { openFinInApex, useApexView, useFinOpenable, useThreadChildren } from "@
 import { cn } from "@/lib/utils"
 
 /**
- * An Apex's Fins under its rail row, as Capy hangs a captain's crew: a 1 px line from the Apex's avatar and a square
+ * An Apex's Fins under its rail row, as Capy hangs a captain's crew: a 1 px line from the Apex's fin and a square
  * elbow into each. Folded (the default) only the Fins that wait on the person show, each with its ask beside its
  * title; open, every Fin still in play shows, those that need the person first, then the finished as one line. A row
  * opens its Fin in place in the Apex's Thread, as the Agents panel does. The counts are the Apex's tip and Overview.
@@ -52,6 +52,8 @@ const FinRow = memo(function FinRow({ apex, apexTitle, agent, needs, last }: { a
   const where = agent.child?.place ? placeDevice(agent.child.place) : undefined
   const ask = openAsk(state)
   const line = ask ? askWords(ask) : childLine(state)
+  // Beside the title there's room for a few words: the question itself, without the "Done · needs you" the fin already shows.
+  const beside = ask ? ask.question : line
   return (
     <button
       type="button"
@@ -75,7 +77,7 @@ const FinRow = memo(function FinRow({ apex, apexTitle, agent, needs, last }: { a
         {agent.title}
       </span>
       {/* What it needs, beside its name: "Needs you" is never the whole of it, and the fin already says it needs you. */}
-      {needs && line ? <span data-asking-line className="max-w-[48%] shrink truncate text-label text-faint">{line}</span> : null}
+      {needs && beside ? <span data-asking-line className="max-w-[48%] shrink truncate text-label text-faint">{beside}</span> : null}
     </button>
   )
 })

@@ -7,7 +7,6 @@ import { harnessLabel } from "@/components/rail/harness-meta"
 import { appMarkLabel, purposeWords, titleTone } from "@/lib/rail-marks"
 import { ThreadMark } from "@/components/rail/thread-status"
 import { ArchiveButton, ThreadActions, ThreadContextMenu, type ThreadMenuProps } from "@/components/rail/thread-actions"
-import { ApexAvatar } from "@/components/rail/rail-avatars"
 import { JumpCap, WorkGlyph } from "@/components/rail/work-status"
 import { WORK_STATUS_WORDS, type WorkStatus } from "@mako/host/contracts/thread-marks"
 import { useThreadMarks } from "@/state/thread-marks"
@@ -111,12 +110,14 @@ export function RowEnd({ status, updatedAt, finsWorking, work, children }: { sta
   )
 }
 
-/** An Apex's leading mark: its avatar, which turns into the fold's chevron under the pointer or focus. */
-export function ApexFold({ thread, open, label }: { thread: string; open: boolean; label: string }) {
+/**
+ * An Apex's leading mark: its Thread's fin, as any Thread wears, which turns into the fold's chevron under the pointer
+ * or focus. A square tile is a project's alone, so the rail's two shapes are its two kinds of row.
+ */
+export function ApexFold({ thread, open, label, children }: { thread: string; open: boolean; label: string; children: ReactNode }) {
   return (
-    // The avatar stands where a Thread's fin does, and says what the fin would: the Apex's state, a Fin's ask first.
     <span role="img" aria-label={label} className="relative flex size-[18px] shrink-0 items-center justify-center">
-      <ApexAvatar seed={thread} className="transition-opacity duration-100 group-hover:opacity-0 [.group:has(:focus-visible)_&]:opacity-0" />
+      <span data-apex-mark className="flex transition-opacity duration-100 group-hover:opacity-0 [.group:has(:focus-visible)_&]:opacity-0">{children}</span>
       <button
         type="button"
         aria-label={open ? "Fold its Fins" : "Show all its Fins"}
@@ -265,6 +266,8 @@ export const ThreadRow = memo(function ThreadRow({
   // Marked to read again, a quiet row wears the unread sphere and a full title, as an answer not yet read does.
   const unreadMark = markedUnread && quiet
 
+  const mark = <ThreadMark status={status} state={unreadMark ? "unread" : undefined} harness={markHarness} lit={lit} cut={lit ? "var(--raised)" : undefined} size={18} />
+
   return (
     <>
     <ThreadContextMenu {...menu}>
@@ -345,10 +348,8 @@ export const ThreadRow = memo(function ThreadRow({
         className={ROW_SURFACE}
       >
         {apex && thread ? (
-          <ApexFold thread={thread} open={fins.open} label={threadStatusLabel(status, markHarness)} />
-        ) : (
-          <ThreadMark status={status} state={unreadMark ? "unread" : undefined} harness={markHarness} lit={lit} cut={lit ? "var(--raised)" : undefined} size={18} />
-        )}
+          <ApexFold thread={thread} open={fins.open} label={threadStatusLabel(status, markHarness)}>{mark}</ApexFold>
+        ) : mark}
         {editing !== null ? (
           <input
             autoFocus
