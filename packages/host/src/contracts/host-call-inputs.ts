@@ -243,10 +243,26 @@ const inputs = {
   "mako:agents-notice": () =>
     z.tuple([
       z.object({
-        id: z.string(),
-        op: z.string(),
+        op: z.string().optional(),
+        from: z
+          .object({
+            op: z.string().optional(),
+            place: z.union([
+              z.object({
+                kind: z.literal("cloud"),
+                thread: z.string(),
+                machine: z.string(),
+                generation: z.number(),
+              }),
+              z.object({ kind: z.literal("device"), device: z.string() }),
+            ]),
+            seq: z.number(),
+            at: z.number(),
+          })
+          .optional(),
         parent: z.object({ thread: z.string(), session: z.string() }),
         child: z.string(),
+        id: z.string(),
         report: z.object({
           id: z.string(),
           child: z.string(),

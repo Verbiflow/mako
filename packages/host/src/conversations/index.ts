@@ -39,6 +39,7 @@ import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject,
 import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
 import { placeLink } from "./place-link.js"
+import { accountNotices, type NoticeLink } from "./notice-post.js"
 import { PlacedCheckouts } from "./placed-checkouts.js"
 import { captureFinSource, verifyFinSource } from "./fin-source.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
@@ -232,6 +233,12 @@ export interface ConversationsDeps {
    * be placed on one, and one placed here reports to its Apex's device. Without it Fins start here only.
    */
   account?(): Pick<CloudAccount, "deviceId" | "devices" | "session" | "heldCloudFinLimits"> | undefined
+  /**
+   * On a cloud machine: its link to the account, null until its agent gave one. With it a Fin here posts its notices
+   * to the account on the machine's credential (`accountNotices`): a machine has no device's sign-in to reach its
+   * Apex's device with.
+   */
+  machineNotices?(): NoticeLink | null
   /**
    * The account's cloud Fin calls, given only to a proof's isolated host (`HostConfig.cloudFinProof`): with them cloud
    * Fins open here (`AgentsDeps.cloudFins`); absent, `place: cloud` is refused as it ships.
@@ -508,6 +515,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       readPull: (target) => readPull(target, undefined, requiredChecks),
       watchCheck: (conversation, tier, onEnd) => deps.watchCheck?.(conversation, tier, onEnd) ?? Promise.resolve(false),
       ...(away && { away }),
+      ...(deps.machineNotices && { post: accountNotices(deps.machineNotices) }),
       remoteOf: (cwd) => deps.git.output(cwd, ["remote", "get-url", "origin"]).then((text) => text.trim() || undefined, () => undefined),
       checkoutOf: (remote) => checkouts.find(remote),
       verifySource: (folder, source) => verifyFinSource(deps.git, folder, source),

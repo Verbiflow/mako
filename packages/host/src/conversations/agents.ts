@@ -48,6 +48,8 @@ import {
   type AgentsCancelled,
   type AgentsCapabilities,
   type AgentsNoticed,
+  type AgentsNoticeCall,
+  type AgentsNoticeFrom,
   type AgentsNoticeInput,
   type AgentsPlaced,
   type AgentsPlaceInput,
@@ -179,11 +181,12 @@ import { QuietWatch } from "./fin-quiet.js"
 import { TurnWaits } from "./turn-waits.js"
 import { SHIVER_STEPS_MAX, SHIVER_WAIT, shiverWaitNote, shiverWaitSeconds, turnWaitItemKey, turnWaitItemWords, turnWaitDescription, turnWaitLine, turnWaitMovedNote, type ShiverFin, type TurnWait, type TurnWaitItem, type TurnWaitLine } from "../contracts/turn-waits.js"
 import { AFTER_WAIT, type TurnWaitInput, type TurnWaitResult } from "../contracts/thread-tools.js"
-import { AgentPlaces, placeName, type AwayRefused, type OutboxNotice, type PlacedAsk, type PlaceLink, type ResolvedPlace } from "./agent-places.js"
+import { AgentPlaces, placeName, type AwayRefused, type NoticePost, type OutboxNotice, type PlacedAsk, type PlaceLink, type ResolvedPlace } from "./agent-places.js"
 import { checkedFinSource } from "./fin-source.js"
 import { CommittedFinSourceSchema, type CommittedFinSource } from "../contracts/fin-source.js"
 import { CloudFinStartSchema, cloudFinInputSha256, cloudFinThread, type CloudFinAnswer, type CloudFinPlace, type CloudFinPlaced, type CloudFinStart } from "@mako/protocol/cloud-fins"
 import { ContinueRepositorySchema } from "@mako/protocol/continues"
+import { TreeNoticeDeliverySchema } from "@mako/protocol/tree-notices"
 import type { PullOutcome, PullReading, PullWaitUntil } from "../contracts/pull-waits.js"
 import type { PullTarget as ReadTarget } from "../git/index.js"
 import { localWords } from "@mako/protocol/computer-words"
@@ -423,6 +426,11 @@ export interface AgentsDeps {
   places?(): readonly string[]
   /** How this host reaches the person's other devices (`PlaceLink`); without it a Fin starts here only. */
   away?: PlaceLink
+  /**
+   * On a cloud machine: where the notices of a Fin here go, the account, in place of its Apex's device's runtime
+   * (`NoticePost`). A device gives none, and sends each to that runtime itself.
+   */
+  post?: NoticePost
   /** The Git remote `cwd`'s repository is a checkout of (its `origin`), which a Fin placed elsewhere works in a checkout of; undefined for a folder with none. */
   remoteOf?(cwd: string): Promise<string | undefined>
   /** A checkout of `remote` on this device for a Fin placed here: one it has, or a clone it makes; refused with why. */
@@ -1056,6 +1064,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       jobs: deps.jobs,
       waiting: () => this.outbox(),
       taken: (report, at) => this.store()?.markReportsDelivered([report.id], at),
+      ...(deps.post && { post: deps.post }),
+      refused: (report, reason, at) => this.store()?.refuseNotice(report.id, reason, at),
       standing: (edge, report) => this.standingOf(edge, report),
       ...(deps.now && { now: deps.now }),
     })
@@ -2317,11 +2327,13 @@ export class Agents implements AgentOperations, ConversationChildren {
    * Fins placed elsewhere, asked of their places how they stand: one call for each Apex and place, which also tells
    * that place this device hears again. It runs before a start is admitted, so work this device didn't send a Fin
    * (the person writing to it there) counts against its tree. A place that can't be asked leaves what this device keeps.
+   * `asleep: "left"` asks a cloud Thread only while its machine is up (`PlaceLink.call`'s `passive`): one asleep
+   * answers at once that it is, and stays so.
    */
-  private async reconcilePlaced(edges: readonly ThreadParent[]): Promise<void> {
+  private async reconcilePlaced(edges: readonly ThreadParent[], asleep?: "left"): Promise<void> {
     const asked = new Map<string, ThreadParent>()
     for (const edge of edges) if (edge.placed) asked.set(`${edge.parentSession}\n${placeOf(edge.asked.place)}`, edge)
-    await Promise.all([...asked.values()].map((edge) => this.listAway(this.apexOfEdge(edge), edge, {})))
+    await Promise.all([...asked.values()].map((edge) => this.listAway(this.apexOfEdge(edge), edge, {}, asleep === "left" && edge.placed?.target.kind === "cloud")))
   }
 
   /**
@@ -2329,10 +2341,10 @@ export class Agents implements AgentOperations, ConversationChildren {
    * says it, unless this device set it to work meanwhile, which that answer may be from before. Undefined when the
    * place can't be asked.
    */
-  private async listAway(apex: Apex, edge: ThreadParent, input: AgentsListInput): Promise<AgentStrip[] | undefined> {
+  private async listAway(apex: Apex, edge: ThreadParent, input: AgentsListInput, passive = false): Promise<AgentStrip[] | undefined> {
     const before = new Map<string, number>()
     for (const each of this.store()!.edges().children(apex.thread)) if (each.placed) before.set(each.child, each.placed.epoch ?? 1)
-    const listed = await this.askPlace<Extract<AgentsListResult, { children: AgentStrip[] }>>(apex, edge, "mako:agents-list", input, "list")
+    const listed = await this.askPlace<Extract<AgentsListResult, { children: AgentStrip[] }>>(apex, edge, "mako:agents-list", input, "list", undefined, undefined, passive)
     if ("refused" in listed) {
       hostLog("agents", "a place holding Fins of this device's wasn't reached", { place: edge.asked.place ?? "", refused: listed.refused })
       return undefined
@@ -4077,25 +4089,51 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * `mako:agents-notice`: a report of a Fin this device placed elsewhere, from the Fin's device. It's kept once by its
-   * report's ID, so a repeat is the same notice; one from an owner older than the newest heard is refused
-   * (`stale-owner`); and it wakes its Apex through the same digest as a Fin's here (`noticeOf`).
+   * `mako:agents-notice`: a report of a Fin this device placed elsewhere, straight from the Fin's device or from the
+   * account, which held it for the Apex's Session and says who sent it (`from`). It's kept once by its report's ID, so
+   * a repeat is the same notice; one from an owner older than the newest heard is refused (`stale-owner`); and it
+   * wakes its Apex through the same digest as a Fin's here (`noticeOf`).
+   *
+   * `account` is the Thread the account itself acts on in this call (`accountCall`), read from how the call reached
+   * this host and never from the notice. `from` is the account's word only then: from any other caller it's what a
+   * device, or anything that calls as one, wrote itself, so it's refused. What the account delivers is held to the
+   * start that made the Fin before anything is kept or looked up by its report's ID (`deliveredAmiss`): one machine
+   * can post another Fin's child and notice ID under its own start, and only this device knows which start made which
+   * Fin. Taken by its ID first, the impostor's would be heard and the Fin's own, after it, a repeat.
    */
-  async notice(input: AgentsNoticeInput): Promise<AgentsNoticed> {
+  async notice(input: AgentsNoticeCall, account?: string): Promise<AgentsNoticed> {
     const store = this.store()
     if (!store) return { refused: "unavailable", why: `${FIN_WORD}s need the Thread store, which didn't open on this device.` }
+    const from = input.from
+    const amiss = noticeFormAmiss(input, account)
+    if (amiss) {
+      hostWarn("agents", "notice refused", { notice: input.id, child: input.child, why: amiss })
+      return { refused: "conflict", why: "A notice comes from its Fin's device under its start's op, or from the account with who sent it, and never as both." }
+    }
+    // The start a notice is under: the sender's own word from its device, the account's word when it delivers.
+    const op = from ? from.op : input.op
+    const known = () => (from?.op !== undefined ? store.edges().byOp(from.op) : store.edges().of(input.child))
     // A Fin that reports at once can outrun its own start's answer: the notice waits for that start to settle here.
     // One whose start's answer never came (lost on the way, or this host died with it under way) is this device's
     // word that the Fin is there: its start is asked again now, under its op, and answers that Fin.
-    if (!store.edges().of(input.child)) {
+    if (op !== undefined && !known()) {
       // Its Apex stopped that start: its device plainly answers now, so the stop goes, and the Fin is kept as stopped.
-      if (this.queuedAway(input.op)?.away?.stop) await this.cancelAway(input.op)
-      else if (!this.starts.has(input.op) && store.queuedSpawns().some((spawn) => spawn.away && spawn.op === input.op)) await this.askRooms()
-      await this.starts.get(input.op)?.answer.catch(() => undefined)
+      if (this.queuedAway(op)?.away?.stop) await this.cancelAway(op)
+      else if (!this.starts.has(op) && store.queuedSpawns().some((spawn) => spawn.away && spawn.op === op)) await this.askRooms()
+      await this.starts.get(op)?.answer.catch(() => undefined)
     }
-    const edge = store.edges().of(input.child)
-    if (!edge?.placed || edge.parent !== input.parent.thread)
-      return { refused: "unknown-child", why: `This device placed no ${FIN_WORD} with that Thread under that ${APEX_WORD}: its start's answer may not have reached it yet.` }
+    const edge = known()
+    const unknown: AgentsNoticed = { refused: "unknown-child", why: `This device placed no ${FIN_WORD} with that Thread under that ${APEX_WORD}: its start's answer may not have reached it yet.` }
+    if (from) {
+      // A start this device knows nothing of may yet answer. A child it knows under another start never will.
+      if (!edge && !store.edges().of(input.child)) return unknown
+      const wrong = edge ? deliveredAmiss(edge, input, from) : "another start made that Fin"
+      if (wrong) {
+        hostWarn("agents", "notice refused", { notice: input.id, child: input.child, seq: from.seq, place: from.place.kind, why: wrong })
+        return { refused: "conflict", why: `The account delivered a notice that isn't this ${FIN_WORD}'s own: ${wrong}.` }
+      }
+    }
+    if (!edge?.placed || edge.parent !== input.parent.thread) return unknown
     const report = ReportSchema.safeParse(input.report)
     if (!report.success || report.data.child !== edge.child || input.id !== `notice:${edge.child}:${report.data.id}`)
       return { refused: "conflict", why: "A notice is notice:{child}:{reportId}, carrying that report of that child." }
@@ -4103,7 +4141,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     if ("refused" in kept) return kept
     // How it stands is its device's word as it sent this, never the report's: an earlier turn's report ends no later turn.
     this.standingHeard(edge.child, input.standing)
-    hostLog("agents", "notice taken", { notice: input.id, child: edge.child, status: report.data.status, ownerGeneration: report.data.ownerGeneration, ...(kept.deduped && { deduped: true }) })
+    hostLog("agents", "notice taken", { notice: input.id, child: edge.child, status: report.data.status, ownerGeneration: report.data.ownerGeneration, ...(kept.deduped && { deduped: true }), ...(from && { seq: from.seq }) })
     // A Fin there reported, so its place may have room now: what waits for it asks.
     if (!kept.deduped) void this.askRooms()
     return { heard: true, ...(kept.deduped && { deduped: true as const }) }
@@ -4112,13 +4150,15 @@ export class Agents implements AgentOperations, ConversationChildren {
   /**
    * This device is back on its account (its link opened, or its host started): each place holding Fins it placed is
    * asked once how they stand, which is kept (`listAway`) and also tells that place this device hears again, so the
-   * notices it kept go now. The stops this device kept for places it couldn't reach go too.
+   * notices it kept go now. A cloud Thread's machine asleep isn't woken to be asked: its notices wait with the
+   * account, which sends them as this device's link says it takes them. The stops this device kept for places it
+   * couldn't reach go too.
    */
   knock(): void {
     const store = this.store()
     if (!store || !this.places || this.stopped) return
     this.retryStops()
-    void this.reconcilePlaced(store.edges().all.filter((edge) => edge.placed))
+    void this.reconcilePlaced(store.edges().all.filter((edge) => edge.placed), "left")
   }
 
   // ── Starting ──
@@ -5569,15 +5609,30 @@ export class Agents implements AgentOperations, ConversationChildren {
     }).slice(0, 32)
   }
 
-  /** The notices of Fins here whose Apex is on another device that no such device has taken yet, oldest first (`AgentPlaces`). */
+  /**
+   * The notices of Fins here whose Apex is on another device that no such device has taken yet, oldest first
+   * (`AgentPlaces`). One the account refused for good is out of it, and stays unheard (`ThreadStore.refuseNotice`).
+   */
   private outbox(): OutboxNotice[] {
     const store = this.store()
     if (!store) return []
     const edges = store.edges()
-    return store.undeliveredReports().flatMap(({ report }) => {
+    const waiting = store.undeliveredReports()
+    const refused = waiting.length ? store.refusedNotices() : undefined
+    return waiting.flatMap(({ report }) => {
       const edge = edges.of(report.child)
-      return edge?.remote && report.status !== "progress" && this.noticeFor(edge, report) ? [{ edge, report }] : []
+      return edge?.remote && report.status !== "progress" && !refused?.has(report.id) && this.noticeFor(edge, report) ? [{ edge, report }] : []
     })
+  }
+
+  /** Whether a notice of a Fin here is on its way to the account: work this machine stays up for (`AgentPlaces.posting`). */
+  posting(): boolean {
+    return this.places?.posting() ?? false
+  }
+
+  /** This machine's link to the account is up, or its credential renewed: the notices it kept go now (`AgentPlaces.renewed`). */
+  accountLinked(): void {
+    this.places?.renewed()
   }
 
   /**
@@ -6609,7 +6664,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   /** A Fin here stands otherwise than its Apex's device last heard: its last report goes again, saying how (`AgentPlaces.restate`). */
   private restate(edge: ThreadParent): void {
     const report = this.latest.get(edge.child)
-    if (report && report.status !== "progress" && this.noticeFor(edge, report)) this.places?.restate({ edge, report })
+    if (report && report.status !== "progress" && !this.store()?.refusedNotices().has(report.id) && this.noticeFor(edge, report)) this.places?.restate({ edge, report })
   }
 
   /** A message, an answer or a stop of an Apex on another device reached its Fin here: the count it came with is the newest this Fin heard (`RemoteParent.heard`). */
@@ -6618,11 +6673,11 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** One of this Apex's operations on a Fin it placed, answered by the Fin's device (`AgentPlaces.ask`). */
-  private async askPlace<Answer extends object>(apex: Apex, edge: ThreadParent, channel: string, input: PlacedAsk, what: string, forwards?: string, epoch?: number): Promise<Answer | AwayRefused> {
+  private async askPlace<Answer extends object>(apex: Apex, edge: ThreadParent, channel: string, input: PlacedAsk, what: string, forwards?: string, epoch?: number, passive = false): Promise<Answer | AwayRefused> {
     const caller = await this.callerOf(apex, forwards, epoch)
     if ("refused" in caller) return caller
     if (!this.places || !edge.placed) return { refused: "unavailable", why: `${edge.name} isn't placed anywhere this device can reach.` }
-    return this.places.ask<Answer>(edge.placed.target, channel, caller, input, what)
+    return this.places.ask<Answer>(edge.placed.target, channel, caller, input, what, passive)
   }
 
   /** The Apex of a Fin, from its edge: the Session that started it, and that Session's conversation here. */
@@ -8497,6 +8552,38 @@ function permissionAnswer(pending: PendingAsk, input: Pick<AgentsAnswerInput, "a
 
 function unknownFin(ref: string): AgentRefused {
   return { refused: "unknown-child", why: `No ${FIN_WORD} of this Thread is named ${ref}. agents_list shows them.` }
+}
+
+/**
+ * Why a notice isn't in a form this host takes from this caller, in words for the log; undefined when it is. `account`
+ * is the Thread the account itself acts on in the call (`accountCall`): only its delivery says `from`, and its
+ * delivery says nothing else.
+ */
+function noticeFormAmiss(input: AgentsNoticeCall, account: string | undefined): string | undefined {
+  if (!input.from) {
+    if (account !== undefined) return "the account delivers a notice that says who sent it"
+    return input.op === undefined ? "a notice names its start, or who sent it" : undefined
+  }
+  if (account === undefined) return "only the account says who sent a notice"
+  if (input.op !== undefined) return "a delivered notice names no op"
+  if (account !== input.parent.thread) return "the account acted on another Thread than the notice's Apex's"
+  return TreeNoticeDeliverySchema.safeParse(input).success ? undefined : "it isn't a delivery as the account makes one"
+}
+
+/**
+ * Why a notice the account delivered isn't the Fin's own, in words for the log; undefined when it is. `edge` is the
+ * one the account's start names (`from.op`), or the child's for a device's notice with no start on record. It must be
+ * a Fin this device placed, the very child the notice and its report name, under the notice's own ID, of the Apex the
+ * notice names, and sent from where this device put it: the cloud Thread, or the device.
+ */
+function deliveredAmiss(edge: ThreadParent, input: AgentsNoticeCall, from: AgentsNoticeFrom): string | undefined {
+  if (!edge.placed) return "that start's Fin wasn't placed elsewhere by this device"
+  if (edge.child !== input.child || input.report.child !== input.child) return "that start made another Fin"
+  if (input.id !== `notice:${edge.child}:${input.report.id}`) return "its ID isn't that report's of that Fin"
+  if (edge.parent !== input.parent.thread || edge.parentSession !== input.parent.session) return "that Fin has another Apex"
+  const target = edge.placed.target
+  const there = target.kind === "cloud" ? from.place.kind === "cloud" && from.place.thread === target.thread : from.place.kind === "device" && from.place.device === target.device
+  return there ? undefined : "it was sent from another place than the Fin's"
 }
 
 /** A Fin as another Fin of its Apex reads it: the person's words to it directly stay its own. */

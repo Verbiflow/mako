@@ -1243,6 +1243,28 @@ export interface AgentsNoticeInput {
 }
 
 /**
+ * Who sent a notice the account delivers, as the account says it from the sender's credential (`TreeNoticeFromSchema`):
+ * the Fin's start where it has one on record, where the Fin runs, and the notice's number and time among its Apex's
+ * Session's. Never the sender's own word.
+ */
+export interface AgentsNoticeFrom {
+  op?: string
+  place: { kind: "cloud"; thread: string; machine: string; generation: number } | { kind: "device"; device: string }
+  seq: number
+  at: number
+}
+
+/**
+ * What `mako:agents-notice` takes: a notice straight from the Fin's device, which names the Fin's start itself (`op`),
+ * or one the account held for the Apex's Session and delivers (`TreeNoticeDeliverySchema`), which says who sent it
+ * (`from`) and names no `op`. Never both: `from` is taken only from the account (`Agents.notice`).
+ */
+export interface AgentsNoticeCall extends Omit<AgentsNoticeInput, "op"> {
+  op?: string
+  from?: AgentsNoticeFrom
+}
+
+/**
  * A placed start its Apex stopped before it knew how the start went (`mako:agents-cancel`), by the start's op. The
  * device ends the Fin if that start made one, and answers it; if it made none, it keeps the stop, so the start is
  * refused whenever it arrives. A repeat answers the same.
