@@ -4052,8 +4052,14 @@ A project row wears a 16 px avatar (`rail-avatars.tsx`): its GitHub owner's publ
 GitHub (`repo-avatars.ts` asks `mako:repo-avatar` with the owner alone; the host fetches
 `https://github.com/<owner>.png` once and keeps it under `<dataRoot>/avatars`), else a monogram on one of eight hues
 hashed from the folder (`.rail-hue-*`). Folded, a project shows only a 6 px attention dot. Projects order as worked
-in unless the person dragged them (`project-drag.ts`, or Move up/down in a project's menu): that order is the
-`rail.projectOrder` preference, which follows the account; unplaced projects follow by `rail-ranks`.
+in (`rail-ranks`), and a project the person dragged (`project-drag.ts`, or Move up/down in its menu) holds the place
+it was dropped at while the rest go on moving around it: `rail.projectOrder`, which follows the account, lists the
+rail's places from the top, a folder for a place the person chose and `:` (`UNPLACED`) for one they didn't. A list
+with no `:` is from when a drag placed every project shown; it reads as it did, and the next drag keeps only the
+project dragged. A project that would draw its header and nothing under it waits behind "N more folders"
+(`listedThreadFolders`): one gone cold (nothing in it for seven days, and not worked in either), or one whose Threads
+are all pinned or folded as Done. The window's own project, a pinned one, one with something working, waiting or
+unread, and one the person placed by hand stay listed; a search or a filter lists whatever it found.
 
 An Apex is a captain (Capy's pattern): its avatar is its Thread's hue with the fin cut out, turning into the fold's
 chevron under the pointer; its Fins hang from it on 1 px square-elbow lines (`.rail-branch`). Folded (the default)

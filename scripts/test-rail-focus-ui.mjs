@@ -108,6 +108,11 @@ async function checkWindow() {
     return true
   })`)
   const flage = "folder:/Users/me/flage"
+  // The catalogue's folders went cold months ago, so they wait behind "N more folders" until it's opened.
+  const moreFolders = `[...document.querySelectorAll('.thread-jump-scope button')].find(button => /more folders$/.test(button.textContent.trim()))`
+  await until(`${moreFolders} !== undefined`, "the cold folders wait behind the line")
+  assert.equal(await evaluate(`document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(flage)}]')`), null, "a cold folder takes no row of the list")
+  await evaluate(`(${moreFolders}.click(), true)`)
   await until(`document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(flage)}]') !== null`, "the flage folder rendered")
   // Folders gone cold render collapsed; open flage so its count shows.
   await evaluate(`(() => { const node = document.querySelector('.thread-jump-scope [data-flip-key=${JSON.stringify(flage)}]'); (node.matches('button') ? node : node.querySelector('button') ?? node).click(); return true })()`)

@@ -6,7 +6,7 @@ import { threadList, withListedRef } from "@mako/host/contracts/thread-list"
 import type { WorktreeSummary } from "@mako/host/contracts/thread-worktrees"
 import { plainPath, projectEnd, projectFolder, projectFolderOf, worktreeAt as worktreeByPass, worktreeIn } from "@mako/host/contracts/worktree-paths"
 import { workspaceName } from "../src/lib/format"
-import { groupThreadFolders, threadFolderKey, type FolderMap, type ThreadFolder, type ThreadFolderActivity } from "../src/lib/thread-folders"
+import { coldBefore, folderIsCold, groupThreadFolders, listedThreadFolders, threadFolderKey, visibleThreadFolders, type FolderMap, type ThreadFolder, type ThreadFolderActivity } from "../src/lib/thread-folders"
 import type { ThreadRef } from "../src/lib/types"
 import type { AcpPresence } from "../src/state/acp-presence"
 import { chatFoldersStore, chatGroupOf } from "../src/state/chat-folders"
@@ -426,4 +426,32 @@ test("the window files a Fin's worktree under its project, whichever of its list
     worktreesStore.set({ ...worktreesStore.get(), worktrees: held })
     threadsStore.set({ ...threadsStore.get(), threads: refs })
   }
+})
+
+test("a project with nothing to list waits behind the rest, unless it's the window's, pinned, busy or kept by the person", () => {
+  const now = Date.parse(at(59))
+  const day = 24 * 3600_000
+  const folder = (key: string, fields: Partial<ThreadFolder> = {}): ThreadFolder =>
+    ({ key, name: key, cwd: key, refs: [row(key, 50, key)], current: false, pinned: false, pinRank: -1, latest: at(50), order: at(50), priority: 0, running: 0, needsInput: 0, failed: 0, unread: 0, active: 0, ...fields })
+  const cold = { latest: new Date(now - 8 * day).toISOString(), order: new Date(now - 8 * day).toISOString() }
+  const rowless = { refs: [] }
+  const list = [
+    folder("warm"), folder("cold", cold), folder("rowless", rowless), folder("six-days", { latest: new Date(now - 6 * day).toISOString(), order: new Date(now - 6 * day).toISOString() }),
+    // Its newer rows haven't landed in this window yet, and the place it kept from the last one says it was worked in.
+    folder("rows-to-come", { latest: cold.latest }),
+    folder("cold-current", { ...cold, current: true }), folder("cold-pinned", { ...cold, pinned: true, pinRank: 0 }), folder("cold-placed", cold), folder("cold-unread", { ...cold, unread: 1 }),
+    folder("rowless-current", { ...rowless, current: true, latest: "" }), folder("rowless-pinned", { ...rowless, pinned: true, pinRank: 1 }), folder("rowless-added", rowless),
+    folder("rowless-running", { ...rowless, running: 1, priority: 2 }), folder("rowless-waiting", { ...rowless, needsInput: 1, priority: 5 }), folder("done-only", { refs: [row("done", 50, "done-only")] }),
+  ]
+  const rest = { now, rowless: (each: ThreadFolder) => each.refs.length === 0 || each.key === "done-only", kept: (key: string) => key === "cold-placed" || key === "rowless-added" }
+  const { listed, resting } = listedThreadFolders(list, rest)
+  assert.deepEqual(resting.map((each) => each.key), ["cold", "rowless", "done-only"], "a cold project, one with no Thread to draw, and one whose Threads are all folded away")
+  assert.deepEqual(listed.map((each) => each.key), list.map((each) => each.key).filter((key) => !["cold", "rowless", "done-only"].includes(key)), "the rest stay, in the order they came in")
+  assert.deepEqual(listedThreadFolders(list, undefined), { listed: list, resting: [] }, "a search or a filter lists every folder it found")
+  // The first page is filled from the projects with something to list: a cold one no longer takes a row of it.
+  const many = [folder("cold-1", cold), folder("a"), folder("cold-2", cold), folder("b"), folder("c")]
+  assert.deepEqual(visibleThreadFolders(listedThreadFolders(many, rest).listed, 2).map((each) => each.key), ["a", "b"])
+  assert.equal(folderIsCold(folder("old", cold), coldBefore(now)), true)
+  assert.equal(folderIsCold(folder("running", { ...cold, priority: 2 }), coldBefore(now)), false, "a folder with a status to show isn't cold")
+  assert.equal(folderIsCold(folder("timeless", { latest: "" }), coldBefore(now)), false, "nor one whose rows carry no time")
 })

@@ -13,7 +13,8 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * controls only under the pointer, a row that is its fin, title and time with Archive and ⋯ under the pointer, the
  * Thread menu's Mark as unread and Status kept in the Thread store, a Done Thread folding into "N done", ⌘ held
  * showing ⌘1–9 and ⌘2 opening the second row, ⌘/⇧-click picking rows with the selection bar's Archive and Esc,
- * dragging a project, Customize sidebar, "N to resolve" with its lines, Finish setting up, and an Apex's Fins folded
+ * dragging a project (the others still ordering as worked in), a project with no row waiting behind "N more folders",
+ * Customize sidebar, "N to resolve" with its lines, Finish setting up, and an Apex's Fins folded
  * and open with ←/→. Screenshots stay in the printed directory; `--port` serves the page on that port.
  */
 
@@ -237,21 +238,64 @@ async function checkWindow() {
   // 8. A project dragged above the first keeps that order, which follows the account.
   const movable = () => evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-project-movable]')].map((section) => section.dataset.projectSection)`)
   const before = await movable()
-  assert.ok(before.length >= 2, "two projects to order")
-  const from = await point(`(document.querySelector('.thread-jump-scope [data-project-section=${JSON.stringify(before[1])}] [data-folder-toggle]'))`)
-  const to = await point(`(document.querySelector('.thread-jump-scope [data-project-section=${JSON.stringify(before[0])}] [data-folder-toggle]'))`)
-  await move(from.x, from.y)
-  await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...from })
-  for (let step = 1; step <= 10; step += 1) await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", button: "left", buttons: 1, x: from.x, y: Math.round(from.y + ((to.y - 10 - from.y) * step) / 10) })
-  await until(`document.querySelector('[data-drag-ghost]') !== null && document.querySelector('[data-drop-line]') !== null`, "the project lifted")
-  await capture("calm-drag.png")
-  await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, x: to.x, y: to.y - 10 })
-  await until(`document.querySelector('[data-drag-ghost]') === null`, "dropped")
+  assert.ok(before.length >= 3, "three projects to order")
+  const toggle = (key) => `(document.querySelector('.thread-jump-scope [data-project-section=${JSON.stringify(key)}] [data-folder-toggle]'))`
+  // Lifts the project `key` and drops it just above `above`.
+  const drag = async (key, above, shot) => {
+    const from = await point(toggle(key))
+    const to = await point(toggle(above))
+    await move(from.x, from.y)
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, ...from })
+    for (let step = 1; step <= 10; step += 1) await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", button: "left", buttons: 1, x: from.x, y: Math.round(from.y + ((to.y - 10 - from.y) * step) / 10) })
+    await until(`document.querySelector('[data-drag-ghost]') !== null && document.querySelector('[data-drop-line]') !== null`, "the project lifted")
+    if (shot) await capture(shot)
+    await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseReleased", button: "left", clickCount: 1, x: to.x, y: to.y - 10 })
+    await until(`document.querySelector('[data-drag-ghost]') === null`, "dropped")
+  }
+  const storedOrder = () => evaluate(`import('/src/state/project-order.ts').then(({projectOrderStore}) => [...projectOrderStore.get().order])`)
+  const accountOrder = () => evaluate(`window.mako.preferences().then((values) => values['rail.projectOrder'])`)
+  await drag(before[1], before[0], "calm-drag.png")
   const after = await movable()
-  assert.equal(after[0], before[1], `dropped first: ${JSON.stringify(after)}`)
-  assert.deepEqual(await evaluate(`import('/src/state/project-order.ts').then(({projectOrderStore}) => projectOrderStore.get().order.slice(0, 2))`), [before[1], before[0]], "the order is kept")
-  assert.deepEqual(await evaluate(`window.mako.preferences().then((values) => values['rail.projectOrder']?.slice(0, 2))`), [before[1], before[0]], "and follows the account")
+  assert.deepEqual(after, [before[1], before[0], ...before.slice(2)], `dropped first, the rest as they were: ${JSON.stringify(after)}`)
+  assert.deepEqual(await storedOrder(), [before[1], ":"], "the order is kept: the project dragged holds the first place, and no other project was placed")
+  assert.deepEqual(await accountOrder(), [before[1], ":"], "and follows the account")
+  // The projects nobody dragged go on ordering as they are worked in: the last one, worked in now, passes the one above
+  // it, and the project dragged keeps its place. The pointer leaves the rail first, which holds every place while inside.
+  await move(900, 500)
+  await evaluate(`import('/src/state/rail-ranks.ts').then(({railRanksStore}) => railRanksStore.set({ folders: { ...railRanksStore.get().folders, [${JSON.stringify(before[2])}]: new Date(Date.now() + 60_000).toISOString() } }))`)
+  await until(`JSON.stringify([...document.querySelectorAll('.thread-jump-scope [data-project-movable]')].map((section) => section.dataset.projectSection)) === ${JSON.stringify(JSON.stringify([before[1], before[2], before[0], ...before.slice(3)]))}`, "a project worked in passes one never dragged, under the one dragged")
+  assert.deepEqual(await storedOrder(), [before[1], ":"], "which moves nothing the person placed")
   console.log("PASS: dragging a project reorders it and keeps the order")
+
+  // A project with no row left to draw waits behind "N more folders" instead of taking a row for its header alone;
+  // dragged from there to a place, it's the person's to keep listed.
+  const quiet = before[2]
+  const moreFolders = () => evaluate(`[...document.querySelectorAll('.thread-jump-scope button')].map((button) => button.textContent.trim()).find((text) => /more folders$|^Fewer folders$/.test(text)) ?? null`)
+  // The line under the projects, brought clear of what stands over the list's end before it's clicked.
+  const clickLine = async (text) => {
+    const line = `([...document.querySelectorAll('.thread-jump-scope button')].find((button) => button.textContent.trim() === ${JSON.stringify(text)}))`
+    await evaluate(`${line}.scrollIntoView({ block: 'center' })`)
+    await frames()
+    await click(line)
+  }
+  assert.equal(await moreFolders(), null, "every project has a row, so none waits")
+  const quietThreads = await evaluate(`[...document.querySelectorAll('.thread-jump-scope [data-project-section=${JSON.stringify(quiet)}] [data-thread-row]')].map((row) => row.dataset.threadId)`)
+  assert.ok(quietThreads.length > 0 && quietThreads.every(Boolean), `the project's Threads: ${JSON.stringify(quietThreads)}`)
+  await evaluate(`import('/src/state/thread-marks.ts').then(({applyThreadMarks}) => applyThreadMarks(${JSON.stringify(quietThreads)}.map((thread) => ({ thread, status: 'done', statusAt: Date.now() - 4 * 24 * 3600_000, by: 'person', unreadAt: null }))))`)
+  await until(`!document.querySelector('.thread-jump-scope [data-project-section=${JSON.stringify(quiet)}]')`, "the project whose Threads are all folded as Done left the list")
+  assert.equal(await moreFolders(), "1 more folders")
+  assert.deepEqual(await movable(), [before[1], before[0], ...before.slice(3)], "and the others closed up")
+  await clickLine("1 more folders")
+  await until(`document.querySelector('.thread-jump-scope [data-project-section=${JSON.stringify(quiet)}]') !== null`, "it's behind the line")
+  assert.deepEqual(await movable(), [before[1], before[0], ...before.slice(3), quiet], "after the projects with something to list")
+  await drag(quiet, before[1])
+  assert.deepEqual(await storedOrder(), [quiet, before[1], ":"], "dragged first: it and the project placed before it hold their places")
+  await move(900, 500)
+  await clickLine("Fewer folders")
+  await until(`![...document.querySelectorAll('.thread-jump-scope button')].some((button) => button.textContent.trim() === 'Fewer folders')`, "the line folded")
+  assert.deepEqual(await movable(), [quiet, before[1], before[0], ...before.slice(3)], "and it stays listed where the person put it, with no row to show")
+  assert.equal(await moreFolders(), null)
+  console.log("PASS: a project with no row waits behind N more folders, and stays where it's dragged to")
 
   // 9. Customize sidebar from the Projects header's ⋯: Setup shown on request; a right-click on the top rows opens the same.
   await hover("[data-rail-threads-heading]")
