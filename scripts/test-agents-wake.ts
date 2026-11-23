@@ -120,6 +120,147 @@ async function burst(): Promise<void> {
   }
 }
 
+/**
+ * An Apex with three Fins, "a", "b" and "c", each at work until `finish` lets it end with its reply as its result. "a"
+ * has finished and its Apex has heard it, at once; "b" has finished since and its result is held for "c", still at work.
+ */
+async function heldFor(name: string, holdMs: number, fail?: string) {
+  const fins = new Map<string, string>()
+  const w = new AgentsWorld({
+    root: join(root, name),
+    holdMs,
+    script: async (turn) => {
+      // A turn a restart cut runs again in the next host, without its brief: it's still that Fin's.
+      const fin = /You're fin:(\w+),/.exec(turn.text)?.[1] ?? [...fins].find(([, conversation]) => conversation === turn.conversation)?.[0]
+      if (!fin) return "ok"
+      fins.set(fin, turn.conversation)
+      await turn.world.hold(turn.conversation)
+      if (fin === fail) {
+        const told = await turn.world.agents.report(turn.caller, { status: "failed", summary: `${fin} couldn't finish its part.`, clientKey: "r" })
+        assert.ok(!("refused" in told), JSON.stringify(told))
+        return "Reported."
+      }
+      return `Done: ${fin} checked its part.`
+    },
+  })
+  const apex = await w.apex("codex")
+  const children = new Map<string, string>()
+  for (const fin of ["a", "b", "c"]) children.set(fin, started(await w.agents.start(apex.caller, { brief: { objective: `Check part ${fin}` }, harness: "claude", name: fin, clientKey: fin, cwd: w.root })).child!)
+  await until(`${name}: every Fin at work`, () => fins.size === 3 && [...fins.values()].every((conversation) => w.live.session(conversation)?.status === "running"))
+  const finish = (fin: string) => w.release(fins.get(fin)!)
+  const wakes = () => wakesOf(w, apex.conversation)
+  const waiting = () => (w.live.held(apex.conversation)?.requests ?? []).filter((request) => request.digest && (request.status === "queued" || request.status === "held"))
+  const first = Date.now()
+  finish("a")
+  await until(`${name}: the first result's wake`, () => wakes().length === 1, 3_000)
+  assert.ok(wakes()[0]!.at - first < 1_500, `${name}: the first result goes at once: ${wakes()[0]!.at - first} ms`)
+  await until(`${name}: the Apex's turn on it to end`, () => w.live.session(apex.conversation)?.status !== "running")
+  const before = Date.now()
+  finish("b")
+  await until(`${name}: the second result to wait in its Apex's queue`, () => waiting().length === 1)
+  const held = waiting()[0]!
+  assert.equal(held.status, "held", `${name}: held, not sent`)
+  assert.ok(held.wake?.since !== undefined && held.wake.since >= before && held.wake.at === held.wake.since + holdMs, `${name}: until its time, counted from when it was held: ${JSON.stringify(held.wake)}`)
+  assert.deepEqual(held.digest!.notices.map((notice) => notice.fin.name), ["b"])
+  return { w, apex, fins, children, finish, wakes, waiting, held: { id: held.id, at: held.wake.at, since: held.wake.since } }
+}
+
+/**
+ * Results that ask nothing, after the first: held in the Apex's queue for the Fins still at work, and sent as one
+ * digest by what ends the hold, on the real queue with its hold shortened. Meanwhile the Fin reads as done to the
+ * person and to its Apex's own reads, and its edge isn't closed.
+ */
+async function heldResults(): Promise<void> {
+  // The last Fin finishes: both results go as one digest. Until then the held one woke nobody, and read as done.
+  {
+    const f = await heldFor("held-tree-quiet", 60_000)
+    try {
+      await delay(WAKE_COALESCE_MS + 500)
+      assert.equal(f.wakes().length, 1, "past the burst's window the held result still woke nobody")
+      const b = f.w.agents.roster(f.apex.conversation).find((agent) => agent.child?.thread === f.children.get("b"))
+      assert.deepEqual(b?.child?.state, { kind: "ended", outcome: "done" }, "the roster the person's card reads says it finished, before any digest")
+      const read = await f.w.agents.read(f.apex.caller, { child: "b" })
+      assert.ok(!("refused" in read) && /Done: b checked its part\./.test(JSON.stringify(read)), `agents_read gives its result meanwhile: ${JSON.stringify(read).slice(0, 300)}`)
+      assert.equal(f.w.agents.keptOpenBy(f.children.get("b")!), "finished too recently")
+      assert.equal(f.w.store.undeliveredReports().length, 0, "its report is its digest's, in the queue")
+      const at = Date.now()
+      f.finish("c")
+      await until("the held result and the last one to go", () => f.wakes().length === 2, 5_000)
+      assert.ok(f.wakes()[1]!.at - at < 1_500, `as the last Fin finishes, not at the hold's time: ${f.wakes()[1]!.at - at} ms`)
+      assert.match(f.wakes()[1]!.text, /2 finished:[\s\S]*"b"[\s\S]*"c"/, "one digest for both")
+      await f.w.settle()
+      assert.equal(f.wakes().length, 2, "three results, two digests")
+      assert.equal(f.waiting().length, 0)
+    } finally {
+      await f.w.close()
+    }
+  }
+  // A Fin fails: the failure goes as it would alone, and takes the held result with it.
+  {
+    const f = await heldFor("held-failure", 60_000, "c")
+    try {
+      const at = Date.now()
+      f.finish("c")
+      await until("the failure to go", () => f.wakes().length === 2, 5_000)
+      assert.ok(f.wakes()[1]!.at - at < 1_500, `at once: ${f.wakes()[1]!.at - at} ms`)
+      assert.match(f.wakes()[1]!.text, /"b"/, "with the held result")
+      assert.match(f.wakes()[1]!.text, /"c" \([^)]*\) failed/, "and the failure")
+      await f.w.settle()
+      assert.equal(f.wakes().length, 2)
+    } finally {
+      await f.w.close()
+    }
+  }
+  // The person writes to the Apex: the held news goes inside their turn, and wakes it for nothing more.
+  {
+    const f = await heldFor("held-person", 60_000)
+    try {
+      f.w.say(f.apex.conversation, "How is it going?")
+      await until("the person's turn", () => f.w.prompts.some((prompt) => prompt.conversation === f.apex.conversation && spoken(prompt.text).startsWith("How is it going?")))
+      const turn = spoken(f.w.prompts.find((prompt) => prompt.conversation === f.apex.conversation && spoken(prompt.text).startsWith("How is it going?"))!.text)
+      assert.match(turn, /Done: b checked its part\./, "their turn carries the held result")
+      assert.equal(f.w.live.snapshot(f.apex.conversation)!.requests.find((request) => request.id === f.held.id)?.joinedInto !== undefined, true, "folded into their message")
+      f.finish("c")
+      await f.w.settle()
+      assert.equal(f.wakes().filter((wake) => /Done: b checked its part\./.test(wake.text)).length, 0, "and no digest says it again")
+    } finally {
+      await f.w.close()
+    }
+  }
+  // Nobody finishes, asks or writes: it goes when its time comes, counted from when it was held.
+  {
+    const f = await heldFor("held-bound", 1_500)
+    try {
+      await until("the held result to go at its time", () => f.wakes().length === 2, 5_000)
+      const late = f.wakes()[1]!.at - f.held.at
+      assert.ok(late >= 0 && late < 1_000, `at its time, not before: ${late} ms after`)
+      assert.match(f.wakes()[1]!.text, /1 finished:[\s\S]*"b"/)
+    } finally {
+      await f.w.close()
+    }
+  }
+  // The host restarts while it's held: it's still held, until the time the last host gave it, and goes once.
+  for (const how of ["restart", "crashed"] as const) {
+    const f = await heldFor(`held-${how}`, 6_000)
+    try {
+      await f.w[how]()
+      const kept = f.w.live.snapshot(f.apex.conversation)!.requests.find((request) => request.id === f.held.id)!
+      assert.equal(kept.status, "held", `${how}: still held`)
+      assert.deepEqual(kept.wake, { at: f.held.at, after: "digest", since: f.held.since }, `${how}: until the same time, not one counted from the new host's start`)
+      await until(`${how}: the held result to go`, () => f.wakes().some((wake) => /"b"/.test(wake.text)), 10_000)
+      const went = f.wakes().find((wake) => /"b"/.test(wake.text))!
+      assert.ok(went.at >= f.held.at && went.at - f.held.at < 1_000, `${how}: at its time: ${went.at - f.held.at} ms after`)
+      // The last Fin's turn, which the exit cut, went on in this host: it ends now.
+      f.finish("c")
+      await f.w.settle(2_600, 30_000)
+      assert.equal(f.wakes().filter((wake) => /Done: b checked its part\./.test(wake.text)).length, 1, `${how}: heard once`)
+      assert.equal(f.w.store.undeliveredReports().length, 0)
+    } finally {
+      await f.w.close()
+    }
+  }
+}
+
 /** `finish`: a question goes to the person, never to the Apex; once the person answers, the result wakes the Apex. */
 async function finishOnly(): Promise<void> {
   const children = new Set<string>()
@@ -633,6 +774,7 @@ try {
   described()
   await backgroundAnswersAtOnce()
   await burst()
+  await heldResults()
   await finishOnly()
   await progressThenTurnEnd()
   await focusSteerAcrossCrash()

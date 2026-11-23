@@ -3,11 +3,11 @@ import { errorMessage } from "../base/error-message.js"
 import { APEX_WORD, decisionWords, FIN_WORD, reportAsk, reportPhase, reportWord, UNFINISHED_WORDS, waitingWords, type Notice, type Report } from "../contracts/agents.js"
 import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
-import { FOCUS_MS, quietLine, WAKE_COALESCE_MS } from "../contracts/children.js"
+import { FOCUS_MS, HOLD_RESULTS_MS, quietLine, WAKE_COALESCE_MS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
 
-export { DIGEST_WAITS, FROM_AGENTS, fromAgent, WAKE_COALESCE_MS, WAKES_PER_MINUTE } from "../contracts/children.js"
+export { DIGEST_WAITS, FROM_AGENTS, fromAgent, HOLD_RESULTS_MS, WAKE_COALESCE_MS, WAKES_PER_MINUTE } from "../contracts/children.js"
 
 /** A result the Apex waited for goes after this: the Apex asked for it, so only what settles with it joins it. */
 export const RESULT_COALESCE_MS = 250
@@ -27,6 +27,8 @@ export interface OpenDigest {
   notices: readonly Notice[]
   /** What it carries beside them (`takeLines`), which every rewrite of it keeps. */
   lines?: readonly string[]
+  /** Held for the Fins still at work (`HOLD_RESULTS_MS`): when its first result was held (`RequestWake.since`). */
+  held?: number
 }
 
 export interface AgentWakesDeps {
@@ -38,18 +40,27 @@ export interface AgentWakesDeps {
   awaited?(notice: Notice): boolean
   /** Whether the Apex's conversation is moving to another harness or account for now (a usage limit's move). */
   moving?(conversation: string): boolean
+  /** Whether a Fin of the Apex other than `but` is working, starting or queued to start: a result that asks nothing waits for those. */
+  working?(conversation: string, but?: string): boolean
+  /** Whether the turn the Apex runs is its Fins' news alone, a digest's own: a result is held through it as while it's idle. */
+  onNews?(conversation: string): boolean
+  /** Whether a wait its Apex armed names this notice's Fin (a turn wait): its result is what that wait is for. */
+  waitedFor?(notice: Notice): boolean
   /** The digests waiting unsent in the Apex's queue, oldest first: the newest is the one a new notice joins. */
   unsent(conversation: string): OpenDigest[]
   /** Whether a digest in the Apex's queue, sent or not, carries this notice: its receipt, read again after a crash. */
   carried(conversation: string, notice: string): boolean
   /**
    * Puts the digest in the Apex's queue under `request`, as the agent `actor`'s words: held until `at` when given (the
-   * burst's window), paused when the Apex is a stopped Fin. The minute's budget is the queue's, as it sends. A request taken once already is
-   * the same one.
+   * burst's window, or with `since` the Fins still at work), paused when the Apex is a stopped Fin. The minute's budget
+   * is the queue's, as it sends. A request taken once already is the same one.
    */
-  admit(conversation: string, request: string, text: string, notices: readonly Notice[], actor: Extract<Actor, { kind: "agent" }>, hold: { at: number } | "paused" | undefined, lines?: readonly string[]): void
-  /** The unsent digest `request` says `text` now, carrying `notices` and `lines`; false when it went meanwhile. */
-  rewrite(conversation: string, request: string, text: string, notices: readonly Notice[], lines?: readonly string[]): boolean
+  admit(conversation: string, request: string, text: string, notices: readonly Notice[], actor: Extract<Actor, { kind: "agent" }>, hold: { at: number; since?: number } | "paused" | undefined, lines?: readonly string[]): void
+  /**
+   * The unsent digest `request` says `text` now, carrying `notices` and `lines`; false when it went meanwhile. `free`:
+   * one held for the Fins still at work is held no longer, and goes now.
+   */
+  rewrite(conversation: string, request: string, text: string, notices: readonly Notice[], lines?: readonly string[], free?: boolean): boolean
   /** Joins the digest to the running turn at its next step, resolving whether the harness took it; false when no turn could take one. */
   steer(conversation: string, id: string, text: string): Promise<boolean> | false
   /**
@@ -72,6 +83,8 @@ export interface AgentWakesDeps {
   now?(): number
   /** How long a working Apex's turn runs before what waits for its end is steered in once (`FOCUS_MS`); a test shortens it. */
   focusMs?: number
+  /** How long results that ask nothing wait for the Fins still at work (`HOLD_RESULTS_MS`); a test shortens it. */
+  holdMs?: number
 }
 
 /**
@@ -81,6 +94,17 @@ export interface AgentWakesDeps {
 function asksApex(notice: Notice): boolean {
   const { status, for: owner, handoff, awaits } = notice.report
   return ((status === "blocked" || status === "needs-input") && owner !== "person") || notice.decision === "lead" || Boolean(handoff) || Boolean(awaits)
+}
+
+/**
+ * A result that asks its Apex nothing: a done report with no question and no decision, which no `wait` start waited
+ * for (`settledOnly`). A failure, an end without a result, a question, a handoff, a wait on someone, another Apex's
+ * reply and Mako's own notices (a quiet Fin, an unanswered message) are none of them. What starts `after` it Mako
+ * starts itself.
+ */
+function asksNothing(notice: Notice): boolean {
+  const { report } = notice
+  return report.status === "done" && !report.question?.trim() && !notice.decision && !notice.settledOnly && !notice.reply && !notice.quiet && !notice.unanswered
 }
 
 /**
@@ -95,11 +119,14 @@ function asksApex(notice: Notice): boolean {
  * held until `WAKE_COALESCE_MS` after the last digest went (`RESULT_COALESCE_MS`
  * for a result the Apex waited for, `settledOnly`, which also goes first and in
  * full). So a burst is two wakes, the first report's and everything else's,
- * never one a report. Queued for a busy Apex's turn end; steered into the running turn
- * at its next step where the harness takes that, and admitted when it
- * doesn't; paused for a stopped Fin until it's resumed. Past
- * `WAKES_PER_MINUTE` a digest waits for the minute's budget, which the queue
- * keeps as it sends (`LiveDispatch`). Its reports are
+ * never one a report. Nor one a result when they come minutes apart: once the
+ * Apex heard one, a result that asks nothing is held in the unsent digest for
+ * the Fins still at work, `HOLD_RESULTS_MS` at most, and what ends the hold
+ * sends them together (`waitsForOthers`, `release`). Queued for a busy
+ * Apex's turn end; steered into the running turn at its next step where the
+ * harness takes that, and admitted when it doesn't; paused for a stopped Fin
+ * until it's resumed. Past `WAKES_PER_MINUTE` a digest waits for the minute's
+ * budget, which the queue keeps as it sends (`LiveDispatch`). Its reports are
  * heard once it's in the queue: the queue, not this, delivers it.
  */
 export class AgentWakes {
@@ -144,7 +171,11 @@ export class AgentWakes {
     // A running turn that takes a message at its next step hears a question it can answer now. The rest waits for the
     // turn's end as one digest, so the Apex isn't steered by each report while it works, unless its turn runs long.
     if (ready === "steer" && !notice.settledOnly && !notice.wake) {
-      if (asksApex(notice)) return this.steerIn(conversation, notice)
+      if (asksApex(notice)) {
+        // What was held for the others waits no longer: it goes at this turn's end, or with the ask if the turn refuses it.
+        this.release(conversation, "a Fin asks")
+        return this.steerIn(conversation, notice)
+      }
       this.armFocus(conversation)
     }
     const open = this.open(conversation)
@@ -162,13 +193,39 @@ export class AgentWakes {
    * that works again) leaves each of them, so no digest says a Fin ended while it works. Asked as a Fin's state moves.
    */
   refresh(conversation: string): void {
-    if (!this.deps.current) return
+    let held = false
     for (const open of this.deps.unsent(conversation)) {
       if (this.focusing.has(open.id)) continue
+      if (open.held !== undefined) held = true
+      if (!this.deps.current) continue
       const rest = open.notices.filter((notice) => this.deps.current!(notice))
       if (rest.length === open.notices.length) continue
       this.narrow(conversation, open, rest)
       hostLog("agents", "stale end not reported", { conversation, reports: open.notices.filter((notice) => !rest.includes(notice)).map((notice) => notice.report.id).join(" ") })
+    }
+    // Results held for the Fins still at work have none to wait for once the last of them stopped working, however it did.
+    if (held && !this.deps.working?.(conversation)) this.release(conversation, "none of its Fins is at work")
+  }
+
+  /**
+   * Whether a result waits for the others, to go with theirs as one digest: it asks nothing (`asksNothing`), a Fin of
+   * its Apex other than its own is still working, starting or queued, and no wait its Apex armed names it. Its own Fin
+   * reads as working until the turn it reported from ends, so it isn't asked about.
+   */
+  private waitsForOthers(conversation: string, notice: Notice): boolean {
+    return asksNothing(notice) && this.deps.working?.(conversation, notice.report.child) === true && !this.deps.waitedFor?.(notice)
+  }
+
+  /**
+   * The results held for the Fins still at work go now, as one digest said as the tree stands: a Fin asked or failed,
+   * none is at work any more, or a turn of the Apex's own ended. The person's message takes them along in the queue
+   * (`foldQueued`), and their time (`HOLD_RESULTS_MS` from the first held) is the queue's to keep, across a restart too.
+   */
+  private release(conversation: string, why: string): void {
+    for (const open of this.deps.unsent(conversation)) {
+      if (open.held === undefined || this.focusing.has(open.id)) continue
+      if (!this.deps.rewrite(conversation, open.id, this.words(conversation, open.notices, open.lines ?? []), open.notices, open.lines, true)) continue
+      hostLog("agents", "held results go", { conversation, request: open.id, why, coalesced: open.notices.length, heldMs: this.now() - open.held })
     }
   }
 
@@ -182,9 +239,13 @@ export class AgentWakes {
     for (const id of ids) this.leftOvers.add(id)
   }
 
-  /** The Apex's turn ended: its queue sends what waits next, said as its Fins stand now (`refresh`). */
-  settled(conversation: string): void {
+  /**
+   * The Apex's turn ended: its queue sends what waits next, said as its Fins stand now (`refresh`). `own`: the turn was
+   * one of its own, not its Fins' news alone, so it hears what was held for the others now, where it stopped anyway.
+   */
+  settled(conversation: string, own = false): void {
     this.refresh(conversation)
+    if (own) this.release(conversation, "a turn of its own ended")
   }
 
   /** Takes back a notice its Apex heard another way (a `wait` start that answers its result), from whichever unsent digest has it; false when none does. */
@@ -261,8 +322,14 @@ export class AgentWakes {
    * digest, the store's claim, its receipt) are each idempotent and read again on recovery (`carried`).
    */
   private join(conversation: string, open: OpenDigest, notice: Notice): void {
-    // A digest carries at most `FIN_REPORTS_MAX`; past that the notice starts the next one.
-    if (open.notices.length >= FIN_REPORTS_MAX) return this.start(conversation, [notice], this.deps.ready(conversation))
+    // A digest held for the Fins still at work stays held only while what joins it waits for them too: a failure, a
+    // question, a waited-for result or the last Fin's result frees it, and they go together.
+    const free = open.held !== undefined && !this.waitsForOthers(conversation, notice)
+    // A digest carries at most `FIN_REPORTS_MAX`; past that the notice starts the next one, held with it or going behind it.
+    if (open.notices.length >= FIN_REPORTS_MAX) {
+      if (free) this.release(conversation, "a report that isn't held")
+      return this.start(conversation, [notice], this.deps.ready(conversation), free ? undefined : open.held)
+    }
     const notices = [...open.notices, notice]
     const fresh = this.deps.takeLines?.(conversation) ?? []
     const lines = [...open.lines ?? [], ...fresh]
@@ -277,16 +344,16 @@ export class AgentWakes {
       hostWarn("agents", "a digest could not be written with this notice; it starts its own", { conversation, error: errorMessage({ error }) })
       return alone()
     }
-    if (!this.deps.rewrite(conversation, open.id, text, notices, lines)) return alone()
-    hostLog("agents", "digest joined", { conversation, request: open.id, notice: notice.id })
+    if (!this.deps.rewrite(conversation, open.id, text, notices, lines, free)) return alone()
+    hostLog("agents", "digest joined", { conversation, request: open.id, notice: notice.id, ...(open.held !== undefined && { held: !free }) })
     this.deps.assign([notice.report.id], open.id)
     hostLog("agents", "digest join assigned", { conversation, request: open.id, notice: notice.id })
     this.heardNow([notice])
     hostLog("agents", "wake", { conversation, request: open.id, how: "joined", coalesced: notices.length })
   }
 
-  /** A digest of its own in the Apex's queue, held for its burst's window. */
-  private start(conversation: string, notices: Notice[], ready: ParentReady): void {
+  /** A digest of its own in the Apex's queue, held for its burst's window; `heldSince`: behind a full one held for the Fins still at work, until its time. */
+  private start(conversation: string, notices: Notice[], ready: ParentReady, heldSince?: number): void {
     const now = this.now()
     const request = notices[0]!.wake ?? namedUuid(`wake:${conversation}:${notices.map((notice) => notice.report.id).join("\n")}`)
     const window = notices.some((notice) => notice.settledOnly) ? RESULT_COALESCE_MS : WAKE_COALESCE_MS
@@ -305,7 +372,15 @@ export class AgentWakes {
     // Never past its window from now: a last digest that reads as sent later than now (a clock set back since) holds the
     // next no longer than the window, so a digest held for an idle Apex always goes.
     const due = Math.min(Math.max(last === undefined ? now : last + window, leftOver || moving ? now + WAKE_COALESCE_MS : 0, awaited ? now + RESULT_COALESCE_MS : 0), now + WAKE_COALESCE_MS)
-    const hold = ready === "paused" ? "paused" : ready === "idle" && due > now ? { at: due } : undefined
+    // The first result of a run goes as above, so an Apex hears at once that its Fins began to finish. Once it was woken
+    // within `HOLD_RESULTS_MS`, a result that asks nothing is held for the Fins still at work, while it's idle or in a
+    // turn its Fins' news started: every one a digest and a turn was twelve of each for twelve Fins over ten minutes.
+    const bound = this.deps.holdMs ?? HOLD_RESULTS_MS
+    // Asked in the order of what each costs: most reports are a first, or ask something, and read nothing more for this.
+    const since = heldSince ?? (last !== undefined && now - last < bound && notices.every(asksNothing) &&
+      (ready === "idle" || ((ready === "steer" || ready === "queue") && this.deps.onNews?.(conversation) === true)) &&
+      notices.every((notice) => this.waitsForOthers(conversation, notice)) ? now : undefined)
+    const hold = ready === "paused" ? "paused" : since !== undefined ? { at: since + bound, since } : ready === "idle" && due > now ? { at: due } : undefined
     const lines = this.deps.takeLines?.(conversation) ?? []
     try {
       if (!notices[0]!.wake) this.deps.assign(notices.map((notice) => notice.report.id), request)
@@ -336,7 +411,8 @@ export class AgentWakes {
       this.focus.delete(conversation)
       if (this.stopped || this.deps.ready(conversation) !== "steer" || !this.deps.steerQueued) return
       const open = this.open(conversation)
-      if (!open?.notices.length) return
+      // One held for the Fins still at work isn't for this turn: what ends its hold sends it.
+      if (!open?.notices.length || open.held !== undefined) return
       // The digest itself goes into the turn, taken from the queue in the journal's one write; what arrives meanwhile
       // starts a digest of its own, and one the harness refuses stays queued for the turn's end.
       this.focusing.add(open.id)

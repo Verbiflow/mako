@@ -275,6 +275,33 @@ try {
     await f.world.close()
   }
 
+  // Its result held in its Apex's queue for a Fin still at work (`HOLD_RESULTS_MS`, lengthened here past the sweep's
+  // six hours and the day after): its Apex hasn't taken it, so it stays open, and closes once the digest went.
+  {
+    let release!: () => void
+    const held = new Promise<void>((resolve) => { release = resolve })
+    const f = await fixture("held-digest", {
+      finTurn: async (_turn, name, count) => {
+        if (name === "busy" && count === 1) await held
+        return undefined
+      },
+      world: { holdMs: 3 * 24 * 60 * 60_000 },
+    })
+    await f.start("busy")
+    const late = await f.start("late")
+    const waits = () => f.world.live.held(f.apex.conversation)?.requests.find((request) => (request.status === "queued" || request.status === "held") && request.digest?.notices.some((notice) => notice.report.child === late.child))
+    await until("the late Fin's result to be held in its Apex's queue", () => waits()?.wake?.since !== undefined)
+    assert.equal(waits()!.status, "held")
+    await staysOpen("a result held for the Fins still at work", f, "late")
+    assert.equal(f.world.agents.keptOpenBy(late.child), "its Apex hasn't taken its result")
+    assert.deepEqual(f.state("late"), { kind: "ended", outcome: "done" }, "it reads as done meanwhile")
+    release()
+    await f.world.settle(400)
+    await f.sweep(false)
+    assert.ok(closedFinished(f.edge("late")), `taken, it closes: ${f.world.agents.keptOpenBy(late.child)}`)
+    await f.world.close()
+  }
+
   // Its result in a digest its Apex hasn't taken: the Apex is mid-turn on a harness that hears it at its turn's end.
   {
     let release!: () => void

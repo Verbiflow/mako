@@ -194,6 +194,8 @@ export interface WorldOptions {
   apexAnswerMs?: number
   /** How long a working Apex's turn runs before what waits for its end is steered in once (`AgentsDeps.focusMs`). */
   focusMs?: number
+  /** How long results that ask nothing wait for the Fins still at work (`AgentsDeps.holdMs`). */
+  holdMs?: number
   /** How long a working Fin may show no activity before its Apex hears it (`AgentsDeps.quietMs`). */
   quietMs?: number
   /** The engine's timers for those waits (`AgentsDeps.later`): a fake clock a test advances itself. */
@@ -431,6 +433,7 @@ export class AgentsWorld {
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
       ...(this.options.focusMs !== undefined && { focusMs: this.options.focusMs }),
+      ...(this.options.holdMs !== undefined && { holdMs: this.options.holdMs }),
       ...(this.options.quietMs !== undefined && { quietMs: this.options.quietMs }),
       ...(this.options.later && { later: this.options.later }),
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),

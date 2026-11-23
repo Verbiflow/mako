@@ -874,7 +874,17 @@ paid for nothing (`bench:orch-wake-latency`: 2,006 ms to 37). What follows is
 ONE digest: at the end of the Apex's turn on the first, or `WAKE_COALESCE_MS`
 after the last digest went (`RESULT_COALESCE_MS` for a result it waited on)
 when that turn is already over, its provider waking through that wait when it
-sleeps (`AgentWakes.start`). Some wait the window even so: reports a previous
+sleeps (`AgentWakes.start`). Once it was woken within `HOLD_RESULTS_MS` (5
+minutes), a result that asks nothing (done, no question or decision, not a
+`wait` start's nor a turn wait's) is held in that unsent digest while another
+of its Fins is working, starting or queued, while the Apex is idle or in a
+turn its Fins' news started. What's held goes as one digest when a report
+that asks or went wrong joins it, with the person's next message
+(`foldQueued`), when none of its Fins is at work, when a turn of the Apex's
+own ends, or `HOLD_RESULTS_MS` after the first was held; the hold is the
+digest's own time in the queue (`RequestWake.since`), so a restart keeps it.
+Twelve Fins finishing over ten minutes are three digests, twelve before
+(`test:wake-queue`). Some wait the window even so: reports a previous
 host left unheard (a receipt read back as the Apex is taken up, a steer its
 harness had, takes them back rather than the Apex hearing them twice), and a
 digest for an Apex moving off a harness that ran out (sent at once, it knocks

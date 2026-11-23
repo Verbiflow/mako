@@ -291,6 +291,8 @@ export type AccountSwitchWait = (typeof ACCOUNT_SWITCH_WAITS)[number]
 export interface RequestWake {
   at: number
   after: string
+  /** A digest held for its Fins still at work (`HOLD_RESULTS_MS`): when its first result was held, which `at` counts from. */
+  since?: number
 }
 
 /** At most this many messages go with one (`LiveRequest.joined`); the rest go in a turn of their own. */

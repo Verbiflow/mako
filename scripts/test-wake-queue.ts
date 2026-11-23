@@ -9,7 +9,8 @@ import { followHostLog } from "@mako/host/base/host-log"
 import { ReportSchema, type Notice } from "@mako/host/contracts/agents"
 import { DIGEST_WAITS } from "@mako/host/contracts/children"
 import { readFinReports } from "@mako/host/contracts/fin-reports"
-import { AgentWakes, FROM_AGENTS, RESULT_COALESCE_MS, WAKE_COALESCE_MS, WAKES_PER_MINUTE, type AgentWakesDeps, type ParentReady } from "@mako/host/conversations/agent-wakes"
+import { AgentWakes, FROM_AGENTS, HOLD_RESULTS_MS, RESULT_COALESCE_MS, WAKE_COALESCE_MS, WAKES_PER_MINUTE, type AgentWakesDeps, type ParentReady } from "@mako/host/conversations/agent-wakes"
+import { FIN_REPORTS_MAX } from "@mako/host/contracts/fin-reports"
 import { carriedDigest } from "@mako/host/contracts/delivery-retry"
 import { LiveJournal } from "@mako/host/conversations/live-journal"
 import { AgentsWorld, TESTED_HARNESSES, type Script } from "./lib/agents-world.ts"
@@ -45,7 +46,7 @@ async function until(what: string, done: () => boolean, timeoutMs = 10_000): Pro
   }
 }
 
-interface Entry { id: string; text: string; notices: Notice[]; lines?: readonly string[]; hold: { at: number } | "paused" | undefined; sent?: number; canceled?: boolean }
+interface Entry { id: string; text: string; notices: Notice[]; lines?: readonly string[]; hold: { at: number; since?: number } | "paused" | undefined; sent?: number; canceled?: boolean }
 
 /** One Apex conversation as the queue would hold it, and every call the producer made. */
 function fakes(ready: () => ParentReady, now: () => number, steer: (text: string) => Promise<boolean> | false = () => false, current: (notice: Notice) => boolean = () => true) {
@@ -56,13 +57,15 @@ function fakes(ready: () => ParentReady, now: () => number, steer: (text: string
   const deps: AgentWakesDeps = {
     ready,
     lastSent: () => entries.reduce<number | undefined>((last, entry) => (entry.sent !== undefined && (last === undefined || entry.sent > last) ? entry.sent : last), undefined),
-    unsent: () => unsent().map((entry) => ({ id: entry.id, notices: entry.notices, ...(entry.lines && { lines: entry.lines }) })),
+    unsent: () => unsent().map((entry) => ({ id: entry.id, notices: entry.notices, ...(entry.lines && { lines: entry.lines }), ...(typeof entry.hold === "object" && entry.hold.since !== undefined && { held: entry.hold.since }) })),
     carried: (_conversation, id) => entries.some((entry) => !entry.canceled && entry.notices.some((each) => each.id === id)),
     admit: (_conversation, id, text, notices, _actor, hold, lines) => { if (!entries.some((entry) => entry.id === id)) entries.push({ id, text, notices: [...notices], hold, ...(lines && { lines }) }) },
-    rewrite: (_conversation, id, text, notices, lines) => {
+    rewrite: (_conversation, id, text, notices, lines, free) => {
       const entry = unsent().find((candidate) => candidate.id === id)
       if (!entry) return false
       if (!notices.length) entry.canceled = true
+      // Held for the Fins still at work no longer, as the queue frees it: its time is now.
+      if (free && typeof entry.hold === "object" && entry.hold.since !== undefined) entry.hold = undefined
       entry.text = text
       entry.notices = [...notices]
       entry.lines = lines ?? []
@@ -79,10 +82,53 @@ function fakes(ready: () => ParentReady, now: () => number, steer: (text: string
 }
 
 let reports = 0
-function notice(status: "done" | "blocked" = "done", marks: Partial<Notice> = {}): Notice {
+function notice(status: "done" | "blocked" | "failed" | "progress" = "done", marks: Partial<Notice> = {}, said: Partial<Notice["report"]> = {}): Notice {
   reports += 1
-  const report = ReportSchema.parse({ id: `report:${reports}`, child: randomUUID(), status, summary: `Report ${reports}.`, ownerGeneration: 1, at: reports })
+  const report = ReportSchema.parse({ id: `report:${reports}`, child: randomUUID(), status, summary: `Report ${reports}.`, ownerGeneration: 1, at: reports, ...said })
   return { id: `notice:${report.child}:${report.id}`, report, label: `"fin-${reports}" (Claude)`, fin: { name: `fin-${reports}`, harness: "claude" }, from: randomUUID(), ...marks }
+}
+
+
+/**
+ * Twelve Fins finishing fifty seconds apart, over ten minutes, under an idle Apex whose turn on a digest takes
+ * `turnMs`: the digests its queue sends, each with how many results it carried. The queue is the fake's, stepped a
+ * second at a time: a digest goes once its Apex is idle and its time has come, and a turn's end is said as the host
+ * says it. `holds` false leaves out what says a Fin is still at work, so nothing is ever held: the rule before.
+ */
+function twelveFins(holds: boolean, turnMs: number): number[] {
+  const SPACING = 50_000
+  const finishes = Array.from({ length: 12 }, (_, i) => (i + 1) * SPACING)
+  let clock = 0
+  let busyUntil = -1
+  let onNews = false
+  const fins = finishes.map(() => notice())
+  const f = fakes(() => (clock < busyUntil ? "queue" : "idle"), () => clock)
+  const wakes = new AgentWakes({
+    ...f.deps,
+    ...(holds && { working: (_conversation, but) => finishes.some((at, i) => at > clock && fins[i]!.report.child !== but), onNews: () => onNews }),
+  })
+  const sent: number[] = []
+  for (; clock <= 20 * 60_000; clock += 1_000) {
+    if (busyUntil === clock) {
+      onNews = false
+      wakes.settled("apex", false)
+    }
+    const at = finishes.indexOf(clock)
+    if (at >= 0) {
+      wakes.notice("apex", "", fins[at]!)
+      // Its own turn ends with its report, so its Fin's state moves: the host reads its Apex's unsent digests again.
+      wakes.refresh("apex")
+    }
+    const next = f.entries.find((entry) => entry.sent === undefined && !entry.canceled)
+    if (next && clock >= busyUntil && (next.hold === undefined || (typeof next.hold === "object" && next.hold.at <= clock))) {
+      next.sent = clock
+      sent.push(next.notices.length)
+      busyUntil = clock + turnMs
+      onNews = true
+    }
+  }
+  assert.equal(sent.reduce((sum, count) => sum + count, 0), 12, "every result reached the Apex, once")
+  return sent
 }
 
 /** The write gaps a digest crosses: its claim and its row as it starts, its row and its claim as a notice joins it. */
@@ -355,6 +401,181 @@ try {
     wakes.notice("apex", "", notice())
     await pause(0)
     assert.ok(f.open()!.text.includes("grok moved"), "a steer not taken: it goes in the digest instead")
+  }
+  {
+    // Results that ask nothing, minutes apart: the first of a run goes at once, and the ones after it are held in the
+    // one unsent digest for the Fins still at work, `HOLD_RESULTS_MS` at most from the first held.
+    let clock = 9_000_000
+    let ready: ParentReady = "idle"
+    let working = true
+    let onNews = false
+    const waitedFor = new Set<string>()
+    const f = fakes(() => ready, () => clock)
+    const deps: AgentWakesDeps = { ...f.deps, working: () => working, onNews: () => onNews, waitedFor: (each) => waitedFor.has(each.id) }
+    const wakes = new AgentWakes(deps)
+    const heldUntil = () => f.open()?.hold
+    /** The digest that waits goes, as the queue would send it, and its turn is over a moment later. */
+    const goes = () => {
+      f.open()!.sent = clock
+      clock += 30_000
+    }
+    wakes.notice("apex", "", notice())
+    assert.equal(heldUntil(), undefined, "the first result of a run goes at once, whoever still works")
+    goes()
+    const since = clock
+    const second = notice()
+    wakes.notice("apex", "", second)
+    assert.deepEqual(heldUntil(), { at: since + HOLD_RESULTS_MS, since }, "the next is held for the Fins still at work")
+    assert.ok(f.delivered.includes(second.report.id), "heard by the store once it's in the queue, as any digest's report")
+    clock += 60_000
+    wakes.notice("apex", "", notice())
+    assert.equal(f.entries.filter((entry) => entry.sent === undefined).length, 1, "and the one after joins it")
+    assert.deepEqual(heldUntil(), { at: since + HOLD_RESULTS_MS, since }, "its time still counted from the first held")
+    wakes.refresh("apex")
+    wakes.settled("apex", false)
+    assert.deepEqual(heldUntil(), { at: since + HOLD_RESULTS_MS, since }, "a Fin's step, or the end of a turn its Fins' news started, frees nothing")
+
+    // What ends the hold sends them as one digest. Each case holds two results again first.
+    const again = () => {
+      if (f.open()) goes()
+      working = true
+      ready = "idle"
+      wakes.notice("apex", "", notice())
+      wakes.notice("apex", "", notice())
+      assert.equal(f.open()!.notices.length, 2)
+      assert.ok(typeof f.open()!.hold === "object" && (f.open()!.hold as { since?: number }).since !== undefined, "two results held")
+    }
+    const freed = (what: string, count: number) => {
+      assert.equal(f.entries.filter((entry) => entry.sent === undefined && !entry.canceled).length, 1, `${what}: one digest`)
+      assert.equal(f.open()!.hold, undefined, `${what}: it goes now`)
+      assert.equal(f.open()!.notices.length, count, `${what}: with everything that was held`)
+    }
+    // A report that asks, or that went wrong, takes them along.
+    const asking: [string, Notice][] = [
+      ["a failure", notice("failed")],
+      ["an end without a result", notice("failed", {}, { unfinished: true })],
+      ["a question", notice("blocked")],
+      ["a question for the person its Apex hears of", notice("blocked", {}, { for: "person", told: true })],
+      ["a decision", notice("done", { decision: "lead" }, { question: "Merge it?" })],
+      ["a result a wait start waited for", notice("done", { settledOnly: true })],
+      ["a handoff", notice("progress", {}, { handoff: { to: "fin:other" } })],
+      ["a wait on someone", notice("progress", {}, { awaits: true })],
+      ["another Apex's reply", notice("done", { reply: true })],
+      ["a Fin gone quiet", notice("done", { quiet: { since: 1, forMs: 2 } })],
+    ]
+    for (const [what, each] of asking) {
+      again()
+      wakes.notice("apex", "", each)
+      freed(what, 3)
+    }
+    // None of those is ever held itself, the Apex woken a moment ago and Fins still at work or not.
+    for (const [what, each] of asking) {
+      goes()
+      clock -= 29_000
+      const fresh = { ...each, id: `${each.id}:again`, report: { ...each.report, id: `${each.report.id}:again` } }
+      wakes.notice("apex", "", fresh)
+      const hold = f.open()!.hold
+      assert.ok(hold === undefined || (typeof hold === "object" && hold.since === undefined && hold.at <= clock + WAKE_COALESCE_MS), `${what} is never held past its window: ${JSON.stringify(hold)}`)
+      clock += 29_000
+    }
+    // Nor a result a wait its Apex armed names: that wait's note is on its way.
+    goes()
+    const waited = notice()
+    waitedFor.add(waited.id)
+    wakes.notice("apex", "", waited)
+    assert.equal(typeof heldUntil() === "object" && (heldUntil() as { since?: number }).since !== undefined, false, "a result a turn wait names isn't held")
+    again()
+    const named = notice()
+    waitedFor.add(named.id)
+    wakes.notice("apex", "", named)
+    freed("a result a turn wait names", 3)
+    // The tree goes quiet: the last Fin's own result, or the last one stopping however it did.
+    again()
+    working = false
+    wakes.notice("apex", "", notice())
+    freed("the last Fin's result", 3)
+    again()
+    working = false
+    wakes.refresh("apex")
+    freed("none of its Fins at work any more", 2)
+    // A turn of the Apex's own ends.
+    again()
+    wakes.settled("apex", true)
+    freed("a turn of its own ended", 2)
+    // A question steered into its running turn: what was held goes at that turn's end.
+    again()
+    ready = "steer"
+    const steering = new AgentWakes({ ...deps, steer: () => Promise.resolve(true) })
+    steering.notice("apex", "", notice("blocked"))
+    await pause(0)
+    freed("a question its running turn took", 2)
+    steering.dispose()
+    // Past the bound since the Apex was last woken, a result is the first of a run again.
+    goes()
+    ready = "idle"
+    working = true
+    clock += HOLD_RESULTS_MS
+    wakes.notice("apex", "", notice())
+    assert.equal(heldUntil(), undefined, "a result long after the last digest goes at once")
+    // During a turn its Fins' news started, a result is held as while idle; during a turn of its own it waits for that
+    // turn's end, unheld, as before.
+    goes()
+    clock -= 20_000
+    ready = "queue"
+    onNews = true
+    wakes.notice("apex", "", notice())
+    assert.deepEqual(heldUntil(), { at: clock + HOLD_RESULTS_MS, since: clock }, "held through a turn its Fins' news started")
+    wakes.settled("apex", false)
+    assert.ok(heldUntil(), "and past its end")
+    wakes.settled("apex", true)
+    goes()
+    clock -= 20_000
+    onNews = false
+    wakes.notice("apex", "", notice())
+    assert.equal(heldUntil(), undefined, "a turn of its own: its end takes it")
+    // A held digest that is full: the next result starts one behind it, held until the same time.
+    goes()
+    ready = "idle"
+    const from = clock
+    for (let count = 0; count <= FIN_REPORTS_MAX; count += 1) wakes.notice("apex", "", notice())
+    const waiting = f.entries.filter((entry) => entry.sent === undefined && !entry.canceled)
+    assert.deepEqual(waiting.map((entry) => entry.notices.length), [FIN_REPORTS_MAX, 1])
+    assert.deepEqual(waiting.map((entry) => entry.hold), [{ at: from + HOLD_RESULTS_MS, since: from }, { at: from + HOLD_RESULTS_MS, since: from }], "both go at the first one's time")
+    working = false
+    wakes.refresh("apex")
+    assert.deepEqual(waiting.map((entry) => entry.hold), [undefined, undefined], "and both are freed together")
+    for (const entry of waiting) entry.sent = clock
+    // A running turn's focus steer leaves a held digest where it is.
+    {
+      const steered: string[] = []
+      const g = fakes(() => "steer", () => 5_000_000)
+      g.entries.push({ id: "sent", text: "", notices: [], hold: undefined, sent: 5_000_000 - 1_000 })
+      const focused = new AgentWakes({ ...g.deps, working: () => true, onNews: () => true, focusMs: 30, steerQueued: (_conversation, _id, request) => { steered.push(request); return Promise.resolve(true) } })
+      focused.notice("apex", "", notice())
+      assert.ok(typeof g.open()!.hold === "object", "held in a turn its Fins' news started")
+      await pause(90)
+      assert.deepEqual(steered, [], "a held digest isn't steered into the turn")
+      focused.dispose()
+    }
+    // With nothing to say a Fin is still at work, nothing is held: the rule as it was.
+    {
+      const g = fakes(() => "idle", () => clock)
+      const plain = new AgentWakes(g.deps)
+      plain.notice("apex", "", notice())
+      g.open()!.sent = clock
+      clock += 30_000
+      plain.notice("apex", "", notice())
+      assert.equal(g.open()!.hold, undefined)
+    }
+    // Twelve Fins finishing over ten minutes, fifty seconds apart: a digest and a turn each before, three now, the
+    // first result's at once, then the results of the next five minutes, then the rest as the last Fin finishes.
+    assert.deepEqual(twelveFins(false, 20_000), Array.from({ length: 12 }, () => 1), "before: twelve digests")
+    assert.deepEqual(twelveFins(true, 20_000), [1, 7, 4], "now: three")
+    // The same with an Apex whose turn on a digest outlasts the gap between results: before, each turn's end sent what
+    // came during it, so nearly one a result still.
+    assert.equal(twelveFins(false, 60_000).length, 11, "before, a slow Apex: eleven")
+    assert.deepEqual(twelveFins(true, 60_000), [1, 7, 4], "now: three")
+    console.log("wakes: results that ask nothing are held for the Fins still at work after the first, and go as one digest when a Fin asks or fails, none is at work, a turn of the Apex's own ends, or five minutes passed; twelve Fins over ten minutes are 3 digests, 12 before")
   }
   // A digest goes on with all it carries; what's left behind is how that attempt went, named once.
   assert.deepEqual(carriedDigest({ notices: [], lines: ["moved"], sentAt: 1, heard: true, resting: true, nextTry: 2 }), { notices: [], lines: ["moved"] })
