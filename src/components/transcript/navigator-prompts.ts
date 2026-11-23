@@ -20,6 +20,6 @@ function samePrompts(before: readonly Exchange[], after: readonly Exchange[]): b
   return after.every((exchange, index) => {
     const held = before[index]!
     return held.id === exchange.id && held.prompt === exchange.prompt && held.opener === exchange.opener &&
-      held.unloaded === exchange.unloaded && held.direct === exchange.direct && (held.response.length > 0) === (exchange.response.length > 0)
+      held.unloaded === exchange.unloaded && held.direct === exchange.direct && held.run?.label === exchange.run?.label && (held.response.length > 0) === (exchange.response.length > 0)
   })
 }

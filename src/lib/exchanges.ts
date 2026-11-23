@@ -7,6 +7,7 @@ import { foldUsageLimits } from "@/lib/usage-limit-folds"
 import { opensContinuation, savedContinuation, type SavedContinuation } from "@mako/host/contracts/turn-continuation"
 import { savedResumeAccount } from "@mako/host/contracts/resume-account"
 import { routedAnswer, routedCall, type Routed, type RoutedAnswer } from "@mako/host/contracts/children"
+import type { FinReportCard } from "@mako/host/contracts/fin-reports"
 
 /**
  * An exchange is one question and everything the agent did to answer it.
@@ -61,7 +62,20 @@ export interface Exchange {
    * each turn's opener, in order (`foldUsageLimits`).
    */
   refused?: Readonly<Record<string, readonly ChatMessage[]>>
+  /**
+   * The turns this one row stands for: a run of an Apex's turns that its Fins' reports woke and nothing else
+   * (`foldReportRuns`). It has no prompt and no answer of its own; the transcript draws its turns' reports as one
+   * account, opening onto each turn as it was. Only the transcript's own list holds one.
+   */
+  run?: ReportRun
   timestamp?: number
+}
+
+/** A run's turns in order, every report they were woken with, and what the navigator calls the row. */
+export interface ReportRun {
+  turns: readonly Exchange[]
+  cards: readonly FinReportCard[]
+  label: string
 }
 
 /**
@@ -633,6 +647,7 @@ export function promptLabel(exchange: Exchange): string {
 
 function labelOf(exchange: Exchange): string {
   if (exchange.unloaded !== undefined) return label(exchange.unloaded)
+  if (exchange.run) return label(exchange.run.label)
   const direct = exchange.direct?.note
   if (direct?.direct) return label(`To ${direct.direct.to}: ${direct.body ?? ""}`)
   const cause = !exchange.prompt ? exchange.opener?.note?.cause : undefined

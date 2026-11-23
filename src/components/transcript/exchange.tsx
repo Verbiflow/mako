@@ -51,8 +51,9 @@ import {
 import { formatDuration, formatTime, textOf } from "@/lib/format"
 import { workHeadline } from "@/lib/work-headline"
 import { turnRows, type FoldRow, type TurnEntry, type TurnRow } from "@/lib/turn-rows"
+import { asksPerson } from "@/lib/fin-report-words"
 import { FoldLine } from "./fold-line"
-import { FinReport, ReportBlock } from "./fin-report"
+import { FinReport, ReportBlock, ReportLine } from "./fin-report"
 import { useWakeReports } from "./use-wake-reports"
 import { setTurnFoldOpen, turnFoldKey, useTurnFolds } from "@/state/turn-folds"
 import { readSent } from "@/lib/context/sent"
@@ -165,6 +166,8 @@ interface ExchangeProps {
   /** The person's words reached this session after it rested a day or more (`wokeAfterRest`). */
   woke?: WokeAfterRest
   failed?: boolean
+  /** Drawn inside the row of a run it belongs to (`ReportRun`): the row is the transcript's turn, this one a part of it. */
+  within?: boolean
 }
 
 function TurnExchange({
@@ -175,6 +178,7 @@ function TurnExchange({
   carried,
   woke,
   failed,
+  within,
 }: ExchangeProps) {
   useHarnessIdentity()
   // A saved conversation keeps no request: Mako's goal steps are known by their words.
@@ -309,7 +313,11 @@ function TurnExchange({
     return drawn
   }
   const renderRow = (row: TurnRow): ReactNode => {
-    if (row.kind === "report") return <ReportBlock key={row.id} card={row.entry.card} timestamp={exchange.prompt?.timestamp} />
+    if (row.kind === "report") {
+      // A question for the person is one line here: the Shiver card is where it's answered.
+      const asking = asksPerson(row.entry.card) ? wake.find((report) => report.card === row.entry.card) : undefined
+      return asking ? <ReportLine key={row.id} report={asking} /> : <ReportBlock key={row.id} card={row.entry.card} timestamp={exchange.prompt?.timestamp} />
+    }
     if (row.kind === "message") return renderEntries([row.entry], false)
     return (
       <TurnFoldRow
@@ -337,7 +345,7 @@ function TurnExchange({
       {/* One gallery per exchange: every picture and video in the prompt, the answer and its work steps a step apart. */}
       <MediaGalleryScope>
       <AnswerRequestContext.Provider value={standing}>
-      <article data-exchange={exchange.id} className="contain-turn scroll-mt-6">
+      <article {...(within ? { "data-run-turn": exchange.id } : { "data-exchange": exchange.id })} className={within ? undefined : "contain-turn scroll-mt-6"}>
         {exchange.prompt ? (
           continuedPrompt ? (
             <TurnWentOn continued={continuedPrompt} message={exchange.prompt} provider={provider} />
