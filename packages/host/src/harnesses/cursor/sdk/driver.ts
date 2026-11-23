@@ -841,6 +841,7 @@ export function createCursorSdkDriver(dependencies: CursorSdkDriverDependencies)
           strictStores: dependencies.stores.strict,
           agentId,
           create: !options.resume && !fork,
+          // Cursor never names a local agent itself, so the title is its name even when it is only the prompt's cut.
           name: options.title,
           model: selection,
           mcpServers: servers,

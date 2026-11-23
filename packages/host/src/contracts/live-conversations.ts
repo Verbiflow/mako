@@ -42,6 +42,12 @@ export interface LiveStartOptions {
   conversationId: string
   resume?: string
   title?: string
+  /**
+   * `title` is only the first prompt, cut short: it names the row until the
+   * harness names its session, so a harness that would is not given it as the
+   * session's name. A title someone chose leaves this out.
+   */
+  placeholderTitle?: boolean
   threadPath?: string
   displayPrompt?: string
   modeId?: string

@@ -1735,6 +1735,7 @@ const inputs = {
         conversationId: z.string(),
         resume: z.string().optional(),
         title: z.string().optional(),
+        placeholderTitle: z.boolean().optional(),
         threadPath: z.string().optional(),
         displayPrompt: z.string().optional(),
         modeId: z.string().optional(),

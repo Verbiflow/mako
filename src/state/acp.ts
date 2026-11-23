@@ -489,6 +489,7 @@ export const acp = {
     }
     // Named from the first prompt, the way every other thread is; the
     // provider's own title replaces it once the session file reports one.
+    // The start says the title is only that, so the harness still writes its own.
     const title = titleFromPrompt(displayPrompt, attachments.map((item) => item.name))
     const starting = beginStart({
       harness,
@@ -500,7 +501,7 @@ export const acp = {
       hiddenUserPrompt: displayPrompt === prompt ? null : prompt,
       worktree,
     })
-    const options: AcpStartOptions = title ? { title } : {}
+    const options: AcpStartOptions = title ? { title, placeholderTitle: true } : {}
     if (worktree) options.worktree = true
     if (worktree && worktreeStart) options.worktreeStart = worktreeStart
     if (cloud) options.cloud = {}
