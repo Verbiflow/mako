@@ -45,9 +45,10 @@ export const PROTOCOL_VERSION = 1
  for a Thread the runtime runs, to that Thread's readers who read such frames, never into its log
  (`PASSING_THREAD_VERSION`). 29 lets a `sessions` row say what the person marked its Thread with: where its work
  stands (`workStatus`, since `workStatusAt`) and that it's to be read again (`markedUnread`, `THREAD_MARKS_VERSION`).
- Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ 30 says the gateway holds a Fin's reports for its Apex's Session, wherever that runs (`tree-notices.ts`,
+ `TREE_NOTICES_LINK_VERSION`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 29
+export const LINK_VERSION = 30
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -202,6 +203,14 @@ export const PASSING_THREAD_VERSION = 28
  * `markedUnread`): a gateway that agreed less gets the row without them, and its devices show no status.
  */
 export const THREAD_MARKS_VERSION = 29
+
+/**
+ * The first link version whose gateway takes a Fin's report as a notice it holds for the Apex's Session
+ * (`tree-notices.ts`). Nothing on the link itself changes: a notice is posted over HTTP, which a gateway before this
+ * has no path for, so a Fin's host posts one only once its link agreed this. Whether the Apex's host takes a notice
+ * from the account is its own word, in what it advertises (`TREE_NOTICES_CAPABILITY`).
+ */
+export const TREE_NOTICES_LINK_VERSION = 30
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake
