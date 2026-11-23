@@ -1,5 +1,8 @@
 import type { ThreadMoveOutcome, ThreadReturnOutcome } from "@mako/host/contracts/cloud-threads"
 import { OwnerUnavailableError, RuntimeDisconnectedError } from "@mako/host/contracts/host-connection"
+import { continueTreeCut } from "@mako/protocol/continues"
+import { treeCutWords } from "@mako/protocol/moves"
+import type { ListedSession } from "@mako/protocol/thread-listing"
 import { whileBusy } from "./busy"
 import type { WebClient } from "./client"
 import type { MoveWay } from "./move-progress"
@@ -19,6 +22,17 @@ export interface MoveAsk {
   move: string
 }
 
+/**
+ * Why its tree of agents keeps a Thread on its Mac, before the move is asked: the Mac's own rule (`treeCut`) read from
+ * the account's list, where an Apex's row says its Fins and names each Fin's Thread, in the Mac's own sentence with
+ * its name. The sheet says it in place of its button. Undefined when nothing the list says keeps it; the Mac still
+ * weighs the move itself.
+ */
+export function moveKept(row: ListedSession, rows: readonly ListedSession[], mac: string): string | undefined {
+  const cut = continueTreeCut(row, rows)
+  return cut && treeCutWords(cut, mac)
+}
+
 /** How long this browser waits before asking again after a move's answer was lost: soon, then less and less often. */
 export const ASK_AGAIN_MS = [2_000, 5_000, 10_000, 30_000] as const
 
@@ -26,6 +40,7 @@ export const ASK_AGAIN_MS = [2_000, 5_000, 10_000, 30_000] as const
  * Asks the Mac to move a Thread up to the cloud (`mako:thread-move`), or to bring it back from there
  * (`mako:thread-return`), as the desk's own move does, and follows it until its end. A turn at work goes along: paused
  * on the Mac and carried on in the cloud. A refusal says why and offers Retry, a new move; never repeated by itself.
+ * One by its tree of agents offers none: asked again, the Mac would say the same.
  */
 export async function startMove(client: WebClient, ask: { thread: WebThread; conversation: string; way: MoveWay; mac: MoveMac; handOff: boolean }): Promise<void> {
   const move = crypto.randomUUID()
@@ -49,7 +64,8 @@ function askMac(client: WebClient, way: MoveWay, mac: MoveMac, conversation: str
 }
 
 function cloudEnd(outcome: ThreadMoveOutcome): MoveEnd {
-  return outcome.kind === "moved" || outcome.kind === "released" ? { kind: "done" } : { kind: outcome.kind === "unsettled" ? "unsettled" : "failed", reason: outcome.reason }
+  if (outcome.kind === "moved" || outcome.kind === "released") return { kind: "done" }
+  return outcome.kind === "unsettled" ? { kind: "unsettled", reason: outcome.reason } : { kind: "failed", reason: outcome.reason, ...outcome.tree && { tree: true as const } }
 }
 
 function deviceEnd(outcome: ThreadReturnOutcome): MoveEnd {

@@ -44,7 +44,7 @@ interface Conversation {
   worktree?: boolean
 }
 
-function world(conversations: Record<string, Conversation>, options: { refusal?: string; machine?: boolean; signedOut?: boolean; kept?: Map<string, AgentAsk[]> } = {}) {
+function world(conversations: Record<string, Conversation>, options: { refusal?: string; tree?: Record<string, string>; machine?: boolean; signedOut?: boolean; kept?: Map<string, AgentAsk[]> } = {}) {
   const calls: Array<{ kind: "move"; id: string; move: string; handOff?: ThreadHandOff } | { kind: "back" | "continue"; id: string; move: string }> = []
   // What `LiveAsks` keeps in each conversation's control: a new tool over the same map is a host after a restart.
   const kept = options.kept ?? new Map<string, AgentAsk[]>()
@@ -54,6 +54,7 @@ function world(conversations: Record<string, Conversation>, options: { refusal?:
       return { kind: "moved", cloudThread: "t-cloud" }
     },
     refusal: async () => options.refusal,
+    treeKeeps: (id) => options.tree?.[id],
     bringBack: async (id, move) => {
       calls.push({ kind: "back", id, move })
       return { kind: "back" }
@@ -164,6 +165,31 @@ function world(conversations: Record<string, Conversation>, options: { refusal?:
   const { tool, kept } = world({ d: { session: "s-d", place: "here", tier: "ask", worktree: true } }, { refusal: "Moving to the cloud needs this Mac signed in to Mako Cloud." })
   assert.deepEqual(await tool.move(agent("s-d"), { to: "cloud", clientKey: "k" }), { refused: "kept-here", why: "Moving to the cloud needs this Mac signed in to Mako Cloud." })
   assert.equal(kept.get("d"), undefined)
+}
+
+{
+  // A Thread in a tree stays with it: a Fin's own move, on any access and from either checkout, and the person's move
+  // of an Apex whose Fins haven't ended, are refused at once in the tree's words; nobody is asked, nothing waits for
+  // a turn, and nothing moves. A Thread in no tree moves as before.
+  const fin = 'This Thread is one of "Ship the importer"\'s Fins. It reports to its Apex on this Mac, so it stays where its Apex is.'
+  const apex = "This Thread leads 2 Fins that haven't ended, and their reports reach it only on this Mac. It can move once they finish or are stopped."
+  const { tool, calls, kept } = world({
+    fin: { session: "s-fin", place: "here", tier: "full", worktree: true, busy: true },
+    asking: { session: "s-asking", place: "here", tier: "ask" },
+    apex: { session: "s-apex", place: "here", tier: "full" },
+    plain: { session: "s-plain", place: "here", tier: "full" },
+  }, { tree: { fin, asking: fin, apex } })
+  assert.deepEqual(await tool.move(agent("s-fin"), { to: "cloud", clientKey: "k" }), { refused: "kept-here", why: fin }, "a Fin on full access in its own worktree hands nothing off")
+  assert.deepEqual(await tool.move(agent("s-asking"), { to: "cloud", clientKey: "k" }), { refused: "kept-here", why: fin }, "below full access the person isn't asked to allow what can't happen")
+  assert.equal(kept.get("asking"), undefined)
+  assert.equal(tool.pending("asking"), false, "and no move waits for its turn")
+  assert.deepEqual(await tool.move({ kind: "person" }, { to: "cloud", conversation: "fin", clientKey: "p" }), { refused: "kept-here", why: fin }, "nor does the person's shell move a Fin")
+  assert.deepEqual(await tool.move({ kind: "person" }, { to: "cloud", conversation: "apex", clientKey: "p" }), { refused: "kept-here", why: apex })
+  assert.deepEqual(await tool.move(agent("s-apex"), { to: "cloud", clientKey: "k" }), { refused: "kept-here", why: apex })
+  await tick()
+  assert.equal(calls.length, 0, "nothing moved")
+  const went = await tool.move(agent("s-plain"), { to: "cloud", clientKey: "k" })
+  assert.equal("outcome" in went && went.outcome, "after-turn", "a Thread in no tree moves as before")
 }
 
 {

@@ -2,7 +2,7 @@ import { sessionStream } from "@mako/protocol"
 import type { ListedSession, ListedState, QuietDevice } from "@mako/protocol/thread-listing"
 import type { ListedRail } from "./live-conversations.js"
 import { rowWaitingFor } from "@mako/protocol/attention"
-import { continueRefusal } from "@mako/protocol/continues"
+import { continueRefusal, continueTreeCut } from "@mako/protocol/continues"
 import type { ListedContinueChoice } from "./live-conversations.js"
 import type { LiveSummary } from "./live-conversations.js"
 import { finsAsChildren, rollup } from "./children.js"
@@ -102,7 +102,9 @@ export function listedApexOf(row: Pick<ListedSession, "thread" | "session">, row
  */
 export function listedContinueChoice(row: ListedSession, rows: readonly ListedSession[], quiet: readonly QuietDevice[]): ListedContinueChoice {
   const refusal = continueRefusal(row, rows, quiet)
-  return { ...refusal && { refusal }, ...row.continued && { continued: row.continued } }
+  // With the tree a refusal is for (`open-fins`, `fin`), so its words can say how many Fins, or whose Fin.
+  const tree = refusal === "open-fins" || refusal === "fin" ? continueTreeCut(row, rows) : undefined
+  return { ...refusal && { refusal }, ...tree && { tree }, ...row.continued && { continued: row.continued } }
 }
 
 /** When the person last sent a listed Session a message, as its owner says it (`ReportedSession.promptedAt`), in epoch ms. */

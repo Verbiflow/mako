@@ -9,6 +9,7 @@ import { LiveConversations } from "@mako/host/conversations/live-conversations"
 import { WorkspaceMoves } from "@mako/host/workspaces/moves"
 import { moveSource } from "@mako/host/workspaces/thread-worktree-moves"
 import { ThreadStore } from "@mako/host/threads/store"
+import { MoveIdSchema, RuntimeIdSchema } from "@mako/host/contracts/thread-execution"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { WorkspaceSnapshots } from "@mako/host/workspaces/snapshots"
 import type { ProviderLiveDriver, ProviderStartOptions } from "@mako/host/harnesses/live-driver"
@@ -157,7 +158,7 @@ try {
     children = [child]
     withFins.owner.childrenChanged(apex)
     assert.deepEqual(withFins.owner.relocation(apex), { kind: "now" }, "an independent working Fin cannot pin its Apex to the main checkout")
-    assert.match(withFins.owner.moves.blockers(thread).join("; "), /has background agents running on this device/, "cloud departure keeps the wider child barrier")
+    assert.match(withFins.owner.moves.blockers(thread).join("; "), /leads Fins that haven't ended, which a move would leave behind/, "cloud departure keeps the wider child barrier")
     children = [{ ...child, state: { kind: "waiting" } }]
     withFins.owner.childrenChanged(apex)
     assert.deepEqual(withFins.owner.relocation(apex), { kind: "now" }, "an independent Fin waiting for input also outlives its Apex's provider")
@@ -205,7 +206,31 @@ try {
     assert.equal(withFins.owner.session(apex)?.cwd, worktree)
     assert.equal(withFins.starts.at(-1)!.options.resume, "native-apex-with-fins")
     assert.equal(children[0]!.state.kind, "waiting", "the independent Fin is neither canceled nor resumed by the Apex's local move")
-    assert.match(withFins.owner.moves.blockers(thread).join("; "), /has background agents running on this device/, "local relocation did not weaken cloud release")
+    assert.match(withFins.owner.moves.blockers(thread).join("; "), /leads Fins that haven't ended, which a move would leave behind/, "local relocation did not weaken cloud release")
+    // A Thread its account already continued elsewhere is given up with its own work alone weighed: a Fin that sits
+    // open never goes quiet by itself, and waited for, it held that release for ever. A move asked here still waits.
+    assert.deepEqual(withFins.owner.moves.blockers(thread, "provider"), [], "an open Fin is no work of its Apex's own provider")
+    assert.deepEqual(await withFins.owner.moves.settledBlockers(thread, 0, "provider"), [])
+    const actor = store.person()
+    const target = { kind: "cloud" as const, runtime: RuntimeIdSchema.parse(randomUUID()) }
+    const asked = MoveIdSchema.parse(randomUUID())
+    withFins.owner.moves.begin({ move: asked, thread, target, actor })
+    await assert.rejects(withFins.owner.moves.release({ operationId: randomUUID(), move: asked, actor }), /leads Fins that haven't ended/, "a move asked here isn't released over an open Fin")
+    withFins.owner.moves.cancel({ operationId: randomUUID(), move: asked, actor })
+    const joined = MoveIdSchema.parse(randomUUID())
+    withFins.owner.moves.begin({ move: joined, thread, target, actor })
+    const handoff = await withFins.owner.moves.release({ operationId: randomUUID(), move: joined, actor }, "provider")
+    assert.equal(handoff.move, joined, "a continue joined is released with the Fin still open")
+    assert.equal(store.execution(store.journalPlacement(apex)!.session)?.state, "in-transit", "nothing runs it here from then")
+    assert.equal(children[0]!.state.kind, "waiting", "and the Fin it left is as it was")
+    withFins.owner.moves.reclaim({ operationId: randomUUID(), refusal: { move: joined, by: target, reason: "taken back for the rest of this check" }, actor })
+    // The barrier reads the Fins from their engine, never the roster this conversation holds: only a Thread's newest
+    // Session hears its Fins move, so a copy can keep one that ended long ago at work.
+    children = [{ ...child, state: { kind: "completed" } }]
+    assert.equal(withFins.owner.snapshot(apex)!.nativeAgents!.agents.find((agent) => agent.child)?.state.kind, "waiting", "this conversation wasn't told its Fin ended")
+    assert.deepEqual(withFins.owner.moves.blockers(thread), [], "the Fin ended, as its engine says: nothing holds the Thread")
+    children = [{ ...child, state: { kind: "waiting" } }]
+    assert.match(withFins.owner.moves.blockers(thread).join("; "), /leads Fins that haven't ended/)
     console.log("Conversation relocate: independent working/waiting Fins survive one approved after-turn local move; genuine provider subagents still hold it, and cloud release still waits")
   } finally {
     await withFins.owner.stop()

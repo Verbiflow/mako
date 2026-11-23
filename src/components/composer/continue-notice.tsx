@@ -76,7 +76,7 @@ function listedNotice(key: string, device: string, choice: ListedContinueChoice)
     tone: "info",
     icon: <CloudOffIcon className="text-muted-foreground" />,
     title: "It can't continue in the cloud yet",
-    description: continueRefusalText(choice.refusal, device),
+    description: continueRefusalText(choice.refusal, device, choice.tree),
     data: { "data-continue": choice.refusal },
   }
 }

@@ -22,6 +22,8 @@ export interface HostMoves {
   move(conversationId: string, move: string, handOff?: ThreadHandOff): Promise<ThreadMoveOutcome>
   /** Why a handoff of the Thread couldn't go now, read without changing anything; undefined when it could. */
   refusal(conversationId: string): Promise<string | undefined>
+  /** Why the tree of agents the Thread is part of keeps it here (`CloudMoves.treeKeeps`); undefined when none does. */
+  treeKeeps(conversationId: string): string | undefined
   bringBack(conversationId: string, move: string): Promise<ThreadReturnOutcome>
   continue(conversationId: string, op: string): Promise<ThreadContinueOutcome>
 }
@@ -89,6 +91,10 @@ export class ThreadMoveTool {
       if (own) return refused("not-yours", "An agent moves its own Thread only.")
       return continued(await moves.continue(conversationId, key))
     }
+    // A Fin, or an Apex with Fins that haven't ended, stays with its tree: said now, whoever asks, before the person is
+    // asked to allow a move that can't happen or a turn's end is waited for.
+    const kept = moves.treeKeeps(conversationId)
+    if (kept) return refused("kept-here", kept)
     if (!own) return moved(await moves.move(conversationId, key, this.#deps.busy(conversationId) ? { why: "asked" } : undefined))
     const handsOff = this.#deps.ownWorktree(conversationId)
     if (handsOff) {

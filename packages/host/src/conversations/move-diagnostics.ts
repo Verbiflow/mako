@@ -52,6 +52,8 @@ function reasonFields({ error }: FailureBoundary): HostLogFields {
   ].find((reason) => reason === message)
   const summary = known ?? (
     message.startsWith("Moves happen between turns:") ? "Moves happen between turns; work is still active." :
+    message.startsWith("This Thread leads ") ? "The Thread leads Fins that haven't ended." :
+    message.startsWith("This Thread is one of ") || message.startsWith("This Thread is a Fin") ? "The Thread is a Fin; it stays with its Apex." :
     message.startsWith("A tab in this Thread works in ") ? "A tab in this Thread works outside its worktree." :
     message.startsWith("Git couldn't create the worktree") ? "Git couldn't create the worktree." :
     message.startsWith("The worktree couldn't take the changes,") ? "The worktree couldn't take the changes." :

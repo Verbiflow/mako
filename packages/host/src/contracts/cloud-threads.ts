@@ -1,5 +1,5 @@
 import type { ContinueOffer } from "@mako/protocol/continues"
-import type { MoveLeft } from "@mako/protocol/moves"
+import type { MoveLeft, TreeCut } from "@mako/protocol/moves"
 import type { OutdatedRestore } from "./restore-plan.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { z } from "zod"
@@ -85,16 +85,20 @@ export type ThreadMoveStep =
   | { kind: "resuming"; whileAway?: MoveWhileAway }
   /** Every conversation of the Thread that moved, each the cloud's now under its own id; `continued`: a turn the handoff paused goes on there. */
   | { kind: "moved"; conversations: string[]; continued?: boolean; carried?: MoveCarried; whileAway?: MoveWhileAway }
-  /** `continued`: a turn the handoff had paused goes on here. */
-  | { kind: "kept-here"; reason: string; continued?: boolean }
+  /**
+   * `continued`: a turn the handoff had paused goes on here. `tree`: its tree of agents keeps it (`treeCut`), which
+   * no asking again changes: a window says the reason once, and offers no retry.
+   */
+  | { kind: "kept-here"; reason: string; continued?: boolean; tree?: TreeCut["kind"] }
   | { kind: "unsettled"; reason: string }
 
 /**
  * A move another device made while this Mac was off (Continue in the cloud), which this Mac joined when it was back.
  * `behind`: the account's copy of what the person read took something after this Mac's originals last did, so the
- * newest turns may not be in what the cloud continued from; they stay here.
+ * newest turns may not be in what the cloud continued from; they stay here. `finsLeft`: it led that many Fins that
+ * hadn't ended, which stayed on this Mac, where their reports no longer reach it; bringing it back joins them again.
  */
-export type MoveWhileAway = { behind: boolean }
+export type MoveWhileAway = { behind: boolean; finsLeft?: number }
 
 /** How much of a move's checkout has gone to the cloud: `bytes` of `of`, which grows as each repository's is packed. */
 export type MoveSent = { bytes: number; of: number }
@@ -150,7 +154,7 @@ export type HandOffSettings = {
  * What `mako:thread-move` came to. `conversation`: the conversation that went, when it isn't the one asked (a Thread in
  * the main checkout whose harness forked onto its own branch).
  */
-export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string; conversation?: string } | { kind: "released"; cloudThread: string } | { kind: "kept-here"; reason: string } | { kind: "unsettled"; reason: string }
+export type ThreadMoveOutcome = { kind: "moved"; cloudThread: string; conversation?: string } | { kind: "released"; cloudThread: string } | { kind: "kept-here"; reason: string; tree?: TreeCut["kind"] } | { kind: "unsettled"; reason: string }
 
 /**
  * Continue in the cloud pressed on this Mac for another device's Thread while that device is off

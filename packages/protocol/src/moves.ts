@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { localWords } from "./computer-words.js"
 
 /**
  * A Thread moving between a device and the cloud, as the gateway arbitrates the cloud's end of it. The device that
@@ -11,6 +12,51 @@ import { z } from "zod"
  * What the move carries travels by its own contracts: the checkout as a checkpoint (`MoveCheckpointSchema`, kept by
  * its hash beside the Thread's records) and each Session's native records through the records routes.
  */
+
+/**
+ * A Thread's place in a tree of agents, as whoever weighs a move of it knows it: the Fins it leads, each as it stands
+ * (`ChildState` on its device, `ListedFinState` on its row), and the Apex that leads it, if one does (`away`: that
+ * Apex runs on another device).
+ */
+export type TreePlace = {
+  fins?: ReadonlyArray<{ state: { kind: string } }>
+  apex?: { title?: string; away?: true }
+}
+
+/** Why a move would cut a tree (`treeCut`): the Thread leads `open` Fins that haven't ended, or it's a Fin of `apex`. */
+export type TreeCut = { kind: "open-fins"; open: number } | { kind: "fin"; apex?: string; away?: true }
+
+/**
+ * The one rule for moving a Thread that's part of a tree of agents: it moves only when the move wouldn't cut the tree.
+ * A tree's record (who leads whom, each report, each answer that waits) is kept where its Apex runs and nowhere else,
+ * and none of it travels with a move. So an Apex with Fins that haven't ended doesn't move, since it would arrive
+ * with an empty roster and never hear them; and a Fin doesn't move apart from its Apex, since it would arrive as a
+ * Thread of nobody's and could never report. Every way a Thread leaves its device asks this: the person's move, an
+ * agent's, a handoff as the device quits or goes off, and a continue pressed while it's off. Undefined when the
+ * Thread may go.
+ */
+export function treeCut(place: TreePlace): TreeCut | undefined {
+  if (place.apex) return { kind: "fin", ...place.apex.title && { apex: place.apex.title }, ...place.apex.away && { away: true as const } }
+  const open = (place.fins ?? []).filter((fin) => fin.state.kind !== "ended").length
+  return open ? { kind: "open-fins", open } : undefined
+}
+
+/**
+ * A cut as a move is refused with it: what is so, and what clears it. Said by the device that holds the tree in its
+ * own words for itself ("this Mac"); said of it from another device (a phone asking its Mac to move a Thread) with
+ * `device`, its name.
+ */
+export function treeCutWords(cut: TreeCut, device?: string): string {
+  // A device's name and an Apex's title are the person's own words: only Mako's sentence takes the computer's.
+  const here = device ?? localWords("this Mac")
+  if (cut.kind === "fin") {
+    if (cut.away) return `This Thread is a Fin of an Apex on another device. Its reports reach its Apex from ${here}, so it stays ${device ? "there" : "here"}.`
+    return `This Thread is ${cut.apex ? `one of "${cut.apex}"'s Fins` : "a Fin"}. It reports to its Apex on ${here}, so it stays where its Apex is.`
+  }
+  return cut.open === 1
+    ? `This Thread leads a Fin that hasn't ended, and its reports reach it only on ${here}. It can move once that Fin finishes or is stopped.`
+    : `This Thread leads ${cut.open} Fins that haven't ended, and their reports reach it only on ${here}. It can move once they finish or are stopped.`
+}
 
 /** The largest checkpoint a move carries: under a request body's limit at the gateway. */
 export const MOVE_CHECKPOINT_MAX_BYTES = 96 * 1024 * 1024

@@ -1,6 +1,6 @@
 import type { ContextTransfer, ConversationControl } from "../contracts/conversation-control.js"
 import { pendingQuestion } from "../contracts/live-questions.js"
-import { isBusyNativeAgent, isProviderWork } from "../contracts/native-agents.js"
+import { isBusyNativeAgent, isBusyProviderWork } from "../contracts/native-agents.js"
 import {
   executionRefusal,
   type ClaimReceipt,
@@ -31,6 +31,13 @@ export interface MoveAccess {
   /** Start work that waited while the Session could not run here. */
   resume(resident: Resident): void
 }
+
+/**
+ * What a departure weighs. `thread`: everything that holds the Thread here, the Fins it leads that haven't ended among
+ * it, since a move would leave them behind. `provider`: only what its own provider holds, for a relocation here, and
+ * for a Thread its account already continued elsewhere, whose Fins stay whatever they do.
+ */
+export type MoveScope = "thread" | "provider"
 
 /** Release refused: something in the Thread is still working, and the move waits for it. */
 /** How long a move waits for what passes in a moment (`settledBlockers`), and how often it looks. */
@@ -189,15 +196,15 @@ export class LiveMoves {
    * the handoff for the destination. Refuses, naming what is still busy,
    * rather than wait; the caller asks again when that settles.
    */
-  async release(input: { operationId: string; move: MoveId; actor: Actor }): Promise<Handoff> {
+  async release(input: { operationId: string; move: MoveId; actor: Actor }, scope: MoveScope = "thread"): Promise<Handoff> {
     const threads = this.store()
     if (threads.moveStatus(input.move)?.phase !== "leaving") return threads.release(input)
-    const residents = this.quiet(threads, input.move)
+    const residents = this.quiet(threads, input.move, scope)
     await Promise.all(residents.map(async (resident) => {
       await resident.hibernating
       if (resident.driver) await this.access.hibernate(resident, "move")
     }))
-    const closing = this.quiet(threads, input.move).filter((resident) => resident.driver)
+    const closing = this.quiet(threads, input.move, scope).filter((resident) => resident.driver)
     if (closing.length) throw new MoveNotQuietError(closing.map((resident) => `${label(resident)} is still connected to its provider`))
     const handoff = threads.release(input)
     this.rowsMoved(moveJournalIds(threads, input.move))
@@ -233,9 +240,9 @@ export class LiveMoves {
    * no move begun: a move asks first so a busy Thread makes nothing in the
    * cloud. Empty when it could go; the release still asks again itself.
    */
-  blockers(thread: ThreadId): string[] {
+  blockers(thread: ThreadId, scope: MoveScope = "thread"): string[] {
     try {
-      this.residentsQuiet(this.store().threadSessions(thread))
+      this.residentsQuiet(this.store().threadSessions(thread), scope)
       return []
     } catch (error) {
       if (error instanceof MoveNotQuietError) return error.reasons
@@ -251,17 +258,17 @@ export class LiveMoves {
    * A move asks this, so one asked as a turn ends goes once the turn's
    * bookkeeping is done rather than being refused for it.
    */
-  async settledBlockers(thread: ThreadId, waitMs = PASSING_WAIT_MS): Promise<string[]> {
+  async settledBlockers(thread: ThreadId, waitMs = PASSING_WAIT_MS, scope: MoveScope = "thread"): Promise<string[]> {
     const deadline = Date.now() + waitMs
     for (;;) {
-      const reasons = this.blockers(thread)
+      const reasons = this.blockers(thread, scope)
       if (!reasons.length) return []
       const residents = this.store().threadSessions(thread).flatMap((session) => session.journals).flatMap((id) => {
         const resident = this.access.resident(id)
         return resident ? [resident] : []
       })
-      const passing = reasons.length === residents.filter((resident) => this.busy(resident)).length &&
-        residents.every((resident) => !this.busy(resident) || passingWork(resident))
+      const passing = reasons.length === residents.filter((resident) => this.busy(resident, scope)).length &&
+        residents.every((resident) => !this.busy(resident, scope) || passingWork(resident))
       if (!passing || Date.now() >= deadline) return reasons
       await new Promise((resolve) => setTimeout(resolve, PASSING_STEP_MS))
     }
@@ -289,11 +296,11 @@ export class LiveMoves {
    * other host holds one of its native sessions. Queued prompts are allowed:
    * the move holds them.
    */
-  private quiet(threads: ThreadStore, move: MoveId): Resident[] {
-    return this.residentsQuiet(threads.moveJournals(move))
+  private quiet(threads: ThreadStore, move: MoveId, scope: MoveScope): Resident[] {
+    return this.residentsQuiet(threads.moveJournals(move), scope)
   }
 
-  private residentsQuiet(sessions: ReadonlyArray<{ journals: readonly string[]; natives: ReadonlyArray<{ harness: string; nativeId: string }> }>): Resident[] {
+  private residentsQuiet(sessions: ReadonlyArray<{ journals: readonly string[]; natives: ReadonlyArray<{ harness: string; nativeId: string }> }>, scope: MoveScope = "thread"): Resident[] {
     const reasons: string[] = []
     const residents: Resident[] = []
     for (const moving of sessions) {
@@ -304,7 +311,7 @@ export class LiveMoves {
       for (const id of moving.journals) {
         const resident = this.access.resident(id)
         if (!resident) continue
-        const busy = this.busy(resident)
+        const busy = this.busy(resident, scope)
         if (busy) reasons.push(`${label(resident)} ${busy}`)
         else residents.push(resident)
       }
@@ -313,8 +320,8 @@ export class LiveMoves {
     return residents
   }
 
-  /** What holds a Thread's departure, or just its provider's pause for a local relocation. */
-  busy(resident: Resident, scope: "thread" | "provider" = "thread"): string | undefined {
+  /** What holds a Thread's departure, or just its provider's pause (`MoveScope`). */
+  busy(resident: Resident, scope: MoveScope = "thread"): string | undefined {
     const { snapshot } = resident
     const control = this.access.control(resident)
     if (resident.opening || resident.waking) return "is starting"
@@ -328,9 +335,13 @@ export class LiveMoves {
       return "is waiting for an answer"
     if (resident.autoContinue) return "is about to continue a dropped turn"
     if (snapshot.session.backgroundTasks) return "has background tasks running"
-    const busy = (snapshot.nativeAgents?.agents ?? []).filter(isBusyNativeAgent)
-    if (busy.some(isProviderWork)) return "has subagents running"
-    if (scope === "thread" && busy.length) return "has background agents running on this device"
+    if ((snapshot.nativeAgents?.agents ?? []).some(isBusyProviderWork)) return "has subagents running"
+    // A Fin that hasn't ended, wherever it runs and whether or not it's at work: a move's plan says so first, with how
+    // many and what clears it (`treeCut`); this holds a release for one started since. Read from their engine as they
+    // stand now, never from the roster this conversation holds: only its Thread's newest Session hears its Fins move
+    // (`finReaders`), so an older tab's copy keeps a Fin long ended at work, and held the Thread here for good.
+    const fins = this.access.dependencies.agents?.()?.roster(snapshot.session.id) ?? snapshot.nativeAgents?.agents ?? []
+    if (scope === "thread" && fins.some((agent) => agent.child && isBusyNativeAgent(agent))) return "leads Fins that haven't ended, which a move would leave behind"
     if (resident.driver && !resident.hibernating && !this.access.canHibernate(resident)) {
       // A session opens again from its record: one that never finished a turn (its first failed) has none yet.
       const binding = snapshot.control?.bindings.find((each) => each.id === snapshot.control?.activeBindingId)

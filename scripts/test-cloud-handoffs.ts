@@ -27,11 +27,13 @@ const git = new Git()
 const sh = (cwd: string, ...args: string[]) => execFileSync("git", ["-c", "user.name=T", "-c", "user.email=t@t", "-c", "init.defaultBranch=main", ...args], { cwd, encoding: "utf8" }).trim()
 
 /** A conversation as `workingThreads` reads it: its summary and snapshot, and where the Thread store places it. */
-function conversation(id: string, thread: string, how: { status?: LiveSessionState["status"]; permissions?: number; background?: number; state?: SessionExecution["state"] } = {}) {
+function conversation(id: string, thread: string, how: { status?: LiveSessionState["status"]; permissions?: number; background?: number; state?: SessionExecution["state"]; fin?: "working" | "waiting" } = {}) {
   const snapshot: WorkingSnapshot = {
     session: { harness: "codex", status: how.status ?? "ready", title: `Thread ${thread}`, ...how.background && { backgroundTasks: how.background } },
     permissions: Array.from({ length: how.permissions ?? 0 }, (_, index): LivePermissionRequest => ({ id: `p-${index}`, sessionId: id, title: "Run a command", options: [] })),
     requests: [],
+    // A Fin open in its roster, as its Apex's snapshot holds it.
+    ...how.fin && { nativeAgents: { limited: false, agents: [{ nativeId: `mako-child:${id}`, title: "Fin", bindingId: "mako:children", provider: "claude", observedAt: 1, state: { kind: how.fin }, child: { thread: randomUUID(), origin: "started" as const } }] } },
   }
   return {
     summary: { session: { id } },
@@ -43,7 +45,8 @@ function conversation(id: string, thread: string, how: { status?: LiveSessionSta
 
 try {
   // Which Threads are at work here: a turn running, an approval waiting or background work, one conversation each, a
-  // running one first; never one already in the cloud, or owned elsewhere, or idle.
+  // running one first; never one already in the cloud, or owned elsewhere, or idle; and never an Apex for the Fins open
+  // in its roster, idle or at work: each is a Thread of its own, and the Apex has nothing a handoff could take.
   {
     const threadA = randomUUID()
     const threadB = randomUUID()
@@ -54,6 +57,8 @@ try {
       conversation(randomUUID(), threadB, { background: 2 }),
       conversation(randomUUID(), threadC),
       conversation(randomUUID(), randomUUID(), { status: "running", state: "elsewhere" }),
+      conversation(randomUUID(), randomUUID(), { fin: "waiting" }),
+      conversation(randomUUID(), randomUUID(), { fin: "working" }),
     ]
     const inCloud = conversation(randomUUID(), randomUUID(), { status: "running" })
     // Only on disk: at rest, and never read back in to find out.

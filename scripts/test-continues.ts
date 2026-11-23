@@ -10,14 +10,14 @@ import { z } from "zod"
 import { Git } from "@mako/git"
 import { decodeOperation } from "@mako/protocol"
 import { cloudRuntimeOf as protocolRuntimeOf, continueCloudThread, continueHandOver, namedUuid as protocolUuid, type ContinueState } from "@mako/protocol/continues"
-import type { MoveAnswer } from "@mako/protocol/moves"
+import type { MoveAnswer, TreePlace } from "@mako/protocol/moves"
 import { fromHostOperation } from "@mako/host/contracts/host-operations"
 import { encodeRuntimeValue } from "@mako/host/contracts/runtime-value"
 import { CloudMoves, MovePlanSchema, cloudRuntimeOf, namedUuid, onBranchHere, type CloudMovesOptions } from "@mako/host/conversations/cloud-moves"
 import { arriveMove, MoveArrivalInputSchema, type MoveArrivalDeps } from "@mako/host/conversations/move-arrival"
 import type { ThreadMoveStep } from "@mako/host/contracts/cloud-threads"
 import { HandoffSchema } from "@mako/host/contracts/thread-execution"
-import { MoveNotQuietError } from "@mako/host/conversations/live-moves"
+import { MoveNotQuietError, type MoveScope } from "@mako/host/conversations/live-moves"
 import { ThreadStore } from "@mako/host/threads/store"
 
 /**
@@ -143,7 +143,10 @@ try {
   // A Mac back from sleep joins the continue: it releases the Thread at the account's generation and confirms the
   // cloud's claim, so the Thread runs in the cloud and never here; asked again, nothing more happens.
   const start = { version: 1 as const, sha256: "a".repeat(64), bytes: 10, head: "b".repeat(40), index: "c".repeat(40), work: "d".repeat(40), branch: "webhooks" }
-  const harness = (answer: () => MoveAnswer | undefined, continued: () => ContinueState | undefined, busy: string[] = [], calls?: Array<{ channel: string; args: readonly unknown[] }>, here: string[] = []) => {
+  const harness = (answer: () => MoveAnswer | undefined, continued: () => ContinueState | undefined, busy: string[] = [], calls?: Array<{ channel: string; args: readonly unknown[] }>, here: string[] = [], tree?: { place: TreePlace; conversation: string; native: string }) => {
+    // As `LiveMoves` weighs them: a Fin that hasn't ended holds a move asked here, and is no work of the Thread's own provider.
+    const fins = tree?.place.fins?.some((fin) => fin.state.kind !== "ended") ? ['"Lead" leads Fins that haven\'t ended, which a move would leave behind'] : []
+    const holds = (scope?: MoveScope) => [...busy, ...(scope === "provider" ? [] : fins)]
     const steps: ThreadMoveStep[] = []
     const adopted: string[] = []
     const carriedOn: string[] = []
@@ -183,17 +186,19 @@ try {
       }),
       threads: () => threads,
       moves: {
-        settledBlockers: async () => [...busy],
+        settledBlockers: async (_thread, _waitMs, scope) => holds(scope),
         begin: (input) => threads.beginMove(input),
         cancel: (input) => threads.cancelMove(input),
-        release: async (input) => {
-          if (busy.length) throw new MoveNotQuietError(busy)
+        release: async (input, scope) => {
+          if (holds(scope).length) throw new MoveNotQuietError(holds(scope))
           return threads.release(input)
         },
         confirm: (input) => threads.confirm(input),
         reclaim: (input) => threads.reclaim(input),
       },
-      session: (id) => (id === conversation ? { harness: "codex", nativeId: "n-1", nativePath: "/codex/n-1.jsonl", cwd: checkout, currentMode: null } : undefined),
+      ...tree && { tree: () => tree.place },
+      session: (id) => (id === conversation ? { harness: "codex", nativeId: "n-1", nativePath: "/codex/n-1.jsonl", cwd: checkout, currentMode: null }
+        : id === tree?.conversation ? { harness: "codex", nativeId: tree.native, nativePath: `/codex/${tree.native}.jsonl`, cwd: checkout, currentMode: null } : undefined),
       checkout: () => ({ path: checkout, worktrees: [{ path: checkout }] }),
       repositoryOf: async () => ({ url: "https://github.com/ana/api", branch: "webhooks" }),
       sendRecords: async () => { throw new Error("a joined continue sends nothing: the account had it all") },
@@ -274,6 +279,43 @@ try {
     assert.ok(!joined.moves.leaving(placed.thread), "heard again, nothing more")
   }
 
+  // An Apex the account continued while its Fins stayed here (an account from before the tree's rule, which this Mac's
+  // going-away no longer names such a Thread to): the tree is cut already, so the join settles. Its Fins that haven't
+  // ended hold nothing, an idle one included, which never goes quiet by itself and once held the join for ever; this
+  // Mac lets go of the Apex as the cloud has it, and its steps say how many Fins stayed, for Bring it back to join.
+  {
+    const apexOp = randomUUID()
+    const lead = randomUUID()
+    const apex = threads.registerJournal({ conversationId: lead, createdAt: clock++, harness: "codex", bindings: [{ provider: "codex", nativeId: "n-apex", path: "/codex/n-apex.jsonl" }] }, threads.person())
+    const g = threads.execution(apex.session)!.generation
+    const claimed: MoveAnswer = { kind: "claimed", move: apexOp, at: clock, sessions: [{ id: apex.session, generation: g + 2 }] }
+    const calls: Array<{ channel: string; args: readonly unknown[] }> = []
+    const place: TreePlace = { fins: [{ state: { kind: "idle" } }, { state: { kind: "ended" } }] }
+    const continued = () => ({ ...state("continued", { start }), op: apexOp, thread: apex.thread, sessions: [{ session: apex.session, conversation: lead, harness: "codex", nativeId: "n-apex", generation: g, folder: checkout }] })
+    const cut = harness(() => claimed, continued, [], calls, [], { place, conversation: lead, native: "n-apex" })
+    cut.moves.joinContinue(apex.session, { ...listed, op: apexOp })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    await settle(cut, apexOp)
+    const execution = threads.execution(apex.session)
+    assert.equal(execution?.state, "elsewhere", "given up here: one owner, the cloud that claimed it")
+    assert.equal(execution?.generation, g + 2)
+    assert.deepEqual(cut.steps, [
+      { kind: "resuming", whileAway: { behind: false, finsLeft: 1 } },
+      { kind: "moved", conversations: [lead], whileAway: { behind: false, finsLeft: 1 } },
+    ], "its steps say the one Fin that hadn't ended stayed; the ended one isn't counted")
+    assert.equal(MovePlanSchema.parse(JSON.parse(readFileSync(join(cut.folder, `${apexOp}.json`), "utf8"))).continued?.finsLeft, 1, "kept with its plan, so a host that stops says it too")
+    cut.moves.joinContinue(apex.session, { ...listed, op: apexOp })
+    assert.ok(!cut.moves.leaving(apex.thread), "settled: heard again, nothing more")
+    // Its own turn still holds it, as any Thread's: nothing is given up under a running turn.
+    const workingOp = randomUUID()
+    const second = randomUUID()
+    const working = threads.registerJournal({ conversationId: second, createdAt: clock++, harness: "codex", bindings: [{ provider: "codex", nativeId: "n-apex-2", path: "/codex/n-apex-2.jsonl" }] }, threads.person())
+    const atWork = harness(() => undefined, () => ({ ...state("continued", { start }), op: workingOp, thread: working.thread, sessions: [{ session: working.session, conversation: second, harness: "codex", nativeId: "n-apex-2", generation: threads.execution(working.session)!.generation, folder: checkout }] }), ["Codex: a turn"], undefined, [], { place, conversation: second, native: "n-apex-2" })
+    atWork.moves.joinContinue(working.session, { ...listed, op: workingOp })
+    await settle(atWork, workingOp)
+    assert.equal(threads.execution(working.session)?.state, "here")
+  }
+
   // Refused while this Mac was away (the machine couldn't take it): a Mac that joined takes it back.
   {
     const refusedOp = randomUUID()
@@ -315,7 +357,7 @@ try {
     assert.equal(threads.execution(stayed.session)?.state, "here")
     assert.deepEqual(failing.here, [parkedTurn], "the parked turn goes on here")
   }
-  console.log("PASS: a continue in the cloud is the device's own move composed by the account (host calls this host takes, its store's handoff, the host's IDs); a machine with no checkpoint starts from its clone and says so, once; a Mac back from sleep joins it at the account's generation and confirms the claim, takes a refusal back, and gives up nothing while it works or its generation differs")
+  console.log("PASS: a continue in the cloud is the device's own move composed by the account (host calls this host takes, its store's handoff, the host's IDs); a machine with no checkpoint starts from its clone and says so, once; a Mac back from sleep joins it at the account's generation and confirms the claim, takes a refusal back, gives up nothing while it works or its generation differs, and lets go of an Apex continued away from its Fins, saying how many stayed")
   threads.close()
 } finally {
   await git.close()
