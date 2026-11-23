@@ -89,6 +89,9 @@ export async function claudeSdkOptions(
     ...primer && tools?.makoUrl && { agents: { [CLAUDE_FIN_AGENT]: CLAUDE_FIN_DEFINITION } },
     mcpServers,
     includePartialMessages: true,
-    title: input.title,
+    // Claude Code names a session itself only when it is given no title, and
+    // a title it is given reads back as a rename that no later name replaces.
+    // So the first prompt's cut stays Mako's, and only a chosen title is sent.
+    title: input.placeholderTitle ? undefined : input.title,
   } }
 }

@@ -24,6 +24,7 @@ import {
   type ClaudeSdkDependencies,
 } from "@mako/host/harnesses/claude/sdk-driver"
 import { claudeExecutablePath } from "@mako/host/harnesses/claude/sdk-process"
+import { claudeSdkOptions } from "@mako/host/harnesses/claude/sdk-options"
 import { HandoffRefused } from "@mako/host/harnesses/prompt-dispatch"
 import { ClaudeProjection } from "@mako/sessions/claude-projection"
 import { readPromptAttachments } from "@mako/sessions/prompt-attachments"
@@ -1420,6 +1421,19 @@ try {
   messages.close()
 }
 console.log("PASS: A steer that aborts a running command keeps the turn running until Claude answers it")
+{
+  // Claude Code writes its own title only for a session started without one, and Mako reads a given one as a rename.
+  const title = async (start: { title: string; placeholderTitle?: boolean }) => {
+    const input = admitted("claude", {
+      conversationId: randomUUID(), emit: () => {}, ...start,
+      mcpSnapshot: async () => ({ cwd: authLogRoot, generatedAt: 0, servers: [], providers: [] }),
+    }, { env: {} })
+    return (await claudeSdkOptions(authLogRoot, input, input.trace)).options.title
+  }
+  assert.equal(await title({ title: "Release notes" }), "Release notes", "a title someone chose names Claude's session")
+  assert.equal(await title({ title: "Fix the flaky build, then look at why the…", placeholderTitle: true }), undefined, "the first prompt's cut is not given to Claude as the session's name")
+}
+console.log("PASS: Claude is given a chosen title, and names a session itself when the title is only its first prompt")
 await claudeRecoveryControls(dependencies, authLogRoot)
 await authHostLog.flush()
 await rm(authLogRoot, { recursive: true, force: true })

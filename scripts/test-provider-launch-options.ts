@@ -175,6 +175,8 @@ try {
     }
     assert.equal(call.dispatched.resume, undefined)
     assert.equal(call.dispatched.initialRequest?.text, "Fresh prompt")
+    assert.equal(call.dispatched.title, "Fresh prompt")
+    assert.equal(call.dispatched.placeholderTitle, true, `${provider}: the host hears that a new Thread's title is only its prompt`)
     assert.deepEqual(call.dispatched.initialRequest?.attachments, [])
     const sourceId = acpStore.get().activeKey
     assert.ok(sourceId)
