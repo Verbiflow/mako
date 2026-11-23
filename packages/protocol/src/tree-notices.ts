@@ -7,8 +7,8 @@ import { PROTOCOL_VERSION } from "./version.js"
 
 /**
  * A Fin's reports for its Apex, kept by the account until the Apex's Session's owner takes them. The Fin's host posts
- * each report as a notice (`POST /v1/tree/notices`) on its own credential, the same notice again under the same ID
- * after a lost reply. The account keeps it for the Apex's Session, numbers it, says who sent it from that credential
+ * each report as a notice on its own credential (a device to `TREE_NOTICES_PATH`, a cloud machine to
+ * `machineNoticesPath`), the same notice again under the same ID after a lost reply. The account keeps it for the Apex's Session, numbers it, says who sent it from that credential
  * and never from what was posted, and delivers it as `mako:agents-notice` to whoever owns that Session now. A notice
  * waits for the Session, not a device: while its owner is off it's held, and if the Session moves meanwhile its new
  * owner takes it.
@@ -25,11 +25,23 @@ import { PROTOCOL_VERSION } from "./version.js"
  * with the same report whenever it changes: the newest replaces the one before, and is never a conflict.
  */
 
-/** Where a Fin's host posts a notice, and reads the answer (`TreeNoticeAnswerSchema`). */
+/** Where a device's host posts a notice of a Fin it runs, and reads the answer (`TreeNoticeAnswerSchema`). A device's path: a machine has its own. */
 export const TREE_NOTICES_PATH = "/v1/tree/notices"
+
+/** Where a cloud machine's host posts a notice of its Fin, on the machine's credential, and reads the same answer. */
+export function machineNoticesPath(machine: string): string {
+  return `/v1/machines/${encodeURIComponent(machine)}/notices`
+}
 
 /** The most notices the account holds for one Apex's Session: one more is refused (`full`) until its owner takes some. */
 export const TREE_NOTICES_HELD = 500
+
+/**
+ * A Fin's share of what its Apex's Session holds: one Fin's notices are at most a quarter of `TREE_NOTICES_HELD` and
+ * of `TREE_NOTICES_HELD_BYTES`, so no Fin fills the Session for the rest. One past its share is `full` for that Fin
+ * alone, until the owner takes some of its own.
+ */
+export const TREE_NOTICE_FIN_SHARE = 4
 
 /**
  * The most a notice is, in bytes of its JSON as posted: 2 MiB, which is above the largest report a host writes, so a
@@ -48,7 +60,10 @@ export const TREE_NOTICE_BYTES = 2 * 1024 * 1024
  */
 export const TREE_NOTICES_HELD_BYTES = 16 * 1024 * 1024
 
-/** The most notices one Fin has admitted in any minute; one more is refused (`rate`). A notice posted again isn't another. */
+/**
+ * The most posts one Fin makes in any minute; one more is refused (`rate`). Every post counts, whatever became of it: a
+ * new notice, one posted again, and one said again with a newer `standing`.
+ */
 export const TREE_NOTICE_ADMITS_PER_MINUTE = 20
 
 /** The most notices put aside for one Apex's Session (`treeNoticeDisposal`'s `dead-letter`); the oldest goes for a newer. */
@@ -166,8 +181,8 @@ export function treeNoticeRefusalText(reason: TreeNoticeRefusal): string {
   switch (reason) {
     case "conflict": return "Another report was already sent under this notice's ID."
     case "gone": return "Its Apex was archived, or the Fin's place is over, so nothing is left to hear this report."
-    case "full": return `Its Apex's Session holds all the reports it can (${TREE_NOTICES_HELD}, or ${TREE_NOTICES_HELD_BYTES / 1024 / 1024} MiB) until its owner takes some. This one goes once it has.`
-    case "rate": return `This Fin sent ${TREE_NOTICE_ADMITS_PER_MINUTE} reports within a minute. This one goes in a moment.`
+    case "full": return `Its Apex's Session holds all the reports it can (${TREE_NOTICES_HELD}, or ${TREE_NOTICES_HELD_BYTES / 1024 / 1024} MiB, a quarter of either from one Fin) until its owner takes some. This one goes once it has.`
+    case "rate": return `This Fin posted ${TREE_NOTICE_ADMITS_PER_MINUTE} times within a minute. This one goes in a moment.`
     case "invalid": return `${NOTICE_ID_RULE}.`
     case "too-large": return `A report crosses in at most ${TREE_NOTICE_BYTES / 1024 / 1024} MiB.`
     case "forbidden": return "That Fin, or that Apex, isn't this sender's."
@@ -230,28 +245,37 @@ export type TreeNoticeAdmission =
   | { admitted: false; reason: "conflict" | "full" }
 
 /**
- * What the account answers a notice posted for a Session, from what it holds there (`held`), the last number it gave
- * there (`head`, 0 before any) and the last notice it admitted from that Fin (`last`). `bytes` is the post's size
- * (`treeNoticeBytes`).
- *
- * A notice it holds, posted again, answers the number it first got, even when the Session is full, and a newer
- * `standing` replaces the held one's; the same ID with another report, child or Apex is a conflict. The Fin's last
- * notice, no longer held, answers its number too and isn't kept again: only a newer `standing` on it goes on, once.
- * Anything else is new and takes the next number, unless the Session holds its most, by count or by bytes. Numbers
- * only rise, so what's held stays in the order it was admitted however much was taken between.
+ * What the account holds as a notice is posted: the sender's own notices held for the Session (`own`, those admitted
+ * under its start), how many notices and bytes the Session holds from every Fin (`count`, `bytes`), the last number
+ * given there (`head`, 0 before any) and the last notice admitted from the sender (`last`). A notice is the sender's
+ * own by its start and its ID together, so another Fin's notice under the same ID is neither this one nor a conflict.
  */
-export function admitTreeNotice(mailbox: { held: readonly HeldTreeNotice[]; head: number; last?: LastTreeNotice }, posted: TreeNotice, bytes: number): TreeNoticeAdmission {
+export type TreeNoticeMailbox = { own: readonly HeldTreeNotice[]; count: number; bytes: number; head: number; last?: LastTreeNotice }
+
+/**
+ * What the account answers a notice posted for a Session, from what it holds there (`TreeNoticeMailbox`). `bytes` is
+ * the post's size (`treeNoticeBytes`).
+ *
+ * A notice of the sender's it holds, posted again, answers the number it first got, even when the Session is full,
+ * and a newer `standing` replaces the held one's; the same ID with another report, child or Apex is a conflict. The
+ * sender's last notice, no longer held, answers its number too and isn't kept again: only a newer `standing` on it
+ * goes on, once. Anything else is new and takes the next number, unless the sender holds its share
+ * (`TREE_NOTICE_FIN_SHARE`) or the Session its most, by count or by bytes. Numbers only rise, so what's held stays in
+ * the order it was admitted however much was taken between.
+ */
+export function admitTreeNotice(mailbox: TreeNoticeMailbox, posted: TreeNotice, bytes: number): TreeNoticeAdmission {
   const newer = (said: TreeStandingMark | undefined) => posted.standing !== undefined && newerTreeStanding(said, posted.standing)
-  const first = mailbox.held.find((each) => each.notice.id === posted.id)
+  const first = mailbox.own.find((each) => each.notice.id === posted.id)
   if (first) return sameTreeNotice(first.notice, posted) ? { admitted: true, seq: first.seq, does: newer(first.notice.standing) ? "restand" : "nothing" } : { admitted: false, reason: "conflict" }
   if (mailbox.last?.id === posted.id) return { admitted: true, seq: mailbox.last.seq, does: newer(mailbox.last.said) ? "forward" : "nothing" }
-  if (mailbox.held.length >= TREE_NOTICES_HELD || mailbox.held.reduce((sum, each) => sum + each.bytes, bytes) > TREE_NOTICES_HELD_BYTES) return { admitted: false, reason: "full" }
+  const share = mailbox.own.length >= TREE_NOTICES_HELD / TREE_NOTICE_FIN_SHARE || mailbox.own.reduce((sum, each) => sum + each.bytes, bytes) > TREE_NOTICES_HELD_BYTES / TREE_NOTICE_FIN_SHARE
+  if (share || mailbox.count >= TREE_NOTICES_HELD || mailbox.bytes + bytes > TREE_NOTICES_HELD_BYTES) return { admitted: false, reason: "full" }
   return { admitted: true, seq: mailbox.head + 1, does: "hold" }
 }
 
-/** Whether a Fin whose notices were admitted at `admits` (each a time in ms) may have another admitted at `now`. */
-export function treeNoticeRateOpen(admits: readonly number[], now: number): boolean {
-  return admits.filter((at) => at > now - 60_000 && at <= now).length < TREE_NOTICE_ADMITS_PER_MINUTE
+/** Whether a Fin that posted at `posts` (each a time in ms, every post counted) may post another at `now`. */
+export function treeNoticeRateOpen(posts: readonly number[], now: number): boolean {
+  return posts.filter((at) => at > now - 60_000 && at <= now).length < TREE_NOTICE_ADMITS_PER_MINUTE
 }
 
 /**
