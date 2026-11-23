@@ -124,7 +124,7 @@ export const HELD_BY_TABLE = new Map<string, "edges" | "threads" | "both" | "nei
   memberships: "both", threads: "both", sessions: "both",
   journals: "threads",
   agent_answers: "neither", agent_cancels: "neither", agent_placings: "neither", agent_pull_wakes: "neither", agent_report_action_ops: "neither",
-  agent_report_actions: "neither", agent_spawns: "neither", app_environments: "neither", executions: "neither", fin_moves: "neither",
+  agent_report_actions: "neither", agent_spawns: "neither", apex_messages: "neither", app_environments: "neither", executions: "neither", fin_moves: "neither",
   limit_notices: "neither", locators: "neither", moves: "neither", operations: "neither", placement_changes: "neither", principals: "neither",
   retired_worktrees: "neither", store_meta: "neither", store_migrations: "neither", thread_environments: "neither", thread_places: "neither",
   thread_marks: "neither", thread_purposes: "neither", thread_reports: "neither", thread_splits: "neither", thread_worktree_repositories: "neither",
@@ -726,6 +726,13 @@ CREATE TABLE IF NOT EXISTS turn_waits (
 CREATE INDEX IF NOT EXISTS turn_waits_armed ON turn_waits(conversation) WHERE state = 'armed';
 CREATE INDEX IF NOT EXISTS turn_waits_unsent ON turn_waits(at) WHERE state = 'fired' AND delivered_at IS NULL;
 CREATE INDEX IF NOT EXISTS turn_waits_request ON turn_waits(request) WHERE request IS NOT NULL;
+CREATE TABLE IF NOT EXISTS apex_messages (
+  request TEXT PRIMARY KEY, sender_thread TEXT NOT NULL, thread TEXT NOT NULL, steered TEXT, record TEXT NOT NULL,
+  at INTEGER NOT NULL, heard_at INTEGER);
+CREATE INDEX IF NOT EXISTS apex_messages_pair ON apex_messages(sender_thread, thread, at);
+CREATE INDEX IF NOT EXISTS apex_messages_at ON apex_messages(at);
+CREATE INDEX IF NOT EXISTS apex_messages_owed ON apex_messages(at) WHERE heard_at IS NULL;
+CREATE INDEX IF NOT EXISTS apex_messages_steered ON apex_messages(steered) WHERE steered IS NOT NULL AND heard_at IS NULL;
 `
 const RecordRowSchema = z.object({ record: z.string() })
 const LimitNoticeRowSchema = z.object({ root_thread: z.string(), record: z.string() })
@@ -778,6 +785,32 @@ export const KeptPullWakeSchema = z.lazy(() => z.object({
 export type KeptPullWake = z.infer<typeof KeptPullWakeSchema>
 function keptPullWake(row: Record<string, SQLOutputValue>): KeptPullWake {
   return KeptPullWakeSchema.parse(JSON.parse(RecordRowSchema.parse(row).record))
+}
+
+/**
+ * A message one Apex sent another (`agents_send` `to: apex:`), kept before it's sent, under the request it goes as:
+ * who sent it and to whom, for the hour's count of the pair, and how the sender's digest names the other, for the reply
+ * it's owed. `steered`: the running turn it joined, whose end answers it. `reply`: what the answering turn said, kept
+ * before it wakes the sender, so a host that stopped before that wake was queued sends it once, and a turn that ends
+ * again (a continuation of one a host's stop cut) replies nothing more.
+ */
+export const ApexMessageSchema = z.lazy(() => z.object({
+  request: z.string().min(1).max(200),
+  sender: z.object({ thread: ThreadIdSchema, session: SessionIdSchema }),
+  thread: ThreadIdSchema,
+  conversation: z.string().min(1).max(200),
+  steered: z.string().min(1).max(200).optional(),
+  /** Sent with `reply: none`: a turn that answers it and completes owes no reply. */
+  notification: z.literal(true).optional(),
+  label: z.string(),
+  fin: z.object({ name: z.string(), harness: z.string().optional() }),
+  at: z.number(),
+  reply: z.object({ status: z.enum(["done", "failed"]), summary: z.string().max(16_000), from: SessionIdSchema, at: z.number() }).optional(),
+}))
+export type ApexMessage = z.infer<typeof ApexMessageSchema>
+const ApexSentRowSchema = z.object({ at: z.number() })
+function apexMessage(row: Record<string, SQLOutputValue>): ApexMessage {
+  return ApexMessageSchema.parse(JSON.parse(RecordRowSchema.parse(row).record))
 }
 
 function keptTurnWait(row: Record<string, SQLOutputValue>): TurnWait {
@@ -1918,6 +1951,86 @@ export class ThreadStore {
       if (wake.obsolete !== undefined) return
       this.sql("UPDATE agent_pull_wakes SET record = ?, delivered_at = coalesce(delivered_at, ?) WHERE wait = ?").run(JSON.stringify({ ...wake, obsolete: at }), at, wait)
     })
+  }
+
+  /** Keeps a message to another Apex, in one write: the same request again finds the one kept first (`existed`). */
+  keepApexMessage(input: ApexMessage): { message: ApexMessage; existed: boolean } {
+    const message = ApexMessageSchema.parse(input)
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM apex_messages WHERE request = ?").get(message.request)
+      if (held) return { message: apexMessage(held), existed: true }
+      this.sql("INSERT INTO apex_messages (request, sender_thread, thread, steered, record, at, heard_at) VALUES (?, ?, ?, NULL, ?, ?, NULL)")
+        .run(message.request, message.sender.thread, message.thread, JSON.stringify(message), message.at)
+      return { message, existed: false }
+    })
+  }
+
+  /** A message to another Apex by its request, while it's kept. */
+  apexMessage(request: string): ApexMessage | undefined {
+    this.syncVersion()
+    const row = this.sql("SELECT record FROM apex_messages WHERE request = ?").get(request)
+    return row ? apexMessage(row) : undefined
+  }
+
+  /** When one Apex messaged another since `since`, oldest first: what the hour's limit counts. */
+  apexSends(sender: string, thread: string, since: number): number[] {
+    this.syncVersion()
+    return this.sql("SELECT at FROM apex_messages WHERE sender_thread = ? AND thread = ? AND at > ? ORDER BY at").all(sender, thread, since)
+      .map((row) => ApexSentRowSchema.parse(row).at)
+  }
+
+  /** The message joined the running turn `into`, whose end answers it. */
+  steerApexMessage(request: string, into: string): void {
+    this.write(() => {
+      const held = this.sql("SELECT record FROM apex_messages WHERE request = ? AND heard_at IS NULL").get(request)
+      if (!held) return
+      this.sql("UPDATE apex_messages SET steered = ?, record = ? WHERE request = ?").run(into, JSON.stringify({ ...apexMessage(held), steered: into }), request)
+    })
+  }
+
+  /** The messages still owed a reply that the turn of `request` answers: the one sent as it, and those steered into it. */
+  apexMessagesAnsweredBy(request: string): ApexMessage[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM apex_messages WHERE (request = ? OR steered = ?) AND heard_at IS NULL ORDER BY at, request").all(request, request).map(apexMessage)
+  }
+
+  /** Keeps what the answering turn said, in one write: the message with its reply, the first one kept; undefined once it's settled. */
+  keepApexReply(request: string, reply: NonNullable<ApexMessage["reply"]>): ApexMessage | undefined {
+    return this.write(() => {
+      const held = this.sql("SELECT record FROM apex_messages WHERE request = ? AND heard_at IS NULL").get(request)
+      if (!held) return undefined
+      const message = apexMessage(held)
+      if (message.reply) return message
+      const replied = ApexMessageSchema.parse({ ...message, reply })
+      this.sql("UPDATE apex_messages SET record = ? WHERE request = ?").run(JSON.stringify(replied), request)
+      return replied
+    })
+  }
+
+  /** Messages to another Apex still owed a reply, or whose reply hasn't reached its sender's queue, oldest first: what a starting host takes up. */
+  owedApexMessages(): ApexMessage[] {
+    this.syncVersion()
+    return this.sql("SELECT record FROM apex_messages WHERE heard_at IS NULL ORDER BY at, request").all().map(apexMessage)
+  }
+
+  /** Its reply reached its sender's queue, or it's owed none: it stays only as one the hour's limit counts. */
+  settleApexMessage(request: string, at: number): void {
+    this.write(() => this.sql("UPDATE apex_messages SET heard_at = ? WHERE request = ? AND heard_at IS NULL").run(at, request))
+  }
+
+  /** A message that was never sent: it's owed nothing and counts for nothing. */
+  dropApexMessage(request: string): void {
+    this.write(() => this.sql("DELETE FROM apex_messages WHERE request = ?").run(request))
+  }
+
+  /** The person archived a Thread: no message it sent or was sent is owed a reply or counted. */
+  dropApexMessagesOf(thread: string): void {
+    this.write(() => this.sql("DELETE FROM apex_messages WHERE sender_thread = ? OR thread = ?").run(thread, thread))
+  }
+
+  /** Drops the settled messages sent by `counted`, which no limit counts any more, and those still owed a reply sent by `owed`. */
+  pruneApexMessages(counted: number, owed: number): void {
+    this.write(() => this.sql("DELETE FROM apex_messages WHERE at <= ? AND (heard_at IS NOT NULL OR at <= ?)").run(counted, owed))
   }
 
   /**

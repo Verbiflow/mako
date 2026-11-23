@@ -1,7 +1,9 @@
 import assert from "node:assert/strict"
+import { randomUUID } from "node:crypto"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { AGENT_TOOLS, LEGACY_SHIVER_SCOPE, ORCHESTRATION_INSTRUCTIONS, type AgentsApexes, type AgentsShiver } from "@mako/host/contracts/agent-tools"
 import type { AgentCaller, Report } from "@mako/host/contracts/agents"
@@ -20,7 +22,8 @@ import { AgentsWorld } from "./lib/agents-world.ts"
  * a Fin reads its Apex and the other Fins it started (`agents_list` with
  * `scope: shiver`), from typed state, as its brief tells it it can; and an Apex
  * reads the person's other Apexes (`scope: apexes`) without waking them, and
- * messages one, which hears it as Mako's words, queued, and replies once.
+ * messages one, which hears it as Mako's words, queued, and replies once,
+ * whenever the host stops on the way; a Fin messages none.
  */
 const root = mkdtempSync(join(tmpdir(), "mako-orch-comms-"))
 const CHILD = ThreadIdSchema.parse("6b0c3c2e-5f8a-4d39-9a43-1d1b4c0f2a11")
@@ -300,6 +303,139 @@ async function apexes(): Promise<void> {
   }
 }
 
+/**
+ * Messages between Apexes are kept in the store: a Fin's is refused; the reply comes back once when the host stops
+ * before the other's turn, in it, after it and before the wake was queued, or after the wake was queued; the hour's
+ * limit counts what earlier hosts sent; and a message leaves the store once it's answered and an hour old, or its
+ * Thread is archived.
+ */
+async function apexesKept(): Promise<void> {
+  let later = 0
+  const holding = { turn: false, answer: false }
+  const world = new AgentsWorld({
+    root: join(root, "apexes-kept"),
+    now: () => Date.now() + later,
+    script: async (turn) => {
+      if (holding.turn && turn.text.includes("hold")) await turn.world.hold(turn.conversation)
+      if (turn.text.includes("another of the person's Apexes")) {
+        if (holding.answer) await turn.world.hold(turn.conversation)
+        return "It's billing's until PR #12 merges."
+      }
+      return "ok"
+    },
+  })
+  try {
+    const app = await world.apex("codex")
+    const billing = await world.apex("claude")
+    const start = async (apex: { caller: AgentCaller }, name: string, role?: "lead") => {
+      const started = await world.agents.start(apex.caller, { brief: { objective: `Do ${name}.` }, harness: "codex", name, clientKey: name, cwd: world.root, ...(role && { role }) })
+      assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+      return started.conversation!
+    }
+    const worker = await start(app, "api")
+    const lead = await start(app, "review", "lead")
+    await start({ caller: world.caller(lead) }, "compat")
+    await start(billing, "billing-db")
+    await world.settle()
+    const threadOf = (conversation: string) => world.store.journalPlacement(conversation)!
+    const pair = [threadOf(app.conversation).thread, threadOf(billing.conversation).thread] as const
+    const heard = (conversation: string, words: string) => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes(words)).length
+    const replies = () => heard(app.conversation, "reply to your message")
+    // Only an Apex whose conversation is in memory is listed and messaged, and a host starting reads in none it has nothing for.
+    const opened = () => world.live.snapshot(billing.conversation)!
+    /** A message as the store keeps one this Apex sent that one, for a point a host stopped at that no restart here reaches. */
+    const keep = (at = Date.now()) => world.store.keepApexMessage({ request: randomUUID(), sender: threadOf(app.conversation), thread: pair[1], conversation: billing.conversation, label: `"claude apex" (Claude)`, fin: { name: "claude apex", harness: "claude" }, at }).message.request
+
+    for (const fin of [worker, lead]) {
+      const refused = await world.agents.send(world.caller(fin), { to: "apex:claude apex", text: "Do you own src/billing/rates.ts?", clientKey: "fin" })
+      assert.ok("refused" in refused && refused.refused === "access" && refused.why.includes("agents_report") && refused.why.includes("Nothing was sent"), `a Fin, a lead too, asks through its Apex: ${JSON.stringify(refused)}`)
+    }
+    await world.settle()
+    assert.equal(heard(billing.conversation, "another of the person's Apexes"), 0, "and nothing reached the other Apex")
+    assert.deepEqual(world.store.apexSends(...pair, 0), [], "nor counted for anyone")
+
+    // The host is killed while the message waits behind the other's turn.
+    holding.turn = true
+    world.say(billing.conversation, "hold while billing works")
+    await until("billing's turn to run", async () => world.live.session(billing.conversation)?.status === "running")
+    const first = await world.agents.send(app.caller, { to: "apex:claude apex", text: "Whose is rates.ts? (one)", clientKey: "k1" })
+    assert.ok(!("refused" in first) && first.delivery === "queued", JSON.stringify(first))
+    holding.turn = false
+    await world.crashed()
+    await world.settle()
+    assert.equal(heard(billing.conversation, "(one)"), 1, "the next host's turn hears it once")
+    assert.equal(replies(), 1, "and its reply wakes the sender, whose host never sent it")
+    assert.deepEqual(world.store.owedApexMessages(), [], "answered, it's owed nothing more")
+    await world.restart()
+    await world.settle()
+    assert.equal(replies(), 1, "nor does a later host send it again")
+
+    // The host stops in the turn that answers it: the turn that continues it replies.
+    holding.answer = true
+    opened()
+    const second = await world.agents.send(app.caller, { to: "apex:claude apex", text: "Whose is rates.ts? (two)", clientKey: "k2" })
+    assert.ok(!("refused" in second) && second.delivery === "turn", JSON.stringify(second))
+    await until("billing's turn on it to run", async () => world.live.session(billing.conversation)?.status === "running")
+    holding.answer = false
+    await world.restart()
+    await world.settle()
+    assert.equal(replies(), 2, "a turn the host's stop cut replies as it's continued, once")
+    assert.equal(heard(app.conversation, `"claude apex" (Claude) failed:`), 0, "and the cut itself was no reply")
+    assert.deepEqual(world.store.owedApexMessages(), [])
+    // Nor is it one when the cut turn's end is heard as the host goes: a message that rode that turn stays owed.
+    const cut = opened().requests.find((request) => request.id === second.request)!
+    assert.equal(cut.interruption?.reason, "host-quit")
+    const riding = keep()
+    world.store.steerApexMessage(riding, cut.id)
+    world.agents.settled(billing.conversation, cut.id)
+    assert.deepEqual(world.store.owedApexMessages().map((owed) => [owed.request, owed.reply]), [[riding, undefined]])
+    world.store.dropApexMessage(riding)
+
+    // The host stops with the reply kept and its wake not yet queued.
+    const kept = keep()
+    world.store.keepApexReply(kept, { status: "done", summary: "Kept before the host stopped.", from: threadOf(billing.conversation).session, at: Date.now() })
+    await world.restart()
+    await world.settle()
+    assert.equal(heard(app.conversation, "Kept before the host stopped."), 1, "the next host sends the kept reply")
+    assert.deepEqual(world.store.owedApexMessages(), [])
+    // And with its wake queued, before the message was settled: the digest in the sender's queue is its receipt.
+    await world.close()
+    const db = new DatabaseSync(join(world.root, "threads.sqlite"))
+    db.prepare("UPDATE apex_messages SET heard_at = NULL WHERE request = ?").run(kept)
+    db.close()
+    world.open()
+    await world.resumed
+    await world.settle()
+    assert.equal(heard(app.conversation, "Kept before the host stopped."), 1, "a reply its sender's queue carries isn't sent again")
+    assert.equal(replies(), 3)
+    assert.deepEqual(world.store.owedApexMessages(), [], "and its message is settled")
+
+    // Three went from this Apex to that one this hour, under three hosts.
+    assert.equal(world.store.apexSends(...pair, 0).length, 3)
+    opened()
+    const fourth = await world.agents.send(app.caller, { to: "apex:claude apex", text: "One more thing.", clientKey: "k4" })
+    assert.ok("refused" in fourth && fourth.refused === "rate-limited", `the limit counts what earlier hosts sent: ${JSON.stringify(fourth)}`)
+    later = 3_600_001
+    const next = await world.agents.send(app.caller, { to: "apex:claude apex", text: "Whose is rates.ts? (five)", clientKey: "k5" })
+    assert.ok(!("refused" in next), `an hour on, the next goes: ${JSON.stringify(next)}`)
+    assert.equal(world.store.apexSends(...pair, 0).length, 1, "and the answered ones an hour old are gone")
+    await world.settle()
+    assert.equal(replies(), 4)
+    assert.deepEqual(world.store.owedApexMessages(), [])
+
+    // One still owed a reply is kept past the hour, and goes with its Thread.
+    keep(Date.now() - 2 * 3_600_000)
+    world.store.pruneApexMessages(Date.now() - 3_600_000, Date.now() - 7 * 24 * 3_600_000)
+    assert.equal(world.store.owedApexMessages().length, 1, "a reply still owed outlasts the hour")
+    world.archived.add(billing.conversation)
+    await world.agents.archived(billing.conversation)
+    assert.deepEqual(world.store.apexSends(...pair, 0), [], "an archived Thread's messages are dropped, either way")
+    assert.deepEqual(world.store.owedApexMessages(), [])
+  } finally {
+    await world.close()
+  }
+}
+
 function doors(): void {
   const list = AGENT_TOOLS.find((tool) => tool.verb === "list")!
   assert.deepEqual(agentToolSchema(list).parse({ scope: "shiver" }), { scope: "shiver" }, "the MCP door takes scope shiver")
@@ -405,7 +541,8 @@ try {
   await manyReports()
   await shiver()
   await apexes()
-  console.log("test:orch-comms: compact answers, finished lines, every digest entry's structured twin, bursts past one wake's cards, the Shiver view and its brief line, and other Apexes read and messaged pass")
+  await apexesKept()
+  console.log("test:orch-comms: compact answers, finished lines, every digest entry's structured twin, bursts past one wake's cards, the Shiver view and its brief line, other Apexes read and messaged, and their messages kept across hosts pass")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

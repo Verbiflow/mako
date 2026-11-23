@@ -156,7 +156,7 @@ import type { LiveRequest, LiveSnapshot, LiveStartOptions } from "../contracts/l
 import type { LivePermissionResponse, LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../contracts/thread-identity.js"
 import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTART_CHAIN, STRANDED_AFTER_MS, strandedTurn } from "../contracts/turn-continuation.js"
-import { uniqueName, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
+import { uniqueName, type ApexMessage, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
 import { holdOf, keepsLine, nextInLine } from "../contracts/request-hold.js"
 import { foldList, foldShiver } from "./agent-list-fold.js"
@@ -309,25 +309,14 @@ const APEX_PREFIX = "apex:"
 /** Messages one Apex sends another in an hour; past them it's refused, so two Apexes can't talk in a loop. */
 const APEX_SENDS_PER_HOUR = 3
 const HOUR_MS = 3_600_000
+/** How long a message to another Apex is owed its reply: past it, a turn that never answered it (its message removed, its Thread gone) is forgotten. */
+const APEX_REPLY_KEPT_MS = 7 * 24 * HOUR_MS
 
 /** Another of the person's Apexes as a message to it is addressed: its Thread, and the conversation that speaks for it. */
 interface OtherApexRef {
   thread: string
   conversation: string
   title?: string
-}
-
-/** A message to another Apex whose reply goes back: to whom, from whom, as the sender's digest names it. */
-interface ApexAsk {
-  sender: Apex
-  notification?: true
-  /** Its conversation and the requests whose turn answers it: the message's own, or the turn it was steered into. */
-  conversation: string
-  requests: string[]
-  thread: string
-  label: string
-  /** The Apex as the sender's card of its reply names it. */
-  fin: { name: string; harness?: string }
 }
 
 /** A message Mako's exit or a crash paused, which the next host resumes for a Fin: never a Stop's, which waits for a deliberate resume. */
@@ -707,7 +696,9 @@ const FILLED = "\0filled"
 const HELD_PREFIX = "after:"
 /** A quiet Fin's notice (`QuietWatch`): no report row holds it, and it goes once heard. */
 const QUIET_PREFIX = "quiet:"
-const stored = (id: string) => !id.startsWith(HELD_PREFIX) && !id.startsWith(QUIET_PREFIX)
+/** Another Apex's reply to a message (`apexReplied`): `reply:<conversation>:<request>`; once its sender heard it, its message is settled. */
+const REPLY_PREFIX = "reply:"
+const stored = (id: string) => !id.startsWith(HELD_PREFIX) && !id.startsWith(QUIET_PREFIX) && !id.startsWith(REPLY_PREFIX)
 
 /** How many of a tree's Threads work now and how many it started, as its budget counts them. */
 /**
@@ -839,10 +830,6 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly digestSteers = new Set<string>()
   /** Each move by its op: a repeat joins it, or answers what it became. */
   private readonly moveOps = new Map<string, Promise<AgentsMoveResult>>()
-  /** Messages to another Apex, by its conversation and the request whose turn answers it: its reply goes to the sender once. */
-  private readonly apexAsks = new Map<string, ApexAsk>()
-  /** When each Apex messaged another, by the ordered pair: at most `APEX_SENDS_PER_HOUR` an hour. */
-  private readonly apexSends = new Map<string, number[]>()
   /** What joined a running turn as a step, by its id: no request holds it for `redirect` to find. */
   private readonly steered = new Map<string, Pick<LiveRequest, "text" | "attachments">>()
   /** The person's direct messages by their request, delivering or delivered, so a repeat answers the first. */
@@ -992,6 +979,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       delivered: (reports, at) => {
         this.store()?.markReportsDelivered(reports.filter(stored), at)
         for (const id of reports) if (id.startsWith(HELD_PREFIX)) this.dropHeld(id.slice(HELD_PREFIX.length))
+        for (const id of reports) if (id.startsWith(REPLY_PREFIX)) this.apexHeard(id.slice(id.lastIndexOf(":") + 1))
         // A steer its Apex's harness took carried one of them: that decision is heard, and its minute starts.
         this.decisionsHeard([...this.undecided].flatMap(([child, held]) => (reports.includes(held.report) ? [child] : [])))
       },
@@ -1143,6 +1131,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     for (const { report } of store.undeliveredReports()) tree(report.child)
     for (const kept of store.undeliveredAnswers()) tree(kept.child)
     for (const kept of store.undeliveredPullWakes()) tree(kept.child)
+    // A message to another Apex still owed its reply: the sender's queue takes a kept one, and the other's says whether its turn ended.
+    for (const ask of store.owedApexMessages()) {
+      if (ask.reply) tree(ask.sender.thread)
+      else reads.add(ask.conversation)
+    }
     for (const { root } of store.limitNotices()) tree(root)
     for (const spawn of store.queuedSpawns()) {
       tree(spawn.tree)
@@ -1223,6 +1216,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       const edge = edges.of(kept.child)
       if (edge) void this.sendPullWake(edge, kept)
     }
+    // So is another Apex's reply to a message, kept and not yet in its sender's queue.
+    this.resumeApexMessages(store)
     // A turn's wait the last host fired and didn't deliver goes once; one met or due while it was down fires now.
     this.turnWaits.start()
     this.rewatchChecks()
@@ -1562,6 +1557,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   async archived(conversation: string): Promise<boolean> {
     // Its own wait ends with it, a Fin's or not.
     this.turnWaits.cancelOf(conversation, "archive")
+    this.apexArchived(conversation)
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
     if (!edge) return false
@@ -1571,6 +1567,14 @@ export class Agents implements AgentOperations, ConversationChildren {
       return false
     }
     return this.end(edge, "the person archived it")
+  }
+
+  /** The person archived a Thread, every Session of it: what it sent other Apexes and what they sent it is owed no reply. */
+  private apexArchived(conversation: string): void {
+    const store = this.store()
+    const thread = store?.journalPlacement(conversation)?.thread
+    if (!store?.writable || !thread || this.conversationsOfThread(thread).some((other) => other !== conversation && !this.deps.archived?.(other))) return
+    store.dropApexMessagesOf(thread)
   }
 
   async stopChild(conversation: string, child: string): Promise<boolean> {
@@ -2867,10 +2871,17 @@ export class Agents implements AgentOperations, ConversationChildren {
    * unless the sender steers it into a turn whose work is wrong. The turn that
    * answers it sends its reply back once, as the sender's wake
    * (`apexReplied`), which sends nothing on. At most `APEX_SENDS_PER_HOUR` go
-   * from one Apex to another; a repeat of the key answers the first.
+   * from one Apex to another; a repeat of the key answers the first. Only the
+   * top of a tree sends one: a Fin, a lead with Fins of its own too, reports
+   * what it needs to its Apex, whose call it is to ask. The message is kept
+   * in the store before it's sent (`ApexMessage`), so the hour's count and
+   * the reply it's owed outlast this host.
    */
   private async sendToApex(sender: Apex, input: AgentsSendInput, began: number): Promise<AgentsSendResult> {
     const op = `send:${sender.session}:${input.clientKey}`
+    const store = this.store()!
+    const above = store.edges().of(sender.thread)
+    if (above) return this.refuse(op, "access", `Only the ${APEX_WORD} at the top of a tree messages another ${APEX_WORD}, and this Thread is a ${FIN_WORD} of ${above.parent}. Report what you need from ${input.to} to your ${APEX_WORD} with agents_report: whether to ask is its call. Nothing was sent.`)
     const kept = this.sent.get(op)
     if (kept) return { ...kept, deduped: true }
     const target = this.otherApexNamed(sender, input.to.slice(APEX_PREFIX.length))
@@ -2881,8 +2892,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (!own) return this.refuse(op, "conflict", "A message needs text.")
     if (input.deliver === "interrupt") return this.refuse(op, "conflict", `Another ${APEX_WORD}'s turn is its own to end: queue (the default), or steer when what it's doing now is wrong.`)
     const now = this.now()
-    const pair = `${sender.thread}>${target.thread}`
-    const recent = (this.apexSends.get(pair) ?? []).filter((at) => now - at < HOUR_MS)
+    const request = namedUuid(op)
+    store.pruneApexMessages(now - HOUR_MS, now - APEX_REPLY_KEPT_MS)
+    // One kept already was counted as it was sent: a repeat of it past the limit still answers the first.
+    const recent = store.apexMessage(request) ? [] : store.apexSends(sender.thread, target.thread, now - HOUR_MS)
     if (recent.length >= APEX_SENDS_PER_HOUR) {
       const minutes = Math.max(1, Math.ceil((recent[0]! + HOUR_MS - now) / 60_000))
       return this.refuse(op, "rate-limited", `${name} had ${APEX_SENDS_PER_HOUR} messages from this ${APEX_WORD} in the last hour; the next can go in ${minutes} min. agents_list with scope apexes says how it stands.`)
@@ -2890,14 +2903,21 @@ export class Agents implements AgentOperations, ConversationChildren {
     const conversation = target.conversation
     const ready = this.ready(conversation)
     if (ready === "gone") return this.refuse(op, "unavailable", `${name}'s conversation isn't on this device.`)
-    const request = namedUuid(op)
-    const senderTitle = this.store()!.thread(ThreadIdSchema.parse(sender.thread))?.title ?? (sender.conversation && this.deps.live.session(sender.conversation)?.title) ?? `Thread ${sender.thread}`
+    const senderTitle = store.thread(ThreadIdSchema.parse(sender.thread))?.title ?? (sender.conversation && this.deps.live.session(sender.conversation)?.title) ?? `Thread ${sender.thread}`
     const text = `${fromApex(senderTitle)}\n${apexNote(sender.thread)}\n\n${own}`
-    const requests = [request]
     let sent: Delivered
     if (this.deps.live.held(conversation)?.requests.some((asked) => asked.id === request)) sent = { delivery: "queued", hears: `${name} already has it.`, deduped: true }
     else {
-      this.deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, { kind: "agent", session: SessionIdSchema.parse(sender.session) }, input.reply === "none" ? { notification: true } : {})
+      const session = SessionIdSchema.parse(sender.session)
+      const harness = this.deps.live.session(conversation)?.harness
+      // Kept before it's sent: a host that stops between the two has counted it, and its repeat sends it.
+      const { existed } = store.keepApexMessage({ request, sender: { thread: ThreadIdSchema.parse(sender.thread), session }, thread: ThreadIdSchema.parse(target.thread), conversation, ...(input.reply === "none" && { notification: true as const }), label: `"${target.title ?? target.thread}" (${harness ? this.deps.harnessLabel(harness) : APEX_WORD})`, fin: { name: target.title ?? target.thread, ...(harness && { harness }) }, at: now })
+      try {
+        this.deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, { kind: "agent", session }, input.reply === "none" ? { notification: true } : {})
+      } catch (error) {
+        if (!existed) store.dropApexMessage(request)
+        throw error
+      }
       const queued = this.queuedDelivery(conversation, name, ready)
       sent = queued
       if (ready !== "idle" && input.deliver === "steer") {
@@ -2906,14 +2926,9 @@ export class Agents implements AgentOperations, ConversationChildren {
         if ("why" in steered) sent = { ...queued, hears: `${name} hears it when its current turn ends, as its next message: ${steered.why}` }
         else {
           sent = steered
-          if (running) requests.push(running)
+          if (running) store.steerApexMessage(request, running)
         }
       }
-      recent.push(now)
-      this.apexSends.set(pair, recent)
-      const harness = this.deps.live.session(conversation)?.harness
-      const ask: ApexAsk = { sender, ...(input.reply === "none" && { notification: true }), conversation, requests, thread: target.thread, label: `"${target.title ?? target.thread}" (${harness ? this.deps.harnessLabel(harness) : APEX_WORD})`, fin: { name: target.title ?? target.thread, ...(harness && { harness }) } }
-      for (const id of requests) this.apexAsks.set(`${conversation}:${id}`, ask)
     }
     const answer: AgentsSent = { child: target.thread, name, request, delivery: sent.delivery, hears: sent.hears, ...(sent.deduped && { deduped: true as const }) }
     this.sent.set(op, answer)
@@ -7807,28 +7822,90 @@ export class Agents implements AgentOperations, ConversationChildren {
     return text ? firstParagraph(text) : undefined
   }
 
-  /** The turn that answers another Apex's message ended: its reply goes to that Apex once, as a wake of its own. */
+  /**
+   * The turn that answers another Apex's message ended: its reply goes to that Apex once, as a wake of its own. The
+   * turn is the message's own, the one it was steered into, or one that continues either. A turn the host's own stop
+   * cut is no answer: its continuation's end is. What it said is kept with the message before the sender is woken
+   * (`keepApexReply`), and the message is settled once that wake is in the sender's queue (`apexHeard`), so a host
+   * that stops anywhere between sends one wake and no second.
+   */
   private apexReplied(conversation: string, request: string): void {
-    const ask = this.apexAsks.get(`${conversation}:${request}`)
-    if (!ask) return
-    for (const id of ask.requests) this.apexAsks.delete(`${conversation}:${id}`)
+    const store = this.store()
+    // A host that can't write the store can't keep a reply, so it sends none: the one that can sends it once.
+    if (!store?.writable) return
+    const requests = this.deps.live.held(conversation)?.requests ?? []
+    const turns = [request]
+    for (let turn = requests.find((asked) => asked.id === request)?.continues; turn && !turns.includes(turn.requestId); turn = requests.find((asked) => asked.id === turn!.requestId)?.continues)
+      turns.push(turn.requestId)
+    const asks = turns.flatMap((id) => store.apexMessagesAnsweredBy(id)).filter((ask) => ask.conversation === conversation)
+    if (!asks.length) return
     const reply = this.deps.live.turnReply(conversation, request)
-    if (ask.notification && reply?.request?.status === "completed") return
+    const ended = reply?.request
+    if (ended?.status === "interrupted" && (ended.interruption?.reason === "host-quit" || ended.interruption?.reason === "host-crashed")) return
     const text = reply?.text.trim()
-    const done = reply?.request?.status === "completed" && Boolean(text)
-    const said = reply?.request?.error || text || "Its turn ended without reporting a result."
-    const front = this.frontOf(ask.sender.thread, ask.sender.session) ?? ask.sender.conversation
-    const from = this.store()?.journalPlacement(conversation)?.session
-    if (!front || !from) return
-    this.wakes.notice(front, this.rootOf(ask.sender.thread), {
-      id: `notice:reply:${conversation}:${request}`,
-      report: { id: `reply:${conversation}:${request}`, child: ThreadIdSchema.parse(ask.thread), status: done ? "done" : "failed", summary: said.slice(0, 16_000), ownerGeneration: this.generation, at: this.now() },
+    const done = ended?.status === "completed" && Boolean(text)
+    const said = ended?.error || text || "Its turn ended without reporting a result."
+    const from = store.journalPlacement(conversation)?.session
+    for (const ask of asks) {
+      // Owed none: sent with `reply: none` and answered by a turn that completed, or its Thread has no Session to speak as.
+      if (!from || (ask.notification && ended?.status === "completed")) {
+        this.apexHeard(ask.request)
+        continue
+      }
+      const kept = store.keepApexReply(ask.request, { status: done ? "done" : "failed", summary: said.slice(0, 16_000), from, at: this.now() })
+      if (kept) this.apexReplyNotice(kept)
+      hostLog("agents", "apex replied", { conversation, request: ask.request, to: ask.sender.thread, done })
+    }
+  }
+
+  /**
+   * A kept reply as its sender's wake, under the notice its message names, so a digest that carries it already is its
+   * receipt (`AgentWakes.notice`). A sender whose conversation isn't in memory is read in first, off this call; kept
+   * unheard meanwhile, a host that stops first sends it on its start, in order with the rest of what it resumes.
+   */
+  private apexReplyNotice(ask: ApexMessage, read: "in-order" | "off-the-call" = "off-the-call"): void {
+    const reply = ask.reply
+    const front = this.frontOf(ask.sender.thread, ask.sender.session)
+    if (!reply || !front) return
+    const notice: Notice = {
+      id: `notice:${REPLY_PREFIX}${ask.conversation}:${ask.request}`,
+      report: { id: `${REPLY_PREFIX}${ask.conversation}:${ask.request}`, child: ask.thread, status: reply.status, summary: reply.summary, ownerGeneration: this.generation, at: reply.at },
       label: ask.label,
       fin: ask.fin,
-      from,
+      from: reply.from,
       reply: true,
-    })
-    hostLog("agents", "apex replied", { conversation, request, to: ask.sender.thread, done })
+    }
+    if (read === "in-order" || this.deps.live.held(front)) return this.wakes.notice(front, this.rootOf(ask.sender.thread), notice)
+    this.wakes.noticeWhen(this.deps.live.readIn([front]), front, this.rootOf(ask.sender.thread), notice)
+  }
+
+  /** A message to another Apex is settled: its reply is in its sender's queue, or it's owed none. */
+  private apexHeard(request: string): void {
+    const store = this.store()
+    if (!store?.writable) return
+    const now = this.now()
+    store.settleApexMessage(request, now)
+    store.pruneApexMessages(now - HOUR_MS, now - APEX_REPLY_KEPT_MS)
+  }
+
+  /**
+   * What the last host left of messages to other Apexes: a reply kept and not yet in its sender's queue goes once, and
+   * a message whose answering turn ended as that host stopped, before its reply was kept, replies now.
+   */
+  private resumeApexMessages(store: ThreadStore): void {
+    if (!store.writable) return
+    const now = this.now()
+    store.pruneApexMessages(now - HOUR_MS, now - APEX_REPLY_KEPT_MS)
+    for (const ask of store.owedApexMessages()) {
+      if (ask.reply) {
+        this.apexReplyNotice(ask, "in-order")
+        continue
+      }
+      const requests = this.deps.live.snapshot(ask.conversation)?.requests ?? []
+      let turn = requests.find((asked) => asked.id === (ask.steered ?? ask.request))
+      for (let next = turn; next; next = requests.find((asked) => asked.continues?.requestId === next!.id)) turn = next
+      if (turn?.status === "completed" || turn?.status === "failed") this.apexReplied(ask.conversation, turn.id)
+    }
   }
 
   /**

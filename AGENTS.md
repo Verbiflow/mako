@@ -1154,11 +1154,18 @@ folder and branch, its Fins' `rollup`, and a digest of its open Fins' last
 reports and its own last reply's first paragraph. Reading wakes no one.
 `agents_send` `to: apex:<title or Thread>` messages one: Mako's words
 (`fromApex`, `apexNote`), never the person's, after its turn unless steered;
-the transcript draws it as a card from that Apex. The turn that answers it
-sends its reply back once, as the sender's wake (`Notice.reply`), and that
-wake sends nothing on. At most three go from one Apex to another an hour
-(`rate-limited`). The rule for when to message is in
-`ORCHESTRATION_INSTRUCTIONS`; `test:orch-comms` covers it too.
+the transcript draws it as a card from that Apex. Only a top-level Thread
+sends one: a Fin, a lead too, reads the list and is refused the send
+(`access`), since whether to ask is its own Apex's call. The turn that
+answers it sends its reply back once, as the sender's wake (`Notice.reply`),
+and that wake sends nothing on. At most three go from one Apex to another an
+hour (`rate-limited`). The store keeps each message before it's sent and its
+reply before that wake (`apex_messages`, `ApexMessage`), settled once the
+wake is in the sender's queue, so a host that stops anywhere between still
+sends one reply and counts the hour's three; a turn its stop cut replies as
+its continuation ends. Rows go once answered and an hour old, with an
+archived Thread, or after a week unanswered. The rule for when to message is
+in `ORCHESTRATION_INSTRUCTIONS`; `test:orch-comms` covers it too.
 
 The person's message in an Apex's conversation goes to the Apex, which
 passes it on (`agents_send`, drawn as a routing line). Nothing goes where
