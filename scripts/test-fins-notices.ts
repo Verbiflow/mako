@@ -81,10 +81,13 @@ interface Tree {
   /** Each machine's current credential, as the account knows it. */
   credentials: Map<string, string>
   posts: Posted[]
-  /** Answers the route gives in place of the account's own, oldest first: a refusal a case asks for. */
-  forced: Array<TreeNoticeAnswer | { status: number }>
-  /** The route admits the next post and loses its answer: the machine's host never hears. */
-  loseAnswer: boolean
+  /**
+   * By notice: the answer the route gives that notice's next post in place of the account's own, a refusal a case asks
+   * for. By notice and never by turn, since a host posts on its own too (a turn's end, a standing said again).
+   */
+  forced: Map<string, TreeNoticeAnswer | { status: number }>
+  /** The notices whose next post the route admits and loses the answer of: the machine's host never hears. */
+  lose: Set<string>
   /** The machine the account makes for the next start. */
   next?: Machine
   /** The account's devices that run Threads, as each device's link lists them. */
@@ -107,7 +110,7 @@ const body = (request: IncomingMessage) => new Promise<Buffer>((resolve, reject)
 
 /** The account's machine route as its side answers it: 202 admitted, 200 a typed refusal (`rate` with `retry-after`), 401 a credential that isn't the machine's current one. */
 async function tree(): Promise<Tree> {
-  const made: Tree = { gateway: createFakeGateway(), url: "", machines: new Map(), credentials: new Map(), posts: [], forced: [], loseAnswer: false, devices: [], calls: [], close: async () => {} }
+  const made: Tree = { gateway: createFakeGateway(), url: "", machines: new Map(), credentials: new Map(), posts: [], forced: new Map(), lose: new Set(), devices: [], calls: [], close: async () => {} }
   const server: Server = createServer((request, response) => {
     void (async () => {
       const text = await body(request)
@@ -117,14 +120,12 @@ async function tree(): Promise<Tree> {
       made.posts.push(seen)
       if (request.method !== "POST" || !machine) return void response.writeHead(404).end()
       if (!authorized) return void response.writeHead(401).end()
-      const forced = made.forced.shift()
+      const forced = made.forced.get(seen.notice)
+      made.forced.delete(seen.notice)
       if (forced && "status" in forced) return void response.writeHead(forced.status).end("unavailable")
       const answer = forced ?? await made.gateway.postNotice({ kind: "machine", machine }, text.toString("utf8"))
       seen.answer = answer
-      if (made.loseAnswer) {
-        made.loseAnswer = false
-        return void request.socket.destroy()
-      }
+      if (made.lose.delete(seen.notice)) return void request.socket.destroy()
       response.writeHead(answer.admitted ? 202 : 200, { "content-type": "application/json", ...(!answer.admitted && answer.reason === "rate" && { "retry-after": "1" }) }).end(JSON.stringify(answer))
     })()
   })
@@ -282,7 +283,6 @@ async function until(what: string, done: () => boolean, timeoutMs = 20_000): Pro
     await new Promise((resolve) => setTimeout(resolve, 20))
   }
 }
-const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 const isBrief = (text: string) => text.includes("You're fin:")
 const spoken = (text: string) => text.replace(/^<mako-local-control>[\s\S]*?<\/mako-local-control>\n\n/, "")
@@ -395,9 +395,15 @@ async function apexOffThenOn(): Promise<void> {
     assert.deepEqual(account.gateway.heldNotices(world.session).map((each) => each.from.seq), [1, 2], "held by the account, numbered as admitted")
     assert.deepEqual(summaries(mac, child), [])
     // A host from before notices: its link never says it takes them, and the account sends it none.
+    const before = mac.delivered.length
+    const said = account.gateway.advertisements(`d-${mac.id}`).length
     await mac.online({ advertises: false })
-    await pause(300)
-    assert.deepEqual(summaries(mac, child), [], "a delivery to a host that didn't advertise isn't made")
+    await until("the account to hear what its link says", () => account.gateway.advertisements(`d-${mac.id}`).length === said + 1)
+    // A call through the same link, answered: anything the account sent this host before it has arrived by now.
+    const actor: Actor = { kind: "client", client: "desktop", deviceId: mac.id }
+    await sendWithRepeats("mako:agents-capabilities", gatewayHostCalls(await account.gateway.connectClient(actor), { runtimeId: `d-${mac.id}`, actor }).call("mako:agents-capabilities", []), { runtime: `d-${mac.id}` })
+    assert.deepEqual(mac.delivered.slice(before).map((operation) => operation.op), ["host.agents-capabilities"], "a delivery to a host that didn't advertise isn't made")
+    assert.deepEqual(summaries(mac, child), [])
     assert.equal(account.gateway.heldNotices(world.session).length, 2, "the account holds them still")
     assert.equal(takesTreeNotices(account.gateway.advertisements(`d-${mac.id}`).at(-1)!.capabilities), false)
     mac.offline()
@@ -407,7 +413,7 @@ async function apexOffThenOn(): Promise<void> {
     assert.deepEqual(summaries(mac, child), ["Step one.", "Step two."], "in order")
     assert.equal(takesTreeNotices(account.gateway.advertisements(`d-${mac.id}`).at(-1)!.capabilities), true)
     await until("the account to let go", () => account.gateway.heldNotices(world.session).length === 0)
-    assert.equal(mac.delivered.filter((operation) => operation.op === TREE_NOTICE_OP).length, 2, "exactly once each")
+    assert.deepEqual(mac.delivered.filter((operation) => operation.op === TREE_NOTICE_OP).map((operation) => carried(operation).from?.seq), [1, 2], "exactly once each")
     assert.equal(account.posts.length, 2, "and the machine posted nothing again")
     console.log("Apex off: two notices were admitted and held, not sent to a link that didn't advertise, and drained in order, once each, when the device's link said it takes them")
   } finally { await world.close() }
@@ -419,32 +425,33 @@ async function finHostRestarts(): Promise<void> {
   const { account, mac, cloud, child, report } = world
   try {
     await report("one", "Kept before the machine was linked.")
-    await pause(200)
     assert.deepEqual(undelivered(cloud).length, 1, "kept in the machine's store, unposted")
     assert.equal(account.posts.length, 0)
     assert.equal(cloud.world.agents.posting(), true, "a report on its way holds the machine up")
     await cloud.world.restart()
     assert.deepEqual(undelivered(cloud).length, 1, "the outbox is the store's: a restart keeps it")
     cloud.link("credential-1")
-    await until("the first on the Apex's device", () => summaries(mac, child).length === 1)
-    await until("the first taken", () => undelivered(cloud).length === 0)
+    // The turn the restart cut short goes on and ends, which the Fin's host reports itself: both go, in the order kept.
+    await until("the first, and the turn's end, on the Apex's device", () => summaries(mac, child).length === 2)
+    await until("both taken", () => undelivered(cloud).length === 0 && !cloud.world.agents.posting())
     // Posted and admitted, and the answer lost: the machine's host doesn't know, and restarts.
-    account.loseAnswer = true
-    await report("two", "Posted, its answer lost.")
+    const second = noticeIdOf(child, `report:${child}:two`)
+    account.lose.add(second)
+    const lost = await report("two", "Posted, its answer lost.")
+    await until("the lost answer", () => !account.lose.has(second))
     await until("the second on the Apex's device", () => summaries(mac, child).includes("Posted, its answer lost."))
-    await until("the lost answer", () => !account.loseAnswer)
-    await pause(100)
-    assert.equal(undelivered(cloud).length, 1, "admitted by the account, and not marked taken here")
+    assert.deepEqual(undelivered(cloud), [lost.id], "admitted by the account, heard by the Apex, and not marked taken here")
     await cloud.world.restart()
+    assert.deepEqual(undelivered(cloud), [lost.id], "nor by a restart")
     cloud.link("credential-1")
     await until("the second taken", () => undelivered(cloud).length === 0)
-    assert.equal(account.posts.at(-1)?.answer?.admitted, true, "posted again, it answers the number it had")
-    const lost = account.posts.filter((post) => post.answer?.admitted).map((post) => post.answer?.admitted && post.answer.seq)
-    assert.equal(lost.at(-1), lost.at(-2), "the same number, twice")
-    await pause(300)
-    // Between them, the turn the first restart cut short went on and ended, which the Fin's host reported itself.
+    const numbers = account.posts.filter((post) => post.notice === second).map((post) => post.answer?.admitted && post.answer.seq)
+    assert.ok(numbers.length >= 2 && numbers.every((seq) => seq === numbers[0] && seq !== undefined), `posted again, it answers the number it had: ${numbers.join(", ")}`)
     assert.deepEqual(summaries(mac, child), ["Kept before the machine was linked.", "Carried on.", "Posted, its answer lost."], "each once, in order")
-    assert.equal(new Set(mac.delivered.filter((operation) => operation.op === TREE_NOTICE_OP).map((operation) => carried(operation).id)).size, 3, "three notices, whatever each said again of how the Fin stands")
+    // The repeat came from a new host, whose word on how the Fin stands is newer: the account may send that on, under
+    // the notice's one number, and the Apex's device keeps the report once all the same.
+    const again = mac.delivered.filter((operation) => operation.op === TREE_NOTICE_OP && carried(operation).id === second).map((operation) => carried(operation).from?.seq)
+    assert.ok(again.every((seq) => seq === numbers[0]), `the repeat is the same notice to its Apex's device: ${again.join(", ")}`)
     console.log("Fin's host restarted: a report kept before posting went after the restart, and one admitted whose answer was lost was posted again, answered its number and reached the Apex once")
   } finally { await world.close() }
 }
@@ -584,14 +591,14 @@ async function refusals(): Promise<void> {
     const terminal: TreeNoticeRefusal[] = ["conflict", "invalid", "forbidden", "too-large"]
     const ended: string[] = []
     for (const reason of terminal) {
-      account.forced.push({ admitted: false, reason })
+      account.forced.set(noticeIdOf(child, `report:${child}:${reason}`), { admitted: false, reason })
       const refused = await report(reason, `Refused as ${reason}.`)
       await until(`${reason} to leave the outbox`, () => !undelivered(cloud).includes(refused.id) || cloud.world.store.refusedNotices().has(refused.id))
       assert.equal(cloud.world.store.refusedNotices().has(refused.id), true, `${reason}: marked, so it isn't posted forever`)
       assert.equal(cloud.world.store.reportDeliveredAt(refused.id), undefined, `${reason}: never marked heard, since nobody heard it`)
       ended.push(noticeIdOf(child, refused.id))
     }
-    assert.deepEqual(account.posts.map((post) => post.notice), ended, "one post each")
+    assert.deepEqual(account.posts.map((post) => post.notice).filter((notice) => ended.includes(notice)), ended, "one post each")
     await cloud.world.restart()
     cloud.link("credential-1")
     // The turn the restart cut short goes on and ends, which is a report of its own: it goes, past the four.
@@ -600,17 +607,17 @@ async function refusals(): Promise<void> {
     assert.deepEqual(account.posts.map((post) => post.notice).filter((notice) => ended.includes(notice)), ended, "nor after a restart")
     assert.deepEqual(summaries(mac, child), ["Carried on."], "none of the four reached the Apex, and the Fin's next report did")
     // `gone` is as good as taken: nothing is left to hear it.
-    account.forced.push({ admitted: false, reason: "gone" })
+    account.forced.set(noticeIdOf(child, `report:${child}:gone`), { admitted: false, reason: "gone" })
     const gone = await report("gone", "Its Apex was archived.")
     await until("gone to be taken", () => !undelivered(cloud).includes(gone.id))
     assert.equal(cloud.world.store.refusedNotices().has(gone.id), false)
     assert.notEqual(cloud.world.store.reportDeliveredAt(gone.id), undefined)
     // `rate` waits what the account said, `full` and a failing account the outbox's own schedule: each is kept, and goes.
     for (const [what, forced] of [["rate", { admitted: false, reason: "rate" }], ["full", { admitted: false, reason: "full" }], ["a 503", { status: 503 }]] as const) {
-      account.forced.push(forced)
-      const waiting = await report(what.replace(/\W/g, ""), `Waited out ${what}.`)
-      await until(`${what} to be answered`, () => account.forced.length === 0)
-      await pause(100)
+      const key = what.replace(/\W/g, "")
+      account.forced.set(noticeIdOf(child, `report:${child}:${key}`), forced)
+      const waiting = await report(key, `Waited out ${what}.`)
+      await until(`${what} to be answered`, () => account.forced.size === 0)
       assert.equal(undelivered(cloud).includes(waiting.id), true, `${what}: kept`)
       assert.equal(cloud.world.agents.posting(), true, `${what}: a report on its way holds the machine up`)
       await until(`${what} to go on its own`, () => summaries(mac, child).includes(`Waited out ${what}.`), 30_000)
@@ -630,10 +637,10 @@ async function credentialRenewed(): Promise<void> {
     account.credentials.set(cloud.name, "credential-2")
     const kept = await report("one", "Posted after the renewal.")
     await until("the 401", () => account.posts.some((post) => !post.authorized))
-    await pause(200)
+    // Its host has read the 401 once the report waits at the longest wait, which holds the machine up no more.
+    await until("the report to wait for a renewal", () => !cloud.world.agents.posting())
     assert.equal(undelivered(cloud).includes(kept.id), true, "kept")
     assert.equal(account.posts.length, 1, "and not posted again at speed")
-    assert.equal(cloud.world.agents.posting(), false, "a machine being enrolled again isn't held up by it")
     assert.ok(OUTBOX_RETRY_MAX_MS >= 5 * 60_000)
     cloud.link("credential-2")
     await until("the report after the renewal", () => summaries(mac, child).length === 1)
@@ -676,7 +683,6 @@ async function knockLeavesMachinesAsleep(): Promise<void> {
     account.calls.length = 0
     mac.world.agents.knock()
     await until("the look at a machine asleep", () => account.calls.length === 1)
-    await pause(100)
     assert.deepEqual([account.calls[0]?.passive, cloud.wakes, cloud.asleep], [true, 0, true], "left asleep")
     // The Apex asking for its Fins itself still reaches them: that isn't a knock.
     const listed = await mac.world.agents.list(world.apex.caller, {})
