@@ -22,7 +22,7 @@ const tool = (id: string, status = "completed"): LiveUpdate => ({ kind: "tool", 
 const exchangesOf = (updates: LiveUpdate[]) =>
   toExchanges(entriesToMessages(reduceLiveUpdates([], updates), { kind: "live", running: false, provider: "claude" }).messages)
 const none = () => false
-const shape = (exchanges: readonly Exchange[]) => exchanges.map((exchange) => (exchange.run ? exchange.run.turns.length : exchange.prompt ? "turn" : "other"))
+const drawnRows = (exchanges: readonly Exchange[]) => exchanges.map((exchange) => (exchange.run ? exchange.run.turns.length : exchange.prompt ? "turn" : "other"))
 
 const asks = card("Push wording", "needs-input", { forPerson: true })
 const afternoon: LiveUpdate[] = [
@@ -36,9 +36,9 @@ const afternoon: LiveUpdate[] = [
 // Three wakes between two of the person's messages are one row; the person's own turns stand either side of it.
 {
   const exchanges = exchangesOf(afternoon)
-  assert.deepEqual(shape(exchanges), ["turn", "turn", "turn", "turn", "turn"])
+  assert.deepEqual(drawnRows(exchanges), ["turn", "turn", "turn", "turn", "turn"])
   const folded = foldReportRuns(exchanges, none)
-  assert.deepEqual(shape(folded), ["turn", 3, "turn"])
+  assert.deepEqual(drawnRows(folded), ["turn", 3, "turn"])
   const run = folded[1]!
   assert.equal(run.id, exchanges[1]!.id, "the row goes by its first turn's id")
   assert.deepEqual(run.run!.cards.map((each) => each.name), ["Haptics", "Share sheet", "Outbox", "Push wording", "Swipe"], "every report is in the row, in order")
@@ -58,14 +58,14 @@ const afternoon: LiveUpdate[] = [
   assert.equal(foldReportRuns(streamed, none, folded)[1], run)
 
   // The turn that streams, or was stopped or failed, stands as itself, and one turn is no run.
-  assert.deepEqual(shape(foldReportRuns(exchanges, (exchange) => exchange.id === exchanges[3]!.id)), ["turn", 2, "turn", "turn"])
-  assert.deepEqual(shape(foldReportRuns(exchanges, (exchange) => exchange.id === exchanges[2]!.id)), ["turn", "turn", "turn", "turn", "turn"])
+  assert.deepEqual(drawnRows(foldReportRuns(exchanges, (exchange) => exchange.id === exchanges[3]!.id)), ["turn", 2, "turn", "turn"])
+  assert.deepEqual(drawnRows(foldReportRuns(exchanges, (exchange) => exchange.id === exchanges[2]!.id)), ["turn", "turn", "turn", "turn", "turn"])
   assert.equal(foldReportRuns(exchanges, (exchange) => exchange.id === exchanges[2]!.id), exchanges, "with no run the list is the one given")
 
   // Earlier history arriving above a run leaves its id as it was while its first turn is still in it.
   const earlier = exchangesOf([wake("w0", card("Dictation", "done")), text("a0", "Dictation is in."), ...afternoon.slice(2)])
   const paged = foldReportRuns(earlier, none, folded)
-  assert.deepEqual(shape(paged), [4, "turn"])
+  assert.deepEqual(drawnRows(paged), [4, "turn"])
   assert.equal(paged[0]!.id, run.id, "a run that grew upward keeps its id")
 }
 
@@ -81,7 +81,7 @@ const afternoon: LiveUpdate[] = [
     wake("w4", card("Outbox", "done")), tool("t4", "failed"), text("a5", "In."),
   ])
   assert.deepEqual(exchanges.map((exchange) => reportTurn(exchange) !== undefined), [false, true, false, true, false])
-  assert.deepEqual(shape(foldReportRuns(exchanges, none)), ["turn", "turn", "turn", "turn", "turn"], "a long answer or a failed call parts the run")
+  assert.deepEqual(drawnRows(foldReportRuns(exchanges, none)), ["turn", "turn", "turn", "turn", "turn"], "a long answer or a failed call parts the run")
   // The person's own words are theirs even when they quote a digest's header after their first line.
   const quoted = exchangesOf([person("p1", `Why did I get this?\n${digest(card("Haptics", "done"))}`), text("a1", "It's a report.")])
   assert.equal(reportTurn(quoted[0]!), undefined)

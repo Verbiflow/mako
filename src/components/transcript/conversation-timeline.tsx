@@ -1870,12 +1870,17 @@ export function ConversationTimeline({
       // Safari may already read back the clamped offset while still drawing the old one, so a drop in height near the
       // end counts though the offset looks right; one far above the end leaves a reader's own glide alone.
       if (!(shrank && node.scrollTop > end - node.clientHeight) && node.scrollTop <= end) return
+      // A scrollbar that takes width (Linux, Windows, a Mac set to always show them) gives that width back while the
+      // scroll is stopped: the pane and every line in it resize inside the observer that called this, which Chromium
+      // reports as a ResizeObserver loop, and the column flows twice in a frame. Its gutter is kept for that frame.
+      if (node.offsetWidth > node.clientWidth) node.style.scrollbarGutter = "stable"
       node.style.overflowY = "hidden"
       node.scrollTop = Math.min(node.scrollTop, end)
       cancelAnimationFrame(shrinkFrame)
       shrinkFrame = requestAnimationFrame(() => {
         shrinkFrame = 0
         node.style.overflowY = ""
+        node.style.scrollbarGutter = ""
       })
     }
     pin()
@@ -1906,7 +1911,7 @@ export function ConversationTimeline({
       pin()
     })
     structure.observe(node, { childList: true, characterData: true, subtree: true })
-    return () => { structure.disconnect(); grown.disconnect(); cancelAnimationFrame(shrinkFrame); node.style.overflowY = "" }
+    return () => { structure.disconnect(); grown.disconnect(); cancelAnimationFrame(shrinkFrame); node.style.overflowY = ""; node.style.scrollbarGutter = "" }
   }, [identity, isEmpty, owned, holdReader, keepSendRoom])
 
   // A turn arrived at the end, opened by a message the person just sent (the one the panel names, or one still in

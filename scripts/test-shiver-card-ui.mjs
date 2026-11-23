@@ -911,9 +911,26 @@ async function checkPage({ window, page, shots, base }) {
   await until(`new Set([...${RUN}.querySelectorAll(':is([data-fin-report], [data-report-line])')].map((node) => node.dataset.fin)).size === 7`, "every Fin's report behind the row")
   await evaluate(`${RUN}.scrollIntoView({ block: 'start' }); true`)
   await capture("afternoon-run-open")
+  // Closed and opened again near the transcript's end, under scrollbars that take width as Linux and Windows draw
+  // them: the column gets shorter by a screenful, and the pane keeps its width while the timeline settles the scroll
+  // (`settleShrink`). Giving the scrollbar's width back there resized the pane inside its own observer, which the
+  // page reports as a ResizeObserver loop; a Mac's overlay scrollers never showed it.
+  await evaluate("(() => { const bars = document.createElement('style'); bars.dataset.widthTakingBars = ''; bars.textContent = '::-webkit-scrollbar { width: 15px; height: 15px }'; document.head.append(bars); return true })()")
+  await until("(() => { const pane = document.querySelector('[data-transcript-viewport]'); return pane.offsetWidth - pane.clientWidth >= 10 })()", "the transcript's scrollbar taking width")
+  for (let round = 0; round < 3; round++) {
+    await evaluate(`${RUN}.querySelector('[data-report-run-line]').click(); true`)
+    await until(`${RUN}.querySelector('[data-turn-fold]').dataset.turnFold === 'closed'`, "the run closing")
+    await new Promise((done) => setTimeout(done, 300))
+    if (round === 2) break
+    await evaluate(`${RUN}.querySelector('[data-report-run-line]').click(); true`)
+    await until(`${RUN}.querySelector('[data-turn-fold]').dataset.turnFold === 'open'`, "the run opening again")
+    await new Promise((done) => setTimeout(done, 300))
+    await evaluate(`${RUN}.scrollIntoView({ block: 'start' }); true`)
+  }
+  assert.deepEqual(errors.filter((message) => /ResizeObserver loop/.test(message)), [], "closing a run near the end resizes nothing inside an observer")
+  await evaluate("document.querySelector('style[data-width-taking-bars]').remove(); true")
+  console.log("PASS: a run closing near the end keeps the pane's width under scrollbars that take width")
   // Answered in the Shiver card, the row stops saying it needs the person, and keeps naming the failure.
-  await evaluate(`${RUN}.querySelector('[data-report-run-line]').click(); true`)
-  await until(`${RUN}.querySelector('[data-turn-fold]').dataset.turnFold === 'closed'`, "the run closing")
   await evaluate("document.querySelector('[data-shiver]').scrollIntoView({ block: 'start' }); true")
   await click(`[data-shiver-row="${pushWording}"] button[data-fin-answer="0"]`)
   await until(`!${RUN}.querySelector('[data-report-waits]')`, "the run letting the question go")
