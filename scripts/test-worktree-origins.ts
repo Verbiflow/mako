@@ -84,6 +84,45 @@ try {
   assert.equal(new WorktreeOrigins(memory).projectFolderOfRemoved(join(mirror, "gone")), undefined, "unless that folder isn't in the project")
   assert.equal(origins.projectFolderOfRemoved(suite), undefined, "a folder that's there stays as it is")
 
+  // A checkout made from another Thread's checkout (a Fin's from its Apex's) names that one, as builds before this
+  // wrote it; it's filed under the project that one is of, however many back, not under a checkout.
+  const made = (name: string, from: string) => {
+    const path = join(root, "home", ".mako", "worktrees", name)
+    mkdirSync(path, { recursive: true })
+    writeFileSync(join(path, PROJECT_CHECKOUT_FILE), JSON.stringify({ project: from }))
+    return path
+  }
+  const apex = made("suite-1/apex", suite)
+  const fin = made("apex-2/fin", apex)
+  const finOfFin = made("fin-3/fin-of-fin", fin)
+  mkdirSync(join(finOfFin, "notes"))
+  assert.deepEqual(origins.of(fin), { path: fin, repoRoot: suite, mirrors: true }, "a checkout made from a checkout mirrors the project")
+  assert.deepEqual(origins.of(join(finOfFin, "notes")), { path: finOfFin, repoRoot: suite, mirrors: true }, "three deep")
+  assert.equal(origins.projectFolder(join(finOfFin, "notes")), join(suite, "notes"), "the same folder of the project")
+  assert.equal(origins.projectFolder(suite), undefined, "a project is in no worktree")
+  git(repo, "worktree", "add", "-q", "-b", "mako/fin", join(fin, "app"))
+  assert.deepEqual(origins.of(join(fin, "app")), { path: join(fin, "app"), repoRoot: repo }, "a repository's worktree inside one is still its own repository's")
+  const left = made("loop-1/left", join(root, "home", ".mako", "worktrees", "loop-2", "right"))
+  const right = made("loop-2/right", left)
+  assert.deepEqual(origins.of(left), { path: left, repoRoot: right, mirrors: true }, "checkouts that name each other are each left as written")
+  assert.deepEqual(origins.of(right), { path: right, repoRoot: left, mirrors: true })
+  // The checkout between is removed first, as an Apex's is while its Fins' stay: the file still says what it mirrored.
+  await origins.flush()
+  assert.deepEqual(z.object({ worktrees: z.record(z.string(), z.object({ repoRoot: z.string() })) }).parse(JSON.parse(readFileSync(memory, "utf8"))).worktrees[fin], { repoRoot: apex },
+    "the file keeps what each was made from, as every build reads it")
+  rmSync(apex, { recursive: true, force: true })
+  const later = new WorktreeOrigins(memory)
+  assert.deepEqual(later.of(fin), { path: fin, repoRoot: suite, mirrors: true }, "a checkout whose own is gone is filed by what hosts remember of that one")
+  assert.deepEqual(later.of(finOfFin), { path: finOfFin, repoRoot: suite, mirrors: true })
+  git(repo, "worktree", "remove", "--force", join(fin, "app"))
+  rmSync(fin, { recursive: true, force: true })
+  rmSync(finOfFin, { recursive: true, force: true })
+  const gone = new WorktreeOrigins(memory)
+  assert.deepEqual(gone.of(join(finOfFin, "notes")), { path: finOfFin, repoRoot: suite, mirrors: true }, "and with every one of them gone, from the file alone")
+  mkdirSync(join(suite, "notes"))
+  assert.equal(gone.projectFolderOfRemoved(join(finOfFin, "notes")), join(suite, "notes"), "a new Session for its folder starts in the project, not in a checkout that's gone")
+  rmSync(join(suite, "notes"), { recursive: true })
+
   // Every folder a catalog could hold, twice: the first pass reads the disk, the second only memory.
   const folders = Array.from({ length: 400 }, (_, index) => join([repo, claude, codex, plain][index % 4] ?? repo, `deep/${index}`))
   for (const folder of folders) mkdirSync(folder, { recursive: true })
