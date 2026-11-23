@@ -38,6 +38,28 @@ import type { Progress } from "./borrow.js"
 import type { Advertisement, GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
 import { type SshClient, SshIncoming, SshOutgoing, SshRefusedError, type SshStream } from "./ssh.js"
 import type { SessionsReport } from "./thread-listing.js"
+import {
+  type HeldTreeNotice,
+  type LastTreeNotice,
+  TREE_NOTICE_DEAD_LETTERS,
+  type TreeNotice,
+  type TreeNoticeAnswer,
+  TreeNoticeAnswerSchema,
+  type TreeNoticeDelivery,
+  TreeNoticeDeliverySchema,
+  type TreeNoticeFrom,
+  TreeNoticeFromSchema,
+  TreeNoticeSchema,
+  admitTreeNotice,
+  apexSessionOfStart,
+  takesTreeNotices,
+  treeNoticeAck,
+  treeNoticeBytes,
+  treeNoticeDisposal,
+  treeNoticeFits,
+  treeNoticeOperation,
+  treeNoticeRateOpen,
+} from "./tree-notices.js"
 import { COMPACT_LIVE_VERSION, LEND_LINK_VERSION, MEDIA_VERSION, NUMBERED_LIVE_VERSION, PROTOCOL_VERSION, SESSIONS_VERSION, SSH_VERSION, SUPPORTED_VERSIONS, negotiate, type VersionRange } from "./version.js"
 import { LINGER_MS, LiveTail, frameFor, logFor, streamNoticeText } from "./live-tail.js"
 import { type LiveForm, WHOLE_LIVE_FORM, readersForm, readsLiveForm } from "./live-form.js"
@@ -115,10 +137,43 @@ type Thread = {
   deferred: Operation[]
 }
 
+/** A cloud Fin's machine as the account made it for the Fin's start, which is all a notice it posts is stamped from. */
+export type FakeFinMachine = {
+  /** The Fin's start. */
+  op: string
+  /** Its cloud Thread, the machine it runs on, and the generation it runs under. */
+  thread: string
+  machine: string
+  generation: number
+  /** The Fin's Thread as its Apex knows it: the only child its notices may name. */
+  child: string
+  /** The Apex it was started for: the only Thread and Session its notices go to, whatever they say. */
+  apex: { thread: string; session: string }
+}
+
+/** Who posts a notice, as its credential says: one of the account's devices, or a cloud Fin's machine. */
+export type FakeNoticeSender = { kind: "device"; device: string } | { kind: "machine"; machine: string }
+
+/** What the account holds for one Apex's Session (`tree-notices.ts`). */
+type Mailbox = {
+  /** The last number given: numbers only rise, so `held` stays in the order it was admitted. */
+  head: number
+  held: Array<HeldTreeNotice & { from: TreeNoticeFrom }>
+  /** What was put aside (`treeNoticeDisposal`), newest last, at most `TREE_NOTICE_DEAD_LETTERS`. */
+  dead: TreeNoticeDelivery[]
+  /** Raised when the Session changes owner: a delivery under way to the owner before is left, whatever it answers. */
+  run: number
+  delivering: boolean
+  /** Something that sends held notices again happened while they were being delivered: they go once more after. */
+  again: boolean
+}
+
 type Connection = {
   runtimeId: string | undefined
   /** The link version agreed at enrolment. */
   version: number | undefined
+  /** Whether this link's last `advertise` said it takes notices from the account (`TREE_NOTICES_CAPABILITY`). */
+  takesNotices: boolean
   correlationId: string
   closed: boolean
   inbox: Inbox<GatewayFrame>
@@ -161,6 +216,22 @@ export type FakeGateway = Omit<GatewayUnderTest, "connectClient"> & {
   lend(runtimeId: string, frame: Extract<GatewayFrame, { type: "source-ask" | "lent" | "lent-ended" }>): boolean
   /** The operations waiting for the Thread's runtime (`whenAsleep: "defer"`). */
   deferred(threadId: string): string[]
+  /** Makes a cloud Fin's machine known, as its start does: a notice posted as that machine is stamped with these. */
+  finMachine(fin: FakeFinMachine): void
+  /** That machine's Fin's place is over: a notice it posts from now is `gone`. */
+  finMachineOver(machine: string): void
+  /** An Apex's Session's Thread was archived: what's held for the Session is dropped, and a notice for it is `gone`. */
+  archiveTree(session: string): void
+  /**
+   * A notice posted (`POST /v1/tree/notices`, `body` its JSON text), by a sender as its credential names it and never
+   * as the body does: admitted or refused at once, and delivered to the owner of its Apex's Session when there is one
+   * to take it.
+   */
+  postNotice(sender: FakeNoticeSender, body: string): Promise<TreeNoticeAnswer>
+  /** What's held for an Apex's Session, as it would be delivered, in the order it was admitted. */
+  heldNotices(session: string): TreeNoticeDelivery[]
+  /** What was put aside for an Apex's Session (its owner answered `conflict`, or `unknown-child` for an hour), oldest first. */
+  deadNotices(session: string): TreeNoticeDelivery[]
 }
 
 export function createFakeGateway(
@@ -180,6 +251,19 @@ export function createFakeGateway(
   const speaks = options.versions ?? SUPPORTED_VERSIONS
   const advertised = new Map<string, Advertisement[]>()
   const beaten = new Map<string, Array<{ lease: string; progress?: Progress }>>()
+  /**
+   * Who owns each Session, as its owners' reports say under the one-owner rule: a higher generation takes it, the same
+   * one only from the same runtime. A Session nobody reports has no owner, and what's held for it waits for one.
+   */
+  const sessionOwners = new Map<string, { runtime: string; generation: number }>()
+  /** By Apex's Session: the notices held for it. */
+  const mailboxes = new Map<string, Mailbox>()
+  const finMachines = new Map<string, FakeFinMachine & { over: boolean }>()
+  const archivedTrees = new Set<string>()
+  /** By Fin: when each of its notices in the last minute was admitted. */
+  const noticeAdmits = new Map<string, number[]>()
+  /** By Fin: the last notice admitted from it, which tells that one posted again from a new one once it's been taken. */
+  const lastNotices = new Map<string, LastTreeNotice>()
   /**
    * By session stream: who watches it, and its numbering and last few updates (`LiveTail`), as a gateway keeps them. A
    * stream nobody watches lingers `LINGER_MS` (`idleSince`), its runtime still sending, so a watcher back from a dropped
@@ -376,6 +460,95 @@ export function createFakeGateway(
     connection.close()
   }
 
+  const mailbox = (session: string): Mailbox => {
+    let found = mailboxes.get(session)
+    if (!found) {
+      found = { head: 0, held: [], dead: [], run: 0, delivering: false, again: false }
+      mailboxes.set(session, found)
+    }
+    return found
+  }
+  const deliveryOf = (held: Mailbox["held"][number]): TreeNoticeDelivery => TreeNoticeDeliverySchema.parse({ ...held.notice, from: held.from })
+  /**
+   * Sends a Session's held notices to its owner: one at a time, in order, each waiting for the last one's answer. It
+   * stops at the first the owner doesn't answer (it's off, or its link never said it takes notices), and passes over a
+   * Fin's other notices once the owner said it doesn't know that Fin, so one Fin's reports stay in order and don't hold
+   * up another's. Nothing here waits on a clock: what's kept goes again when this is next asked, and one the owner
+   * hasn't known the Fin of for an hour is put aside then.
+   */
+  const deliverNotices = (session: string) => {
+    const box = mailboxes.get(session)
+    if (!box?.held.length) return
+    if (box.delivering) {
+      box.again = true
+      return
+    }
+    box.delivering = true
+    void deliverHeld(session, box, box.run)
+  }
+  const deliverHeld = async (session: string, box: Mailbox, run: number) => {
+    do {
+      box.again = false
+      const unknown = new Set<string>()
+      let after = 0
+      for (;;) {
+        const next = box.held.find((held) => held.seq > after && !unknown.has(held.notice.child))
+        const owner = runtimes.get(sessionOwners.get(session)?.runtime ?? "")
+        if (!next || !owner?.runtimeId || !owner.takesNotices) break
+        after = next.seq
+        const sent = next.notice
+        const reply = await route(treeNoticeOperation(deliveryOf(next), {
+          id: crypto.randomUUID(),
+          target: { kind: "runtime", runtimeId: owner.runtimeId },
+          actor: { kind: "runtime", runtimeId: `gateway:${next.notice.parent.thread}` },
+          correlationId: crypto.randomUUID(),
+        }))
+        // The Session changed owner meanwhile: its new owner is being sent what's held, this one included.
+        if (box.run !== run) return
+        const ack = treeNoticeAck(reply)
+        if (!ack) break
+        const disposal = treeNoticeDisposal(ack, nowMs() - next.from.at)
+        if (disposal === "keep") {
+          unknown.add(next.notice.child)
+          continue
+        }
+        if (!box.held.includes(next)) continue
+        // Its Fin stood otherwise while this was on its way: it goes once more, as it's held now.
+        if (disposal === "delete" && next.notice !== sent) {
+          after = next.seq - 1
+          continue
+        }
+        box.held.splice(box.held.indexOf(next), 1)
+        if (disposal === "dead-letter") box.dead = [...box.dead, deliveryOf(next)].slice(-TREE_NOTICE_DEAD_LETTERS)
+      }
+    } while (box.again)
+    box.delivering = false
+  }
+  /** A Session has another owner now: what's held for it goes to that one, whatever was under way to the one before. */
+  const noticesMoved = (session: string) => {
+    const box = mailboxes.get(session)
+    if (!box) return
+    box.run += 1
+    box.delivering = false
+    deliverNotices(session)
+  }
+  /** A runtime's report of its Sessions, read for who owns each (`sessionOwners`). */
+  const ownSessions = (runtimeId: string, report: SessionsReport) => {
+    const moved: string[] = []
+    for (const row of [...(report.owned ?? []), ...report.listed]) {
+      const known = sessionOwners.get(row.session)
+      if (known && (row.generation < known.generation || (row.generation === known.generation && known.runtime !== runtimeId))) continue
+      if (known?.runtime !== runtimeId) moved.push(row.session)
+      sessionOwners.set(row.session, { runtime: runtimeId, generation: row.generation })
+    }
+    const named = report.owned && new Set(report.owned.map((row) => row.session))
+    for (const [session, known] of sessionOwners) {
+      if (known.runtime !== runtimeId) continue
+      if (report.gone.some((row) => row.session === session && row.generation >= known.generation) || (named && !named.has(session))) sessionOwners.delete(session)
+    }
+    for (const session of moved) noticesMoved(session)
+  }
+
   const enroll = (
     connection: Connection,
     frame: Extract<RuntimeFrame, { type: "enroll" }>
@@ -570,6 +743,7 @@ export function createFakeGateway(
     if (frame.type === "listing") return
     if (frame.type === "sessions") {
       reports.set(connection.runtimeId, [...(reports.get(connection.runtimeId) ?? []), frame.report])
+      ownSessions(connection.runtimeId, frame.report)
       return
     }
     if (frame.type === "lease-beat") {
@@ -579,6 +753,10 @@ export function createFakeGateway(
     if (frame.type === "advertise") {
       const { type: _type, ...advertisement } = frame
       advertised.set(connection.runtimeId, [...(advertised.get(connection.runtimeId) ?? []), advertisement])
+      // An owner that takes notices is here: what was held for its Sessions while it was off goes now.
+      connection.takesNotices = takesTreeNotices(advertisement.capabilities)
+      if (connection.takesNotices)
+        for (const [session, owner] of sessionOwners) if (owner.runtime === connection.runtimeId) deliverNotices(session)
       return
     }
     if (frame.type === "live") {
@@ -732,6 +910,7 @@ export function createFakeGateway(
       const connection: Connection = {
         runtimeId: undefined,
         version: undefined,
+        takesNotices: false,
         correlationId: crypto.randomUUID(),
         closed: false,
         inbox,
@@ -1013,6 +1192,91 @@ export function createFakeGateway(
       return true
     },
     deferred: (threadId) => thread(threadId).deferred.map((operation) => operation.id),
+
+    finMachine: (fin) => {
+      finMachines.set(fin.machine, { ...fin, over: false })
+    },
+    finMachineOver: (machine) => {
+      const fin = finMachines.get(machine)
+      if (fin) fin.over = true
+    },
+    archiveTree: (session) => {
+      archivedTrees.add(session)
+      const box = mailboxes.get(session)
+      if (!box) return
+      box.held = []
+      box.run += 1
+      box.delivering = false
+    },
+    async postNotice(sender, body) {
+      const answer = (said: TreeNoticeAnswer) => TreeNoticeAnswerSchema.parse(JSON.parse(JSON.stringify(said)))
+      const refused = (reason: Extract<TreeNoticeAnswer, { admitted: false }>["reason"]) => answer({ admitted: false, reason })
+      const fin = sender.kind === "machine" ? finMachines.get(sender.machine) : undefined
+      // Who it's from is the credential's word: a device, or the machine as it was made, and nothing the body says.
+      const stamp = (seq: number, at: number) => TreeNoticeFromSchema.safeParse({
+        ...(fin && { op: fin.op }),
+        place: sender.kind === "device" ? { kind: "device", device: sender.device } : { kind: "cloud", thread: fin?.thread, machine: fin?.machine, generation: fin?.generation },
+        seq,
+        at,
+      }).data
+      if (!stamp(1, 0)) return refused("forbidden")
+      // Measured as it came, before it's read.
+      if (!treeNoticeFits(body)) return refused("too-large")
+      const notice = readNotice(body)
+      if (!notice) return refused("invalid")
+      // A machine reports for the Fin it was made for, to the Apex it was started for, and its start's op names that
+      // Apex's Session: where its notices go is never the body's to say.
+      if (fin && (fin.child !== notice.child || fin.apex.thread !== notice.parent.thread || fin.apex.session !== notice.parent.session || apexSessionOfStart(fin.op) !== fin.apex.session)) return refused("forbidden")
+      const session = fin?.apex.session ?? notice.parent.session
+      if (fin?.over || archivedTrees.has(session)) return refused("gone")
+      const box = mailbox(session)
+      const last = lastNotices.get(notice.child)
+      const bytes = treeNoticeBytes(body)
+      const admitted = admitTreeNotice({ held: box.held, head: box.head, ...(last && { last }) }, notice, bytes)
+      if (!admitted.admitted) return answer(admitted)
+      const mark = notice.standing && { owner: notice.standing.owner, seq: notice.standing.seq }
+      const at = nowMs()
+      if (admitted.does === "restand") {
+        const held = box.held.find((each) => each.seq === admitted.seq)
+        if (held) {
+          held.notice = notice
+          held.bytes = bytes
+        }
+        if (last?.id === notice.id && mark) lastNotices.set(notice.child, { ...last, said: mark })
+      }
+      // A newer standing on a notice its owner already took: sent on once if the owner is there, and kept nowhere.
+      if (admitted.does === "forward") {
+        const owner = runtimes.get(sessionOwners.get(session)?.runtime ?? "")
+        const from = stamp(admitted.seq, at)
+        if (owner?.runtimeId && owner.takesNotices && from && last && mark) {
+          lastNotices.set(notice.child, { ...last, said: mark })
+          void route(treeNoticeOperation(TreeNoticeDeliverySchema.parse({ ...notice, from }), { id: crypto.randomUUID(), target: { kind: "runtime", runtimeId: owner.runtimeId }, actor: { kind: "runtime", runtimeId: `gateway:${notice.parent.thread}` }, correlationId: crypto.randomUUID() }))
+        }
+      }
+      if (admitted.does !== "hold") return answer(admitted)
+      const admits = (noticeAdmits.get(notice.child) ?? []).filter((each) => each > at - 60_000)
+      if (!treeNoticeRateOpen(admits, at)) return refused("rate")
+      const from = stamp(admitted.seq, at)
+      if (!from) return refused("forbidden")
+      noticeAdmits.set(notice.child, [...admits, at])
+      lastNotices.set(notice.child, { id: notice.id, seq: admitted.seq, ...(mark && { said: mark }) })
+      box.head = admitted.seq
+      box.held.push({ seq: admitted.seq, bytes, notice, from })
+      deliverNotices(session)
+      return answer(admitted)
+    },
+    heldNotices: (session) => (mailboxes.get(session)?.held ?? []).map(deliveryOf),
+    deadNotices: (session) => [...(mailboxes.get(session)?.dead ?? [])],
+  }
+}
+
+/** A posted body as the notice it is, or undefined when it isn't JSON or isn't one. */
+function readNotice(body: string): TreeNotice | undefined {
+  try {
+    return TreeNoticeSchema.safeParse(JSON.parse(body)).data
+  } catch {
+    // Not JSON: no notice.
+    return undefined
   }
 }
 
