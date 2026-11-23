@@ -19,7 +19,7 @@ import { webHarnessLabel } from "./labels"
 import { MoveSheet, ThreadMove } from "./move-card"
 import { ContinueOffer, ContinueSheet } from "./continue-cloud"
 import { startContinue, useContinueChoice } from "./continue-actions"
-import { startMove, type MoveMac } from "./move-actions"
+import { moveKept, startMove, type MoveMac } from "./move-actions"
 import type { MoveWay } from "./move-progress"
 import { askBringBack, listedMove, useBringBackAsked, useMoves } from "./moves"
 import { StartSheet, type AddingTo } from "./new-thread"
@@ -344,6 +344,8 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
   const choice = useContinueChoice(session.quietSince ? session : undefined)
   const offered = choice?.offer && cloudOn(client.account.entitlements) && !moving ? choice : undefined
   const onMac = session.owner.kind === "device" && !session.quietSince ? session.owner : undefined
+  // Whether its tree of agents keeps it on its Mac, by the list this browser follows: gone as its last Fin ends there.
+  const kept = useAccountList((state) => (onMac ? moveKept(session.row, state.rows, session.where) : undefined))
   const inCloud = session.owner.kind === "cloud"
   const hasMac = [...devices.values()].some((device) => device.kind === "desktop")
   const archive = () => void archiveAndSay(client, thread, setBusy, onArchived)
@@ -433,6 +435,7 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
         way={way ?? "cloud"}
         working={working}
         from={onMac ? { deviceId: onMac.deviceId, name: session.where } : undefined}
+        kept={kept}
         onDismiss={() => {
           setAsking(undefined)
           askBringBack(undefined)

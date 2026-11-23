@@ -224,6 +224,13 @@ try {
     assert.equal(store.execution(store.journalPlacement(apex)!.session)?.state, "in-transit", "nothing runs it here from then")
     assert.equal(children[0]!.state.kind, "waiting", "and the Fin it left is as it was")
     withFins.owner.moves.reclaim({ operationId: randomUUID(), refusal: { move: joined, by: target, reason: "taken back for the rest of this check" }, actor })
+    // The barrier reads the Fins from their engine, never the roster this conversation holds: only a Thread's newest
+    // Session hears its Fins move, so a copy can keep one that ended long ago at work.
+    children = [{ ...child, state: { kind: "completed" } }]
+    assert.equal(withFins.owner.snapshot(apex)!.nativeAgents!.agents.find((agent) => agent.child)?.state.kind, "waiting", "this conversation wasn't told its Fin ended")
+    assert.deepEqual(withFins.owner.moves.blockers(thread), [], "the Fin ended, as its engine says: nothing holds the Thread")
+    children = [{ ...child, state: { kind: "waiting" } }]
+    assert.match(withFins.owner.moves.blockers(thread).join("; "), /leads Fins that haven't ended/)
     console.log("Conversation relocate: independent working/waiting Fins survive one approved after-turn local move; genuine provider subagents still hold it, and cloud release still waits")
   } finally {
     await withFins.owner.stop()

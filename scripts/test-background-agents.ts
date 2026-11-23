@@ -17,7 +17,7 @@ import { THREAD_LIST_CAP } from "@mako/host/contracts/thread-list"
 import { childEntry, childMode, childState, modeWithin, type ThreadParent } from "@mako/host/contracts/agents"
 import { AFTER_START, type AgentsStarted } from "@mako/host/contracts/agent-tools"
 import { backgroundWork, backgroundWorkText } from "@mako/host/contracts/background-work"
-import { AFTER_LIMIT, CHILDREN_BINDING, withChildren } from "@mako/host/contracts/native-agents"
+import { AFTER_LIMIT, CHILDREN_BINDING, withChildren, type NativeAgent } from "@mako/host/contracts/native-agents"
 import { listedAsThread, threadList } from "@mako/host/contracts/thread-list"
 import { SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { HANDED_OVER_NOTE, listedFins } from "@mako/host/contracts/children"
@@ -1386,6 +1386,30 @@ async function activityTellsNoOne(): Promise<void> {
 }
 
 /**
+ * A report that wakes an idle Apex at once still reaches that Apex's roster. The notice starts the Apex's turn before
+ * the engine tells its conversations, that turn's start reads the roster, and the entry held was then the new one
+ * already: compared with it nothing had moved, and the Apex's conversation kept its Fin idle after it had ended, which
+ * held the Apex's Thread from moving to the cloud. A move's release reads the Fins from their engine besides.
+ */
+async function wakingReportReachesTheRoster(): Promise<void> {
+  const w = world("waking-report", () => "Done.")
+  try {
+    const apex = await w.apex("codex")
+    const started = await w.agents.start(apex.caller, { brief: { objective: "Check it." }, harness: "claude", name: "checker", clientKey: "k-checker", cwd: w.root })
+    assert.ok(!("refused" in started) && started.child, JSON.stringify(started))
+    await w.settle()
+    const finsOf = (agents: readonly NativeAgent[] | undefined) => (agents ?? []).filter((agent) => agent.child).map((agent) => [agent.state.kind, agent.child?.state?.kind])
+    assert.deepEqual(finsOf(w.agents.roster(apex.conversation)), [["completed", "ended"]], "its turn's end is its result: the engine has it ended")
+    assert.ok(w.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes("checker")), "and its Apex was woken with it")
+    assert.deepEqual(finsOf(w.live.snapshot(apex.conversation)?.nativeAgents?.agents), [["completed", "ended"]], "the Apex's conversation heard it end")
+    const thread = w.store.journalPlacement(apex.conversation)!.thread
+    assert.deepEqual(w.live.moves.blockers(thread), [], "so nothing holds its Thread here for a Fin that ended")
+  } finally {
+    await w.close()
+  }
+}
+
+/**
  * A Fin's progress, and a change of how it stands, go to its Apex Thread's newest Session alone, by the store's order,
  * and never read another back from its journal. One Apex of 14 Sessions, 13 closed, took every step 14 times.
  */
@@ -1426,6 +1450,8 @@ async function progressGoesWhereItsRead(): Promise<void> {
     const now = entries.get(edge.child) ?? w.agents.roster(apex.conversation).find((entry) => entry.child?.thread === edge.child)!
     const moveFrom = (before: typeof now) => {
       entries.set(edge.child, before)
+      // What its Apex's conversations last heard is what a move is weighed against (`told`).
+      w.agents["told"].set(edge.child, before)
       told.length = 0
       w.agents["childMoved"](edge, true)
       return told
@@ -2356,6 +2382,7 @@ try {
     stoppedApexHolds,
     listsReadNoJournal,
     activityTellsNoOne,
+    wakingReportReachesTheRoster,
     progressGoesWhereItsRead,
     finsMoveInTheNewestSession,
     anySessionAsks,

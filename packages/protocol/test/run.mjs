@@ -2569,6 +2569,10 @@ describe("a Session continued in the cloud while its device is off", () => {
     assert.equal(treeCutWords({ kind: "fin", apex: "Ship the importer" }), 'This Thread is one of "Ship the importer"\'s Fins. It reports to its Apex on this Mac, so it stays where its Apex is.')
     assert.equal(treeCutWords({ kind: "fin" }), "This Thread is a Fin. It reports to its Apex on this Mac, so it stays where its Apex is.")
     assert.equal(treeCutWords({ kind: "fin", away: true }), "This Thread is a Fin of an Apex on another device. Its reports reach its Apex from this Mac, so it stays here.")
+    // Said of a Mac from another device, by its name.
+    assert.equal(treeCutWords({ kind: "open-fins", open: 2 }, "Ana's MacBook"), "This Thread leads 2 Fins that haven't ended, and their reports reach it only on Ana's MacBook. It can move once they finish or are stopped.")
+    assert.equal(treeCutWords({ kind: "fin", apex: "Ship the importer" }, "Ana's MacBook"), 'This Thread is one of "Ship the importer"\'s Fins. It reports to its Apex on Ana\'s MacBook, so it stays where its Apex is.')
+    assert.equal(treeCutWords({ kind: "fin", away: true }, "Ana's MacBook"), "This Thread is a Fin of an Apex on another device. Its reports reach its Apex from Ana's MacBook, so it stays there.")
 
     // Continue in the cloud, by the account's list alone: an Apex's row says its Fins, and names its Fins' Threads.
     const idle = fin("idle", { kind: "idle" })

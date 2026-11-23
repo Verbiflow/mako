@@ -132,7 +132,7 @@ export function ThreadMove({ thread, session }: { thread: WebThread; session: We
   const retry =
     end?.kind === "failed" && followed?.continued
       ? () => void startContinue(client, { thread, session, mac: followed.mac })
-      : end?.kind === "failed" && followed
+      : end?.kind === "failed" && followed && !end.tree
       ? () => void startMove(client, { thread, conversation: session.row.conversation, way: followed.way, mac: followed.mac, handOff: session.row.state === "working" })
       : end?.kind === "unconfirmed" && followed?.move && !followed.continued
         ? () => askAgain(followed.move!)
@@ -217,9 +217,10 @@ export function MoveStrip({ thread, move, onRetry }: { thread: string; move: Sho
 
 /**
  * Before a move: what happens to the Thread and to its turn, said plainly, and the one button that does it. Bringing
- * it back asks which Mac when the account has several; one asleep or offline is listed, and can't be chosen.
+ * it back asks which Mac when the account has several; one asleep or offline is listed, and can't be chosen. A Thread
+ * its tree of agents keeps on its Mac (`kept`) is told so here, with no button.
  */
-export function MoveSheet({ open, way, working, from, onDismiss, onMove }: { open: boolean; way: MoveWay; working: boolean; from: MoveMac | undefined; onDismiss: () => void; onMove: (mac: MoveMac) => void }) {
+export function MoveSheet({ open, way, working, from, kept, onDismiss, onMove }: { open: boolean; way: MoveWay; working: boolean; from: MoveMac | undefined; kept?: string | undefined; onDismiss: () => void; onMove: (mac: MoveMac) => void }) {
   const devices = useAccountList((state) => state.devices)
   const quiet = useAccountList((state) => state.quiet)
   const macs = [...devices.values()].filter((device) => device.kind === "desktop").sort((left, right) => Number(quiet.has(left.id)) - Number(quiet.has(right.id)))
@@ -228,19 +229,21 @@ export function MoveSheet({ open, way, working, from, onDismiss, onMove }: { ope
   const picked = macs.find((mac) => mac.id === chosen) ?? macs.find((mac) => !quiet.has(mac.id))
   const target: MoveMac | undefined = up ? from : picked && { deviceId: picked.id, name: picked.name }
   const name = target?.name ?? "your Mac"
-  const title = up ? "Move to the cloud?" : `Bring it back to ${name}?`
-  const body = up
+  // Kept on its Mac by its tree of agents (`moveKept`): the reason in place of what a move would do, and no button to press.
+  const stays = up ? kept : undefined
+  const title = stays ? `It stays on ${name}` : up ? "Move to the cloud?" : `Bring it back to ${name}?`
+  const body = stays ?? (up
     ? working
       ? `Its turn is working now. It pauses on ${name}, goes up with its worktree and sessions, and carries on in a cloud machine where it left off.`
       : `It goes on in a cloud machine, at the same folder, with its worktree and sessions. Its worktree on ${name} follows each turn there.`
     : working
       ? `Its turn is working in the cloud. It comes back between turns: if that turn is still going, the cloud says so and nothing moves.`
-      : `Its cloud machine stops taking work and packs up. It comes back into its worktree on ${name}, with what it did in the cloud, and the machine is gone.`
+      : `Its cloud machine stops taking work and packs up. It comes back into its worktree on ${name}, with what it did in the cloud, and the machine is gone.`)
   const away = target ? quiet.get(target.deviceId) : undefined
   const now = useNow()
   return (
     <Sheet open={open} onDismiss={onDismiss} label={title}>
-      <div className="web-move-ask" data-move-ask={way}>
+      <div className="web-move-ask" data-move-ask={way} data-move-kept={stays ? true : undefined}>
         <p className="web-sheet-title px-0">{title}</p>
         <p className="text-ui text-muted-foreground">{body}</p>
         {!up && macs.length > 1 ? (
@@ -257,14 +260,16 @@ export function MoveSheet({ open, way, working, from, onDismiss, onMove }: { ope
             })}
           </div>
         ) : null}
-        {away ? <p className="mt-3 text-label text-caution">{name} is asleep or offline (seen {lastSeen(away, now)}). It has to be awake and online to {up ? "move it" : "take it back"}.</p> : null}
+        {away && !stays ? <p className="mt-3 text-label text-caution">{name} is asleep or offline (seen {lastSeen(away, now)}). It has to be awake and online to {up ? "move it" : "take it back"}.</p> : null}
         <div className="mt-6 flex flex-col gap-2">
-          <button type="button" className="web-button justify-center" disabled={!target || away !== undefined} onClick={() => target && onMove(target)}>
-            {up ? <ArrowUpIcon className="size-4" /> : <ArrowDownIcon className="size-4" />}
-            {up ? "Move to the cloud" : `Bring back to ${name}`}
-          </button>
+          {stays ? null : (
+            <button type="button" className="web-button justify-center" disabled={!target || away !== undefined} onClick={() => target && onMove(target)}>
+              {up ? <ArrowUpIcon className="size-4" /> : <ArrowDownIcon className="size-4" />}
+              {up ? "Move to the cloud" : `Bring back to ${name}`}
+            </button>
+          )}
           <button type="button" className="web-quiet-button justify-center" onClick={onDismiss}>
-            Cancel
+            {stays ? "Close" : "Cancel"}
           </button>
         </div>
       </div>

@@ -39,9 +39,10 @@ export interface WebMove {
  * How a move stands at its end, as far as this browser knows. `done` and `failed` are the owner's word (moved; refused
  * with its reason, or never asked at all), and nothing heard later changes them. `unsettled`: the owner waits on the
  * cloud's answer. `unconfirmed`: this browser's own, its answer lost on the way (the phone slept, the network went);
- * how it went isn't known, so the same move is asked again by its ID. A later step overrides either.
+ * how it went isn't known, so the same move is asked again by its ID. A later step overrides either. `tree`: refused
+ * by its tree of agents, which no asking again changes, so nothing offers to.
  */
-export type MoveEnd = { kind: "done" } | { kind: "failed"; reason: string } | { kind: "unsettled"; reason: string } | { kind: "unconfirmed"; reason: string }
+export type MoveEnd = { kind: "done" } | { kind: "failed"; reason: string; tree?: true } | { kind: "unsettled"; reason: string } | { kind: "unconfirmed"; reason: string }
 
 /** Whether an end is the owner's last word on its move: nothing heard later changes it. */
 export function settledEnd(end: MoveEnd | undefined): boolean {
@@ -115,7 +116,8 @@ export function stepHeard(heard: HeardStep): void {
   if ((heard.way === "cloud" ? CLOUD_ENDS : DEVICE_ENDS).has(step.kind)) {
     if (!held) return
     if (step.kind === "moved" || step.kind === "back") endMove(thread, heard.move, { kind: "done" })
-    else if ("reason" in step) endMove(thread, heard.move, { kind: step.kind === "unsettled" ? "unsettled" : "failed", reason: step.reason })
+    else if (step.kind === "unsettled") endMove(thread, heard.move, { kind: "unsettled", reason: step.reason })
+    else if ("reason" in step) endMove(thread, heard.move, { kind: "failed", reason: step.reason, ...step.kind === "kept-here" && step.tree && { tree: true as const } })
     return
   }
   const sent = step.kind === "packing" && "sent" in step ? step.sent : undefined

@@ -9,6 +9,7 @@ import { receiveLive } from "@/state/live-door"
 import { hydrateLive } from "@/state/live-recovery"
 import { createHook, createStore } from "@/state/store"
 import { localWords } from "@mako/protocol/computer-words"
+import { treeCut, treeCutWords, type TreePlace } from "@mako/protocol/moves"
 
 /** Both directions share observation order and effect ownership; only a confirmed return establishes local authority. */
 type CloudOperation = { origin: string; target: string; ignored?: true; superseded?: true; located?: string[]; refreshed?: string[] } & (
@@ -196,6 +197,21 @@ function knownMoveMembers(target: string): string[] {
   return [...new Set([target, ...thread ? Object.values(conversations).filter((conversation) => conversation.kind === "live" && conversation.threadId === thread).map((conversation) => conversation.key) : []])]
 }
 
+/**
+ * Why its tree of agents keeps a Thread on this Mac, for the Local chip's popover before any press: the host's one
+ * rule (`treeCut`) and its words, over what the window holds. The Fins it leads are the roster's, so the reason
+ * stands while any of them hasn't ended and goes as the last one ends, with nothing asked. Whether it's a Fin is its
+ * host's to say once the popover's check has answered (`ThreadHarnessCheck`'s `kept`): only it knows a Fin whose Apex
+ * runs on another device, or was archived. Until then it's a Fin by the Apex this window files it under.
+ */
+export function treeKept(place: TreePlace, check: ThreadHarnessCheck | undefined): string | undefined {
+  const leads = treeCut({ fins: place.fins ?? [] })
+  if (leads) return treeCutWords(leads)
+  if (check) return check.kind === "kept" && check.tree.kind === "fin" ? check.refusal : undefined
+  const led = place.apex && treeCut({ apex: place.apex })
+  return led ? treeCutWords(led) : undefined
+}
+
 /** A step from the host. A confirmed failure keeps its reason and recovery action above the composer. */
 export function threadMoveStepped(conversationId: string, move: string, step: ThreadMoveStep): void {
   const state = cloudMovesStore.get()
@@ -230,10 +246,14 @@ export function threadMoveStepped(conversationId: string, move: string, step: Th
     return
   }
   if (step.kind === "kept-here") {
+    // Kept by its tree of agents (`treeCut`): said once, in passing, and no notice stays. Asking again changes nothing
+    // until its Fins end, or ever for a Fin, so a notice would offer a Retry that can't help; the chip's popover says
+    // the same reason in place of its offer for as long as it holds.
+    const kept = step.tree !== undefined
     cloudMovesStore.set((state) => ({
       ...state,
       moves: { ...state.moves, [move]: { direction: "outbound", origin: state.moves[move]?.origin ?? conversationId, target: conversationId, settled: "kept-here" } },
-      failedMoves: { ...state.failedMoves, [conversationId]: {
+      failedMoves: kept ? without(state.failedMoves, conversationId) : { ...state.failedMoves, [conversationId]: {
         move,
         reason: step.reason,
         handOff: state.moving[conversationId]?.handOff === true || step.continued === true,

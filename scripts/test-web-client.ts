@@ -52,7 +52,7 @@ import { said } from "../src/lib/fin-report-words"
 import { quietLine } from "../src/lib/quiet-device"
 import { barFrom, forward, percentWords, sentWords, stepFraction, stepWords } from "../src/web-client/move-progress"
 import { endMove, followedWays, listedMove, movesStore, putMove, stepHeard } from "../src/web-client/moves"
-import { followAnswer } from "../src/web-client/move-actions"
+import { followAnswer, moveKept } from "../src/web-client/move-actions"
 import { continueChoice, startContinue, webContinues } from "../src/web-client/continue-actions"
 import { continueRefusalShown } from "@mako/host/contracts/cloud-continues"
 import { appKey, appShownAs, appsStore, loopbackTarget, readApp, serversOf, withPath } from "../src/web-client/previews"
@@ -1236,6 +1236,22 @@ test("a move whose answer the network lost is not confirmed, asked again under t
   assert.deepEqual(movesStore.get().moves.get(thread)?.end, { kind: "failed", reason: "The cloud is full." })
   endMove(thread, "m4", { kind: "unconfirmed", reason: "x" })
   assert.equal(movesStore.get().moves.get(thread)?.end?.kind, "failed", "a lost answer after it changes nothing")
+  movesStore.set({ moves: new Map() })
+
+  // A Thread its tree of agents keeps on its Mac is told so before the move is asked, by the list this browser holds:
+  // an Apex's row says its Fins, and the sheet says the Mac's own sentence in place of its button, until the last ends.
+  const fin = (n: number, kind: "idle" | "ended"): ListedFin => ({ thread: uuid(7000 + n), name: `fin-${n}`, harness: "claude", state: kind === "ended" ? { kind, outcome: "done" } : { kind }, startedAt: at(1) })
+  const apex = row(70, { thread: uuid(700), threadTitle: "Ship the importer", runsOn: { kind: "device", deviceId: STUDIO }, fins: [fin(1, "idle"), fin(2, "idle"), fin(3, "ended")] })
+  assert.equal(moveKept(apex, [apex], "Studio"), "This Thread leads 2 Fins that haven't ended, and their reports reach it only on Studio. It can move once they finish or are stopped.")
+  const ended = { ...apex, fins: [fin(1, "ended"), fin(2, "ended")] }
+  assert.equal(moveKept(ended, [ended], "Studio"), undefined, "its last Fin ended: the list says so, and the sheet offers the move")
+  const placed = row(71, { thread: uuid(7001), runsOn: { kind: "device", deviceId: STUDIO } })
+  assert.equal(moveKept(placed, [placed, apex], "Studio"), 'This Thread is one of "Ship the importer"\'s Fins. It reports to its Apex on Studio, so it stays where its Apex is.')
+  assert.equal(moveKept(row(72, { runsOn: { kind: "device", deviceId: STUDIO } }), [apex], "Studio"), undefined, "a Thread in no tree moves")
+  // One the Mac refuses for its tree all the same (a Fin started since) ends with its reason and no Retry to offer.
+  putMove({ thread, conversation: "c1", way: "cloud", mac, move: "m5", step: "packing", stepAt: 0, handOff: false, ours: true })
+  stepHeard({ conversation: "c1", move: "m5", way: "cloud", step: { kind: "kept-here", reason: "This Thread leads a Fin that hasn't ended.", tree: "open-fins" }, thread, mac })
+  assert.deepEqual(movesStore.get().moves.get(thread)?.end, { kind: "failed", reason: "This Thread leads a Fin that hasn't ended.", tree: true })
   movesStore.set({ moves: new Map() })
 })
 

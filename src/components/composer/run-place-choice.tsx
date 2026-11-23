@@ -3,13 +3,14 @@ import type { CarriedFilesView } from "@mako/host/contracts/cloud-carried-files"
 import { CloudDownloadIcon, CloudIcon, CloudUploadIcon, LaptopIcon, TriangleAlertIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { conversationWork } from "@/state/acp-state"
+import { conversationRoster, conversationWork } from "@/state/acp-state"
+import { childStateOf, rosterChildren } from "@mako/host/contracts/children"
 import { Action } from "@/components/ui/kit"
 import { cn } from "@/lib/utils"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { useCloudAccount } from "@/state/cloud-account"
 import { decideCarriedFiles, readCarriedFiles, useCarriedFiles } from "@/state/carried-files"
-import { bringBack, checkHarnesses, CLOUD_WHERE, moveToCloud, updateThen, useCloudMoves } from "@/state/cloud-moves"
+import { bringBack, checkHarnesses, CLOUD_WHERE, moveToCloud, treeKept, updateThen, useCloudMoves } from "@/state/cloud-moves"
 import { PlaceMark } from "@/components/ui/place-mark"
 import { runPlace } from "@mako/host/contracts/account-devices"
 import { HarnessesBehind } from "./harnesses-behind"
@@ -19,6 +20,7 @@ import { useSession } from "@/state/session"
 import { useOnScreen } from "@/state/thread-sessions"
 import { useWorktrees } from "@/state/worktrees"
 import { localWords } from "@mako/protocol/computer-words"
+import type { TreePlace } from "@mako/protocol/moves"
 
 const triggerClass = "pressable flex h-7 min-w-0 items-center gap-1.5 px-2 text-ui text-faint hover:bg-fill-hover hover:text-foreground aria-pressed:text-foreground"
 
@@ -85,6 +87,18 @@ function ThreadRunPlace({ thread }: { thread: string }) {
     const active = activeLiveAcp(state)
     return active ? { key: active.key, cwd: active.cwd, elsewhere: Boolean(active.elsewhere), running: active.session.status === "running", background: conversationWork(state, active) !== null, started: Boolean(active.session.nativeId) } : null
   }, shallowEqual)
+  // Its place in a tree of agents, as this window holds it (`TreePlace`): how each Fin its Thread leads stands, by its
+  // roster, and the Apex it's filed under, if it's a Fin. Each a line, so the chip wakes only when one of them changes.
+  const finKinds = useAcp((state) => {
+    const active = activeLiveAcp(state)
+    return active ? rosterChildren(conversationRoster(state, active)).map((fin) => childStateOf(fin).kind).join(" ") : ""
+  })
+  const apex = useAcp((state) => {
+    const active = activeLiveAcp(state)
+    if (!active?.parent) return undefined
+    const led = Object.values(state.conversations).find((each) => each.kind === "live" && each.threadId === active.parent?.thread)
+    return (led?.kind === "live" && (led.threadTitle ?? led.title)) || ""
+  })
   const worktree = useWorktrees((state) => state.worktrees.find((entry) => entry.thread === thread)?.path)
   const moveStep = useCloudMoves((state) => (live ? state.moving[live.key]?.step.kind : undefined))
   const moving = moveStep !== undefined
@@ -142,12 +156,15 @@ function ThreadRunPlace({ thread }: { thread: string }) {
     )
   }
   const inWorktree = worktree !== undefined && (live.cwd === worktree || live.cwd.startsWith(`${worktree}/`))
+  // A Fin, or an Apex with Fins that haven't ended, stays with its tree: said in place of the offer, never after a press.
+  const place: TreePlace = { fins: finKinds.split(" ").filter(Boolean).map((kind) => ({ state: { kind } })), ...apex !== undefined && { apex: { ...apex && { title: apex } } } }
+  const kept = treeKept(place, check)
   // The cloud can't resume a Session a newer harness here wrote: said here, before anything is made (`ThreadHarnessCheck`).
-  const blocked = !live.started
+  const blocked = kept ?? (!live.started
     ? "Send a first message before it moves."
     : !inWorktree && (live.running || live.background)
       ? localWords("It works in the project folder, so it goes onto its own branch first, once this turn ends. Move it then; the project folder stays on this Mac.")
-      : known?.refusal
+      : known?.refusal)
   // This Mac's harnesses older than the cloud's: the way back will need them updated, said before it goes.
   const behind = blocked === undefined ? known?.behind ?? [] : []
   // At work, it's handed off: its turn pauses, goes along, and continues in the cloud; what it left running in the
@@ -192,9 +209,9 @@ function ThreadRunPlace({ thread }: { thread: string }) {
         <>
         <p className="px-2 py-1.5 text-label text-faint">Where this thread runs</p>
         <OfferRow
-          data={{ "data-thread-move-offer": true, "data-thread-handoff": handOff || undefined }}
+          data={{ "data-thread-move-offer": true, "data-thread-handoff": handOff || undefined, "data-thread-move-kept": kept !== undefined || undefined }}
           icon={<CloudUploadIcon className="mt-0.5 size-3 shrink-0" />}
-          title={handOff ? "Hand off to the cloud" : "Move to the cloud"}
+          title={handOff && !kept ? "Hand off to the cloud" : "Move to the cloud"}
           detail={blocked ??
             (!inWorktree
               ? localWords("It goes onto its own branch first, taking only its own changes; the project folder keeps yours. Then its worktree and every session go to a cloud machine, at the same folder. Your Mac can close.")

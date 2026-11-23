@@ -1,4 +1,5 @@
 import { z } from "zod"
+import type { TreeCut } from "@mako/protocol/moves"
 import type { RuntimeUpdateOffer } from "./restore-plan.js"
 
 /**
@@ -57,3 +58,8 @@ export type ThreadHarnessCheck =
   | { kind: "unknown"; reason: string }
   /** `refusal`: when something is `ahead`, the words the move is refused with. */
   | { kind: "known"; image: string; ahead: HarnessAhead[]; behind: HarnessBehind[]; refusal?: string }
+  /**
+   * Its tree of agents keeps the Thread where it is (`treeCut`), whatever its harnesses: nothing was weighed. The
+   * popover says `refusal` in place of the offer.
+   */
+  | { kind: "kept"; tree: TreeCut; refusal: string }

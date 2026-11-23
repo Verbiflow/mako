@@ -5089,7 +5089,16 @@ Thread is archived (`Agents.treePlace`). A move's plan refuses it before
 anything is made, handed off or not, and `thread_move` before it asks anyone
 (`CloudMoves.treeKeeps`), in words that say how many Fins and what clears it;
 Continue in the cloud refuses it by the account's rows (`continueRefusal`'s
-`open-fins` and `fin`). An Apex isn't at work for the Fins open in its roster
+`open-fins` and `fin`). A window says the same sentence in place of its offer,
+before any press: the Local chip's popover from the roster it holds and its
+host's check (`treeKept`, `ThreadHarnessCheck`'s `kept`), a phone's sheet from
+the list (`moveKept`), each back as the last Fin ends. A refusal that reaches a
+window all the same is marked (`kept-here`'s `tree`) and said once, with no
+notice and no Retry, since asking again changes nothing. The release reads a
+Thread's Fins from their engine, never the roster a conversation holds, which
+only its newest Session hears move; and the engine tells an Apex's
+conversations of a Fin's entry by what they last heard (`Agents.told`), not
+by what a reader since made of it. An Apex isn't at work for the Fins open in its roster
 (`workingThreads`), and a Mac going away leaves a Thread its tree keeps as it
 is, unpaused and out of its note. A continue made of an Apex all the same is
 joined with only its own work weighed (`MoveScope`), since an idle Fin never

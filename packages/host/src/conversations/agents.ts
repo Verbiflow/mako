@@ -766,6 +766,13 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly generation: number
   private readonly entries = new Map<string, NativeAgent>()
   /**
+   * Each Fin's entry as its Apex's conversations last heard it (`childMoved`). Apart from `entries`, which whoever
+   * reads a roster fills again: a report's notice wakes an idle Apex at once, that turn's start reads the roster, and
+   * the entry held was then already the new one when `childMoved` compared it, so nothing had moved and nobody was
+   * told. An Apex's snapshot kept its Fin idle, or at work, long after it had ended.
+   */
+  private readonly told = new Map<string, NativeAgent>()
+  /**
    * Each Thread's roster as last built, with the entries that wear a limit's notice (`noticed`): those alone can go
    * stale with no commit (the notice's reset passes, a wait behind it moves), so a held roster is checked by them
    * and not by every entry it has.
@@ -6074,23 +6081,30 @@ export class Agents implements AgentOperations, ConversationChildren {
     // Its Apex is on another device, and it stands otherwise than that device last heard, with nothing new to report
     // (its turn ended after a report it made itself, or someone here sent it on): its last report says so again.
     if (edge.remote && holds !== held && this.standingSaid.get(edge.child) !== holds) this.restate(edge)
-    const before = this.entries.get(edge.child)
+    const kept = this.entries.get(edge.child)
+    // Against what its Apex's conversations last heard (`told`), never what's held, which a reader since may have made.
+    const before = this.told.get(edge.child) ?? kept
     this.entries.delete(edge.child)
-    const entry = this.entryOf(edge, moved)
+    const made = this.entryOf(edge, moved)
+    // The entry held stands while it says the same: the roster holds that very one.
+    const entry = kept && sameChildEntry(kept, made) ? kept : made
+    this.entries.set(edge.child, entry)
+    if (entry !== kept) {
+      // Its one entry takes its place in the roster held, whose other entries stand as they were: read again, each of
+      // an Apex's 226 was looked up for every step of any one of them.
+      const roster = this.rosters.get(edge.parent)
+      const at = roster && kept ? roster.agents.indexOf(kept) : -1
+      if (roster && at >= 0) {
+        const agents = roster.agents.slice()
+        agents[at] = entry
+        this.rosters.set(edge.parent, { agents, noticed: kept?.child?.limitNotice || entry.child?.limitNotice ? agents.filter((agent) => agent.child?.limitNotice) : roster.noticed })
+      } else this.rosters.delete(edge.parent)
+    }
     if (before && sameChildEntry(before, entry)) {
-      this.entries.set(edge.child, before)
       if (released) void this.drain()
       return
     }
-    // Its one entry takes its place in the roster held, whose other entries stand as they were: read again, each of an
-    // Apex's 226 was looked up for every step of any one of them.
-    const roster = this.rosters.get(edge.parent)
-    const at = roster && before ? roster.agents.indexOf(before) : -1
-    if (roster && at >= 0) {
-      const agents = roster.agents.slice()
-      agents[at] = entry
-      this.rosters.set(edge.parent, { agents, noticed: before?.child?.limitNotice || entry.child?.limitNotice ? agents.filter((agent) => agent.child?.limitNotice) : roster.noticed })
-    } else this.rosters.delete(edge.parent)
+    this.told.set(edge.child, entry)
     const kindChanged = !before || before.state.kind !== entry.state.kind || before.stoppable !== entry.stoppable
     for (const conversation of this.finReaders(edge.parent)) this.deps.live.childrenChanged(conversation, progressOnly && !kindChanged)
     // A digest still unsent is in memory, whose queue keeps it there: one only on disk holds none, and isn't read in.

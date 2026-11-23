@@ -41,16 +41,21 @@ export function treeCut(place: TreePlace): TreeCut | undefined {
   return open ? { kind: "open-fins", open } : undefined
 }
 
-/** A cut as the device that holds the tree refuses a move with it: what is so, and what clears it. */
-export function treeCutWords(cut: TreeCut): string {
+/**
+ * A cut as a move is refused with it: what is so, and what clears it. Said by the device that holds the tree in its
+ * own words for itself ("this Mac"); said of it from another device (a phone asking its Mac to move a Thread) with
+ * `device`, its name.
+ */
+export function treeCutWords(cut: TreeCut, device?: string): string {
+  // A device's name and an Apex's title are the person's own words: only Mako's sentence takes the computer's.
+  const here = device ?? localWords("this Mac")
   if (cut.kind === "fin") {
-    if (cut.away) return localWords("This Thread is a Fin of an Apex on another device. Its reports reach its Apex from this Mac, so it stays here.")
-    // The Apex's title is the person's own words: only Mako's sentence takes the computer's.
-    return `This Thread is ${cut.apex ? `one of "${cut.apex}"'s Fins` : "a Fin"}. ${localWords("It reports to its Apex on this Mac, so it stays where its Apex is.")}`
+    if (cut.away) return `This Thread is a Fin of an Apex on another device. Its reports reach its Apex from ${here}, so it stays ${device ? "there" : "here"}.`
+    return `This Thread is ${cut.apex ? `one of "${cut.apex}"'s Fins` : "a Fin"}. It reports to its Apex on ${here}, so it stays where its Apex is.`
   }
   return cut.open === 1
-    ? localWords("This Thread leads a Fin that hasn't ended, and its reports reach it only on this Mac. It can move once that Fin finishes or is stopped.")
-    : localWords(`This Thread leads ${cut.open} Fins that haven't ended, and their reports reach it only on this Mac. It can move once they finish or are stopped.`)
+    ? `This Thread leads a Fin that hasn't ended, and its reports reach it only on ${here}. It can move once that Fin finishes or is stopped.`
+    : `This Thread leads ${cut.open} Fins that haven't ended, and their reports reach it only on ${here}. It can move once they finish or are stopped.`
 }
 
 /** The largest checkpoint a move carries: under a request body's limit at the gateway. */

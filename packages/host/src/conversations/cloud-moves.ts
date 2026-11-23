@@ -5,7 +5,7 @@ import { z } from "zod"
 import type { Git } from "@mako/git"
 import { encodeOperation, type ThreadFileHistory } from "@mako/protocol"
 import type { ContinueState, ListedContinue } from "@mako/protocol/continues"
-import { MOVE_ANSWER_WAIT_MS, MoveCarryRefSchema, MoveCarrySchema, MoveCheckpointSchema, treeCut, treeCutWords, type MoveAnswer, type MoveCarryRepository, type MoveCheckpoint, type MoveLeft, type TreePlace } from "@mako/protocol/moves"
+import { MOVE_ANSWER_WAIT_MS, MoveCarryRefSchema, MoveCarrySchema, MoveCheckpointSchema, treeCut, treeCutWords, type MoveAnswer, type MoveCarryRepository, type MoveCheckpoint, type MoveLeft, type TreeCut, type TreePlace } from "@mako/protocol/moves"
 import { RecordHoldingsSchema, describeSync, withFreshLink, type RecordsLink, type SentRecords } from "@mako/sessions/record-sync"
 import { SessionSettingsSchema, type SessionSettings } from "@mako/sessions/settings"
 import { errorMessage } from "../base/error-message.js"
@@ -356,6 +356,19 @@ function carriedOf(plan: Plan): MoveCarried | undefined {
   return carried.repositories > 1 || carried.outside || carried.left.length ? carried : undefined
 }
 
+/**
+ * A move refused because it would cut a tree of agents (`treeCut`), in the words that say so: apart from every other
+ * refusal, since asking again changes nothing until the tree does, and whoever shows it offers no retry.
+ */
+export class TreeKeepsError extends Error {
+  readonly cut: TreeCut
+  constructor(cut: TreeCut) {
+    super(treeCutWords(cut))
+    this.name = "TreeKeepsError"
+    this.cut = cut
+  }
+}
+
 /** A joined continue as its steps say it (`MoveWhileAway`). */
 function whileAway(continued: NonNullable<Plan["continued"]>): MoveWhileAway {
   return { behind: continued.behind, ...continued.finsLeft && { finsLeft: continued.finsLeft } }
@@ -511,9 +524,14 @@ export class CloudMoves {
 
   /**
    * What the Thread of `conversationId`'s harnesses here and in the cloud mean for moving it (`HarnessCheck`), read
-   * without making or changing anything; throws, saying why, when it couldn't move for any other reason.
+   * without making or changing anything; `kept` when its tree of agents keeps it here; throws, saying why, when it
+   * couldn't move for any other reason.
    */
   async harnessCheck(conversationId: string): Promise<ThreadHarnessCheck> {
+    // Its tree's word first, as the plan would say it: the popover that asks this says it in place of its offer.
+    const thread = this.#options.threads()?.journalPlacement(conversationId)?.thread
+    const cut = thread && this.#cut(thread)
+    if (cut) return { kind: "kept", tree: cut, refusal: treeCutWords(cut) }
     const plan = await this.#plan(conversationId, MoveIdSchema.parse(randomUUID()), { why: "asked" }, false)
     return this.#options.harnesses?.check(plan.sessions) ?? { kind: "unknown", reason: "This Mako doesn't weigh harness versions." }
   }
@@ -734,11 +752,12 @@ export class CloudMoves {
       }
     } catch (error) {
       const reason = errorMessage({ error })
+      const tree = error instanceof TreeKeepsError ? error.cut.kind : undefined
       logMoveDiagnostic(() => hostWarn("moves", "a move stayed here before its plan was saved", { move, conversation: from, ...conversationId !== from && { currentConversation: conversationId }, stage, ...moveDiagnosticReason({ error }) }))
       const placed = this.#options.threads()?.journalPlacement(conversationId)
       await this.#stayed(move, placed?.thread, handOff, paused, [conversationId])
-      this.#options.step(conversationId, move, { kind: "kept-here", reason, ...paused.length && { continued: true } })
-      return { kind: "kept-here", reason }
+      this.#options.step(conversationId, move, { kind: "kept-here", reason, ...paused.length && { continued: true }, ...tree && { tree } })
+      return { kind: "kept-here", reason, ...tree && { tree } }
     }
     await this.#write(plan)
     return this.#resume(plan)
@@ -768,7 +787,7 @@ export class CloudMoves {
     // The tree stays whole (`treeCut`), handed off or not: a handoff pauses a turn, never a Fin that sits open, so it
     // would make a machine, wait out its pause and stay all the same.
     const cut = this.#cut(placed.thread)
-    if (cut) throw new Error(treeCutWords(cut))
+    if (cut) throw new TreeKeepsError(cut)
     // Asked before anything is made: a busy Thread starts no machine. The release asks again, with no wait before it
     // commits. A handoff pauses what works instead, once everything ahead is done.
     if (!handOff) {
@@ -835,7 +854,7 @@ export class CloudMoves {
         }
         await this.#release(plan)
       } catch (error) {
-        return this.#keep(plan, errorMessage({ error }), false)
+        return this.#keep(plan, errorMessage({ error }), false, error instanceof TreeKeepsError ? error.cut.kind : undefined)
       }
     }
     // Let go of here: a caller that waits only for that hears it now, whether this host released it or a stopped one did.
@@ -1136,7 +1155,10 @@ export class CloudMoves {
       plan.handoff = await this.#options.moves.release({ operationId: stepOperation(plan.move, "release"), move: plan.move, actor })
     } catch (error) {
       this.#options.moves.cancel({ operationId: stepOperation(plan.move, "cancel"), move: plan.move, actor })
-      throw error instanceof MoveNotQuietError ? new Error(`Moves happen between turns: ${error.reasons.join("; ")}.`) : error
+      if (!(error instanceof MoveNotQuietError)) throw error
+      // A Fin started since the plan asked holds the release: said as the plan would have, with what clears it.
+      const cut = this.#cut(plan.thread)
+      throw cut ? new TreeKeepsError(cut) : new Error(`Moves happen between turns: ${error.reasons.join("; ")}.`)
     }
     plan.phase = "released"
     plan.timings.released = Date.now() - plan.began
@@ -1228,7 +1250,7 @@ export class CloudMoves {
   }
 
   /** The Thread stays here: before the release, nothing changed; after a refusal, this Mac takes it back. */
-  async #keep(plan: Plan, reason: string, released: boolean): Promise<ThreadMoveOutcome> {
+  async #keep(plan: Plan, reason: string, released: boolean, tree?: TreeCut["kind"]): Promise<ThreadMoveOutcome> {
     if (released) {
       const threads = this.#options.threads()
       if (threads) {
@@ -1251,8 +1273,8 @@ export class CloudMoves {
     plan.reason = reason
     await this.#write(plan)
     hostLog("moves", "a Thread stayed here", { move: plan.move, released, reason, continued: paused.length })
-    this.#options.step(plan.asked, plan.move, { kind: "kept-here", reason, ...paused.length && { continued: true } })
-    return { kind: "kept-here", reason }
+    this.#options.step(plan.asked, plan.move, { kind: "kept-here", reason, ...paused.length && { continued: true }, ...tree && { tree } })
+    return { kind: "kept-here", reason, ...tree && { tree } }
   }
 
   /**

@@ -1,6 +1,6 @@
 import type { ContextTransfer, ConversationControl } from "../contracts/conversation-control.js"
 import { pendingQuestion } from "../contracts/live-questions.js"
-import { isBusyNativeAgent, isProviderWork } from "../contracts/native-agents.js"
+import { isBusyNativeAgent, isBusyProviderWork } from "../contracts/native-agents.js"
 import {
   executionRefusal,
   type ClaimReceipt,
@@ -335,11 +335,13 @@ export class LiveMoves {
       return "is waiting for an answer"
     if (resident.autoContinue) return "is about to continue a dropped turn"
     if (snapshot.session.backgroundTasks) return "has background tasks running"
-    const busy = (snapshot.nativeAgents?.agents ?? []).filter(isBusyNativeAgent)
-    if (busy.some(isProviderWork)) return "has subagents running"
+    if ((snapshot.nativeAgents?.agents ?? []).some(isBusyProviderWork)) return "has subagents running"
     // A Fin that hasn't ended, wherever it runs and whether or not it's at work: a move's plan says so first, with how
-    // many and what clears it (`treeCut`); this holds a release for one started since.
-    if (scope === "thread" && busy.length) return "leads Fins that haven't ended, which a move would leave behind"
+    // many and what clears it (`treeCut`); this holds a release for one started since. Read from their engine as they
+    // stand now, never from the roster this conversation holds: only its Thread's newest Session hears its Fins move
+    // (`finReaders`), so an older tab's copy keeps a Fin long ended at work, and held the Thread here for good.
+    const fins = this.access.dependencies.agents?.()?.roster(snapshot.session.id) ?? snapshot.nativeAgents?.agents ?? []
+    if (scope === "thread" && fins.some((agent) => agent.child && isBusyNativeAgent(agent))) return "leads Fins that haven't ended, which a move would leave behind"
     if (resident.driver && !resident.hibernating && !this.access.canHibernate(resident)) {
       // A session opens again from its record: one that never finished a turn (its first failed) has none yet.
       const binding = snapshot.control?.bindings.find((each) => each.id === snapshot.control?.activeBindingId)

@@ -68,6 +68,8 @@ async function checkMoveState() {
   const { createContext, runInContext } = await import("node:vm")
   const { webcrypto } = await import("node:crypto")
   const ts = await import("typescript")
+  // The tree's rule and words are the protocol's own, as the window loads them.
+  const protocolMoves = await import("@mako/protocol/moves")
   const code = await readFile(new URL("../src/state/cloud-moves.ts", import.meta.url), "utf8")
   const storeCode = await readFile(new URL("../src/state/store.ts", import.meta.url), "utf8")
   const world = (handler, conversations = {}, returnHandler = () => new Promise(() => {})) => {
@@ -92,6 +94,7 @@ async function checkMoveState() {
       sonner: { toast: { success: (...args) => effects.push(["success", args]), message: (...args) => effects.push(["message", args]), warning: (...args) => effects.push(["warning", args]) } },
       "@/state/providers": { providers: {} },
       "@mako/protocol/computer-words": { localWords: (text) => text },
+      "@mako/protocol/moves": protocolMoves,
       "@/lib/bridge": { hasBridge: () => true, getMako: () => bridge },
       "@/state/acp-state": { acpStore: { get: () => ({ conversations }) }, updateAcpConversation: (id, apply) => {
         if (conversations[id]) conversations[id] = apply(conversations[id])
@@ -338,6 +341,45 @@ async function checkMoveState() {
     assert.equal(JSON.stringify(w.state()), enriched)
     assert.equal(JSON.stringify(w.effects), enrichedEffects)
     assert.equal(w.calls.length, 1)
+  })
+  await check("the Local chip knows its tree's verdict before any press, from what the window holds", async (make) => {
+    const { treeKept } = make(() => pending()).api
+    const fins = (...kinds) => kinds.map((kind) => ({ state: { kind } }))
+    const known = { kind: "known", image: "mako-machine", ahead: [], behind: [] }
+    const leads = (count) => count === 1
+      ? "This Thread leads a Fin that hasn't ended, and its reports reach it only on this Mac. It can move once that Fin finishes or is stopped."
+      : `This Thread leads ${count} Fins that haven't ended, and their reports reach it only on this Mac. It can move once they finish or are stopped.`
+    const led = 'This Thread is one of "Ship the importer"\'s Fins. It reports to its Apex on this Mac, so it stays where its Apex is.'
+    // An Apex: the roster alone decides, as it stands, whatever an earlier check said.
+    assert.equal(treeKept({ fins: fins("idle", "working", "ended") }, undefined), leads(2))
+    assert.equal(treeKept({ fins: fins("idle", "ended") }, known), leads(1))
+    assert.equal(treeKept({ fins: fins("ended", "ended") }, undefined), undefined, "its last Fin ended: the offer is back with nothing asked")
+    assert.equal(treeKept({ fins: fins("ended") }, { kind: "kept", tree: { kind: "open-fins", open: 1 }, refusal: leads(1) }), undefined, "a check from before its Fin ended doesn't outlive the roster")
+    assert.equal(treeKept({}, known), undefined, "a Thread in no tree is offered its move")
+    // A Fin: by the Apex the window files it under until its host has answered, then by its host's word.
+    assert.equal(treeKept({ apex: { title: "Ship the importer" } }, undefined), led)
+    assert.equal(treeKept({ apex: {} }, undefined), "This Thread is a Fin. It reports to its Apex on this Mac, so it stays where its Apex is.")
+    assert.equal(treeKept({ apex: { title: "Ship the importer" } }, { kind: "kept", tree: { kind: "fin", apex: "Ship the importer" }, refusal: led }), led)
+    assert.equal(treeKept({ apex: { title: "Ship the importer" } }, known), undefined, "its host says its Apex was archived: it moves as any Thread")
+    const away = "This Thread is a Fin of an Apex on another device. Its reports reach its Apex from this Mac, so it stays here."
+    assert.equal(treeKept({}, { kind: "kept", tree: { kind: "fin", away: true }, refusal: away }), away, "a Fin of an Apex on another device, which only its host knows")
+  })
+  await check("a move its tree refuses leaves no notice with a Retry, only its reason said once", async (make) => {
+    const reason = "This Thread leads a Fin that hasn't ended, and its reports reach it only on this Mac. It can move once that Fin finishes or is stopped."
+    const w = make(() => ({ kind: "kept-here", reason, tree: "open-fins" }))
+    await w.api.moveToCloud("c")
+    assert.equal(w.state().failedMoves.c, undefined, "nothing stays above the composer")
+    assert.equal(w.state().moving.c, undefined)
+    assert.deepEqual(w.effects.filter(([kind]) => kind === "message").map(([, args]) => [args[0], args[1].description]), [["It stayed on this Mac", reason]])
+    // Heard as a step from a move begun elsewhere (an agent's, another window's): the same.
+    const heard = make(() => pending())
+    heard.api.threadMoveStepped("c", "theirs", { kind: "packing" })
+    heard.api.threadMoveStepped("c", "theirs", { kind: "kept-here", reason, tree: "fin" })
+    assert.equal(heard.state().failedMoves.c, undefined)
+    // Any other refusal keeps its notice and its Retry, as before.
+    const other = make(() => ({ kind: "kept-here", reason: "Moves happen between turns: Codex is running a turn." }))
+    await other.api.moveToCloud("c")
+    assert.equal(other.state().failedMoves.c?.reason, "Moves happen between turns: Codex is running a turn.")
   })
   await check("a continue joined with Fins left here says they stayed and offers the way back", async (make) => {
     const w = make(() => pending(), {}, () => ({ kind: "back" }))
@@ -1123,6 +1165,29 @@ async function checkWindow() {
   assert.equal(await evaluate(`document.querySelector('[data-thread-move-offer]').disabled`), true)
   assert.match(await text('[data-thread-move-offer]'), /The cloud runs Codex 0\.164\.0, older than the 0\.165\.0 that wrote this Thread here[\s\S]*once the cloud runs 0\.165\.0 or newer/)
   await both("harness-skew-ahead", [popover])
+  await escape()
+
+  // 11b. An Apex with a Fin that hasn't ended: the popover says why it stays in place of the offer, which can't be
+  // pressed, from the roster the window holds; as its last Fin ends the offer is back, with the popover still open.
+  await startThread()
+  await until(`document.body.innerText.includes('Finished:')`, "the first turn ended")
+  const leads = (state, child) => evaluate(`Promise.all([import('/src/state/acp-state.ts'), import('/src/state/live-door.ts')]).then(([{ acpStore, updateAcpConversation }, { receiveLive }]) => {
+    const key = acpStore.get().activeKey
+    const agents = [{ nativeId: 'mako-child:fin', title: 'Check the importer', bindingId: 'mako:children', provider: 'claude', observedAt: 1, startedAt: 1, state: ${JSON.stringify(state)}, child: { thread: '0a0a0a0a-0000-4000-8000-00000000f1f1', name: 'checker', origin: 'started', state: ${JSON.stringify(child)} } }]
+    receiveLive(key, { from: 'said' }, () => updateAcpConversation(key, (conversation) => (conversation.kind === 'live' ? { ...conversation, nativeAgents: { limited: false, agents } } : conversation)))
+    return true
+  })`)
+  await leads({ kind: "waiting", reason: "Idle: a message gives it its next turn" }, { kind: "idle" })
+  await recordMoves()
+  await click('[data-run-place="local"]')
+  await until(`document.querySelector('[data-thread-move-offer][data-thread-move-kept]') !== null`, "the tree's verdict in the popover")
+  assert.equal(await evaluate(`document.querySelector('[data-thread-move-offer]').disabled`), true, "an Apex with an open Fin isn't offered a move to press")
+  assert.match(await text('[data-thread-move-offer]'), /Move to the cloud[\s\S]*This Thread leads a Fin that hasn't ended, and its reports reach it only on this Mac\. It can move once that Fin finishes or is stopped\./)
+  await both("tree-keeps-apex", [popover])
+  await leads({ kind: "completed" }, { kind: "ended", outcome: "done" })
+  await until(`document.querySelector('[data-thread-move-offer]') !== null && !document.querySelector('[data-thread-move-kept]') && document.querySelector('[data-thread-move-offer]').disabled === false`, "the offer back as its last Fin ended")
+  assert.equal(await evaluate(`window.moveCalls.length`), 0, "nothing was asked of the host meanwhile")
+  assert.equal(await evaluate(`document.querySelector('[data-thread-move-failed]')`), null, "and no notice was raised")
   await escape()
 
   // 12. Devin, which Devin.app updates: the way back stays and says what to do; updated there, the window weighs it

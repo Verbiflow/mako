@@ -398,29 +398,41 @@ try {
   {
     const fin = 'This Thread is one of "Ship the importer"\'s Fins. It reports to its Apex on this Mac, so it stays where its Apex is.'
     const led = setup("tree-fin", { make: (base) => ({ ...base, tree: () => ({ apex: { title: "Ship the importer" } }) }) })
-    assert.deepEqual(await led.moves.move(led.conversation, move()), { kind: "kept-here", reason: fin })
-    assert.deepEqual(led.steps, [{ kind: "kept-here", reason: fin }])
+    assert.deepEqual(await led.moves.move(led.conversation, move()), { kind: "kept-here", reason: fin, tree: "fin" }, "marked as its tree's refusal, which no retry changes")
+    assert.deepEqual(led.steps, [{ kind: "kept-here", reason: fin, tree: "fin" }])
+    assert.deepEqual(await led.moves.harnessCheck(led.conversation), { kind: "kept", tree: { kind: "fin", apex: "Ship the importer" }, refusal: fin }, "the popover's check hears it before any press")
     assert.equal(led.moves.treeKeeps(led.conversation), fin, "an agent's move and a going-away read the same words without a plan")
     assert.equal(await led.moves.refusal(led.conversation), fin, "a quit wouldn't hand it off either")
     await assert.rejects(led.moves.readyPlan(led.conversation), /one of "Ship the importer"'s Fins/, "and no cloud Thread stands by for a move that can't happen")
     assert.deepEqual(state(led), { state: "here", owner: led.threads.self, generation: 1 }, "nothing begun")
     assert.deepEqual([led.gateway.made.length, led.gateway.sentRecords.length, led.gateway.checkpoints.size], [0, 0, 0], "no cloud Thread made, nothing sent")
     const away = setup("tree-fin-away", { make: (base) => ({ ...base, tree: () => ({ apex: { away: true } }) }) })
-    assert.deepEqual(await away.moves.move(away.conversation, move()), { kind: "kept-here", reason: "This Thread is a Fin of an Apex on another device. Its reports reach its Apex from this Mac, so it stays here." })
+    assert.deepEqual(await away.moves.move(away.conversation, move()), { kind: "kept-here", reason: "This Thread is a Fin of an Apex on another device. Its reports reach its Apex from this Mac, so it stays here.", tree: "fin" })
 
     const open = "This Thread leads 2 Fins that haven't ended, and their reports reach it only on this Mac. It can move once they finish or are stopped."
     const fins = [{ state: { kind: "idle" } }, { state: { kind: "working" } }, { state: { kind: "ended" } }]
     const apex = setup("tree-apex", { make: (base) => ({ ...base, tree: () => ({ fins }) }) })
-    assert.deepEqual(await apex.moves.move(apex.conversation, move()), { kind: "kept-here", reason: open }, "how many are open, and what clears it")
+    assert.deepEqual(await apex.moves.move(apex.conversation, move()), { kind: "kept-here", reason: open, tree: "open-fins" }, "how many are open, and what clears it")
     apex.work.running = "r-apex"
     const began = Date.now()
-    assert.deepEqual(await apex.moves.move(apex.conversation, move(), { why: "quit" }), { kind: "kept-here", reason: open }, "a handoff is refused the same")
+    assert.deepEqual(await apex.moves.move(apex.conversation, move(), { why: "quit" }), { kind: "kept-here", reason: open, tree: "open-fins" }, "a handoff is refused the same")
     assert.ok(Date.now() - began < 5_000, "at once, not after its pause was waited out")
     assert.equal(apex.work.running, "r-apex", "its turn was never paused")
     assert.deepEqual(apex.work.continuedHere, [])
     assert.deepEqual([apex.gateway.made.length, apex.gateway.sentRecords.length, apex.gateway.checkpoints.size], [0, 0, 0], "and no machine was made for it")
     const one = setup("tree-apex-one", { make: (base) => ({ ...base, tree: () => ({ fins: [{ state: { kind: "queued" } }] }) }) })
-    assert.deepEqual(await one.moves.move(one.conversation, move()), { kind: "kept-here", reason: "This Thread leads a Fin that hasn't ended, and its reports reach it only on this Mac. It can move once that Fin finishes or is stopped." })
+    assert.deepEqual(await one.moves.move(one.conversation, move()), { kind: "kept-here", reason: "This Thread leads a Fin that hasn't ended, and its reports reach it only on this Mac. It can move once that Fin finishes or is stopped.", tree: "open-fins" })
+    // A Fin started after the plan asked holds the release: kept in the plan's own words, marked the same, and the
+    // cloud Thread made ahead is refused so its machine ends.
+    const made: { length: number }[] = []
+    const late = setup("tree-apex-late", { make: (base) => ({ ...base, tree: () => (made[0]?.length ? { fins: [{ state: { kind: "starting" } }] } : {}) }) })
+    made.push(late.gateway.made)
+    late.busy.late.push('"Lead" leads Fins that haven\'t ended, which a move would leave behind')
+    const lateMove = move()
+    assert.deepEqual(await late.moves.move(late.conversation, lateMove), { kind: "kept-here", reason: "This Thread leads a Fin that hasn't ended, and its reports reach it only on this Mac. It can move once that Fin finishes or is stopped.", tree: "open-fins" })
+    assert.equal(late.gateway.made.length, 1, "its cloud Thread was made ahead, before the Fin started")
+    assert.equal(late.gateway.answers.get(lateMove)?.kind, "refused")
+    assert.deepEqual(state(late), { state: "here", owner: late.threads.self, generation: 1 })
 
     const done = setup("tree-apex-ended", { make: (base) => ({ ...base, tree: () => ({ fins: [{ state: { kind: "ended" } }, { state: { kind: "ended" } }] }) }) })
     assert.equal(done.moves.treeKeeps(done.conversation), undefined)
