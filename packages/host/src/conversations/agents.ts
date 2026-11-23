@@ -159,6 +159,8 @@ import { RESTART_RETIRED_MOVE, type ContextTransfer } from "../contracts/convers
 import type { LiveRequest, LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { LivePermissionResponse, LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../contracts/thread-identity.js"
+import { threadHandle } from "../contracts/thread-handles.js"
+import { projectFolder } from "../contracts/worktree-paths.js"
 import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTART_CHAIN, STRANDED_AFTER_MS, strandedTurn } from "../contracts/turn-continuation.js"
 import { uniqueName, type ApexMessage, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
@@ -6968,8 +6970,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     const reach = this.reachOf(apex)
     const refs: string[] = []
     for (const { thread } of context) {
-      const ref = this.threadRef(apex, thread)
-      if (!ref) return { refused: "unknown-thread", why: `${thread} isn't a Thread here: name it by a thread:<harness>:<id> ref, a Thread ID or a ${FIN_WORD}'s name. agents_list with scope threads finds one.` }
+      const found = this.threadRef(apex, thread)
+      if (found && "refused" in found) return found
+      const ref = found?.ref
+      if (!ref) return { refused: "unknown-thread", why: `${thread} isn't a Thread here: name it by a thread:<harness>:<id> ref, a Thread's handle or ID, or a ${FIN_WORD}'s name. agents_list with scope threads finds one.` }
       if (!reach(ref)) return { refused: "access", why: `${thread} is outside this ${FIN_WORD}'s reach: it attaches Threads of its own tree and those it holds by reference. Its ${APEX_WORD} can hand one down with context.` }
       refs.push(ref)
     }
@@ -7011,15 +7015,21 @@ export class Agents implements AgentOperations, ConversationChildren {
     return (ref) => keysOf(ref).some((key) => reached.has(key))
   }
 
-  /** A ref as written, or the ref of a Thread by its ID or of a Fin of the caller's tree by its name. */
-  private threadRef(apex: Apex, named: string): string | undefined {
+  /**
+   * A ref as written, or the ref of a Thread by its ID or its handle, or of a Fin of the caller's tree by its name: a
+   * Fin's name first, so one that reads as a handle names the Fin. A handle several Threads share is refused with them.
+   */
+  private threadRef(apex: Apex, named: string): { ref: string } | AgentRefused | undefined {
     const bare = named.trim().replace(/^@/, "")
-    if (parseThreadToken(bare)) return bare
+    if (parseThreadToken(bare)) return { ref: bare }
     const store = this.store()!
     const name = finName(bare)
-    const thread = treeEdges(store.edges(), apex.thread).find((edge) => edge.child === bare || edge.name === name)?.child ?? ThreadIdSchema.safeParse(bare).data
-    if (!thread || !store.thread(thread)) return undefined
-    return this.refOfThread(thread)
+    const known = treeEdges(store.edges(), apex.thread).find((edge) => edge.child === bare || edge.name === name)?.child ?? ThreadIdSchema.safeParse(bare).data
+    const handled = known ? undefined : this.threadByHandle(bare, "unknown-thread")
+    if (handled && "refused" in handled) return handled
+    const thread = known ?? handled?.thread
+    const ref = thread && store.thread(thread) ? this.refOfThread(thread) : undefined
+    return ref === undefined ? undefined : { ref }
   }
 
   /** A Thread's ref: its newest session its harness keeps; `thread_history` reads every session of the Thread from any. */
@@ -7067,7 +7077,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const reach = this.reachOf(apex)
     const rows = references?.list({}) ?? []
     const refOf = (row: ThreadRef) => threadToken(row.harness, threadReferenceId(row)).slice(1)
-    const named = query ? this.threadRef(apex, query) : undefined
+    const one = query ? this.threadRef(apex, query) : undefined
+    const named = one && !("refused" in one) ? one.ref : undefined
     if (named) {
       const token = parseThreadToken(named)
       const exact = token ? findThreadReference(rows, token.harness, token.id) : undefined
@@ -8070,15 +8081,50 @@ export class Agents implements AgentOperations, ConversationChildren {
     })
   }
 
-  /** Another Apex by its title or Thread, as `scope: apexes` lists them; a title two share is refused with their Threads. */
+  /**
+   * Another Apex by its Thread, its title or its handle, as `scope: apexes` lists them: a title before a handle, so
+   * one that reads as a handle still names its own Thread. A title two share is refused with their handles, and a
+   * handle several Threads share with each a character longer.
+   */
   private otherApexNamed(caller: Apex, ref: string): OtherApexRef | AgentRefused {
     const others = this.otherApexes(caller)
     const words = ref.trim().toLowerCase()
     const found = others.filter((other) => other.thread === ref.trim() || other.title?.trim().toLowerCase() === words)
     if (found.length === 1) return found[0]!
-    if (found.length) return { refused: "unknown-apex", why: `${found.length} ${APEX_WORD}es are titled ${ref}: name one as apex:<Thread ID>: ${found.map((other) => other.thread).join(", ")}.` }
-    const listed = others.map((other) => `${APEX_PREFIX}${other.title ?? other.thread}`).join(", ")
+    if (found.length) return { refused: "unknown-apex", why: `${found.length} ${APEX_WORD}es are titled ${ref}: name one by its handle: ${found.map((other) => `${APEX_PREFIX}${this.handleOf(other.thread)}`).join(", ")}.` }
+    const handled = this.threadByHandle(ref, "unknown-apex")
+    if (handled && "refused" in handled) return handled
+    const named = handled && others.find((other) => other.thread === handled.thread)
+    if (named) return named
+    const listed = others.map((other) => `${APEX_PREFIX}${this.handleOf(other.thread)}${other.title ? ` ("${noteLine(other.title, 60)}")` : ""}`).join(", ")
     return { refused: "unknown-apex", why: `No other ${APEX_WORD} of the person's open here is ${ref}${listed ? `; they are ${listed}` : ""}. agents_list with scope apexes shows them.` }
+  }
+
+  /**
+   * A Thread's handle as an agent reads and writes it (`threadHandle`): its project's word, from the folder its
+   * conversation works in or the project its worktree was made from, and as many characters of its code as name it
+   * alone among the person's Threads here, so a handle copied from a list finds one Thread.
+   */
+  private handleOf(thread: string, length?: number): string {
+    const store = this.store()!
+    const conversation = this.conversationOf(thread)
+    const cwd = conversation ? this.deps.live.session(conversation)?.cwd : undefined
+    return threadHandle(thread, projectFolder(store.worktrees(), cwd) ?? cwd, length ?? store.handleLength(thread))
+  }
+
+  /**
+   * The Thread a typed handle names (`ThreadStore.threadByHandle`); a refusal naming those that share what was typed,
+   * each by a handle that finds it alone; or undefined when it isn't a handle or no Thread has it.
+   */
+  private threadByHandle(typed: string, refused: AgentRefused["refused"]): { thread: ThreadId } | AgentRefused | undefined {
+    const found = this.store()!.threadByHandle(typed)
+    if (found?.kind === "found") return { thread: ThreadIdSchema.parse(found.thread) }
+    if (found?.kind !== "ambiguous") return undefined
+    const named = found.threads.map(({ thread, length }) => {
+      const title = this.store()!.thread(ThreadIdSchema.parse(thread))?.title
+      return `${this.handleOf(thread, length)}${title ? ` ("${noteLine(title, 60)}")` : ""}`
+    })
+    return { refused, why: `${found.threads.length + found.more} Threads share the handle ${typed.trim()}: ${named.join(", ")}${found.more ? ` and ${found.more} more` : ""}. Name one with more of its characters.` }
   }
 
   private otherApex(other: OtherApexRef): OtherApex {
@@ -8100,6 +8146,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const said = this.lastReply(conversation)
     return {
       thread,
+      handle: this.handleOf(thread),
       ...(other.title && { title: other.title }),
       ...(session && { harness: this.deps.harnessLabel(session.harness) }),
       working,

@@ -33,6 +33,7 @@ import { appMarkOf, useThreadApp } from "@/state/thread-app"
 import { useLeavingWorktrees, useWorktrees, useWorktreeSummaries, workingFolder, worktreeAt } from "@/state/worktrees"
 import { worktreeTip } from "@/lib/worktree-marks"
 import { threadReferenceId, threadToken } from "@/lib/mentions"
+import { handleOfThread } from "@/lib/thread-handle"
 import { formatRelative, workspaceName } from "@/lib/format"
 import { threadFolderKey } from "@/lib/thread-folders"
 import { checkoutOf, projectFolder } from "@mako/host/contracts/worktree-paths"
@@ -207,6 +208,8 @@ export const ThreadRow = memo(function ThreadRow({
   const appState = useThreadApp((store) => (checkout ? appMarkOf(store, checkout)?.state : undefined))
   const appPort = useThreadApp((store) => (checkout ? appMarkOf(store, checkout)?.port : undefined))
   const project = useWorktrees((state) => projectFolder(ref.worktrees, ref.cwd) ?? (ref.cwd ? state.folderMap(ref.cwd) : undefined))
+  // Its handle is its Thread's own (`threadHandle`), worked out here; the row never draws it: it's in the tip and the menu.
+  const handle = handleOfThread(thread, project ?? ref.cwd)
   const active = useSession((state) => state.meta?.sessionFile === ref.path)
   const selectedPath = useThreads(
     (state) => state.opening?.ref.path ?? state.viewing?.ref.path
@@ -252,6 +255,7 @@ export const ThreadRow = memo(function ThreadRow({
     controlled: !folded && (target.kind === "live" || working),
     path: ref.path,
     thread,
+    handle,
     cwd: ref.cwd,
     archiveTargets: folded?.members.map(foldRowTarget),
     pinned: isPinned,
@@ -321,6 +325,7 @@ export const ThreadRow = memo(function ThreadRow({
             ref.model,
           ].filter(Boolean).join(" · "),
           ref.cwd,
+          handle,
           !made && branch ? `Worktree on ${branch}` : undefined,
           isPinned ? "Pinned" : undefined,
           appState ? appMarkLabel(appState, appPort) : undefined,
@@ -334,6 +339,7 @@ export const ThreadRow = memo(function ThreadRow({
         aria-selected={picked || undefined}
         data-thread-row
         data-thread-id={thread}
+        data-thread-handle={handle}
         data-flip-key={ref.path}
         data-conversation-id={target.kind === "live" ? target.id : undefined}
         data-thread-indent={indent || undefined}

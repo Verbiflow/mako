@@ -9,6 +9,7 @@ import { AGENT_TOOLS, LEGACY_SHIVER_SCOPE, ORCHESTRATION_INSTRUCTIONS, type Agen
 import type { AgentCaller, Report } from "@mako/host/contracts/agents"
 import { agentWords, apexNote, FROM_AGENTS, fromAgent, fromApex, YOUR_APEX } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { threadHandle } from "@mako/host/contracts/thread-handles"
 import { agentToolSchema, agentToolText } from "@mako/host/conversations/agent-tools"
 import { AgentWakes, digest, finishedLine, type Notice } from "@mako/host/conversations/agent-wakes"
 import { FIN_REPORTS_MAX, readFinReports } from "@mako/host/contracts/fin-reports"
@@ -240,6 +241,8 @@ async function apexes(): Promise<void> {
     assert.deepEqual(view.apexes.map((other) => other.title), ["claude apex"], "only the other Apex: not itself, its own Fins, or a Thread with none")
     const other = view.apexes[0]!
     assert.equal(other.thread, world.store.journalPlacement(billing.conversation)!.thread)
+    const handle = threadHandle(other.thread, world.root)
+    assert.equal(other.handle, handle, "its handle beside its title: its folder's word and four characters of its Thread's code")
     assert.equal(other.harness, "Claude")
     assert.equal(other.working, false)
     assert.equal(other.folder, world.root)
@@ -256,7 +259,13 @@ async function apexes(): Promise<void> {
     assert.ok(!listText.includes("\n") && listText.length < 900, `one Apex in ${listText.length} characters`)
 
     const unknown = await world.agents.send(app.caller, { to: "apex:payments", text: "Hi.", clientKey: "u" })
-    assert.ok("refused" in unknown && unknown.refused === "unknown-apex" && unknown.why.includes("apex:claude apex"), JSON.stringify(unknown))
+    assert.ok("refused" in unknown && unknown.refused === "unknown-apex" && unknown.why.includes(`apex:${handle} ("claude apex")`), JSON.stringify(unknown))
+    // A handle no Thread has, and one that names a Thread that isn't another Apex: the caller's own.
+    const absent = [..."2345"].map((start) => start.repeat(12)).find((code) => world.store.threadByHandle(code)?.kind === "unknown")!
+    const noHandle = await world.agents.send(app.caller, { to: `apex:${absent}`, text: "Hi.", clientKey: "u2" })
+    assert.ok("refused" in noHandle && noHandle.refused === "unknown-apex", JSON.stringify(noHandle))
+    const own = await world.agents.send(app.caller, { to: `apex:${threadHandle(world.store.journalPlacement(app.conversation)!.thread, world.root)}`, text: "Hi.", clientKey: "u3" })
+    assert.ok("refused" in own && own.refused === "unknown-apex", `its own handle names no other Apex: ${JSON.stringify(own)}`)
     const forwarded = await world.agents.send(app.caller, { to: "apex:claude apex", forward: true, clientKey: "f" })
     assert.ok("refused" in forwarded && forwarded.refused === "conflict", "the person's message isn't passed to another Apex")
 
@@ -286,12 +295,13 @@ async function apexes(): Promise<void> {
     assert.equal(prompted(billing.conversation), before.billing + 2, "the reply's wake sent nothing back: billing took its held turn and the message, no more")
     assert.equal(prompted(app.conversation), before.app + 1)
 
-    for (const key of ["m2", "m3"]) {
-      const sent = await world.agents.send(app.caller, { to: `apex:${other.thread}`, text: `${asked} (${key})`, clientKey: key })
-      assert.ok(!("refused" in sent) && sent.delivery === "turn", `an idle Apex takes it now: ${JSON.stringify(sent)}`)
+    // By its handle as listed, and by its code alone in capitals; its Thread ID still names it.
+    for (const [key, to] of [["m2", handle], ["m3", handle.slice(handle.lastIndexOf("-") + 1).toUpperCase()]] as const) {
+      const sent = await world.agents.send(app.caller, { to: `apex:${to}`, text: `${asked} (${key})`, clientKey: key })
+      assert.ok(!("refused" in sent) && sent.delivery === "turn" && sent.child === other.thread, `an idle Apex takes it now, named by ${to}: ${JSON.stringify(sent)}`)
       await world.settle()
     }
-    const fourth = await world.agents.send(app.caller, { to: "apex:claude apex", text: "One more thing.", clientKey: "m4" })
+    const fourth = await world.agents.send(app.caller, { to: `apex:${other.thread}`, text: "One more thing.", clientKey: "m4" })
     assert.ok("refused" in fourth && fourth.refused === "rate-limited" && /3 messages .* in the last hour/.test(fourth.why), JSON.stringify(fourth))
     const repeat = await world.agents.send(app.caller, { to: "apex:claude apex", text: asked, clientKey: "m1" })
     assert.ok(!("refused" in repeat) && repeat.deduped, "a repeat past the limit still answers the first")

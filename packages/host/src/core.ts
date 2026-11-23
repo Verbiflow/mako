@@ -65,7 +65,7 @@ import { hostPlatform, nodePlatform, onMac, onWindows } from "./base/platform.js
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { KeepAwakeSettings } from "./contracts/keep-awake.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
-import { openThreads, declareThreadMethods, declareUnreadRecordMethods, ThreadTitler } from "./threads/index.js"
+import { conversationNamed, openThreads, declareThreadMethods, declareUnreadRecordMethods, ThreadTitler } from "./threads/index.js"
 import type { Control, ControlService } from "./control/index.js"
 import type { SimulatorAgent, SimulatorCaller, SimulatorsListed } from "./contracts/simulators.js"
 import { accountBorrowing, BorrowedSimulators, ControlResidency, ControlSessions, SimulatorTools, controlLine, controlLoad, controlVideoMedia } from "./control/load.js"
@@ -1729,6 +1729,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   live.asks.answering = async (conversation, ask, allow) => { await late.agentAsks?.answer(conversation, ask, allow) }
   late.threadMoves = new ThreadMoveTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
+    named: (ref) => (threads.store ? conversationNamed(threads.store, ref) : { conversation: ref }),
     place: (id) => {
       if (live.session(id) && !cloudConversations?.has(id)) return "here"
       const row = cloudConversations?.listedRow(id)
@@ -1753,6 +1754,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // Rename, Archive and Restore for an agent's `thread` and `mako thread`, through the calls the app's menu makes.
   late.threadActs = new ThreadActTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
+    named: (ref) => (threads.store ? conversationNamed(threads.store, ref) : { conversation: ref }),
     threadOf: (id) => threads.store?.journalPlacement(id)?.thread,
     tier: (id) => sessionAccessTier(live.session(id)),
     invoke: async (channel, args) => z.json().optional().parse(decodeRuntimeValue(await methods.invoke(channel, args))),

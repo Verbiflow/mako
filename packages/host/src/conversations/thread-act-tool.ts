@@ -12,6 +12,8 @@ import { namedUuid } from "./cloud-moves.js"
 export interface ThreadActToolDeps {
   /** The conversation a Session's agent runs in here. */
   conversationOf(session: string): string | undefined
+  /** The conversation the person's own call names, by its ID or its Thread's handle or ID (`conversationNamed`); as named without it. */
+  named?(conversation: string): { conversation: string } | { why: string }
   /** The Thread a conversation is in, as `mako:thread-rename` names it. */
   threadOf(conversationId: string): string | undefined
   tier(conversationId: string): AccessTier | undefined
@@ -41,7 +43,9 @@ export class ThreadActTool {
     const own = caller.kind === "agent" ? this.#deps.conversationOf(caller.session) : undefined
     if (caller.kind === "agent" && !own) return { refused: "no-thread", why: "No conversation here has that Session. Call it from a Thread's mako tools, or its shell, where MAKO_SESSION_ID names it." }
     if (own && input.conversation && input.conversation !== own) return { refused: "not-yours", why: "An agent acts on its own Thread only: leave conversation out." }
-    const conversationId = own ?? input.conversation
+    const named = own || !input.conversation ? undefined : (this.#deps.named?.(input.conversation) ?? { conversation: input.conversation })
+    if (named && "why" in named) return { refused: "no-thread", why: named.why }
+    const conversationId = own ?? named?.conversation
     if (!conversationId) return { refused: "no-thread", why: "Name the conversation (--conversation), or call it from a Thread's shell." }
     if (input.action === "rename" && !input.title?.trim()) return { refused: "no-title", why: "Rename needs a title." }
     const op = namedUuid(`thread act\0${caller.kind === "agent" ? caller.session : "person"}\0${input.clientKey}`)

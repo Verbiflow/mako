@@ -249,6 +249,8 @@ export interface AgentsApexes {
 export interface OtherApex {
   /** Its Thread, which `agents_send` takes as `apex:<thread>`. */
   thread: string
+  /** Its handle (`threadHandle`), which `agents_send` takes as `apex:<handle>`: as many characters as name it alone here. */
+  handle: string
   title?: string
   harness?: string
   working: boolean
@@ -394,7 +396,7 @@ export interface AgentsSettleInput {
 export type AgentsSettleResult = { action: ReportAction; deduped?: true } | AgentRefused
 
 export interface AgentsSendInput {
-  /** Your own Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. Shiver siblings need a parent relay through agents_report; discovery grants no send authority. */
+  /** Your own Fin's name or Thread ID, or another of the person's Apexes as `apex:<handle, title or Thread ID>`. Shiver siblings need a parent relay through agents_report; discovery grants no send authority. */
   to: string
   /** Pass on the person's message this turn answers, word for word, as theirs: the host fills it in, so the call stays short. */
   forward?: boolean
@@ -922,10 +924,10 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         `An idle or finished ${FIN_WORD} takes it as its next task in its own Thread. A working one takes it as deliver says: queue (the default) after its turn, for more to do; steer, into the turn it's running, when the message changes what it's doing now; interrupt, stopping that turn first, when what it's running is wrong.`,
         `One running in an agent CLI your shell started is stopped and its session resumed here with the message, its last step maybe cut short.`,
         `It returns at once, saying when that ${FIN_WORD}'s harness lets it hear the message; what the ${FIN_WORD} does reports back as its work does.`,
-        `Another ${APEX_WORD} (apex:<title>) hears it after its turn (steer only when its current work is wrong); its reply wakes you once; at most 3 an hour to one. Message one only when the person asked, or it owns the files or branch you'd change, or its work blocks yours; never for status, thanks or acknowledgement. One message with everything it needs; don't reply to a reply unless it asks you something.`,
+        `Another ${APEX_WORD} (apex:<handle>) hears it after its turn (steer only when its current work is wrong); its reply wakes you once; at most 3 an hour to one. Message one only when the person asked, or it owns the files or branch you'd change, or its work blocks yours; never for status, thanks or acknowledgement. One message with everything it needs; don't reply to a reply unless it asks you something.`,
       ].join(" "),
       fields: {
-        to: `The ${FIN_WORD}'s name (fin:<name> as your note lists it) or Thread ID; another ${APEX_WORD}: apex:<title or Thread ID>.`,
+        to: `The ${FIN_WORD}'s name (fin:<name> as your note lists it) or Thread ID; another ${APEX_WORD}: apex:<handle or title>.`,
         forward: "true: pass on the person's message this turn answers, as their words.",
         text: "Your own words: beneath the person's with forward, else the whole message.",
         deliver: `For a working ${FIN_WORD}: queue (default), steer or interrupt.`,

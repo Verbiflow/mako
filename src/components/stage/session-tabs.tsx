@@ -24,6 +24,8 @@ import { harnessLabel } from "@/lib/harness-label"
 import { sessionDetail } from "@/lib/session-words"
 import { useAcp } from "@/state/acp"
 import { useThreadGroups } from "@/state/thread-groups"
+import { useWorktrees } from "@/state/worktrees"
+import { handleOfThread, handleProject } from "@/lib/thread-handle"
 import { archiveSessionTab } from "@/state/session-archive"
 import { openInPane, openTabInPane } from "@/state/session-panes"
 import { pressTab } from "@/state/tab-drag"
@@ -140,6 +142,9 @@ function SessionTabButton({
   const composerHarness = useThreads((state) => state.composerHarness)
   const title = tab.kind === "draft" && !selected ? "Draft" : sessionTabTitle(tab)
   const worked = useTabWorked(tab, thread, titles)
+  // Its Thread's handle, last in the tab's tooltip, as its rail row's tip says it.
+  const project = useWorktrees((state) => (tab.kind === "session" ? handleProject(tab.ref ?? { cwd: tab.presence?.cwd }, state.folderMap) : undefined))
+  const handle = tab.kind === "session" ? handleOfThread(thread, project) : undefined
   const harness =
     tab.kind === "draft"
       ? selected ? composerHarness : tab.draft.harness
@@ -172,7 +177,8 @@ function SessionTabButton({
         tabIndex={selected ? 0 : -1}
         data-tab-id={selected ? AGENT_TAB_ID : undefined}
         data-session-tab={tab.id}
-        title={tab.kind === "draft" ? `New session in this Thread${selected ? "" : ", not sent yet"}` : worked ? `${title}\n${worked.detail}` : title}
+        title={tab.kind === "draft" ? `New session in this Thread${selected ? "" : ", not sent yet"}` : [title, worked?.detail, handle].filter(Boolean).join("\n")}
+        data-thread-handle={handle}
         onPointerDown={(event) => {
           if (thread && menu) pressTab(event, { tab, thread, title }, event.currentTarget)
         }}

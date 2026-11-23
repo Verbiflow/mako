@@ -36,6 +36,7 @@ function world(tier: "full" | "auto" = "full", fails = false, archiveAnswer: Jso
   const gate = new AgentAskGate(asks)
   const tool = new ThreadActTool({
     conversationOf: (session) => (session === "s-mine" ? "mine" : undefined),
+    named: (ref) => (ref === "mako-7f3k" ? { conversation: "mine" } : ref === "7f3" ? { why: "2 Threads share the handle 7f3: 7f3k, 7f3q. Name one with more of its characters." } : { conversation: ref }),
     threadOf: (id) => (id === "mine" ? "thread-mine" : undefined),
     tier: () => tier,
     invoke: async (channel, args) => {
@@ -97,6 +98,13 @@ function world(tier: "full" | "auto" = "full", fails = false, archiveAnswer: Jso
   assert.equal(await tool.act(person, { action: "archive", clientKey: "k" }).then((answer) => "refused" in answer && answer.refused), "no-thread")
   assert.equal(calls.length, 0)
   assert.deepEqual(await tool.act(person, { action: "restore", conversation: "elsewhere", clientKey: "k" }), { outcome: "restored" })
+  // The person's shell names it by its Thread's handle too; one several Threads share is refused with them, and nothing runs.
+  const byHandle = await tool.act(person, { action: "archive", conversation: "mako-7f3k", clientKey: "h" })
+  assert.ok("outcome" in byHandle && byHandle.outcome === "archived", JSON.stringify(byHandle))
+  assert.deepEqual(calls.at(-1)?.args, [{ id: operationOf(calls.at(-1)), target: { kind: "live", id: "mine" }, archived: true }], "the conversation its handle names")
+  const shared = await tool.act(person, { action: "archive", conversation: "7f3", clientKey: "h2" })
+  assert.ok("refused" in shared && shared.refused === "no-thread" && shared.why.includes("7f3k, 7f3q"), JSON.stringify(shared))
+  assert.equal(calls.length, 2)
   assert.deepEqual(await world("full", true).tool.act(agent("s-mine"), { action: "archive", clientKey: "k" }), { refused: "failed", why: "That Thread no longer exists" })
   // A cloud Thread's archive is its object's to refuse, which the host answers rather than throws.
   const stayed = world("full", false, { revision: 1, keys: [], cloud: { kind: "refused", thread: "t-1", reason: "Its machine still has unsaved work.", anyway: true } })
