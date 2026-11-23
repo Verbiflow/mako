@@ -7,7 +7,7 @@ import type { CommitAnalysisMode } from "@/lib/types"
 import type { Prefs } from "@/state/prefs"
 import { setPref, usePrefs } from "@/state/prefs"
 import { git } from "@/state/git"
-import { refreshCommitModel } from "@/state/commit-model"
+import { nameThreads, refreshCommitModel, useCommitModelSettings } from "@/state/commit-model"
 import { CommitKeys } from "./model-connections"
 import { WorktreesSection } from "./worktrees-section"
 import { PullRequestsAsMe } from "./pull-requests-as-me"
@@ -17,6 +17,27 @@ import { useGitHub } from "@/state/github"
 import { IfCanChooseFolder } from "@/components/ui/machine-gate"
 import { tildePath } from "@/lib/project-query"
 import { chooseCloneInto, cloneDirectory, loadFound, useOpenProject, useRecentProjects } from "@/state/open-project"
+
+/**
+ * Whether Threads are titled with the key above. Off until the person turns
+ * it on: a title sends a Thread's first message to the key's provider, which
+ * need not be the one its agent talks to, so the row says where it goes.
+ */
+function ThreadTitlesRow() {
+  const { settings } = useCommitModelSettings()
+  const key = settings?.work?.commit.resolved
+  const on = settings?.work?.titles === true
+  return (
+    <SettingRow
+      title="Title Threads"
+      description={key
+        ? `Sends a Thread's first message and the start of its answer to ${key.via}, once, for a short title. Only for a Thread its agent hasn't named. Your agents' subscriptions aren't used.`
+        : "Needs an API key. A Thread keeps the title its agent gave it, or the start of your first message."}
+    >
+      <Toggle label="Title Threads" on={on && key !== undefined} disabled={!key} onChange={() => void nameThreads(!on)} />
+    </SettingRow>
+  )
+}
 
 /** Settings › Git: how Changes looks, what writes commit messages, who cloud commits and pull requests are from, and worktrees. */
 export function GitSection() {
@@ -249,6 +270,7 @@ function CommitMessages() {
             onChange={(next) => setPref("commitAnalysis", next)}
           />
         </SettingRow>
+        <ThreadTitlesRow />
       </ListCard>
       <div className="flex flex-col gap-2">
         <div className="flex items-center gap-2">

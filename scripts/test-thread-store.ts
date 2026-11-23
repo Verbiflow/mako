@@ -270,6 +270,22 @@ function conflicts(): void {
   threads.close()
 }
 
+/** A title Mako generated is no name of the Thread's own: a Session alone in such a Thread joins the one its native session belongs to, as an untitled one does. */
+function generatedTitleMerges(): void {
+  const threads = store("generated-merge")
+  const handoff = journal({ harness: "claude", bindings: [{ provider: "claude", nativeId: "claude-7", path: "/claude/a/claude-7.jsonl" }] })
+  const placed = threads.registerJournal(handoff, migration)
+  const early = threads.resolveRefs([row("grok", "grok-7", "/grok/grok-7")], catalog).get("/grok/grok-7")
+  assert.ok(early)
+  assert.equal(threads.claimGeneratedTitle({ thread: early.thread, conversation: handoff.conversationId, holder: "host" }), true)
+  assert.equal(threads.writeGeneratedTitle({ thread: early.thread, holder: "host", title: "Release notes" })?.source, "auto")
+  const extended = { ...handoff, bindings: [...handoff.bindings, { provider: "grok", nativeId: "grok-7", path: "/grok/grok-7" }] }
+  assert.deepEqual(threads.registerJournal(extended, migration), placed, "the handoff stays in its Session")
+  assert.deepEqual(threads.sessionPlacement(early.session), placed, "the Session with only a generated title joins it")
+  assert.equal(threads.conflicts.length, 0)
+  threads.close()
+}
+
 function receipts(): void {
   const threads = store("receipts")
   const placed = threads.registerJournal(journal({ harness: "grok", bindings: [{ provider: "grok", nativeId: "g", path: "/grok/g" }] }), migration)
@@ -659,6 +675,7 @@ try {
   retiredDelegation()
   handoffAndCatalogFirst()
   conflicts()
+  generatedTitleMerges()
   receipts()
   placementVersion()
   threadGroups()

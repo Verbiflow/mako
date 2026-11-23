@@ -305,10 +305,10 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     if (earlier.length) fields.lineage = earlier
     return fields
   }
-  // A title the person or Mako gave the Thread; an older build's automatic one isn't shown anywhere.
+  // The Thread's name, whoever gave it: the person, Mako at its start, or Mako's generated title.
   const threadTitle = (thread: ThreadId) => {
     const found = titles.get(thread)
-    return found?.title && found.titleSource !== "auto" ? line(found.title) : undefined
+    return found?.title ? line(found.title) : undefined
   }
 
   const bySession = new Map<string, ReportedSession>()

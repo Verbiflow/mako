@@ -265,12 +265,13 @@ export function spendBetween(
  * separate line in Settings › Usage, so usage adds up: a session's turns, its
  * side questions, and these.
  */
-export const HELPER_PURPOSES = ["commit-message", "connection-check"] as const
+export const HELPER_PURPOSES = ["commit-message", "connection-check", "thread-title"] as const
 export type HelperPurpose = (typeof HELPER_PURPOSES)[number]
 
 export const HELPER_PURPOSE_LABELS = {
   "commit-message": "Commit messages",
   "connection-check": "Model connection checks",
+  "thread-title": "Thread titles",
 } satisfies Record<HelperPurpose, string>
 
 /**

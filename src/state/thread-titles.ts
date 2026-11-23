@@ -7,12 +7,12 @@ import type { ThreadRef } from "@/lib/types"
 
 export interface ThreadTitle {
   title: string
-  /** `user` is a person's rename; `frozen` is a name Mako gave a Thread it started. */
-  source: "user" | "frozen"
+  /** `user` is a person's rename; `frozen` is a name Mako gave a Thread it started; `auto` is a title Mako generated. */
+  source: "user" | "frozen" | "auto"
 }
 
 export interface ThreadTitlesState {
-  /** Each Thread's own name, by Thread ID; a Thread without one shows its Session's. */
+  /** Each Thread's name, its own or the one Mako generated, by Thread ID; a Thread without one shows its Session's. */
   byThread: Readonly<Record<string, ThreadTitle>>
 }
 

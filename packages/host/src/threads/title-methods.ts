@@ -9,10 +9,11 @@ const TitleSchema = z.string().max(400)
 const ImportSchema = z.array(z.object({ thread: ThreadIdSchema, title: TitleSchema })).max(5_000)
 
 /**
- * Threads' own names for every window: the ones to draw, a person's rename
- * of a whole Thread (or dropping it with `null`, so the row shows its first
- * Session's title again), and a window's renames from before the store kept
- * them. Every change is told to every window as `thread-titles`.
+ * Threads' names for every window: the ones to draw, a generated title
+ * among them (`ThreadTitler`), a person's rename of a whole Thread (or
+ * dropping its name with `null`, so the row shows its first Session's title
+ * again), and a window's renames from before the store kept them. Every
+ * change is told to every window as `thread-titles`.
  */
 export function declareThreadTitleMethods(methods: MethodTable, input: {
   store: ThreadStore | null

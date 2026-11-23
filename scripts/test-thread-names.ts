@@ -11,8 +11,9 @@ import { ThreadStore } from "@mako/host/threads/store"
  * A Thread's own name: a rename names the whole Thread, however many
  * Sessions it holds, and survives a restart; dropping it shows the first
  * Session's title again; another host hears of it; old window renames and
- * setup names are kept; and a title an older build wrote automatically is
- * no longer shown.
+ * setup names are kept; a title Mako generated is shown as `auto`, is told
+ * to other hosts, and never replaces a person's name or a frozen one, each
+ * of which replaces it.
  */
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), "mako-thread-names-")))
@@ -77,7 +78,48 @@ try {
   assert.equal(kept.keepThreadTitle(setup.thread, "Something else")?.title, "Set up mako", "a Thread with a name keeps it")
   kept.close()
 
-  // Titles an older build wrote: an automatic one isn't shown, an unsourced one is the user's.
+  // A generated title: only its claim's holder writes it, once, and only onto a Thread with no name.
+  const made = openStore("generated")
+  const watching = openStore("generated")
+  const plain = newThread(made)
+  watching.takeExternalTitles()
+  assert.equal(made.generatedTitleOpen(plain.thread), true)
+  assert.equal(made.writeGeneratedTitle({ thread: plain.thread, holder: "host", title: "Unclaimed" }), undefined, "nothing is written without a claim")
+  assert.equal(made.claimGeneratedTitle({ thread: plain.thread, conversation: plain.conversation, holder: "host" }), true)
+  assert.equal(made.claimGeneratedTitle({ thread: plain.thread, conversation: plain.conversation, holder: "other" }), false, "one host asks at a time")
+  assert.deepEqual(made.writeGeneratedTitle({ thread: plain.thread, holder: "host", title: " Parser recovery " }), { thread: plain.thread, title: "Parser recovery", source: "auto" })
+  assert.deepEqual(made.titleEntry(plain.thread), { thread: plain.thread, title: "Parser recovery", source: "auto" }, "a generated title is shown")
+  assert.deepEqual(made.titles(), [{ thread: plain.thread, title: "Parser recovery", source: "auto" }])
+  assert.deepEqual(made.titlesOf([plain.thread]).get(plain.thread), { title: "Parser recovery", titleSource: "auto" })
+  assert.deepEqual(watching.takeExternalTitles(), [{ thread: plain.thread, title: "Parser recovery", source: "auto" }], "another host's windows hear of it")
+  assert.equal(made.generatedTitleOpen(plain.thread), false)
+  assert.equal(made.claimGeneratedTitle({ thread: plain.thread, conversation: plain.conversation, holder: "host" }), false, "a titled Thread is asked about no more")
+
+  const mine = newThread(made)
+  assert.equal(made.claimGeneratedTitle({ thread: mine.thread, conversation: mine.conversation, holder: "host" }), true)
+  made.renameThread({ operationId: randomUUID(), thread: mine.thread, title: "My name", actor: made.person() })
+  assert.equal(made.writeGeneratedTitle({ thread: mine.thread, holder: "host", title: "A late answer" }), undefined, "a generated title never replaces a person's name")
+  assert.deepEqual(made.titleEntry(mine.thread), { thread: mine.thread, title: "My name", source: "user" })
+  made.clearThreadTitle({ operationId: randomUUID(), thread: mine.thread, actor: made.person() })
+  assert.equal(made.generatedTitleOpen(mine.thread), false, "nor is one asked for once the person dropped theirs")
+
+  const frozen = newThread(made)
+  assert.equal(made.claimGeneratedTitle({ thread: frozen.thread, conversation: frozen.conversation, holder: "host" }), true)
+  made.keepThreadTitle(frozen.thread, "Set up mako")
+  assert.equal(made.writeGeneratedTitle({ thread: frozen.thread, holder: "host", title: "A late answer" }), undefined, "nor a name Mako froze")
+  assert.deepEqual(made.titleEntry(frozen.thread), { thread: frozen.thread, title: "Set up mako", source: "frozen" })
+  assert.equal(made.claimGeneratedTitle({ thread: frozen.thread, conversation: frozen.conversation, holder: "host" }), false)
+
+  // Each of them replaces a generated title.
+  assert.equal(made.renameThread({ operationId: randomUUID(), thread: plain.thread, title: "Recovery", actor: made.person() }).titleSource, "user")
+  const forSetup = newThread(made)
+  made.claimGeneratedTitle({ thread: forSetup.thread, conversation: forSetup.conversation, holder: "host" })
+  made.writeGeneratedTitle({ thread: forSetup.thread, holder: "host", title: "Lexer rewrite" })
+  assert.deepEqual(made.keepThreadTitle(forSetup.thread, "Set up the lexer"), { thread: forSetup.thread, title: "Set up the lexer", source: "frozen" })
+  made.close()
+  watching.close()
+
+  // Titles an older build wrote: one in the column this build doesn't read isn't shown, one marked `auto` is, an unsourced one is the user's.
   const old = join(root, "older.sqlite")
   const seeded = new ThreadStore(old)
   const automatic = newThread(seeded)
@@ -90,15 +132,16 @@ try {
   db.prepare("UPDATE threads SET title = 'Named elsewhere', title_source = NULL WHERE id = ?").run(unsourced.thread)
   db.close()
   const reopened = new ThreadStore(old)
-  assert.deepEqual(reopened.titleEntry(automatic.thread), { thread: automatic.thread, title: null }, "an automatic title is no longer shown")
-  assert.deepEqual(reopened.titleEntry(automaticInTitle.thread), { thread: automaticInTitle.thread, title: null })
+  assert.deepEqual(reopened.titleEntry(automatic.thread), { thread: automatic.thread, title: null }, "an older build's `auto_title` is not read")
+  assert.deepEqual(reopened.titleEntry(automaticInTitle.thread), { thread: automaticInTitle.thread, title: "Lexer work", source: "auto" })
   assert.deepEqual(reopened.titleEntry(unsourced.thread), { thread: unsourced.thread, title: "Named elsewhere", source: "user" }, "a title without a source is the user's")
-  assert.deepEqual(reopened.titles(), [{ thread: unsourced.thread, title: "Named elsewhere", source: "user" }])
+  assert.deepEqual(reopened.titles().sort((left, right) => left.title!.localeCompare(right.title!)),
+    [{ thread: automaticInTitle.thread, title: "Lexer work", source: "auto" }, { thread: unsourced.thread, title: "Named elsewhere", source: "user" }])
   assert.deepEqual(reopened.importThreadTitles([{ thread: automaticInTitle.thread, title: "Lexer rewrite" }]),
-    [{ thread: automaticInTitle.thread, title: "Lexer rewrite", source: "user" }], "an old window rename replaces an automatic title")
+    [{ thread: automaticInTitle.thread, title: "Lexer rewrite", source: "user" }], "an old window rename replaces a generated title")
   reopened.close()
 
-  console.log("thread names: a multi-Session rename names the Thread, restart, dropping a name, other hosts, window renames, setup names, older builds' titles")
+  console.log("thread names: a multi-Session rename names the Thread, restart, dropping a name, other hosts, window renames, setup names, generated titles, older builds' titles")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

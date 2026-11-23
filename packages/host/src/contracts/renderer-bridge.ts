@@ -62,7 +62,7 @@ import type {
   UtilityCatalogInput,
   UtilityCatalog,
 } from "./utility-models.js"
-import type { UtilityTask } from "./utility-work.js"
+import type { THREAD_TITLES, UtilityTask } from "./utility-work.js"
 import type { LocalModelServer, ModelConnectionCheck, ModelConnectionCheckInput, ModelConnectionInput, ModelConnectionsSnapshot, ModelConnectionTest, ModelConnectionView } from "./model-connections.js"
 import type { RewindInput, RewindPreview } from "./workspace-snapshots.js"
 import type {
@@ -193,7 +193,7 @@ export function createMakoBridge(transport: BridgeTransport) {
     threadGroups: () => invokeTrustedHost<ThreadGroup[]>("mako:thread-groups"),
     threadPurposes: () => invokeTrustedHost<ThreadPurpose[]>("mako:thread-purposes"),
     threadTitles: () => invokeTrustedHost<ThreadTitleEntry[]>("mako:thread-titles"),
-    /** `title: null` gives the Thread's name back to automatic titles. */
+    /** `title: null` drops the Thread's name, its own or a generated one: the row shows its first Session's title. */
     renameThread: (operationId: string, thread: string, title: string | null, original?: string) =>
       invokeTrustedHost<ThreadTitleEntry>("mako:thread-rename", operationId, thread, title, original),
     threadMarks: () => invokeTrustedHost<ThreadMarkEntry[]>("mako:thread-marks"),
@@ -971,8 +971,8 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:git-cancel-generation", requestId),
     utilityModelSettings: () =>
       invokeTrustedHost<UtilityModelSettings>("mako:utility-model-settings"),
-    /** What does a small task: `auto`, `off` for titles, or a model `utilityModelSettings` lists. */
-    chooseUtilityModel: (task: UtilityTask, choice: string) =>
+    /** What does a small task: `auto` or a model `utilityModelSettings` lists; for `THREAD_TITLES`, `on` or `off`. */
+    chooseUtilityModel: (task: UtilityTask | typeof THREAD_TITLES, choice: string) =>
       invokeTrustedHost<void>("mako:utility-choice", task, choice),
     /** The order Mako tries harnesses in for setup and commit messages; empty goes back to Mako's. */
     saveHarnessOrder: (order: string[]) =>

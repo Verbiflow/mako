@@ -7,7 +7,7 @@ import { GitDrafting } from "./drafting.js"
 import type { RecordHelperRun } from "./helper-tally.js"
 import { UtilityModelStore, utilityLegacyFiles } from "./utility-model-store.js"
 import type { UtilityWork } from "./utility-work.js"
-import { HARNESS_ORDER_LIMIT, UTILITY_TASKS } from "../contracts/utility-work.js"
+import { HARNESS_ORDER_LIMIT, THREAD_TITLES, UTILITY_TASKS } from "../contracts/utility-work.js"
 import {
   legacyUtilityModelDirectory,
   migrateUtilityModels,
@@ -80,6 +80,7 @@ export interface HarnessOrderPreference {
 }
 
 const UtilityChoiceSchema = z.tuple([z.enum(UTILITY_TASKS), z.string().min(1).max(400)])
+const ThreadTitlesChoiceSchema = z.enum(["on", "off"])
 const HarnessOrderSchema = z.array(z.string().min(1).max(40)).max(HARNESS_ORDER_LIMIT)
 
 export function installGitIpc(methods: MethodTable, context: GitIpcContext): void {
@@ -167,6 +168,7 @@ export function installGitIpc(methods: MethodTable, context: GitIpcContext): voi
     return { ...settings, work: tasks }
   })
   methods.handle("mako:utility-choice", async (task: string, choice: string) => {
+    if (task === THREAD_TITLES) return models.nameThreads(ThreadTitlesChoiceSchema.parse(choice) === "on")
     const [parsedTask, parsedChoice] = UtilityChoiceSchema.parse([task, choice])
     await work.choose(parsedTask, parsedChoice)
   })

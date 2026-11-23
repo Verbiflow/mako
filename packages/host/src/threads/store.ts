@@ -603,8 +603,16 @@ const PurposeRowSchema = z.object({ thread_id: z.string(), purpose: z.string(), 
  * and `frozen`); a title with no source came from a build that didn't say,
  * and counts as the user's. `original_title` is the name the Thread showed
  * before it was first renamed, and `title_revision` rises on every change.
- * The `auto_*` and `title_pending*` columns and `title_exchanges` held
- * those builds' automatic titles; this build neither shows nor writes
+ * A title Mako generated is `title` with source `auto` (`ThreadTitler`):
+ * builds from before it was shown read it as no name, as they always have.
+ * `auto_context` says how often a model was asked for it, `asked` after the
+ * first request and `settled` once nothing more is asked (as is anything
+ * else an older build left there); `auto_at` is when
+ * it was written; `title_pending` is the conversation a host is asking
+ * about now, `title_pending_by` that host and `title_pending_at` since
+ * when, for `TITLE_LEASE_MS`, so two hosts don't ask about one Thread.
+ * `auto_title` and `title_exchanges` held an older build's titles and the
+ * exchanges it kept for them; this build neither reads nor writes
  * them, and keeps them for builds that share the store.
  */
 const TITLE_COLUMNS = [
@@ -635,8 +643,17 @@ const TitleRowSchema = z.object({
 })
 type TitleRow = z.infer<typeof TitleRowSchema>
 const TITLE_ROW = "SELECT id, title, title_source FROM threads"
-/** A Thread without a name of its own; a title an older build wrote automatically isn't one. */
+/** A Thread without a name of its own; a title Mako generated isn't one, and a person's or a frozen name replaces it. */
 const UNNAMED = "(title IS NULL OR title_source IS 'auto')"
+/** The person decided the Thread's name: no model is asked for one again, and a host asking now has lost its claim. */
+const TITLE_SETTLED = "auto_context = 'settled', title_pending = NULL, title_pending_at = NULL, title_pending_by = NULL"
+/** How long a host's request for a Thread's title keeps other hosts from asking; a request ends well inside it. */
+export const TITLE_LEASE_MS = 90_000
+const GeneratedTitleRowSchema = z.object({
+  title: z.string().nullable(),
+  auto_context: z.string().nullable(),
+  title_pending_at: z.number().nullable(),
+})
 const TitleChangeRowSchema = z.object({ seq: z.number(), thread_id: z.string() })
 const ColumnRowSchema = z.object({ name: z.string() })
 const PurposeKindSchema = z.enum(["setup"])
@@ -2828,7 +2845,9 @@ export class ThreadStore {
   /**
    * The person's name for the Thread as a whole: the rail shows it, and
    * each Session keeps its own title on its tab. `original` is the name the
-   * row showed, kept if the Thread had none recorded.
+   * row showed, kept if the Thread had none recorded. It replaces a title
+   * Mako generated, and no model is asked for this Thread's title again,
+   * whatever one is being asked now and even once the name is dropped.
    */
   renameThread(input: { operationId: string; thread: ThreadId; title: string; actor: Actor; original?: string }): ThreadRecord {
     const title = input.title.trim()
@@ -2838,7 +2857,7 @@ export class ThreadStore {
         const thread = this.thread(input.thread)
         if (!thread) throw new Error("That Thread no longer exists")
         this.sql(`UPDATE threads SET title = ?, title_source = 'user', original_title = coalesce(original_title, ?),
-          title_revision = title_revision + 1, revision = revision + 1 WHERE id = ?`)
+          title_revision = title_revision + 1, revision = revision + 1, ${TITLE_SETTLED} WHERE id = ?`)
           .run(title, input.original?.trim() || null, thread.id)
         return { thread: thread.id }
       }, z.object({ thread: ThreadIdSchema }))
@@ -2848,14 +2867,14 @@ export class ThreadStore {
     })
   }
 
-  /** Drop the Thread's own name; its row shows its first Session's title again. */
+  /** Drop the Thread's name, its own or a generated one; its row shows its first Session's title again, and stays that way. */
   clearThreadTitle(input: { operationId: string; thread: ThreadId; actor: Actor }): ThreadTitleEntry {
     return this.write(() => {
       const cleared = this.receipt(input.operationId, "clear-thread-title", { thread: input.thread }, input.actor, () => {
         const thread = this.thread(input.thread)
         if (!thread) throw new Error("That Thread no longer exists")
         this.sql(`UPDATE threads SET title = NULL, title_source = NULL, title_revision = title_revision + 1,
-          revision = revision + 1 WHERE id = ?`).run(thread.id)
+          revision = revision + 1, ${TITLE_SETTLED} WHERE id = ?`).run(thread.id)
         return { thread: thread.id }
       }, z.object({ thread: ThreadIdSchema }))
       return this.titleEntry(cleared.thread) ?? { thread: cleared.thread, title: null }
@@ -2901,10 +2920,68 @@ export class ThreadStore {
     })
   }
 
-  /** Every Thread with a name of its own. */
+  /** Every Thread with a name: its own, or the one Mako generated. */
   titles(): ThreadTitleEntry[] {
-    return this.sql(`${TITLE_ROW} WHERE merged_into IS NULL AND NOT ${UNNAMED}`).all()
+    return this.sql(`${TITLE_ROW} WHERE merged_into IS NULL AND title IS NOT NULL`).all()
       .map((row) => titleEntry(TitleRowSchema.parse(row)))
+  }
+
+  /**
+   * Whether a model may still be asked for this Thread's title: it has no
+   * name, generated or its own, fewer than two requests were made for one,
+   * the person never decided its name, and no host is asking now. A read;
+   * `claimGeneratedTitle` decides.
+   */
+  generatedTitleOpen(id: ThreadId): boolean {
+    const thread = this.thread(id)
+    const found = thread && this.sql("SELECT title, auto_context, title_pending_at FROM threads WHERE id = ?").get(thread.id)
+    return found ? titleOpen(GeneratedTitleRowSchema.parse(found), this.now()) : false
+  }
+
+  /**
+   * Take the Thread for `holder` to ask a model its title once, about
+   * `conversation`. False when it isn't open (`generatedTitleOpen`). The
+   * request is counted here, before it is made, so a host that stops while
+   * asking has still asked: a Thread is asked about twice at most, by every
+   * host and across restarts.
+   */
+  claimGeneratedTitle(input: { thread: ThreadId; conversation: string; holder: string }): boolean {
+    return this.write(() => {
+      const thread = this.thread(input.thread)
+      if (!thread || thread.id !== input.thread) return false
+      const now = this.now()
+      return this.sql(`UPDATE threads SET auto_context = CASE WHEN auto_context IS NULL THEN 'asked' ELSE 'settled' END,
+        title_pending = ?, title_pending_at = ?, title_pending_by = ?
+        WHERE id = ? AND title IS NULL AND (auto_context IS NULL OR auto_context = 'asked')
+          AND (title_pending_at IS NULL OR title_pending_at <= ?)`)
+        .run(input.conversation, now, input.holder, thread.id, now - TITLE_LEASE_MS).changes > 0
+    })
+  }
+
+  /**
+   * The title a model gave for `holder`'s claim, written as the Thread's
+   * `auto` title. Undefined, and nothing written, when the claim is no
+   * longer `holder`'s or the Thread took a name meanwhile: a rename, a
+   * frozen name and another host's title all win over a late answer.
+   */
+  writeGeneratedTitle(input: { thread: ThreadId; holder: string; title: string }): ThreadTitleEntry | undefined {
+    const title = input.title.trim()
+    if (!title) return undefined
+    return this.write(() => {
+      const written = this.sql(`UPDATE threads SET title = ?, title_source = 'auto', auto_at = ?, auto_context = 'settled',
+        title_revision = title_revision + 1, title_pending = NULL, title_pending_at = NULL, title_pending_by = NULL
+        WHERE id = ? AND merged_into IS NULL AND title IS NULL AND title_pending_by = ?`)
+        .run(title, this.now(), input.thread, input.holder).changes > 0
+      return written ? this.titleEntry(input.thread) : undefined
+    })
+  }
+
+  /** Give `holder`'s claim back without a title: the request failed, or its answer wasn't one. */
+  releaseGeneratedTitle(input: { thread: ThreadId; holder: string }): void {
+    this.write(() => {
+      this.sql("UPDATE threads SET title_pending = NULL, title_pending_at = NULL, title_pending_by = NULL WHERE id = ? AND title_pending_by = ?")
+        .run(input.thread, input.holder)
+    })
   }
 
   /** One Thread's name, following merges; `title: null` when it has none. */
@@ -3590,7 +3667,8 @@ export class ThreadStore {
     if (!membership) return false
     const threadId = MembershipRowSchema.parse(membership).thread_id
     const thread = ThreadRowSchema.parse(this.sql("SELECT id, owner_id, title, title_source, revision, merged_into FROM threads WHERE id = ?").get(threadId))
-    if (thread.title !== null || thread.merged_into) return false
+    // A title Mako generated is no name of the Thread's own, so it holds nothing here.
+    if ((thread.title !== null && thread.title_source !== "auto") || thread.merged_into) return false
     return CountSchema.parse(this.sql("SELECT count(*) AS count FROM memberships WHERE thread_id = ?").get(threadId)).count === 1
   }
 
@@ -4188,11 +4266,17 @@ export class ThreadStore {
 
 interface JournalPath { path: string; harness: string; nativeId?: string }
 
-/** The Thread's own name, as `UNNAMED` reads it: an unsourced title is the user's, an automatic one isn't a name. */
+/** The Thread's name as a row shows it: an unsourced title is the user's, and one Mako generated says so (`auto`). */
 function titleEntry(row: TitleRow): ThreadTitleEntry {
   const thread = ThreadIdSchema.parse(row.id)
-  if (row.title === null || row.title_source === "auto") return { thread, title: null }
-  return { thread, title: row.title, source: row.title_source === "frozen" ? "frozen" : "user" }
+  if (row.title === null) return { thread, title: null }
+  return { thread, title: row.title, source: row.title_source ?? "user" }
+}
+
+/** `ThreadStore.generatedTitleOpen`, of the Thread's row at `now`. */
+function titleOpen(row: z.infer<typeof GeneratedTitleRowSchema>, now: number): boolean {
+  if (row.title !== null || (row.auto_context !== null && row.auto_context !== "asked")) return false
+  return row.title_pending_at === null || row.title_pending_at <= now - TITLE_LEASE_MS
 }
 
 function ownerColumns(owner: ExecutionOwner): ["device" | "cloud", string] {

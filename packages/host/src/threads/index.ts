@@ -32,6 +32,7 @@ export type { ThreadLifecycle, LiveThreads, NativeQueue } from "./lifecycle.js"
 export { SessionMemory, SessionHeldError, type ConversationEndpoint, type ConversationRoute, type SessionFacts } from "./session-memory.js"
 export type { ApexMessage, JournalFacts, KeptAnswer, KeptMark, KeptPullWake, MoveBegan, SourceRef, ThreadStore } from "./store.js"
 export { uniqueName } from "./store.js"
+export { ThreadTitler } from "./thread-titler.js"
 export { discardChatFolder, ensureChatsRoot, newChatFolder, standsForNoProject } from "./chat-folders.js"
 export { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 export type {

@@ -26,7 +26,7 @@ const storedSchema = connectionSchema.extend({ apiKey: apiKeySchema })
 const choiceSchema = z.string().min(1).max(400)
 const harnessIdSchema = z.string().regex(/^[a-z0-9][a-z0-9-]{0,39}$/)
 const harnessOrderSchema = z.array(harnessIdSchema).max(HARNESS_ORDER_LIMIT)
-const choicesSchema = z.object({ commit: choiceSchema.optional(), order: harnessOrderSchema.optional() })
+const choicesSchema = z.object({ commit: choiceSchema.optional(), order: harnessOrderSchema.optional(), titles: z.boolean().optional() })
 type StoredChoices = z.infer<typeof choicesSchema>
 
 /** A small JSON file read with `schema`, or undefined when it's missing, too big or not that shape. */
@@ -51,6 +51,7 @@ async function readChoices(path: string): Promise<{ raw: JsonObject; stored: Sto
   if (commit.success) stored.commit = commit.data
   const order = harnessOrderSchema.safeParse(raw["order"])
   if (order.success) stored.order = order.data
+  if (raw["titles"] === true) stored.titles = true
   return { raw, stored }
 }
 const credentialSchema = z.object({
@@ -144,7 +145,12 @@ export class UtilityModelStore {
     await this.ready
     const { stored } = await readChoices(this.choicesPath())
     // Older builds could choose a harness's model (`agent:<harness>/<model>`); drafts no longer run on one.
-    return { commit: !stored?.commit || stored.commit.startsWith("agent:") ? AUTOMATIC : stored.commit }
+    return { commit: !stored?.commit || stored.commit.startsWith("agent:") ? AUTOMATIC : stored.commit, ...(stored.titles && { titles: true }) }
+  }
+
+  /** Turn generated Thread titles on or off (`THREAD_TITLES`); off is the file without the choice. */
+  async nameThreads(on: boolean): Promise<void> {
+    await this.update(async (stored) => ({ ...stored, titles: on || undefined }))
   }
 
   async choose(task: UtilityTask, choice: string): Promise<void> {

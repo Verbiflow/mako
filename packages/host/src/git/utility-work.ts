@@ -77,7 +77,12 @@ export class UtilityWork {
         reason: found.kind === "unavailable" ? found.reason : undefined,
       }
     }
-    return { commit: state("commit") }
+    return { commit: state("commit"), titles: choices.titles === true }
+  }
+
+  /** Whether the person turned generated Thread titles on (`THREAD_TITLES`). */
+  async namesThreads(): Promise<boolean> {
+    return (await this.options.models.choices()).titles === true
   }
 
   /** Save what does `task`: `auto`, or one of the connections Settings lists now. */

@@ -416,6 +416,8 @@ export const STEPS = [
   [4, "tsx scripts/test-thread-groups-host.ts"],
   [2, "tsx scripts/test-thread-migration.ts"],
   [1, "tsx scripts/test-thread-names.ts"],
+  // A Thread's generated title: asked once, of an API connection alone, for a Thread nothing else named; and the row that shows it.
+  [1, "npm run -s test:thread-titles"],
   [6, "tsx scripts/test-thread-store-hosts.ts"],
   [1, "tsx scripts/test-thread-store-read-only.ts"],
   [2, "tsx scripts/test-thread-store.ts"],
