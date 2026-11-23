@@ -446,6 +446,8 @@ export interface AgentsDeps {
   apexAnswerMs?: number
   /** `FOCUS_MS`: how long a working Apex's turn runs before what waits for its end is steered in once; shorter in tests. */
   focusMs?: number
+  /** `HOLD_RESULTS_MS`: how long results that ask nothing wait for the Fins still at work; shorter in tests. */
+  holdMs?: number
   /** How long a working Fin may show no activity before its Apex hears it (`QuietWatch`); `QUIET_MS` without it. */
   quietMs?: number
   /**
@@ -955,13 +957,17 @@ export class Agents implements AgentOperations, ConversationChildren {
       ready: (conversation) => this.ready(conversation),
       moving: (conversation) => [...this.moving].some((key) => key.startsWith(`${conversation}:`)),
       awaited: (notice) => [...this.holds].some((hold) => notice.id === `notice:${hold.child}:${notice.report.id}`),
+      working: (conversation, but) => this.finsAtWork(conversation, but),
+      onNews: (conversation) => Boolean(deps.live.held(conversation)?.requests.find((request) => request.status === "dispatching")?.digest),
+      waitedFor: (notice) => Boolean(this.store()?.armedTurnWaits().some((wait) => wait.items.some((item) => item.kind === "fin" && item.fin === notice.report.child))),
       lastSent: (conversation) => ((deps.live.held(conversation) ?? deps.live.snapshot(conversation))?.requests ?? []).reduce<number | undefined>((last, request) =>
         request.digest?.sentAt !== undefined && (last === undefined || request.digest.sentAt > last) ? request.digest.sentAt : last, undefined),
       // Read in when it isn't loaded: after a restart the Apex's queue is the receipt a notice is checked against. A digest
       // sent again says what the one it repeats said, so later news goes on its own.
       // Memory first: a notice for an Apex in memory reads nothing in, and one that isn't is read in before (`noticeOf`).
       unsent: (conversation) => ((deps.live.held(conversation) ?? deps.live.snapshot(conversation))?.requests ?? []).flatMap((request) =>
-        request.digest && !request.continues?.brief && (request.status === "queued" || request.status === "held") ? [{ id: request.id, ...carriedDigest(request.digest) }] : []),
+        request.digest && !request.continues?.brief && (request.status === "queued" || request.status === "held")
+          ? [{ id: request.id, ...carriedDigest(request.digest), ...(request.status === "held" && request.wake?.after === DIGEST_WAITS && request.wake.since !== undefined && { held: request.wake.since }) }] : []),
       // A digest folded into another turn (`joinedInto`) carries its notices there.
       carried: (conversation, notice) => Boolean((deps.live.held(conversation) ?? deps.live.snapshot(conversation))?.requests.some((request) =>
         (request.status !== "canceled" || request.joinedInto !== undefined) && request.digest?.notices.some((carried) => carried.id === notice))),
@@ -970,16 +976,18 @@ export class Agents implements AgentOperations, ConversationChildren {
         if (deps.live.snapshot(conversation)?.requests.some((asked) => asked.id === request)) return
         deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, actor, {
           digest: { notices: [...notices], ...(lines?.length && { lines: [...lines] }) },
-          ...hold === "paused" ? { pause: "stop" as const } : hold && { wake: { at: hold.at, after: DIGEST_WAITS } },
+          ...hold === "paused" ? { pause: "stop" as const } : hold && { wake: { at: hold.at, after: DIGEST_WAITS, ...(hold.since !== undefined && { since: hold.since }) } },
         })
         // An idle Apex's digest goes when its burst's window ends: a provider that sleeps wakes through the window, not
         // after it. One paused for a stopped Fin wakes nothing, and the conversation says no to what it wouldn't send.
-        if (hold && hold !== "paused") deps.live.expect?.(conversation, request)
+        // Nor does one held for the Fins still at work, minutes from going.
+        if (hold && hold !== "paused" && hold.since === undefined) deps.live.expect?.(conversation, request)
       },
-      rewrite: (conversation, request, text, notices, lines) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices], ...(lines?.length && { lines: [...lines] }) }),
+      rewrite: (conversation, request, text, notices, lines, free) => deps.live.rewriteWaiting(conversation, request, text, { notices: [...notices], ...(lines?.length && { lines: [...lines] }) }, free),
       steer: (conversation, id, text) => this.steer(conversation, id, text),
       steerQueued: (conversation, id, request, text) => this.steerQueuedDigest(conversation, id, request, text),
       ...(deps.focusMs !== undefined && { focusMs: deps.focusMs }),
+      ...(deps.holdMs !== undefined && { holdMs: deps.holdMs }),
       assign: (reports, request) => {
         this.store()?.assignWake(reports.filter(stored), request)
         for (const id of reports) if (id.startsWith(HELD_PREFIX)) this.heldIn(id.slice(HELD_PREFIX.length), request)
@@ -1625,7 +1633,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     // A turn that ended mid-wait left no one to answer: the Fin's result wakes it instead.
     for (const hold of this.holds) if (hold.apex === conversation) hold.end()
     this.apexReplied(conversation, request)
-    this.wakes.settled(conversation)
+    // A turn its Fins' news alone started isn't one of its own: what's held for the Fins still at work stays held through it.
+    this.wakes.settled(conversation, !this.deps.live.held(conversation)?.requests.find((asked) => asked.id === request)?.digest)
     // It can take input again: a turn wait's note it couldn't take goes now.
     this.turnWaits.retry(conversation)
     const child = this.childOfConversation(conversation)
@@ -7261,6 +7270,26 @@ export class Agents implements AgentOperations, ConversationChildren {
     return full && startRateWords(full, full.started, full.frees, this.now())
   }
 
+
+  /**
+   * Whether a Fin of the Apex `conversation` other than `but` is working, starting, or queued and able to start: the
+   * ones a result that asks nothing is held for (`AgentWakes`). A start that waits on a Fin that failed never goes.
+   */
+  private finsAtWork(conversation: string, but?: string): boolean {
+    const store = this.store()
+    const thread = store?.journalPlacement(conversation)?.thread
+    if (!store || !thread) return false
+    if (store.edges().children(thread).some((edge) => {
+      if (edge.child === but || edge.closedAt !== undefined) return false
+      const kind = this.stateOf(edge).kind
+      if (kind === "working" || kind === "starting") return true
+      // One whose turn was cut short, by Mako's own exit too, isn't through: Mako continues it, or its Apex is asked
+      // (`watchCut`). Read as at rest, the host's exit would send what its Apex's queue holds for it.
+      const own = kind === "idle" ? this.conversationOf(edge.child) : undefined
+      return own !== undefined && this.deps.live.turnCut(own)
+    })) return true
+    return this.heldFor(thread).some(({ queued }) => !queued.held && !queued.refused)
+  }
 
   /** The digest's last line, for the parent `conversation`. */
   private counts(conversation: string): string {

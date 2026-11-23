@@ -601,13 +601,17 @@ export class LiveConversations {
   /**
    * An unsent message of `id` says `text` now, carrying `digest`, its place and its hold kept: an Apex's digest a
    * notice joined before it went (`AgentWakes`). With no notices left it's taken back. False when it went meanwhile.
+   * `free`: one held for its Fins still at work (`RequestWake.since`) is held no longer, and its time is now, which the
+   * one timer sends as it sends any whose time came.
    */
-  rewriteWaiting(id: string, requestId: string, text: string, digest: NonNullable<LiveRequest["digest"]>): boolean {
+  rewriteWaiting(id: string, requestId: string, text: string, digest: NonNullable<LiveRequest["digest"]>, free = false): boolean {
     const resident = this.records.get(id)
     const request = resident?.snapshot.requests.find((candidate) => candidate.id === requestId)
     if (!resident || !request || (request.status !== "queued" && request.status !== "held")) return false
+    const freed = free && request.wake?.after === DIGEST_WAITS && request.wake.since !== undefined
     // A question joining a digest the budget holds takes it along, within the burst's window (`digestAsks`).
-    const wake = request.wake?.after === DIGEST_WAITS && digestAsks(digest.notices) ? { ...request.wake, at: Math.min(request.wake.at, Date.now() + WAKE_COALESCE_MS) } : request.wake
+    const wake = freed ? { at: Math.min(request.wake!.at, Date.now()), after: DIGEST_WAITS }
+      : request.wake?.after === DIGEST_WAITS && digestAsks(digest.notices) ? { ...request.wake, at: Math.min(request.wake.at, Date.now() + WAKE_COALESCE_MS) } : request.wake
     const next: LiveRequest = digest.notices.length
       ? { ...request, wake, text, digest: { ...digest, ...(request.digest?.resting && { resting: true as const, ...(request.digest.nextTry !== undefined && { nextTry: request.digest.nextTry }) }) }, inputDigest: promptFingerprint(text, request.attachments, request.tuning) }
       : { ...request, status: "canceled" }

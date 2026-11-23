@@ -429,7 +429,9 @@ function QueueRow({
       {request.status === "held" && !editing && !request.signIn && !limitWait ? (
         <p className="mt-1 text-label text-faint" data-queue-wake={request.wake?.at ?? request.retry?.at} data-queue-retry={request.retry?.cause}>
           {request.wake?.after === DIGEST_WAITS
-            ? "Your Fins' news, going in a moment with whatever else they say."
+            ? request.wake.since !== undefined
+              ? "Your Fins' news, going when the rest finish or with your next message."
+              : "Your Fins' news, going in a moment with whatever else they say."
             : request.wake
             ? `Sends by itself at ${clockText(request.wake.at)}, when the usage limit resets`
             : request.retry

@@ -31,6 +31,12 @@ export const FOCUS_MS = 2 * 60_000
 /** An idle Apex waits this long after a notice for the others of its burst, then wakes once for all of them. */
 export const WAKE_COALESCE_MS = 2_000
 /**
+ * A result that asks its Apex nothing, after the first of a run of them, waits for the others still at work, and they go
+ * as one digest: at the latest this long after the first one held (`AgentWakes`). Twelve Fins finishing over ten
+ * minutes were twelve digests and twelve turns of their Apex before this, each a turn's tokens and a block of its chat.
+ */
+export const HOLD_RESULTS_MS = 5 * 60_000
+/**
  * A Fin that reads as working with nothing from it this long (no output, no step, no report) is named to its Apex once,
  * in its digest (`QuietWatch`): a hung turn otherwise reads as working until the person asks. A command that runs this
  * long makes no activity either, so the notice names it and the Apex decides.

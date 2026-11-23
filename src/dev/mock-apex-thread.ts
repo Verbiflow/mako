@@ -436,6 +436,7 @@ const WAKE_TEXT = appendFinReports(
  * `&wake=afternoon`: six wakes between two of the person's messages, as a dozen Fins report through an afternoon.
  * The first the Apex answers at length, so it stands as a turn; the five after it are a remark each, one on a
  * failure, one with a message it sent, the last the wake every scene has. They read as one row (`foldReportRuns`).
+ * With `&last=wake` nothing follows that last wake, which then stands as the newest turn under a row of four.
  */
 const AFTERNOON_WAKE = new URLSearchParams(globalThis.location?.search).get("wake") === "afternoon"
 const AFTERNOON: { minutes: number; reports: Parameters<typeof appendFinReports>[1]; said: string; sent?: string }[] = [
@@ -536,8 +537,10 @@ export function apexSnapshot(): LiveSnapshot {
   const earlier = search.has("journal") ? journalTurns(search.get("journal")!) : earlierTurns(Number(search.get("turns") ?? 0))
   // Where a bench's cold open starts: the scene is built, the window not yet drawn.
   performance.mark("mock-apex-scene")
+  // `last=wake`: the person hasn't written since the wake, so the transcript ends on what its Fins reported.
+  const endsOnWake = search.get("last") === "wake"
   // `idle=1`: its turn over, as between the person's messages.
-  const idle = search.get("idle") === "1"
+  const idle = search.get("idle") === "1" || endsOnWake
   const first = { id: "1ead1ead-7000-4000-8000-000000000001", createdAt: STARTED, text: "Split the phone polish list into Threads and see them through. Ask me only for what you can't decide.", attachments: [], status: "completed" as const }
   const routed = { id: "1ead1ead-7000-4000-8000-000000000002", createdAt: ROUTED_AT, text: ROUTED_WORDS, attachments: [], status: "completed" as const }
   const wake = { id: "1ead1ead-7000-4000-8000-000000000004", createdAt: WAKE_AT, text: WAKE_TEXT, attachments: [], status: "completed" as const }
@@ -579,7 +582,7 @@ export function apexSnapshot(): LiveSnapshot {
     sessionId: APEX_SESSION,
     base: null,
     permissions: [],
-    requests: [...earlier.requests, first, routed, ...afternoon.map((wake) => wake.request), wake, request],
+    requests: [...earlier.requests, first, routed, ...afternoon.map((wake) => wake.request), wake, ...(endsOnWake ? [] : [request])],
     blocks: [
       ...earlier.blocks,
       { type: "user", text: first.text, requestId: first.id },
@@ -599,8 +602,7 @@ export function apexSnapshot(): LiveSnapshot {
             { type: "event" as const, ...membershipLine({ kind: "stopped", fin: "Haptics audit" }) },
           ]
         : []),
-      { type: "user", text: request.text, requestId: request.id },
-      { type: "text", text: "Reading the digest." },
+      ...(endsOnWake ? [] : [{ type: "user" as const, text: request.text, requestId: request.id }, { type: "text" as const, text: "Reading the digest." }]),
     ],
     control: {
       activeBindingId: APEX_CONVERSATION,
