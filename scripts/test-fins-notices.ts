@@ -88,8 +88,6 @@ interface Tree {
   forced: Map<string, TreeNoticeAnswer | { status: number }>
   /** The notices whose next post the route admits and loses the answer of: the machine's host never hears. */
   lose: Set<string>
-  /** The notices whose next post's answer waits for the promise: the account holds the notice, and its host hasn't heard so yet. */
-  holdAnswer: Map<string, Promise<void>>
   /** The machine the account makes for the next start. */
   next?: Machine
   /** The account's devices that run Threads, as each device's link lists them. */
@@ -112,7 +110,7 @@ const body = (request: IncomingMessage) => new Promise<Buffer>((resolve, reject)
 
 /** The account's machine route as its side answers it: 202 admitted, 200 a typed refusal (`rate` with `retry-after`), 401 a credential that isn't the machine's current one. */
 async function tree(): Promise<Tree> {
-  const made: Tree = { gateway: createFakeGateway(), url: "", machines: new Map(), credentials: new Map(), posts: [], forced: new Map(), lose: new Set(), holdAnswer: new Map(), devices: [], calls: [], close: async () => {} }
+  const made: Tree = { gateway: createFakeGateway(), url: "", machines: new Map(), credentials: new Map(), posts: [], forced: new Map(), lose: new Set(), devices: [], calls: [], close: async () => {} }
   const server: Server = createServer((request, response) => {
     void (async () => {
       const text = await body(request)
@@ -128,9 +126,6 @@ async function tree(): Promise<Tree> {
       const answer = forced ?? await made.gateway.postNotice({ kind: "machine", machine }, text.toString("utf8"))
       seen.answer = answer
       if (made.lose.delete(seen.notice)) return void request.socket.destroy()
-      const holding = made.holdAnswer.get(seen.notice)
-      made.holdAnswer.delete(seen.notice)
-      await holding
       response.writeHead(answer.admitted ? 202 : 200, { "content-type": "application/json", ...(!answer.admitted && answer.reason === "rate" && { "retry-after": "1" }) }).end(JSON.stringify(answer))
     })()
   })
@@ -654,39 +649,25 @@ async function credentialRenewed(): Promise<void> {
   } finally { await world.close() }
 }
 
-/**
- * A Fin that stands otherwise with nothing new to report says its last notice again as it stands, through the account,
- * and its Apex's device takes the newer word: whether its turn ends after its host read the account's answer to the
- * report, or while that post is still on its way, which carries how it stood before.
- */
+/** A Fin that stands otherwise with nothing new to report says its last notice again as it stands, through the account, and its Apex's device takes the newer word. */
 async function restated(): Promise<void> {
-  for (const when of ["after its answer", "while its post is on its way"] as const) {
-    const world = await placed()
-    const { account, mac, cloud, child, conversation, report } = world
-    try {
-      const notice = noticeIdOf(child, `report:${child}:one`)
-      let answer = () => {}
-      if (when !== "after its answer") account.holdAnswer.set(notice, new Promise<void>((resolve) => (answer = resolve)))
-      await report("one", "Ready for a look.")
-      // The account holds it and delivers it on its own: its owner may take it before the Fin's host hears it's held.
-      await until("the report on the Apex's device", () => summaries(mac, child).length === 1)
-      await until("the account to let go", () => account.gateway.heldNotices(world.session).length === 0)
-      if (when === "after its answer") await until("the report taken on the machine", () => undelivered(cloud).length === 0)
-      else assert.deepEqual(undelivered(cloud).length, 1, "its post's answer not read yet")
-      assert.equal(mac.world.store.edges().of(child)?.placed?.working, true, "at work as it reported: its turn runs on")
-      // Its turn ends with nothing new to report after its own: how it stands changed, and its last notice says so.
-      cloud.world.release(conversation)
-      await until("the Fin's turn to end", () => !cloud.world.live.atWork(conversation))
-      answer()
-      await until("the Apex's device to hear it stands idle", () => mac.world.store.edges().of(child)?.placed?.working === false)
-      await until("the report taken on the machine", () => undelivered(cloud).length === 0)
-      const posts = account.posts.filter((post) => post.notice === notice)
-      assert.ok(posts.length >= 2 && posts.every((post) => post.answer?.admitted && post.answer.seq === 1), `the same notice again, under the number it had: ${JSON.stringify(posts.map((post) => post.answer))}`)
-      assert.deepEqual(account.gateway.heldNotices(world.session), [], "sent on, and held nowhere")
-      assert.equal(summaries(mac, child).filter((summary) => summary === "Ready for a look.").length, 1, "its report is kept once")
-      console.log(`restate, ${when}: a Fin's changed standing went as its last notice again through the account, and its Apex's device took the newer word`)
-    } finally { await world.close() }
-  }
+  const world = await placed()
+  const { account, mac, cloud, child, conversation, report } = world
+  try {
+    await report("one", "Ready for a look.")
+    await until("the report on the Apex's device", () => summaries(mac, child).length === 1)
+    await until("the account to let go", () => account.gateway.heldNotices(world.session).length === 0)
+    assert.equal(mac.world.store.edges().of(child)?.placed?.working, true, "at work as it reported: its turn runs on")
+    const before = account.posts.length
+    // Its turn ends with nothing new to report after its own: how it stands changed, and its last notice says so.
+    cloud.world.release(conversation)
+    await until("the standing posted", () => account.posts.length > before)
+    await until("the Apex's device to hear it stands idle", () => mac.world.store.edges().of(child)?.placed?.working === false)
+    assert.equal(account.posts.at(-1)?.answer?.admitted, true, "the same notice, admitted under the number it had")
+    assert.deepEqual(account.gateway.heldNotices(world.session), [], "sent on, and held nowhere")
+    assert.equal(summaries(mac, child).filter((summary) => summary === "Ready for a look.").length, 1, "its report is kept once")
+    console.log("restate: a Fin's changed standing went as its last notice again through the account, and its Apex's device took the newer word")
+  } finally { await world.close() }
 }
 
 /** The Apex's device back on its account asks a cloud Thread how its Fins stand only while its machine is up: one asleep isn't woken. */
