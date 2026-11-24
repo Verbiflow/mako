@@ -4,6 +4,7 @@ import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
 import { cn } from "@/lib/utils"
 import type { LiveSteering } from "@/lib/types"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
+import { COMPOSER_BOX, COMPOSER_COLUMN, COMPOSER_CONTROLS, ComposerStatus } from "@/components/composer/composer-frame"
 import { useApexStop } from "@/components/composer/stop-apex"
 import { Ticking } from "@/components/ui/ticking"
 import { usePrefs } from "@/state/prefs"
@@ -44,13 +45,13 @@ export interface EditingQueued {
 }
 
 /**
- * The web's composer, one for every place a message is written: a Thread's, a quiet Mac's, and a new Thread's. One card,
- * as the desk's composer is one tile: `+` opens the phone's own picker (photos, camera, files); the field grows with its
- * words; the mic sits beside the one send button, which changes with the situation (`send-action.ts`): Send, Stop while
- * the agent works and the field is empty, Queue or Steer while it works and the field has words (held, both), ✓ while a
- * queued message is being edited. A Thread's card carries its model and access under its field (`tools`), as the desk's
- * composer does; a new Thread's adds where above the field (`header`). `onSend` says whether the message went; one that
- * didn't stays in the field.
+ * The web's composer, one for every place a message is written: a Thread's, a quiet Mac's, and a new Thread's, on a
+ * phone, a tablet and a laptop's browser. It is the desktop's box (`composer-frame.tsx`): the field, then one control
+ * row of `+` (the phone's own picker: photos, camera, files), the harness and model (`tools`), the mic and the one send
+ * button, which changes with the situation (`send-action.ts`): Send, Stop while the agent works and the field is empty,
+ * Queue or Steer while it works and the field has words (held, both), ✓ while a queued message is being edited. Under
+ * the box, the status line says where it runs and its access in words (`status`). `onSend` says whether the message
+ * went; one that didn't stays in the field.
  */
 export function Composer({
   placeholder,
@@ -63,6 +64,7 @@ export function Composer({
   attach = true,
   header,
   tools,
+  status,
   autoFocus = false,
   sendLabel = "Send",
   desk = false,
@@ -87,15 +89,17 @@ export function Composer({
   /** Whether a message can go yet: the field takes words before (a new Thread's place still being read), Send waits. */
   sendable?: boolean
   attach?: boolean
-  /** Inside the card, above the field: where a new Thread starts. */
+  /** Inside the box, over the field: the Session the words go to, where a Thread has more than one. */
   header?: ReactNode
-  /** Inside the card, in a bar under the field with `+`, the mic and the send button: what it runs with. */
+  /** The control row under the field, between `+` and the mic and send: the harness and model it runs with. */
   tools?: ReactNode
+  /** The status line under the box: where it runs and the access level, in words, each still the control it was. */
+  status?: ReactNode
   autoFocus?: boolean
   sendLabel?: string
   /**
-   * On a laptop's browser: the desktop composer's tile, square and full width, its field in the prose size, Enter
-   * sending (Shift+Enter a new line), and the desktop's own send button.
+   * On a laptop's browser: Enter sends (Shift+Enter a new line), the desktop's own send button, no dictation, and the
+   * desktop's control sizes.
    */
   desk?: boolean
   /** Where its words are kept until they're sent (`drafts.ts`): they outlive the screen, the page and a reload. */
@@ -380,15 +384,20 @@ export function Composer({
           {over ? `Too large to send from a phone yet: ${kilobytes(budget)} of ${kilobytes(ATTACHMENT_BUDGET)}.` : (problem ?? dictation.failure)}
         </p>
       ) : null}
+      {/*
+       * The desktop's composer, from its own geometry (`composer-frame.tsx`): one square box on the pane's surface with
+       * a hairline frame, the draft, then one control row; under the box the status line of where and how it runs. On
+       * every form the same; under a finger its controls are a thumb's size (`web-client.css`).
+       */}
       <form
-        className="web-composer"
+        className={cn(COMPOSER_COLUMN, "web-composer")}
         data-desk={desk || undefined}
         onSubmit={(event) => {
           event.preventDefault()
           void send()
         }}
       >
-        <div className={cn("web-composer-field", dictation.listening && "web-listening")} data-tools={tools !== undefined || undefined} data-editing={editing ? "" : undefined}>
+        <div className={cn(COMPOSER_BOX, "web-composer-field", dictation.listening && "web-listening")} data-editing={editing ? "" : undefined}>
           {editing ? (
             <div className="web-composer-editing" role="status">
               <PencilIcon aria-hidden className="size-3.5 shrink-0" />
@@ -398,9 +407,8 @@ export function Composer({
               </button>
             </div>
           ) : null}
+          {header}
           {attachments}
-          {desk ? null : header}
-          {tools === undefined ? addButton : null}
           <textarea
             ref={input}
             value={text}
@@ -430,30 +438,20 @@ export function Composer({
               }
             }}
           />
-          {tools !== undefined ? (
-            <div className="web-composer-bar">
-              {recording ?? (
-                <>
-                  {addButton}
-                  {desk ? header : null}
-                  <div className="web-composer-tools">{tools}</div>
-                  {mic}
-                </>
-              )}
-              {action}
-            </div>
-          ) : recording ? (
-            <div className="web-composer-recording">
-              {recording}
-              {action}
-            </div>
-          ) : (
-            <span className="web-composer-actions">
-              {mic}
-              {action}
-            </span>
-          )}
+          <div className={cn(COMPOSER_CONTROLS, "web-composer-bar")} data-composer-controls>
+            {recording ?? (
+              <>
+                {addButton}
+                {/* Not the desktop's scrolling row: its one chip truncates instead, and its touch reaches past it. */}
+                <div className="web-composer-tools">{tools}</div>
+                {mic}
+              </>
+            )}
+            {action}
+          </div>
         </div>
+        {/* Under a finger the status line is a thumb's 44 px, its facts as tall (`web-client.css`). */}
+        <ComposerStatus className="web-composer-status pointer-coarse:mb-0 pointer-coarse:h-11">{status}</ComposerStatus>
       </form>
     </div>
   )

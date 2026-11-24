@@ -1,6 +1,6 @@
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
 import { ComposerAdditions } from "@/components/composer/composer-additions"
-import { ComposerRouting } from "@/components/composer/composer-routing"
+import { ComposerPlace, ComposerRouting } from "@/components/composer/composer-routing"
 import { COMPOSER_BOX, COMPOSER_COLUMN, COMPOSER_CONTROLS, COMPOSER_INPUT, COMPOSER_ROUTING, ComposerStatus } from "@/components/composer/composer-frame"
 import { cn } from "@/lib/utils"
 import { harnessTitle } from "@/components/composer/harness-title"
@@ -93,7 +93,9 @@ export function PaneComposer() {
           </div>
         </div>
       </div>
-      <ComposerStatus still />
+      <ComposerStatus still>
+        <ComposerPlace />
+      </ComposerStatus>
       </div>
     </div>
   )

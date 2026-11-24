@@ -72,7 +72,7 @@ Use these; don't redraw them.
 | A list of an Apex's Fins | the Shiver card (`viewer/shiver-card.tsx`): needs you, working, queued, failed; done and idle folded. A row's time is how long the Fin has stood as it does (`since`): a working one's current turn, never its age |
 | A row of a rail's fixed top | `RailRow` (`rail/rail-row.tsx`): the left rail's New thread and Inbox, the right rail's Changes and Files |
 | A message | `Prompt` and `FinReports` (`transcript/`), the avatar beside the message's last line |
-| The composer | the same in every view (`composer-frame.tsx`): in the transcript's column, one square box on the pane's surface with a hairline frame, the draft, then one row of plus, harness and model with its reasoning, send; under the box a quiet status line of where and how the work runs (this Mac or the cloud, the folder or branch, the access level in words, `--caution` only for full access) and the context reading at its end |
+| The composer | the same in every view and on every client (`composer-frame.tsx`; the web app's `web-client/composer.tsx` draws the same box, its controls a finger's size on a phone or an iPad): in the transcript's column, one square box on the pane's surface with a hairline frame, the draft, then one row of plus, harness and model with its reasoning, send; under the box a quiet status line of where and how the work runs (this Mac or the cloud, the folder or branch, the access level in words, `--caution` only for full access) and the context reading at its end |
 
 ## The rails and tabs
 

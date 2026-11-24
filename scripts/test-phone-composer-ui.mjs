@@ -16,7 +16,8 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * - "Switched to" lines come from the Session's record, so a reload draws the same ones.
  * - The queue's actions, the steps line and the edit's Cancel are 44 px targets.
  * - The queue's count is said once, by the queue; a phone's transcript keeps no rail of turns, nor a gutter for one.
- * - The model, its effort and the access are one chip ("GPT-5.6 Sol · High", a caution mark under Full access) opening
+ * - The model and its effort are one chip in the control row ("GPT-5.6 Sol High"), the access in words under the box
+ *   (Full access in the caution hue), both opening
  *   one sheet: the harness's models, the chosen one's effort levels and nothing for a model without, the access as its
  *   last row. A choice made there goes with the next message; an access change the owner refuses says why. A flick
  *   down closes it.
@@ -119,11 +120,15 @@ async function checkPhone() {
   }
 
   const sheet = '[role="dialog"][aria-label="Model and access"]'
-  /** The chip as it reads: the model, its effort suffix, and whether it carries the caution mark. */
+  /**
+   * The chip as it reads: the model and its effort, as the desktop's composer reads them, and whether the access on the
+   * status line under the box is the caution-coloured full access.
+   */
   const chip = () => evaluate(`(() => {
     const chip = document.querySelector('[data-thread-chip="settings"]')
     const words = chip.querySelector('.truncate')
-    return { model: words.textContent, effort: chip.querySelector('.web-settings-chip-effort')?.textContent ?? null, risky: Boolean(chip.querySelector('[data-risky-mark]')), cut: words.scrollWidth > words.clientWidth, spoken: chip.getAttribute('aria-label') }
+    const access = document.querySelector('[data-composer-status] [data-thread-chip="access"]')
+    return { model: words.textContent, effort: chip.querySelector('.web-settings-chip-effort')?.textContent ?? null, risky: access?.dataset.access === 'full' && Boolean(access.querySelector('[data-risky-mark]')), cut: words.scrollWidth > words.clientWidth, spoken: chip.getAttribute('aria-label'), access: access?.textContent ?? null }
   })()`)
   /** The effort levels the sheet offers, and the one chosen. */
   const efforts = () => evaluate(`(() => {
@@ -161,7 +166,18 @@ async function checkPhone() {
     const bar = await evaluate("[...document.querySelector('.web-composer-bar').querySelectorAll('button')].filter(node => node.offsetParent).map(node => node.dataset.threadChip ? 'chip' : node.dataset.sendAction ? 'send' : node.getAttribute('aria-label'))")
     assert.deepEqual(bar, ["Add photos or files", "chip", "Dictate", "send"], `the composer's bar: ${JSON.stringify(bar)}`)
     let read = await chip()
-    assert.deepEqual([read.model, read.effort, read.risky, read.cut], ["GPT-5.6 Sol", "· High", false, false], `the chip reads the model and its effort, whole: ${JSON.stringify(read)}`)
+    assert.deepEqual([read.model, read.effort, read.risky, read.cut], ["GPT-5.6 Sol", "High", false, false], `the chip reads the model and its effort, whole: ${JSON.stringify(read)}`)
+    assert.equal(read.access, "Ask before acting", "the access in words on the status line under the box")
+    // The desktop's composer (`composer-frame.tsx`): one framed box holding the field and one control row, then the
+    // status line under it, the send the desktop's own sea square.
+    const frame = await evaluate(`(() => {
+      const box = document.querySelector('.web-composer .composer-box')
+      const status = document.querySelector('.web-composer [data-composer-status]')
+      return { box: Boolean(box), field: Boolean(box?.querySelector('.web-composer-input')), controls: Boolean(box?.querySelector('[data-composer-controls] [data-send-action]')), statusUnder: Boolean(status) && box.compareDocumentPosition(status) === Node.DOCUMENT_POSITION_FOLLOWING && !box.contains(status), send: Boolean(document.querySelector('[data-send-action].composer-send')), corners: getComputedStyle(box).borderRadius }
+    })()`)
+    assert.deepEqual(frame, { box: true, field: true, controls: true, statusUnder: true, send: true, corners: "0px" }, `the desktop's composer frame: ${JSON.stringify(frame)}`)
+    const accessReach = await evaluate(`(() => { const node = document.querySelector('[data-thread-chip="access"]'); const r = node.getBoundingClientRect(); const x = r.left + r.width / 2; return r.height >= 44 && [r.top + 1, r.bottom - 1].every(y => node.contains(document.elementFromPoint(x, y))) })()`)
+    assert.ok(accessReach, "the access takes a touch 44 px tall")
     assert.equal(read.spoken, "Model and access: GPT-5.6 Sol, High reasoning, Ask before acting")
     const reach = await evaluate(`(() => { const chip = document.querySelector('[data-thread-chip="settings"]'); const r = chip.getBoundingClientRect(); const x = r.left + r.width / 2; return [r.top - 3, r.bottom + 3].every(y => chip.contains(document.elementFromPoint(x, y))) })()`)
     assert.ok(reach, "the chip takes a touch 44 px tall")
@@ -170,7 +186,12 @@ async function checkPhone() {
 
     await phone("dark")
     read = await chip()
-    assert.deepEqual([read.model, read.effort, read.risky], ["GPT-5.6 Sol", "· High", true], `under Full access the chip carries the caution mark: ${JSON.stringify(read)}`)
+    assert.deepEqual([read.model, read.effort, read.risky, read.access], ["GPT-5.6 Sol", "High", true, "Full access"], `under Full access the status line says so in the caution hue: ${JSON.stringify(read)}`)
+    assert.equal(await evaluate(`document.querySelector('[data-thread-chip="access"]').dataset.access`), "full", "full access is the one the status line colours")
+    // Pressed, the access opens the one sheet with its row already open.
+    await tap('[data-thread-chip="access"]')
+    await until(`document.querySelector('${sheet} [data-access-row]')?.getAttribute('aria-expanded') === 'true'`, "the sheet opened at the access")
+    await flickDown()
     await evaluate("document.activeElement?.blur(), true")
     await capture("composer-full-access-iphone-dark.png")
 
@@ -194,7 +215,7 @@ async function checkPhone() {
     await tap(`${sheet} [data-effort] [data-value="medium"]`)
     await until(`document.querySelector('${sheet} [data-effort] [aria-checked="true"]')?.dataset.value === 'medium'`, "Medium chosen")
     read = await chip()
-    assert.deepEqual([read.model, read.effort], ["GPT-5.6 Luna", "· Medium"], `the chip follows the sheet: ${JSON.stringify(read)}`)
+    assert.deepEqual([read.model, read.effort], ["GPT-5.6 Luna", "Medium"], `the chip follows the sheet: ${JSON.stringify(read)}`)
 
     // The access: one row saying what it allows; tapped, the other levels open under it.
     assert.match(await evaluate(`document.querySelector('${sheet} [data-access-row]').textContent`), /Full access.*Nothing waits for approval/)
@@ -203,7 +224,7 @@ async function checkPhone() {
     assert.deepEqual(await evaluate(`[...document.querySelectorAll('${sheet} [data-access-mode]')].map(node => node.dataset.accessMode)`), ["read-only", "auto"])
     await capture("sheet-access-iphone-dark.png")
     await tap(`${sheet} [data-access-mode="auto"]`)
-    await until("!document.querySelector('[data-thread-chip=\"settings\"] [data-risky-mark]')", "the caution mark gone with Full access")
+    await until("document.querySelector('[data-thread-chip=\"access\"]')?.dataset.access !== 'full'", "the status line's caution gone with Full access")
     assert.match(await evaluate(`document.querySelector('${sheet} [data-access-row]').textContent`), /^Ask before acting/)
 
     // Refused by the owner, the access stays where the Session is and says why.
