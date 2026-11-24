@@ -14,7 +14,7 @@ import { checkInboxNavigation } from "./lib/inbox-navigation-ui.mjs"
  * polish" and its twelve Fins): the rows in order with no view switch under them, the Inbox's count equal to the
  * needs-you facts the marks read (each Fin blocked on the person, each Thread whose status needs the person), an
  * answer in the Inbox reaching the Apex's host and moving that Fin to working in the Inbox and the rail at once,
- * Cmd+Shift+U opening it, and the phone's list with its Inbox chip, its sections, the asking Fins as rows of their
+ * Cmd+Shift+U opening it, and the phone's list with the desk's Inbox row, its sections, the asking Fins as rows of their
  * own and its Inbox screen answering in place. Screenshots stay in the printed directory.
  */
 
@@ -255,22 +255,22 @@ async function checkWindow() {
 
   await checkInboxNavigation({ window, page, base, evaluate, until, frames, click, capture })
 
-  // 5. The phone: the Inbox chip with its count; projects with their Threads, an Apex's asking Fins hung under it.
+  // 5. The phone: the desk's Inbox row with its count; projects with their Threads, an Apex's asking Fins hung under it.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
-  await until(`document.querySelector('[data-list-chips]') !== null && document.querySelectorAll('[data-asking-fin]').length > 0`, "the phone's chips and asking Fins")
-  const phone = await evaluate(`({ chips: [...document.querySelectorAll('[data-list-chip]')].map((node) => node.dataset.listChip), count: Number(document.querySelector('[data-list-chip="inbox"] [data-inbox-count]')?.textContent ?? 0), groups: document.querySelectorAll('[data-project-group]').length, fins: [...document.querySelectorAll('[data-asking-fin]')].map((node) => ({ fin: node.dataset.finRow, text: node.innerText.replace(/\\s+/g, ' '), under: node.closest('[data-hung-fins]')?.dataset.hungFins })) })`)
+  await until(`document.querySelector('[data-rail-top]') !== null && document.querySelectorAll('[data-asking-fin]').length > 0`, "the phone's top rows and asking Fins")
+  const phone = await evaluate(`({ chips: [...document.querySelectorAll('[data-rail-top] [data-rail-top-row]')].map((node) => node.dataset.railTopRow), count: Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0), groups: document.querySelectorAll('[data-project-group]').length, fins: [...document.querySelectorAll('[data-asking-fin]')].map((node) => ({ fin: node.dataset.finRow, text: node.innerText.replace(/\\s+/g, ' '), under: node.closest('[data-hung-fins]')?.dataset.hungFins })) })`)
   console.log("PHONE", JSON.stringify(phone))
-  assert.deepEqual(phone.chips, ["inbox"], "the phone's chips: the Inbox (pull requests and automations live on a Mac)")
+  assert.deepEqual(phone.chips, ["inbox"], "the phone's top rows: the Inbox (pull requests and automations live on a Mac, and New floats)")
   assert.ok(phone.groups > 0, "Threads stand under their projects")
   assert.ok(phone.fins.length >= 2, "each asking Fin is a row")
   assert.ok(phone.fins.every((fin) => fin.under), "hung under its Apex")
   assert.equal(phone.count, phone.fins.length + (await evaluate(`document.querySelectorAll('[data-thread][data-standing="waiting"]').length`)), "the chip counts what needs you")
   await capture("phone-list.png")
-  console.log("PASS: the phone's chips, projects and asking Fins")
+  console.log("PASS: the phone's top rows, projects and asking Fins")
 
   // 6. The phone's Inbox screen: the asks answered in place.
-  await click('[data-list-chip="inbox"]')
+  await click('[data-rail-top-row="inbox"]')
   await until(`document.querySelector('[data-inbox] [data-ask=fin]') !== null`, "the phone's Inbox")
   const cards = await evaluate(`document.querySelectorAll('[data-inbox] [data-ask=fin]').length`)
   assert.equal(cards, phone.fins.length, "one card per asking Fin")
@@ -285,7 +285,7 @@ async function checkWindow() {
   assert.equal((await evaluate("window.apexScene.responds()[0]")).fin, phoneTarget)
   await until(`document.querySelectorAll('[data-inbox] [data-ask=fin]').length === ${cards - 1}`, "the answered Fin leaves the phone's Inbox")
   await click('[aria-label="Back to threads"]')
-  await until(`document.querySelectorAll('[data-asking-fin]').length === ${phone.fins.length - 1} && Number(document.querySelector('[data-list-chip="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${phone.count - 1}`, "the list and its chip say it too")
+  await until(`document.querySelectorAll('[data-asking-fin]').length === ${phone.fins.length - 1} && Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${phone.count - 1}`, "the list and its chip say it too")
   console.log("PASS: the phone's Inbox answers in place")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])

@@ -5666,7 +5666,8 @@ has no project of its own and shows the first three), then Pinned, then
 Threads by project. There is no view switch: Recent, a bounded chronological
 list, and Archived are choices in the Threads heading's filter menu, and the
 heading names the one showing and leads back. The phone's list
-(`src/web-client/list.tsx`) has the Inbox as a chip, then Needs you (each Fin
+(`src/web-client/list.tsx`) heads with the desk's own rows (`RailRow`: the
+Inbox, and New thread on a tablet, where a phone's New floats), then Needs you (each Fin
 asking as a row of its own, "Mobile polish ·" before its question), Working
 and Recent, and `/inbox` is its Inbox screen (`inbox-screen.tsx`, the same Fin
 asks answered through `answerFin`). Where a Thread runs and its project are said
