@@ -124,6 +124,71 @@ async function check() {
     for (let index = 0; index < rows; index += 1) assert.deepEqual(await evaluate(`(() => { const box = document.querySelectorAll('[data-composer] [data-composer-row]')[${index}].getBoundingClientRect(); return { left: box.left, right: box.right } })()`), await edges(".composer-box"), `row ${index} lines up, ${name}`)
   }
 
+  // One composer: a new Thread, an existing one, a pane's resting composer and a laptop's browser draw the same box,
+  // the same control row and the same status line under it, measured. They once differed in frame, tone, width and
+  // placeholder, and looked like two products.
+  const measureComposer = (at = "[data-composer]") =>
+    evaluate(`(() => {
+      document.activeElement?.blur?.()
+      const composer = document.querySelector(${JSON.stringify(at)})
+      if (!composer) return null
+      const box = composer.querySelector('.composer-box')
+      const input = composer.querySelector('.composer-input')
+      const controls = composer.querySelector('.composer-routing')?.parentElement
+      const status = composer.querySelector('[data-composer-status]')
+      const send = composer.querySelector('.composer-send')
+      if (!box || !input || !controls || !status || !send) return { missing: [box, input, controls, status, send].map(Boolean) }
+      const pane = composer.parentElement.getBoundingClientRect()
+      const rect = (node) => node.getBoundingClientRect()
+      const style = (node) => getComputedStyle(node)
+      const at2 = (value) => Math.round(value * 2) / 2
+      return {
+        column: Math.abs(rect(box).width - (Math.min(pane.width, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--container-content'))) - 24)) <= 1,
+        centred: Math.abs((rect(box).left - pane.left) - (pane.right - rect(box).right)) <= 1,
+        background: style(box).backgroundColor,
+        frame: style(box).boxShadow,
+        input: [style(input).paddingTop, style(input).paddingLeft, style(input).fontSize, style(input).lineHeight, at2(rect(input).height)],
+        controls: [at2(rect(controls).height), style(controls).paddingLeft, style(controls).paddingRight, style(controls).paddingBottom],
+        send: [at2(rect(send).width), at2(rect(send).height)],
+        status: [at2(rect(status).height), at2(rect(status).top - rect(box).bottom), at2(pane.bottom - rect(status).bottom), style(status.firstElementChild).fontSize],
+        placeholder: input.placeholder,
+        // At rest the composer is exactly the room held for it (--composer-rest): the lazy desk's placeholder and the
+        // ocean's fade are that number, so the transcript never moves when the composer arrives.
+        atRest: at2(composer.getBoundingClientRect().height) === parseFloat(getComputedStyle(composer).getPropertyValue('--composer-rest')),
+        // Where the work runs is the status line's, never the control row's.
+        placeInControls: Boolean(controls.querySelector('[data-run-place], [data-workspace], [aria-label^="Access:"]')),
+      }
+    })()`)
+  await load("/?mock", 1440, 900)
+  await until("Boolean(document.querySelector('.composer-box [data-composer-status], [data-composer] [data-composer-status]'))", "the existing Thread's composer")
+  const existing = await measureComposer()
+  await evaluate("import('/src/extend/commands.ts').then(({ runCommand }) => { runCommand('session.new'); return true })")
+  await until("document.querySelector('[data-composer] .composer-input')?.placeholder === 'Ask anything' && Boolean(document.querySelector('.ocean-scene'))", "a new Thread")
+  const fresh = await measureComposer()
+  assert.ok(existing && !existing.missing, `the existing Thread's composer: ${JSON.stringify(existing)}`)
+  assert.equal(existing.placeInControls, false, "the control row holds no place, branch or access")
+  assert.equal(existing.column, true, "the composer keeps to the transcript's column")
+  assert.equal(existing.atRest, true, "an empty composer is the room held for it")
+  assert.deepEqual(fresh, existing, "a new Thread's composer is the existing Thread's")
+  await capture("new-thread.png")
+  // Widths differ only with the pane (a new Thread has no right rail open); each is its pane's column.
+  // A pane without focus draws its Session's composer in the same boxes, so focusing it shifts nothing.
+  // The busy scene opens its Thread of several Sessions on a first load; what the new Thread above kept would win.
+  await evaluate("localStorage.clear(); sessionStorage.clear(); true")
+  await load("/?mock&app=busy", 1680, 900)
+  await until("Boolean(document.querySelector('[data-composer] .composer-input'))", "the busy Thread")
+  await evaluate("import('/src/extend/commands.ts').then(({ runCommand }) => { runCommand('chat.split'); return true })")
+  await until("Boolean(document.querySelector('[data-pane-reply]'))", "a resting pane's composer")
+  const resting = await measureComposer("[data-pane-reply]")
+  const focused = await measureComposer("[data-composer]:not([data-pane-reply])")
+  assert.ok(resting && !resting.missing && focused && !focused.missing, "both panes' composers")
+  for (const key of ["background", "frame", "input", "controls", "send", "status", "placeInControls"]) assert.deepEqual(resting[key], focused[key], `a resting pane's composer has the focused one's ${key}`)
+  await capture("panes.png")
+  await load("/scripts/web-desk.html?thread=apex&theme=dark", 1440, 900)
+  await until("Boolean(document.querySelector('[data-composer] [data-composer-status]'))", "a laptop's browser's composer")
+  const browser = await measureComposer()
+  for (const key of ["column", "centred", "background", "frame", "input", "controls", "send", "placeInControls"]) assert.deepEqual(browser[key], existing[key], `a laptop's browser's composer has the desk's ${key}`)
+
   // The phone's dock: what it draws over the box lines up with it too.
   await load("/scripts/phone-apex.html?app=apex&fins=limit", 390, 844, true)
   await until("Boolean(document.querySelector('[data-thread][data-apex-row]'))", "the phone's list")
@@ -157,6 +222,6 @@ async function check() {
   await lined("on an iPad", ".web-composer-field", ["[data-probe=queue]", "[data-probe=ask]"])
 
   guard.done()
-  console.log("Composer edges: every notice lines up with the box, on the desk, in the browser, on the phone and on an iPad")
+  console.log("Composer edges: every notice lines up with the box, on the desk, in the browser, on the phone and on an iPad; one composer in a new Thread, an existing one, a resting pane and the browser")
   app.exit(0)
 }

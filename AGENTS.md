@@ -3819,10 +3819,12 @@ deliberate action and never rides along with a commit.
   chrome.** The title strip, the rail and each pane's tab strip sit on the
   shell; a pane's body is the surface; panes side by side are parted by a 6px
   gutter of the shell (`Divider`, whose bar shows only under the pointer), and
-  a pane's sections by tone and spacing, never a hairline. The composer's
-  input is one raised box inset from its pane. Hairlines stay for content
-  (a diff's file headers, a table) and controls (an input's or a button's
-  outline). **Every corner is square**, as the fin is: the radius tokens
+  a pane's sections by tone and spacing, never a hairline. The composer is
+  one box in the transcript's column, framed by a hairline on the pane's own
+  surface, the same in a new Thread, an existing one and a resting pane
+  (`composer-frame.tsx`; `test:composer-edges-ui` measures it). Hairlines stay
+  for content (a diff's file headers, a table) and controls (an input's or a
+  button's outline). **Every corner is square**, as the fin is: the radius tokens
   (`--radius-*`) are all 0, so panes, rows, tabs, cards, fields, buttons,
   menus, dialogs, toasts, the composer, the prompt bubble and avatars meet
   at square corners. Only what means a dot (status dots, the unread sphere,
@@ -3884,7 +3886,8 @@ deliberate action and never rides along with a commit.
   `--sea` (mako-cloud `apps/site`), hue 245. Until November 2026 the accent
   was an orange "ember" that appeared nowhere in the brand. It is
   punctuation: the open Thread's lit fin, the glint crossing a working fin,
-  the composer caret, at most one badge. Never on links, borders, focus, selection, hover
+  the composer caret and its send once there is something to send, at most
+  one badge. Never on links, borders, focus, selection, hover
   fills, icons at rest, or any fill larger than a badge; if two sea moments
   are visible in one pane, one is wrong. Selection and hover are tints of the
   text colour (`--fill-hover` / `--fill-selected`), never the accent. Beyond
@@ -4114,12 +4117,17 @@ steering message or an approval is a notice above the composer only while it
 is under way or went wrong (`src/desk/notices.ts`), and an idle provider
 closes itself after ten minutes. A notice that no longer stands is not kept
 anywhere to be found later. The
-routing row gives way in a fixed order as the pane narrows (the centre can be
-450px), found by measuring rather than a width breakpoint
-(`use-compact-row.ts`): the access chip drops to its glyph first, the harness
-chip second, and what still overflows scrolls behind a faded edge instead of
-being cut off silently. The model and its reasoning are what people read
-there and are never shortened.
+composer's one control row holds what a person touches every message: plus,
+the harness and model with its reasoning, Plan while it's on, send. Where and
+how the work runs (this Mac or the cloud, the project folder or its branch,
+the access level in words, coloured only for full access, the Thread's Fins
+and relations) is a quiet status line under the box, each still the control
+it was, with the context reading at its end under the send. The status line
+gives way in a fixed order as the pane narrows (the centre can be 450px),
+found by measuring rather than a width breakpoint (`use-compact-row.ts`):
+where it runs and the access level drop to their glyphs first, the branch
+second, and what still overflows scrolls behind a faded edge instead of being
+cut off silently. The model and its reasoning are never shortened.
 
 Settings › Projects is one page per project (`projects-section.tsx`, opened by `openProjectSettings`, the rail's
 project menu and the palette's "Project settings: <name>"), the list grouped Active and Hidden (`hiddenProjects`).
