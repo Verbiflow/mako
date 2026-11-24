@@ -14,9 +14,9 @@ import { ignoredEntries, missingEntries, type BringEntry } from "./worktree-carr
 import { CheckoutBorrowing } from "./checkout-borrowing.js"
 import { gitActionPrompt } from "../contracts/git-actions.js"
 import type { ThreadWorktree, WorktreeBranchPull, WorktreeUpdate } from "../contracts/thread-worktrees.js"
-import type { MoveShare, MoveShares } from "../contracts/workspace-moves.js"
+import type { MoveOutcome, MoveShare, MoveShares } from "../contracts/workspace-moves.js"
 
-type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary" | "shares" | "wantBranch"> & Partial<Pick<ThreadWorktreeService, "borrowing">>
+type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary" | "shares" | "wantBranch"> & Partial<Pick<ThreadWorktreeService, "borrowing" | "moveOutcome" | "bringStayed" | "putBack">>
 
 interface Deps {
   git: Git
@@ -27,6 +27,8 @@ interface Deps {
   leaves?: Pick<WorktreeLeaves, "ask">
   /** The Thread's worktree or its branch changed, or the worktree went away; windows read them again. */
   changed(): void
+  /** The agent brought what its move left, or put files back: the card above its composer shows the move as it is now. */
+  adjusted?(conversationId: string, outcome: MoveOutcome): void
   /** A repository's recent pull requests, for the worktree's own. */
   pullsOf?: (repoRoot: string) => Promise<WorktreeBranchPull[] | null>
   recipesRoot?: string
@@ -56,10 +58,13 @@ export interface WorkspaceStatus {
     repositories?: (BranchState & { repository: string; folder: string; mainCheckout: string })[]
   }
   move?: "asking" | "allowed" | "declined" | "moving"
+  /** In this Thread's worktree, what its move left to check: see `AfterMove`. */
+  afterMove?: AfterMove
   /**
    * In the main checkout: whose its uncommitted changes are, each line by
-   * its last writer. worktree_move takes `thisThread`; the rest stays unless
-   * the user brings `mightBeThisThread` and `notAttributed`.
+   * its last writer. worktree_move takes `thisThread`; the rest stays, and
+   * `mightBeThisThread` and `notAttributed` follow when brought: by the
+   * person in the app, or the agent with worktree_bring `stayed`.
    */
   changes?: {
     thisThread: ChangeCount & { paths: string[] }
@@ -85,6 +90,32 @@ export interface IgnoredInMain {
   paths?: string[]
   omitted?: number
   all?: string
+}
+
+/**
+ * What the move into this Thread's worktree left for its agent to check, as
+ * the card above the composer shows it to the person: files that came on
+ * timing alone (`tookOnTiming`), which worktree_bring `putBack` returns, and
+ * changes that stayed in the main checkout because they might be this
+ * Thread's or nobody can be named for them, which worktree_bring `stayed`
+ * brings. Absent once there's nothing left to check.
+ */
+export interface AfterMove {
+  tookOnTiming?: ChangeCount & { paths: string[] }
+  stayedInMain?: { mightBeThisThread: ChangeCount & { paths: string[] }; notAttributed: ChangeCount & { paths: string[] } }
+  putBack?: string[]
+}
+
+/** `outcome` as worktree_status reports it; undefined when there's nothing left to check. */
+export function afterMoveOf(outcome: MoveOutcome): AfterMove | undefined {
+  const listed = (share: MoveShare) => ({ files: share.files, lines: share.lines, paths: share.paths.slice(0, LISTED_CHANGES) })
+  const after: AfterMove = {}
+  if (outcome.likely?.files) after.tookOnTiming = listed(outcome.likely)
+  const { uncertain, unattributed } = outcome.stayed
+  if (!outcome.brought && uncertain.files + unattributed.files) after.stayedInMain = { mightBeThisThread: listed(uncertain), notAttributed: listed(unattributed) }
+  if (!after.tookOnTiming && !after.stayedInMain) return undefined
+  if (outcome.returned?.length) after.putBack = outcome.returned.slice(0, LISTED_CHANGES)
+  return after
 }
 
 /** Changed files and lines (added plus removed; 0 when Mako couldn't count them). */
@@ -115,6 +146,10 @@ export interface WorkspaceTools {
   merge(conversationId: string): Promise<string>
   remove(conversationId: string): Promise<string>
   bring(conversationId: string, entries?: BringEntry[]): Promise<string>
+  /** "Bring these" after the move, as the card above the composer does it. */
+  bringStayed(conversationId: string): Promise<string>
+  /** "Put back" after the move: `paths`, project-relative, go back to the main checkout as it had them. */
+  putBack(conversationId: string, paths: readonly string[]): Promise<string>
 }
 
 const plural = (count: number, one: string) => `${count} ${one}${count === 1 ? "" : "s"}`
@@ -283,6 +318,15 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
     if (!checkout) throw new Error("This Thread has no worktree; it edits in the main checkout.")
     return checkout
   }
+  /** The worktree service, once this Session is known to edit in this Thread's worktree. */
+  const inOwnWorktree = async (conversationId: string, doing: string) => {
+    const cwd = cwdOf(conversationId)
+    const current = deps.worktrees?.threadCheckout(conversationId)
+    if (!current || !(await within(current.path, cwd))) throw new Error(`This Session must edit in this Thread's worktree before ${doing}. worktree_status says where it edits.`)
+    const worktrees = deps.worktrees!
+    if (!worktrees.bringStayed || !worktrees.putBack) throw new Error("Worktrees need the Thread store, which didn't open.")
+    return worktrees
+  }
   const branchState = async (path: string): Promise<BranchState> => {
     const state: BranchState = {}
     const [ahead, summary] = await Promise.all([
@@ -345,6 +389,11 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       }
       const move = deps.moves.answerFor(conversationId)
       if (move) status.move = move
+      if (onIt) {
+        const outcome = await deps.worktrees?.moveOutcome?.(conversationId).catch(() => null)
+        const after = outcome && afterMoveOf(outcome)
+        if (after) status.afterMove = after
+      }
       return status
     },
     async move(conversationId, wanted = {}) {
@@ -366,6 +415,33 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
       const wanted = entries ?? recipe?.carry ?? []
       const result = await borrowing.bring(conversationId, main, checkout, wanted)
       return toolText({ mainCheckout: main, worktree: checkout, ...result })
+    },
+    async bringStayed(conversationId) {
+      const worktrees = await inOwnWorktree(conversationId, "bringing what its move left into it")
+      const { outcome, came, left } = await worktrees.bringStayed!(conversationId, { by: "agent" })
+      if (came.length) deps.adjusted?.(conversationId, outcome)
+      return toolText({
+        brought: came.length ? came : undefined,
+        changedSince: left.length ? left : undefined,
+        said: came.length
+          ? `Moved ${plural(came.length, "file")} from the main checkout into this worktree. Mako couldn't tell whether they were this Thread's work: review them before committing.${left.length ? " The ones under changedSince changed in either checkout since the move, so they stayed as they are." : ""}`
+          : left.length ? "Nothing came: every file that stayed changed in either checkout since the move, so they stayed as they are." : "Nothing is left in the main checkout from this Thread's move.",
+      })
+    },
+    async putBack(conversationId, paths) {
+      const worktrees = await inOwnWorktree(conversationId, "putting files back from it")
+      const { outcome, returned, left } = await worktrees.putBack!(conversationId, paths, { by: "agent" })
+      if (returned.length) deps.adjusted?.(conversationId, outcome)
+      const unknown = paths.filter((path) => !returned.includes(path) && !left.includes(path))
+      return toolText({
+        putBack: returned.length ? returned : undefined,
+        changedSince: left.length ? left : undefined,
+        notFromTheMove: unknown.length ? unknown : undefined,
+        said: returned.length
+          ? `Put ${plural(returned.length, "file")} back in the main checkout as it had ${returned.length === 1 ? "it" : "them"} before the move; this worktree has ${returned.length === 1 ? "it" : "them"} as the branch does.`
+          : "Nothing went back.",
+        next: unknown.length ? "notFromTheMove lists paths this move didn't bring; worktree_status afterMove lists what it did, relative to the project folder." : undefined,
+      })
     },
     async update(conversationId) {
       const checkout = threadCheckout(conversationId)
@@ -480,9 +556,10 @@ async function reply(work: () => Promise<string>) {
 
 /**
  * The worktree tools on a conversation's `mako` server. They act
- * on the calling conversation's Thread only. Mako adds no approval of its
- * own to merging or removing: the harness's permission for MCP tools
- * decides, and Mako's checks only keep the work safe.
+ * on the calling conversation's Thread only. Below full access a move asks
+ * the person (`WorkspaceMoves`); otherwise Mako adds no approval of its own:
+ * the harness's permission for MCP tools decides, and Mako's checks only keep
+ * the work safe.
  */
 export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools, conversationId: () => string): void {
   const none = z.object({}).strict()
@@ -499,17 +576,26 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
   server.registerTool(
     "worktree_bring",
     {
-      description: "Bring ignored files from the originating main checkout into this Thread's existing worktree. Call when the recipe's carry changed after the worktree was created, when this Thread needs a one-off local file or output, or to make a linked entry this worktree's own before changing it. Leave entries out to bring the recipe's carry as it says, or name relative paths or patterns without changing the recipe. Copies by default, cloning large folders on supported volumes; link: true shares an entry with the main checkout, so a write there changes both. Copying an entry that's linked here makes it this worktree's own, keeping what was made in it here; other existing entries stay untouched. No file values are read or returned. Refuses outside paths and Python virtual environments. worktree_status lists the main checkout's ignored paths. Use prepare outputs for dependency folders whose matching inputs Mako should check.",
-      inputSchema: z.object({ entries: z.array(z.object({ path: checkoutPattern, link: z.boolean().optional() }).strict()).max(20).optional() }).strict(),
+      description: "Bring files from the originating main checkout into this Thread's existing worktree. After a move into it (worktree_status's afterMove): stayed: true brings the changes it left in the main checkout once you've read them and they're this Thread's; putBack returns files it took that aren't. Ignored files: call when the recipe's carry changed after the worktree was created, when this Thread needs a one-off local file or output, or to make a linked entry this worktree's own before changing it. Leave entries out to bring the recipe's carry as it says, or name relative paths or patterns without changing the recipe. Copies by default, cloning large folders on supported volumes; link: true shares an entry with the main checkout, so a write there changes both. Copying an entry that's linked here makes it this worktree's own, keeping what was made in it here; other existing entries stay untouched. No file values are read or returned. Refuses outside paths and Python virtual environments. worktree_status lists the main checkout's ignored paths. Use prepare outputs for dependency folders whose matching inputs Mako should check.",
+      inputSchema: z.object({
+        entries: z.array(z.object({ path: checkoutPattern, link: z.boolean().optional() }).strict()).max(20).optional(),
+        stayed: z.literal(true).optional(),
+        putBack: z.array(z.string().min(1).max(1_000)).min(1).max(1_000).optional(),
+      }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
-    ({ entries }) => reply(() => tools.bring(conversationId(), entries))
+    ({ entries, stayed, putBack }) => reply(() => {
+      if ([entries, stayed, putBack].filter((one) => one !== undefined).length > 1) throw new Error("Pass one of entries, stayed and putBack per call.")
+      if (stayed) return tools.bringStayed(conversationId())
+      if (putBack) return tools.putBack(conversationId(), putBack)
+      return tools.bring(conversationId(), entries)
+    })
   )
   server.registerTool(
     "worktree_move",
     {
       description:
-        "Call when the user asks for this work on its own branch or in a worktree, or when you'd otherwise make a worktree or a copy of the checkout to keep work apart. Asks to move this Thread into its own worktree, so your edits stay out of the main checkout; for a project folder holding several repositories, that's one worktree per repository on one branch. Use this instead of `git worktree add`, `git checkout -b`, copying the checkout, a `--worktree` flag or a worktree tool of your own: Mako, its Changes panel and the recipe's checks see only this Thread's checkouts. Pass branch to name the new branch (the user's name for it, such as `alt`; Mako names one when left out) and base to start it from another commit, branch or tag, which needs a checkout with nothing uncommitted. Mako shows the branch in the app and brings the conversation along with this Thread's own uncommitted changes: each line whose last writer is this Thread, and the files it created, deleted or renamed. Other Threads' and the user's changes stay in the main checkout, so a checkout holding others' work is no reason not to move; lines that might be this Thread's and changes nobody can be named for stay unless the user brings them. worktree_status says beforehand which is which. Afterwards Mako offers merging or a pull request. This Session and the Thread's other Sessions in this checkout move together, into the same worktree. Returns at once, saying what will come and what will stay. The user answers in the app, unless the project always allows it; an allowed move happens once your turn and theirs have ended, and the message you get in the worktree lists what came and what stayed.",
+        "Call when the user asks for this work on its own branch or in a worktree, or when you'd otherwise make a worktree or a copy of the checkout to keep work apart. Asks to move this Thread into its own worktree, so your edits stay out of the main checkout; for a project folder holding several repositories, that's one worktree per repository on one branch. Use this instead of `git worktree add`, `git checkout -b`, copying the checkout, a `--worktree` flag or a worktree tool of your own: Mako, its Changes panel and the recipe's checks see only this Thread's checkouts. Pass branch to name the new branch (the user's name for it, such as `alt`; Mako names one when left out) and base to start it from another commit, branch or tag, which needs a checkout with nothing uncommitted. Mako shows the branch in the app and brings the conversation along with this Thread's own uncommitted changes: each line whose last writer is this Thread, and the files it created, deleted or renamed. Other Threads' and the user's changes stay in the main checkout, so a checkout holding others' work is no reason not to move; lines that might be this Thread's and changes nobody can be named for stay, and after the move worktree_bring stayed: true brings the ones you find are this Thread's. worktree_status says beforehand which is which. Afterwards Mako offers merging or a pull request. This Session and the Thread's other Sessions in this checkout move together, into the same worktree. Returns at once, saying what will come and what will stay. On full access, or in a project that always allows it, it goes without asking; otherwise the user answers in the app. An allowed move happens once your turn and theirs have ended, and the message you get in the worktree lists what came and what stayed.",
       inputSchema: z.object({
         branch: z.string().min(1).max(200).optional().describe("The new branch's name; it must not exist yet."),
         base: z.string().min(1).max(200).optional().describe("The commit, branch or tag to start it from; the checkout's own commit when left out."),
@@ -522,7 +608,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_update",
     {
       description:
-        "Call when the user asks to update this branch from main, or before opening a pull request when worktree_status says the branch is behind. Fetches, then merges what the branch new Threads start from has (main, or origin/main when only it moved) into this Thread's worktree branch; the same Update the user has in the Git sidebar. Never rebases or force-pushes. Refused with uncommitted changes to tracked files, during another merge or rebase, or off the branch. When it stops on conflicts, the merge stays in progress and the result lists the files and how to finish it. A project folder holding several repositories updates each one's branch on its own: the result names each repository with what happened, and one that's refused or stops on conflicts doesn't keep the others from updating.",
+        "Call when the user asks to update this branch from main, when your work needs what main has now, or before opening a pull request when worktree_status says the branch is behind. Fetches, then merges what the branch new Threads start from has (main, or origin/main when only it moved) into this Thread's worktree branch; the same Update the user has in the Git sidebar. Never rebases or force-pushes. Refused with uncommitted changes to tracked files, during another merge or rebase, or off the branch. When it stops on conflicts, the merge stays in progress and the result lists the files and how to finish it. A project folder holding several repositories updates each one's branch on its own: the result names each repository with what happened, and one that's refused or stops on conflicts doesn't keep the others from updating.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },
@@ -532,7 +618,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_merge",
     {
       description:
-        "Call when the user asks to merge this Thread's work. Merges the branch of this Thread's worktree into the branch the main checkout has out. Mako merges only when it's safe (everything on the branch committed, the main checkout clean and idle, no conflicts); otherwise it says what's in the way and changes nothing. A project folder holding several repositories merges every repository with commits together: each is checked first, and one that can't merge keeps all of them from merging. This merges on this computer; a pull request merges on GitHub with pull_request_merge. The branch and the worktree stay.",
+        "Call when the user asks to merge this Thread's work, or on full access when merging is the next step of its work. Merges the branch of this Thread's worktree into the branch the main checkout has out. Mako merges only when it's safe (everything on the branch committed, the main checkout clean and idle, no conflicts); otherwise it says what's in the way and changes nothing. A project folder holding several repositories merges every repository with commits together: each is checked first, and one that can't merge keeps all of them from merging. This merges on this computer; a pull request merges on GitHub with pull_request_merge. The branch and the worktree stay.",
       inputSchema: none,
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     },

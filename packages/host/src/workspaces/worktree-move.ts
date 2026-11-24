@@ -122,12 +122,15 @@ export const MovePlanSchema = z.lazy(() => z.object({
   /** `writing` once the plan is saved and before the first write; `done` once both sides are checked. */
   step: z.enum(["writing", "done"]),
   brought: z.boolean(),
-  /** Saved before "Bring these" or "Put back" writes, so a start that finds it finishes them from this plan. */
-  adjusting: z.union([z.object({ kind: z.literal("bring") }), z.object({ kind: z.literal("put-back"), paths: z.array(z.string()) })]).optional(),
+  /** Saved before "Bring these" or "Put back" writes, so a start that finds it finishes them from this plan; `by` when the Thread's agent asked, not the person. */
+  adjusting: z.union([z.object({ kind: z.literal("bring"), by: z.literal("agent").optional() }), z.object({ kind: z.literal("put-back"), paths: z.array(z.string()), by: z.literal("agent").optional() })]).optional(),
   repositories: z.array(RepositoryPlanSchema),
   outcome: MoveOutcomeSchema,
 }))
 export type MovePlan = z.infer<typeof MovePlanSchema>
+
+/** Who asked for "Bring these" or "Put back": the person, from the app, or the Thread's agent, with worktree_bring. */
+export type Adjuster = "person" | "agent"
 
 /** What "Bring these" and "Put back" call before they write, and at each step. */
 export interface AdjustHooks {
@@ -896,7 +899,7 @@ export async function resumeMove(git: Git, ledger: Pick<MoveLedger, "mako"> | un
  * saved marked before the first write, so a start that finds it runs this
  * again: what landed reads as done, and the rest follows.
  */
-export async function bringStayed(git: Git, ledger: MoveLedger | undefined, plan: MovePlan, project: string, log: MoveInput["log"], hooks: AdjustHooks = {}): Promise<{ plan: MovePlan; brought: number; came: string[]; left: string[] }> {
+export async function bringStayed(git: Git, ledger: MoveLedger | undefined, plan: MovePlan, project: string, log: MoveInput["log"], hooks: AdjustHooks = {}, by: Adjuster = "person"): Promise<{ plan: MovePlan; brought: number; came: string[]; left: string[] }> {
   if (plan.brought) return { plan, brought: 0, came: [], left: [] }
   const bytes = new Map<string, Buffer>()
   const writes = []
@@ -936,7 +939,7 @@ export async function bringStayed(git: Git, ledger: MoveLedger | undefined, plan
   const backup = `${BACKUP_REFS}${plan.id}-brought`
   for (const entry of writes)
     if (entry.main.length) await backUpOnce(git, entry.plan.repoRoot, entry.plan.head, backup, `Mako: the main checkout before bringing what stayed to Thread ${plan.thread}`)
-  await hooks.save?.({ ...plan, adjusting: { kind: "bring" } })
+  await hooks.save?.({ ...plan, adjusting: { kind: "bring", ...by === "agent" && { by } } })
   hooks.stepped?.("bring-saved")
   await applyWrites(git, ledger, writes, bytes, false, () => hooks.stepped?.("bring-wrote"))
   const off = await landed(writes)
@@ -953,7 +956,7 @@ export async function bringStayed(git: Git, ledger: MoveLedger | undefined, plan
     return sum + new Set([...entry.worktree, ...entry.main].map((write) => write.path).filter((path) => !moved.has(path))).size
   }, 0)
   const named = [...left].map(relativeOf)
-  log("brought what stayed", { thread: plan.thread, files: brought, left: named.length })
+  log("brought what stayed", { thread: plan.thread, files: brought, left: named.length, by })
   const empty = { files: 0, lines: 0, paths: [] }
   const outcome: MoveOutcome = {
     ...plan.outcome,
@@ -972,7 +975,7 @@ export async function bringStayed(git: Git, ledger: MoveLedger | undefined, plan
  * back, so a later "Bring these" starts from where it is. Like "Bring
  * these", the plan is saved marked before the first write.
  */
-export async function putBack(git: Git, ledger: MoveLedger | undefined, plan: MovePlan, project: string, paths: readonly string[], log: MoveInput["log"], hooks: AdjustHooks = {}): Promise<{ plan: MovePlan; returned: string[]; left: string[] }> {
+export async function putBack(git: Git, ledger: MoveLedger | undefined, plan: MovePlan, project: string, paths: readonly string[], log: MoveInput["log"], hooks: AdjustHooks = {}, by: Adjuster = "person"): Promise<{ plan: MovePlan; returned: string[]; left: string[] }> {
   const wanted = new Set(paths)
   const named = (repository: RepositoryPlan, path: string) => relative(project, join(repository.repoRoot, path)) || path
   const bytes = new Map<string, Buffer>()
@@ -1016,7 +1019,7 @@ export async function putBack(git: Git, ledger: MoveLedger | undefined, plan: Mo
   const backup = `${BACKUP_REFS}${plan.id}-returned`
   for (const entry of writes)
     if (entry.main.length) await backUpOnce(git, entry.plan.repoRoot, entry.plan.head, backup, `Mako: the main checkout before putting back files Thread ${plan.thread} took`)
-  if (writes.some((entry) => entry.chosen.length)) await hooks.save?.({ ...plan, adjusting: { kind: "put-back", paths: [...paths] } })
+  if (writes.some((entry) => entry.chosen.length)) await hooks.save?.({ ...plan, adjusting: { kind: "put-back", paths: [...paths], ...by === "agent" && { by } } })
   hooks.stepped?.("put-back-saved")
   await applyWrites(git, ledger, writes, bytes, false, () => hooks.stepped?.("put-back-wrote"))
   const off = await landed(writes)
@@ -1041,7 +1044,7 @@ export async function putBack(git: Git, ledger: MoveLedger | undefined, plan: Mo
     const [repoRoot = "", path = ""] = key.split("\0")
     return relative(project, join(repoRoot, path)) || path
   })
-  log("put back", { thread: plan.thread, files: returned.length, left: changedSince.length })
+  log("put back", { thread: plan.thread, files: returned.length, left: changedSince.length, by })
   return { plan: { ...plan, adjusting: undefined, repositories, outcome }, returned, left: changedSince }
 }
 
@@ -1077,13 +1080,15 @@ const listed = (share: MoveShare) => `${files(share.files)}${share.paths.length 
 
 const some = (paths: readonly string[]) => `${paths.slice(0, 5).join(", ")}${paths.length > 5 ? `, and ${paths.length - 5} more` : ""}`
 
-/** Files the user put back, for the agent in the worktree. */
-export function returnedSentence(paths: readonly string[]): string {
+/** Files put back, for the agent in the worktree: the person's choice, or the agent's own call that a restart finished. */
+export function returnedSentence(paths: readonly string[], by: Adjuster = "person"): string {
+  if (by === "agent") return `Mako finished putting ${files(paths.length)} back in the main checkout, as you asked with worktree_bring (${some(paths)}).`
   return `The user put ${files(paths.length)} back in the main checkout (${some(paths)}); they're not this Thread's, so this worktree has ${paths.length === 1 ? "it" : "them"} as the branch does. Leave ${paths.length === 1 ? "it" : "them"} out of this worktree unless the user asks.`
 }
 
-/** Files "Bring these" brought, for the agent in the worktree. */
-export function broughtSentence(paths: readonly string[]): string {
+/** Files "Bring these" brought, for the agent in the worktree: the person's choice, or the agent's own call that a restart finished. */
+export function broughtSentence(paths: readonly string[], by: Adjuster = "person"): string {
+  if (by === "agent") return `Mako finished bringing ${files(paths.length)} the move had left in the main checkout into this worktree, as you asked with worktree_bring (${some(paths)}).`
   return `At the user's request, Mako brought ${files(paths.length)} the move had left in the main checkout into this worktree (${some(paths)}). Mako couldn't tell whether ${paths.length === 1 ? "it was" : "they were"} this Thread's work, so read ${paths.length === 1 ? "it" : "them"} before building on ${paths.length === 1 ? "it" : "them"}.`
 }
 
@@ -1095,12 +1100,12 @@ export function outcomeSentences(outcome: MoveOutcome): string[] {
     ? `This Thread's uncommitted changes came with you: ${listed(outcome.came)}${outcome.came.lines ? `, ${outcome.came.lines} changed lines` : ""}${outcome.brought ? ", with those Mako couldn't attribute" : ""}.`
     : "None of the main checkout's uncommitted changes were this Thread's, so none came.")
   if (outcome.likely?.files)
-    out.push(`Of these, Mako took ${listed(outcome.likely)} on timing alone: only this Thread's work was running when they changed. The user can put them back from the app.`)
+    out.push(`Of these, Mako took ${listed(outcome.likely)} on timing alone: only this Thread's work was running when they changed. Check them, and put back any that aren't this Thread's with worktree_bring putBack.`)
   if (outcome.returned?.length) out.push(returnedSentence(outcome.returned))
   const others = [stayed.others.files ? `${files(stayed.others.files)} other Threads changed` : "", stayed.person.files ? `${files(stayed.person.files)} the user changed` : ""].filter(Boolean)
   if (others.length) out.push(`Their changes stayed in the main checkout: ${others.join(", ")}.`)
   const unsure = [stayed.uncertain.files ? `${listed(stayed.uncertain)} with lines that might be this Thread's` : "", stayed.unattributed.files ? `${listed(stayed.unattributed)} changed before Mako tracked the checkout, so nobody is named for them` : ""].filter(Boolean)
-  if (unsure.length) out.push(`Also stayed: ${unsure.join("; ")}. The user can bring these from the app; don't copy them yourself.`)
+  if (unsure.length) out.push(`Also stayed: ${unsure.join("; ")}. Read them in the main checkout, and if they're this Thread's work, bring them with worktree_bring stayed: true rather than copying them.`)
   for (const hunk of outcome.split.slice(0, 5))
     out.push(`A hunk in ${hunk.path} couldn't be split by line, so it ${hunk.to === "thread" ? "came whole, since this Thread last wrote most of it" : "stayed whole, since others last wrote most of it"}.`)
   if (outcome.unstaged.length) out.push(`Staged in part before, now unstaged in the main checkout: ${outcome.unstaged.slice(0, 5).join(", ")}.`)

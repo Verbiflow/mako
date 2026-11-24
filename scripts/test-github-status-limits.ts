@@ -31,7 +31,7 @@ try {
   run("remote", "add", "origin", "https://github.com/fixture/project.git")
   run("remote", "set-url", "--push", "origin", origin)
   await writeFile(state, "repo")
-  await writeFile(binary, `#!${process.execPath}\nimport{readFileSync,appendFileSync}from'node:fs';\nconst a=process.argv.slice(2), mode=readFileSync(${JSON.stringify(state)},'utf8');\nappendFileSync(${JSON.stringify(calls)},a[0]+' '+(a[1]||'')+'\\n');\nconst fail=()=>{if(a.includes('--include'))process.stdout.write('HTTP/2.0 403 Forbidden\\nRetry-After: 180\\n\\n{}');process.stderr.write('HTTP 403: You have exceeded a secondary rate limit. DO-NOT-SHOW-FIXTURE-DETAIL');process.exit(1)};\nif(a[0]==='--version')console.log('gh fixture');\nelse if(a[0]==='api'&&a[1]==='user'){if(mode==='user')fail();if(a.includes('--include'))process.stdout.write('HTTP/2.0 200 OK\\n\\n');console.log('{"login":"fixture","id":7}')}\nelse if((a[0]==='api'&&a[1]==='repos/{owner}/{repo}')){if(mode!=='pull')fail();console.log('{"html_url":"https://github.com/fixture/project","full_name":"fixture/project","default_branch":"main"}')}else if(a[0]==='api'&&a[1]==='graphql')fail();else process.exit(1);\n`, { mode: 0o700 })
+  await writeFile(binary, `#!${process.execPath}\nimport{readFileSync,appendFileSync}from'node:fs';\nconst a=process.argv.slice(2), mode=readFileSync(${JSON.stringify(state)},'utf8');\nappendFileSync(${JSON.stringify(calls)},a[0]+' '+(a[1]||'')+'\\n');\nconst fail=()=>{if(a.includes('--include'))process.stdout.write('HTTP/2.0 403 Forbidden\\nRetry-After: 180\\n\\n{}');process.stderr.write('HTTP 403: You have exceeded a secondary rate limit. DO-NOT-SHOW-FIXTURE-DETAIL');process.exit(1)};\nif(a[0]==='--version')console.log('gh fixture');\nelse if(a[0]==='api'&&a[1]==='user'){if(mode==='user')fail();if(mode==='down'){process.stderr.write('HTTP 502: Bad Gateway (https://api.github.com/user)');process.exit(1)}if(mode==='out'){process.stderr.write('To get started with GitHub CLI, please run:  gh auth login');process.exit(4)}if(a.includes('--include'))process.stdout.write('HTTP/2.0 200 OK\\n\\n');console.log('{"login":"fixture","id":7}')}\nelse if((a[0]==='api'&&a[1]==='repos/{owner}/{repo}')){if(mode!=='pull')fail();console.log('{"html_url":"https://github.com/fixture/project","full_name":"fixture/project","default_branch":"main"}')}else if(a[0]==='api'&&a[1]==='graphql')fail();else process.exit(1);\n`, { mode: 0o700 })
   process.env.GH_PATH = binary
   const tools = pullRequestTools({ git, place: async () => ({ folder: repo, repositories: [{ name: "repo", root: repo, startedFrom: null }] }), changed: () => { throw new Error("A limited request cannot publish a change") } })
   registerPullRequestTools(server, tools, () => "fixture", () => true)
@@ -74,6 +74,21 @@ try {
     assert.match(JSON.stringify(result), /GitHub is rate limiting this login until/)
     assert.doesNotMatch(JSON.stringify(result), /Add a GitHub remote|gh auth login|DO-NOT-SHOW-FIXTURE-DETAIL/)
   } finally { await pullHost.stop() }
+  // An account lookup that fails for any reason but the login is a lookup to try again, never "Sign in": an agent
+  // relayed that to the person while its next push went through.
+  for (const [mode, signedOut] of [["down", false], ["out", true]] as const) {
+    await writeFile(state, mode)
+    const each = new HostStopping()
+    try {
+      const status = await each.run(() => githubStatus(repo))
+      const reason = pullSetupReason(status) ?? ""
+      if (signedOut) assert.match(reason, /gh auth login/, "gh saying it has no login is the one case that asks for one")
+      else {
+        assert.ok(status.repoLookup, `GitHub ${mode} reads as a lookup that failed`)
+        assert.doesNotMatch(reason, /gh auth login|Sign in/, "a failed lookup never asks the person to sign in")
+      }
+    } finally { await each.stop() }
+  }
   await writeFile(state, "user")
   // Standalone consumers without a host still retain a safe minimum retry time.
   const standalone = await githubStatus(repo)

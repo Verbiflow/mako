@@ -40,6 +40,12 @@ interface Deps {
   failed(conversationId: string, message: string): void
   /** How long the person's move waits for what its Sessions are finishing; 15 s unless a test says otherwise. */
   settleMs?: number
+  /**
+   * Whether this conversation runs on full access, which is the person's grant for an agent's own work: its move onto
+   * its own branch goes without asking, as `thread_move` and the other tools that act for the person do. Below it the
+   * person answers in the composer unless the project always allows it.
+   */
+  fullAccess?(conversationId: string): boolean
 }
 
 const SETTLE_MS = 15_000
@@ -107,7 +113,7 @@ export class WorkspaceMoves {
         harness: source.harness,
         project: place.project,
         changed: place.changed,
-        state: this.alwaysAllowed.includes(place.project) ? "allowed" : "asking",
+        state: this.alwaysAllowed.includes(place.project) || this.deps.fullAccess?.(conversationId) ? "allowed" : "asking",
       }
       if (source.title) request.title = source.title
       if (place.joins) request.joins = place.joins
@@ -122,8 +128,10 @@ export class WorkspaceMoves {
     const others = request.companions ?? 0
     const when = others ? `When this turn and those of this Thread's ${others === 1 ? "other Session" : `${others} other Sessions`} here end, Mako moves them all` : "When this turn ends, Mako moves the Session"
     const then = `${when} ${where}${carried}, and sends you a message there to carry on. Finish this turn now: make no further edits here, and tell the user you'll continue in the worktree.`
+    const why = this.alwaysAllowed.includes(request.project) ? "this project lets agents move without asking"
+      : this.deps.fullAccess?.(conversationId) ? "this Thread is on full access" : "the user allowed it"
     return request.state === "allowed"
-      ? `Allowed: this project lets agents move without asking. ${then}`
+      ? `Allowed: ${why}. ${then}`
       : `Asked the user. Their answer is in a card above the composer; worktree_status shows it. If they allow it: ${then} If they don't, keep working here.`
   }
 
@@ -332,6 +340,6 @@ function carriedText(request: WorkspaceMoveRequest): string {
   if (others) parts.push(`; other Threads' and the user's changes (${count(others)}) stay in the main checkout`)
   if (unsure) parts.push(request.bring
     ? `; the user chose to bring the ${count(unsure)} whose changes might be this Thread's or nobody can be named for`
-    : `; ${count(unsure)} whose changes might be this Thread's or nobody can be named for stay unless the user brings them`)
+    : `; ${count(unsure)} whose changes might be this Thread's or nobody can be named for stay, and worktree_bring stayed: true brings them once you've read them`)
   return parts.join("")
 }

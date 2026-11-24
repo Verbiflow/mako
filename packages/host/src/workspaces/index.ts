@@ -64,6 +64,7 @@ import type { MakoTools } from "../tools/index.js"
 import type { WorkspaceConversations } from "./conversations.js"
 import type { AgentHost } from "./agent-host.js"
 import type { HostEvent } from "../contracts/host-events-boot.js"
+import type { MoveOutcome } from "../contracts/workspace-moves.js"
 import type { ThreadWorktreeMoveDeps } from "./thread-worktree-moves.js"
 
 export { ArtifactPreviews, type ProviderArtifactPreview } from "./artifact-previews.js"
@@ -533,6 +534,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     move: async (id, bring) => (await worktreeMove().carry(id, { lead: true, tell: true, bring, waitTurn: true })).session.id,
     follow: async (id, told, lead, haste) => { await worktreeMove().carry(id, { lead: false, tell: told, after: lead, ...haste && { haste } }) },
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
+    fullAccess: (id) => sessionAccessTier(live.session(id)) === "full",
     failed: (id, message) => {
       hostWarn("moves", "a workspace move failed", { conversation: id, error: message })
       emit({ type: "notice", level: "error", message: "The agent didn't move to its own branch; it goes on where it was." })
@@ -636,7 +638,11 @@ function agentTools({ git, workspaces, live, store, emit, person, pullRequestsAs
   const { worktrees } = workspaces
   const cwd = (id: string) => live.session(id)?.cwd
   const changed = () => worktreesChanged(worktrees, emit)
-  const workspace = workspaceTools({ git, cwd, worktrees, moves, leaves, changed, pullsOf: listBranchPulls, recipesRoot: workspaces.recipes })
+  const adjusted = (conversationId: string, outcome: MoveOutcome) => {
+    emit({ type: "workspace-move-adjusted", conversationId, outcome })
+    changed()
+  }
+  const workspace = workspaceTools({ git, cwd, worktrees, moves, leaves, changed, adjusted, pullsOf: listBranchPulls, recipesRoot: workspaces.recipes })
   const pulls = pullRequestTools({
     git,
     async place(id) {
@@ -702,7 +708,7 @@ export function declareWorkspaceMethods(methods: MethodTable, { workspaces, move
   declareWorktreeMethods(methods, workspaces.worktrees, { heads: listPullHeads, branches: listBranchPulls }, workspaces.retention)
   declareProjectSettingsMethods(methods, workspaces.projectSettings)
   declareThreadScratchMethods(methods, workspaces.scratch, workspaces.threadData)
-  declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees)
+  declareMoveMethods(methods, movers.moves, (target) => moveHold(live, movers.worktreeMoves, movers.moves, target), workspaces.worktrees, (conversationId, outcome) => emit({ type: "workspace-move-adjusted", conversationId, outcome }))
   declarePlanBuildMethods(methods, workspaces.planBuilds)
   declareCheckoutHeadMethods(methods, workspaces.checkoutHeads)
   declareThreadAppMethods(methods, movers.appTools?.desk, movers.sampler, apps => movers.outputHints?.ready(apps) ?? false, windowShown)

@@ -230,7 +230,7 @@ const ONE_PER_REPOSITORY =
  * reached through the user's own `gh` login, as the Git sidebar reaches it.
  */
 export function registerPullRequestTools(server: McpServer, tools: PullRequestTools, conversationId: () => string, fullAccess: (conversation: string) => boolean): void {
-  // The person's access mode is the grant: on full access a Thread opens and merges as the next step of its work, without asking.
+  // The person's access mode is the grant for merging: on full access a Thread merges as the next step of its work, without asking.
   const full = (() => {
     try {
       return fullAccess(conversationId())
@@ -238,9 +238,8 @@ export function registerPullRequestTools(server: McpServer, tools: PullRequestTo
       return false
     }
   })()
-  const openWhen = full
-    ? "Call when this branch's work is ready for review, or when the user asks to open a pull request, or to push to or update the open one: this Thread is on full access, so it opens one without asking first."
-    : "Call when the user asks to open a pull request, or to push to or update the open one."
+  // Opening, pushing and re-running this branch's own checks are the Thread's own work at every access; merging isn't.
+  const openWhen = "Call when this branch's work is ready for review, when the user asks to open a pull request, or to push to or update the open one; do it yourself rather than asking the user to."
   const mergeWhen = full
     ? "Call when the user asks to merge this branch's pull request on GitHub, or when merging it is the next step of the work you were given: this Thread is on full access, so it merges without asking first."
     : "Call only when the user asks to merge this branch's pull request on GitHub: on this Thread's access, merging is the user's call, and only full access lets a Thread merge on its own."
@@ -291,7 +290,7 @@ export function registerPullRequestTools(server: McpServer, tools: PullRequestTo
   server.registerTool(
     "pull_request_rerun",
     {
-      description: `${full ? "Call when a check failed for a reason outside the branch's change, such as a flaky test or a runner that went away, or when the user asks" : "Call when the user asks"} to re-run this branch's failed checks: Re-run in the Git sidebar. Re-runs the failed jobs of each failed GitHub Actions run on the pushed commit; fix a failure the change caused instead. ${ONE_PER_REPOSITORY} in the project folder itself it re-runs the only open one's.`,
+      description: `Call when a check failed for a reason outside the branch's change, such as a flaky test or a runner that went away, or when the user asks to re-run this branch's failed checks: Re-run in the Git sidebar. Re-runs the failed jobs of each failed GitHub Actions run on the pushed commit; fix a failure the change caused instead. ${ONE_PER_REPOSITORY} in the project folder itself it re-runs the only open one's.`,
       inputSchema: z.object({ repository: REPOSITORY }).strict(),
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: true },
     },

@@ -3,8 +3,8 @@
   "roles": {
     "thread": {
       "total": {
-        "tokens": 14765,
-        "bytes": 64721
+        "tokens": 14956,
+        "bytes": 65509
       },
       "instructions": {
         "tokens": 726,
@@ -16,20 +16,20 @@
           "bytes": 1585
         },
         "worktree_bring": {
-          "tokens": 293,
-          "bytes": 1396
+          "tokens": 387,
+          "bytes": 1762
         },
         "worktree_move": {
-          "tokens": 493,
-          "bytes": 2206
+          "tokens": 521,
+          "bytes": 2321
         },
         "worktree_update": {
-          "tokens": 224,
-          "bytes": 1055
+          "tokens": 233,
+          "bytes": 1095
         },
         "worktree_merge": {
-          "tokens": 182,
-          "bytes": 873
+          "tokens": 196,
+          "bytes": 934
         },
         "worktree_remove": {
           "tokens": 144,
@@ -88,16 +88,16 @@
           "bytes": 2884
         },
         "pull_request_open": {
-          "tokens": 698,
-          "bytes": 3177
+          "tokens": 718,
+          "bytes": 3269
         },
         "pull_request_merge": {
           "tokens": 415,
           "bytes": 1857
         },
         "pull_request_rerun": {
-          "tokens": 228,
-          "bytes": 1030
+          "tokens": 254,
+          "bytes": 1144
         },
         "thread_history": {
           "tokens": 580,
@@ -175,8 +175,8 @@
     },
     "apex": {
       "total": {
-        "tokens": 14765,
-        "bytes": 64721
+        "tokens": 14956,
+        "bytes": 65509
       },
       "instructions": {
         "tokens": 726,
@@ -188,20 +188,20 @@
           "bytes": 1585
         },
         "worktree_bring": {
-          "tokens": 293,
-          "bytes": 1396
+          "tokens": 387,
+          "bytes": 1762
         },
         "worktree_move": {
-          "tokens": 493,
-          "bytes": 2206
+          "tokens": 521,
+          "bytes": 2321
         },
         "worktree_update": {
-          "tokens": 224,
-          "bytes": 1055
+          "tokens": 233,
+          "bytes": 1095
         },
         "worktree_merge": {
-          "tokens": 182,
-          "bytes": 873
+          "tokens": 196,
+          "bytes": 934
         },
         "worktree_remove": {
           "tokens": 144,
@@ -260,16 +260,16 @@
           "bytes": 2884
         },
         "pull_request_open": {
-          "tokens": 698,
-          "bytes": 3177
+          "tokens": 718,
+          "bytes": 3269
         },
         "pull_request_merge": {
           "tokens": 415,
           "bytes": 1857
         },
         "pull_request_rerun": {
-          "tokens": 228,
-          "bytes": 1030
+          "tokens": 254,
+          "bytes": 1144
         },
         "thread_history": {
           "tokens": 580,
@@ -347,8 +347,8 @@
     },
     "fin": {
       "total": {
-        "tokens": 15761,
-        "bytes": 69081
+        "tokens": 15952,
+        "bytes": 69869
       },
       "instructions": {
         "tokens": 726,
@@ -360,20 +360,20 @@
           "bytes": 1585
         },
         "worktree_bring": {
-          "tokens": 293,
-          "bytes": 1396
+          "tokens": 387,
+          "bytes": 1762
         },
         "worktree_move": {
-          "tokens": 493,
-          "bytes": 2206
+          "tokens": 521,
+          "bytes": 2321
         },
         "worktree_update": {
-          "tokens": 224,
-          "bytes": 1055
+          "tokens": 233,
+          "bytes": 1095
         },
         "worktree_merge": {
-          "tokens": 182,
-          "bytes": 873
+          "tokens": 196,
+          "bytes": 934
         },
         "worktree_remove": {
           "tokens": 144,
@@ -432,16 +432,16 @@
           "bytes": 2884
         },
         "pull_request_open": {
-          "tokens": 698,
-          "bytes": 3177
+          "tokens": 718,
+          "bytes": 3269
         },
         "pull_request_merge": {
           "tokens": 415,
           "bytes": 1857
         },
         "pull_request_rerun": {
-          "tokens": 228,
-          "bytes": 1030
+          "tokens": 254,
+          "bytes": 1144
         },
         "thread_history": {
           "tokens": 580,
@@ -523,8 +523,8 @@
     },
     "fin-apex": {
       "total": {
-        "tokens": 15761,
-        "bytes": 69081
+        "tokens": 15952,
+        "bytes": 69869
       },
       "instructions": {
         "tokens": 726,
@@ -536,20 +536,20 @@
           "bytes": 1585
         },
         "worktree_bring": {
-          "tokens": 293,
-          "bytes": 1396
+          "tokens": 387,
+          "bytes": 1762
         },
         "worktree_move": {
-          "tokens": 493,
-          "bytes": 2206
+          "tokens": 521,
+          "bytes": 2321
         },
         "worktree_update": {
-          "tokens": 224,
-          "bytes": 1055
+          "tokens": 233,
+          "bytes": 1095
         },
         "worktree_merge": {
-          "tokens": 182,
-          "bytes": 873
+          "tokens": 196,
+          "bytes": 934
         },
         "worktree_remove": {
           "tokens": 144,
@@ -608,16 +608,16 @@
           "bytes": 2884
         },
         "pull_request_open": {
-          "tokens": 698,
-          "bytes": 3177
+          "tokens": 718,
+          "bytes": 3269
         },
         "pull_request_merge": {
           "tokens": 415,
           "bytes": 1857
         },
         "pull_request_rerun": {
-          "tokens": 228,
-          "bytes": 1030
+          "tokens": 254,
+          "bytes": 1144
         },
         "thread_history": {
           "tokens": 580,
