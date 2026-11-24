@@ -1,14 +1,25 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.1"
   },
   "about": "Read missing.md and tell me what it says. Don't look for it anywhere else. A read of a file that does not exist fails, and the answer says so.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10ae3fa0ffejnSkJ0ZNT0mDc6",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_df6666ca0ffeM069xsSyOnTunK",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 read read {\"path\":\"/tmp/mako-pair/project/missing.md\"} error -> File not found: /tmp/mako-pair/project/missing.md details=[{\"path\":\"/tmp/mako-pair/project/missing.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: There is no missing.md in this project.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

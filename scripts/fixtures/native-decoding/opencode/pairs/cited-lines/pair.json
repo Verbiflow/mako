@@ -1,14 +1,25 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.1"
   },
   "about": "Read notes.md, then tell me in one sentence what its second line says, citing the file and that line. An answer that cites a file and a line of it, which Devin 3000.10.23's model marks up for its client to link.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10ae1e91ffe07zsVqgv6pRY5Y",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_df6663bffffe4lmF0uq985Do2j",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 read read {\"path\":\"/tmp/mako-pair/project/notes.md\"} -> Read file /tmp/mako-pair/project/notes.md, lines 1-2\\n1: The release ships on Friday.\\n2: QA signs off on Thursday. details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: Line 2 of notes.md says QA signs off on Thursday.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

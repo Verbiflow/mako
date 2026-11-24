@@ -1,14 +1,30 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.1"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / /compact / (resumed) / Without reading anything, which day did notes.md name? A turn, a manual compaction, the harness's process closed and the session resumed in a new one, then a turn that leans on the summary. What the harness replays while it opens is history.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10a9c8e2ffe8GpsYJYxTzRRjX",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_df6622d62ffeofxrKyUk89Oq32",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 read read {\"path\":\"/tmp/mako-pair/project/notes.md\"} -> Read file /tmp/mako-pair/project/notes.md, lines 1-2\\n1: The release ships on Friday.\\n2: QA signs off on Thursday. details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: The release ships on Friday.",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: Friday.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }

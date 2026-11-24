@@ -1,14 +1,25 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.1"
   },
   "about": "Run `echo hi > ../outside.txt` in the shell and tell me whether it worked. A command that writes outside the project, which a sandboxed harness refuses. Codex 0.159.3 sends no item for a command its sandbox refused; its rollout keeps the call.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10ae332affekboa4MNXx4eUJx",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_df66658c4fferZ2z5Yh0J5PnP4",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 shell shell {\"command\":\"echo hi > ../outside.txt\"} -> (no output)",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: That is what the shell reported.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }
