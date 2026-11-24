@@ -7,8 +7,8 @@ import { LINK_VERSION, SUPPORTED_VERSIONS, TREE_NOTICES_LINK_VERSION, negotiate 
 import { serveRuntime } from "../dist/runtime-client.js"
 import {
   TREE_NOTICES_CAPABILITY, TREE_NOTICES_HELD, TREE_NOTICES_HELD_BYTES, TREE_NOTICES_PATH, TREE_NOTICE_ADMITS_PER_MINUTE, TREE_NOTICE_BYTES, TREE_NOTICE_DEAD_LETTERS, TREE_NOTICE_FIN_SHARE, TREE_NOTICE_OP, TREE_NOTICE_UNKNOWN_CHILD_MS,
-  TreeNoticeAckSchema, TreeNoticeAnswerSchema, TreeNoticeDeliverySchema, TreeNoticeFromSchema, TreeNoticeRefusalSchema, TreeNoticeSchema,
-  admitTreeNotice, apexSessionOfStart, machineNoticesPath, newerTreeStanding, noticeIdHolds, noticeIdOf, sameTreeNotice, takesTreeNotices, treeNoticeBytes, treeNoticeAck, treeNoticeAckWord, treeNoticeDisposal, treeNoticeFits, treeNoticeOperation, treeNoticeRateOpen, treeNoticeRefusalText,
+  TREE_EDGES_PATH, TreeEdgeAnswerSchema, TreeEdgeAskSchema, TreeEdgeRefusalSchema, TreeEdgeSchema, TreeNoticeAckSchema, TreeNoticeAnswerSchema, TreeNoticeDeliverySchema, TreeNoticeFromSchema, TreeNoticeRefusalSchema, TreeNoticeSchema,
+  admitTreeNotice, apexSessionOfStart, decideTreeEdge, machineNoticesPath, newerTreeStanding, noticeIdHolds, noticeIdOf, sameTreeEdge, sameTreeNotice, takesTreeNotices, treeEdgeOfNotice, treeEdgeRefusalText, treeNoticeBytes, treeNoticeAck, treeNoticeAckWord, treeNoticeDisposal, treeNoticeFits, treeNoticeOperation, treeNoticeRateOpen, treeNoticeRefusalText,
 } from "../dist/tree-notices.js"
 
 const apex = { thread: "11111111-1111-4111-8111-111111111111", session: "22222222-2222-4222-8222-222222222222" }
@@ -22,6 +22,15 @@ const standing = (owner, seq, working = true) => ({ heard: 1, working, owner, se
 const noticeOf = (key, child = fin, more = {}) => {
   const report = { id: `report:${child}:${key}`, child, status: "progress", summary: `Step ${key}.`, ownerGeneration: 1, at: 1_700_000_000_000 }
   return { id: noticeIdOf(child, report.id), parent: apex, child, report, ...more }
+}
+
+/** The record of `child`, a Fin on `mac`, as its Apex's device keeps it with the account. */
+const edgeOf = (child = fin, more = {}) => ({ op: `start:${apex.session}:${child}`, apex, child, place: { kind: "device", device: mac }, ...more })
+
+/** A gateway whose account has `mac`'s Fins on record: the two every case names, and any more one does. */
+const recorded = (gateway, ...children) => {
+  for (const child of [fin, otherFin, ...children]) gateway.treeEdge(edgeOf(child))
+  return gateway
 }
 
 const settle = () => new Promise((resolve) => setImmediate(resolve))
@@ -257,22 +266,22 @@ describe("tree notices: the contract", () => {
 
 describe("tree notices: the fake gateway's mailbox", () => {
   test("a notice is admitted once: posted again it answers the same number, and the same ID carrying another report is a conflict", async () => {
-    const gateway = createFakeGateway()
+    const gateway = recorded(createFakeGateway())
     try {
       const sender = { kind: "device", device: mac }
       assert.deepEqual(await post(gateway, sender, noticeOf("1")), { admitted: true, seq: 1 })
       assert.deepEqual(await post(gateway, sender, noticeOf("2")), { admitted: true, seq: 2 })
       assert.deepEqual(await post(gateway, sender, noticeOf("1")), { admitted: true, seq: 1 }, "the first number it got")
       assert.deepEqual(await post(gateway, sender, { ...noticeOf("1"), report: { ...noticeOf("1").report, summary: "Another." } }), { admitted: false, reason: "conflict" })
-      assert.deepEqual(await post(gateway, sender, { ...noticeOf("1"), parent: { ...apex, thread: otherFin } }), { admitted: false, reason: "conflict" }, "or naming another Apex's Thread")
+      assert.deepEqual(await post(gateway, sender, { ...noticeOf("1"), parent: { ...apex, thread: otherFin } }), { admitted: false, reason: "forbidden" }, "and naming another Apex's Thread it's no record's notice")
       assert.deepEqual(gateway.heldNotices(apex.session).map((held) => [held.id, held.from.seq]), [[noticeOf("1").id, 1], [noticeOf("2").id, 2]], "held once each, in order")
       assert.deepEqual(gateway.heldNotices(apex.session)[0].from.place, { kind: "device", device: mac })
-      assert.equal(gateway.heldNotices(apex.session)[0].from.op, undefined, "a device's credential names no start")
+      assert.equal(gateway.heldNotices(apex.session)[0].from.op, edgeOf().op, "stamped with its record's start, which a device's credential doesn't name")
     } finally { await gateway.close() }
   })
 
   test("a notice that breaks the ID rule, says more than a notice does, or is over 2 MiB is refused and never held", async () => {
-    const gateway = createFakeGateway()
+    const gateway = recorded(createFakeGateway())
     try {
       const sender = { kind: "device", device: mac }
       const notice = noticeOf("1")
@@ -289,7 +298,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
 
   test("a Fin posts at most 20 times a minute, every post counted: a new notice, one posted again, one said again as it stands, and one refused", async () => {
     let at = 1_700_000_000_000
-    const gateway = createFakeGateway({ now: () => new Date(at) })
+    const gateway = recorded(createFakeGateway({ now: () => new Date(at) }))
     try {
       const sender = { kind: "device", device: mac }
       for (let index = 0; index < TREE_NOTICE_ADMITS_PER_MINUTE; index += 1) assert.equal((await post(gateway, sender, noticeOf(`a${index}`))).admitted, true)
@@ -320,10 +329,11 @@ describe("tree notices: the fake gateway's mailbox", () => {
 
   test("a Session holds at most 500 notices from all its Fins, and 125 from one: a Fin at its share is full alone, and one held still answers its number", async () => {
     let at = 1_700_000_000_000
-    const gateway = createFakeGateway({ now: () => new Date(at) })
+    const gateway = recorded(createFakeGateway({ now: () => new Date(at) }))
     try {
       const sender = { kind: "device", device: mac }
       const childOf = (each) => `66666666-6666-4666-8666-${String(each).padStart(12, "0")}`
+      recorded(gateway, ...[0, 1, 2, 3, 9].map(childOf), "77777777-7777-4777-8777-777777777777")
       const share = TREE_NOTICES_HELD / TREE_NOTICE_FIN_SHARE
       let held = 0
       // Four Fins, each to its share, a minute's posts at a time.
@@ -363,7 +373,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
   })
 
   test("a Session's owner hears its notices one at a time, in the order they were admitted, and each it hears is deleted", async () => {
-    const gateway = createFakeGateway()
+    const gateway = recorded(createFakeGateway())
     try {
       const apexHost = await owner(gateway, "rt-apex")
       const sender = { kind: "device", device: mac }
@@ -387,7 +397,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
   })
 
   test("while the owner is off, or on a link that never said it takes notices, they're held; they go, in order, when it's on and says so", async () => {
-    const gateway = createFakeGateway()
+    const gateway = recorded(createFakeGateway())
     try {
       const sender = { kind: "device", device: mac }
       await post(gateway, sender, noticeOf("1"))
@@ -410,7 +420,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
   })
 
   test("an owner that goes before answering leaves the notice held, and it's delivered again when it's back", async () => {
-    const gateway = createFakeGateway()
+    const gateway = recorded(createFakeGateway())
     try {
       const apexHost = await owner(gateway, "rt-apex")
       await post(gateway, { kind: "device", device: mac }, noticeOf("1"))
@@ -429,7 +439,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
   })
 
   test("a Session that changes owner while a notice is held: its new owner takes it, whatever the one before answers late", async () => {
-    const gateway = createFakeGateway()
+    const gateway = recorded(createFakeGateway())
     try {
       const before = await owner(gateway, "rt-mac")
       await post(gateway, { kind: "device", device: mac }, noticeOf("1"))
@@ -458,7 +468,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
   })
 
   test("a Fin the owner doesn't know yet: its notices are kept, another Fin's go past them, and they're delivered in order at the next admit", async () => {
-    const gateway = createFakeGateway()
+    const gateway = recorded(createFakeGateway())
     try {
       const apexHost = await owner(gateway, "rt-apex")
       const sender = { kind: "device", device: mac }
@@ -491,7 +501,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
 
   test("an answer that is none of the five keeps the notice, and a conflict puts it aside, the newest 32 of them", async () => {
     let at = 1_700_000_000_000
-    const gateway = createFakeGateway({ now: () => new Date(at) })
+    const gateway = recorded(createFakeGateway({ now: () => new Date(at) }))
     try {
       const apexHost = await owner(gateway, "rt-apex")
       const sender = { kind: "device", device: mac }
@@ -522,7 +532,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
   })
 
   test("a held notice said again with a newer standing keeps its number and its place, and reaches the owner with the newest", async () => {
-    const gateway = createFakeGateway()
+    const gateway = recorded(createFakeGateway())
     try {
       const sender = { kind: "device", device: mac }
       assert.deepEqual(await post(gateway, sender, noticeOf("1", fin, { standing: standing(1, 1) })), { admitted: true, seq: 1 })
@@ -548,7 +558,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
   })
 
   test("a Fin's last notice, taken by its owner, is the same notice when it's posted again: its number, nothing held, and only a newer standing sent on, once", async () => {
-    const gateway = createFakeGateway()
+    const gateway = recorded(createFakeGateway())
     try {
       const sender = { kind: "device", device: mac }
       const apexHost = await owner(gateway, "rt-apex")
@@ -581,10 +591,11 @@ describe("tree notices: the fake gateway's mailbox", () => {
   })
 
   test("a Session holds at most 16 MiB of notices and one Fin 4 MiB of them: one that would take either over is full, and a notice over 2 MiB is too large", async () => {
-    const gateway = createFakeGateway()
+    const gateway = recorded(createFakeGateway())
     try {
       const sender = { kind: "device", device: mac }
       const childOf = (each) => `66666666-6666-4666-8666-${String(each).padStart(12, "0")}`
+      recorded(gateway, ...[0, 1, 2, 3, 9].map(childOf), "77777777-7777-4777-8777-777777777777")
       const sized = (key, bytes, child = fin) => {
         const notice = noticeOf(key, child)
         notice.report.summary = ""
@@ -614,7 +625,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
 
   test("a notice its owner doesn't know the Fin of is kept for an hour from its admission, then put aside at the next pass", async () => {
     let at = 1_700_000_000_000
-    const gateway = createFakeGateway({ now: () => new Date(at) })
+    const gateway = recorded(createFakeGateway({ now: () => new Date(at) }))
     try {
       const sender = { kind: "device", device: mac }
       const unknown = { refused: "unknown-child", why: "Its start's answer may not have reached this device yet." }
@@ -714,7 +725,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
   })
 
   test("an archived Apex's Session holds nothing, and a notice for it is gone", async () => {
-    const gateway = createFakeGateway()
+    const gateway = recorded(createFakeGateway())
     try {
       const sender = { kind: "device", device: mac }
       await post(gateway, sender, noticeOf("1"))
@@ -724,6 +735,193 @@ describe("tree notices: the fake gateway's mailbox", () => {
       assert.deepEqual(await post(gateway, sender, noticeOf("2")), { admitted: false, reason: "gone" })
       const apexHost = await owner(gateway, "rt-apex")
       assert.equal(await apexHost.quiet(), true)
+    } finally { await gateway.close() }
+  })
+})
+
+describe("tree notices: the records of Fins off their Apexes' hosts", () => {
+  const apexMac = "88888888-8888-4888-8888-888888888888"
+  const edge = edgeOf()
+  const ask = (gateway, device, body) => gateway.askTreeEdge(device, JSON.stringify(body))
+  const keep = (record = edge) => ({ ask: "keep", edge: record })
+  const end = (op = edge.op) => ({ ask: "end", op })
+
+  test("a record is a start of its own Apex's Session, the Apex, the child and where it runs, and nothing else", () => {
+    assert.equal(TREE_EDGES_PATH, "/v1/tree/edges")
+    assert.deepEqual(TreeEdgeSchema.parse(edge), edge)
+    assert.equal(TreeEdgeSchema.safeParse({ ...edge, place: { kind: "cloud", thread: machine.thread } }).success, true, "a cloud Thread is a place too")
+    assert.equal(TreeEdgeSchema.safeParse({ ...edge, op: "start:99999999-9999-4999-8999-999999999999:fix" }).success, false, "a start of another Session")
+    assert.equal(TreeEdgeSchema.safeParse({ ...edge, op: "migrated:1" }).success, false, "an op that names no Session")
+    assert.equal(TreeEdgeSchema.safeParse({ ...edge, place: { kind: "device", device: "studio" } }).success, false, "a device by its ID, never its name")
+    assert.equal(TreeEdgeSchema.safeParse({ ...edge, place: { kind: "cloud", thread: machine.thread, machine: machine.machine } }).success, false, "a cloud Thread, not the machine it has now")
+    for (const more of [{ name: "parser" }, { brief: "Fix it." }, { state: "working" }, { apex: { ...apex, device: apexMac } }])
+      assert.equal(TreeEdgeSchema.safeParse({ ...edge, ...more }).success, false, `it isn't the roster: ${Object.keys(more)[0]}`)
+    for (const left of ["op", "apex", "child", "place"]) assert.equal(TreeEdgeSchema.safeParse({ ...edge, [left]: undefined }).success, false, `${left} is required`)
+  })
+
+  test("an ask keeps a record or ends one by its start, and answers done or one of three refusals, each with its words", () => {
+    assert.deepEqual(TreeEdgeAskSchema.parse(keep()), keep())
+    assert.deepEqual(TreeEdgeAskSchema.parse(end()), end())
+    assert.equal(TreeEdgeAskSchema.safeParse({ ask: "keep", edge, op: edge.op }).success, false)
+    assert.equal(TreeEdgeAskSchema.safeParse({ ask: "end", edge }).success, false, "an end names the start alone")
+    assert.equal(TreeEdgeAskSchema.safeParse({ ask: "list" }).success, false)
+    assert.deepEqual(TreeEdgeRefusalSchema.options, ["conflict", "forbidden", "invalid"])
+    assert.equal(TreeEdgeAnswerSchema.safeParse({ ok: true }).success, true)
+    assert.equal(TreeEdgeAnswerSchema.safeParse({ ok: false, reason: "conflict" }).success, true)
+    assert.equal(TreeEdgeAnswerSchema.safeParse({ ok: false, reason: "gone" }).success, false)
+    assert.equal(TreeEdgeAnswerSchema.safeParse({ ok: false }).success, false)
+    const words = TreeEdgeRefusalSchema.options.map(treeEdgeRefusalText)
+    assert.equal(new Set(words).size, 3)
+    for (const text of words) assert.match(text, /\.$/)
+  })
+
+  test("deciding: only the device that owns the Apex's Session keeps or ends a record, a repeat changes nothing, and another record under the start is a conflict", () => {
+    const owns = (session) => session === apex.session
+    const nobody = () => false
+    const kept = { edge, ending: false }
+    assert.deepEqual(decideTreeEdge(keep(), undefined, owns), { ok: true, does: "keep" })
+    assert.deepEqual(decideTreeEdge(keep(), kept, owns), { ok: true, does: "nothing" }, "the same record again")
+    assert.deepEqual(decideTreeEdge(keep({ place: edge.place, child: edge.child, apex: { session: apex.session, thread: apex.thread }, op: edge.op }), kept, owns), { ok: true, does: "nothing" }, "whatever order its fields come in")
+    assert.equal(sameTreeEdge(edge, { ...edge, child: otherFin }), false)
+    for (const [what, other] of [["another child", { child: otherFin }], ["another place", { place: { kind: "device", device: apexMac } }], ["a cloud Thread", { place: { kind: "cloud", thread: machine.thread } }], ["another Thread of the Apex's", { apex: { ...apex, thread: otherFin } }]])
+      assert.deepEqual(decideTreeEdge(keep({ ...edge, ...other }), kept, owns), { ok: false, reason: "conflict" }, what)
+    assert.deepEqual(decideTreeEdge(keep(), undefined, nobody), { ok: false, reason: "forbidden" })
+    assert.deepEqual(decideTreeEdge(keep({ ...edge, child: otherFin }), kept, nobody), { ok: false, reason: "forbidden" }, "asked before anything is said of what's on record")
+    assert.deepEqual(decideTreeEdge(end(), kept, owns), { ok: true, does: "end" })
+    assert.deepEqual(decideTreeEdge(end(), undefined, owns), { ok: true, does: "nothing" }, "ended already, or never kept")
+    assert.deepEqual(decideTreeEdge(end(), kept, nobody), { ok: false, reason: "forbidden" })
+    assert.deepEqual(decideTreeEdge(end(), undefined, nobody), { ok: false, reason: "forbidden" }, "the same with no record, so nothing is learned of one")
+    assert.deepEqual(decideTreeEdge(end("migrated:1"), undefined, () => true), { ok: false, reason: "forbidden" }, "a start that names no Session is nobody's to end")
+    // Ended with notices still held under it: it stands until they're taken, ended again changes nothing, kept again it stands.
+    const ending = { edge, ending: true }
+    assert.deepEqual(decideTreeEdge(end(), ending, owns), { ok: true, does: "nothing" })
+    assert.deepEqual(decideTreeEdge(keep(), ending, owns), { ok: true, does: "keep" })
+    assert.deepEqual(decideTreeEdge(keep({ ...edge, child: otherFin }), ending, owns), { ok: false, reason: "conflict" })
+  })
+
+  test("a device's notice is admitted under the oldest record that names the device, the child and the Apex, Thread and Session both", () => {
+    const notice = noticeOf("1")
+    const later = { ...edge, op: `start:${apex.session}:again` }
+    const cloud = { ...edge, op: `start:${apex.session}:cloud`, place: { kind: "cloud", thread: machine.thread } }
+    assert.equal(treeEdgeOfNotice([cloud, edge, later], mac, notice), edge, "the oldest, and never a cloud Thread's")
+    assert.equal(treeEdgeOfNotice([edge], apexMac, notice), undefined, "another device")
+    assert.equal(treeEdgeOfNotice([edge], mac, noticeOf("1", otherFin)), undefined, "another child")
+    assert.equal(treeEdgeOfNotice([edge], mac, { ...notice, parent: { ...apex, thread: otherFin } }), undefined, "another Thread of the Apex's")
+    assert.equal(treeEdgeOfNotice([edge], mac, { ...notice, parent: { ...apex, session: otherFin } }), undefined, "another Session")
+    assert.equal(treeEdgeOfNotice([], mac, notice), undefined)
+  })
+
+  test("the fake keeps a record for the device whose runtime owns its Apex's Session, once, and refuses any other device, another record under the start, and what isn't an ask", async () => {
+    const gateway = createFakeGateway()
+    try {
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: false, reason: "forbidden" }, "before the account lists who owns the Session")
+      await owner(gateway, `d-${apexMac}`, { takes: false })
+      assert.deepEqual(await ask(gateway, mac, keep()), { ok: false, reason: "forbidden" }, "the Fin's own device")
+      assert.deepEqual(gateway.treeEdges(), [])
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true }, "again")
+      assert.deepEqual(gateway.treeEdges(), [{ edge, ending: false }], "kept once")
+      assert.deepEqual(await ask(gateway, apexMac, keep({ ...edge, child: otherFin })), { ok: false, reason: "conflict" })
+      assert.deepEqual(await ask(gateway, apexMac, keep({ ...edge, place: { kind: "device", device: apexMac } })), { ok: false, reason: "conflict" })
+      assert.deepEqual(gateway.treeEdges(), [{ edge, ending: false }], "and the first stands")
+      for (const body of [{ ask: "keep", edge: { ...edge, op: "migrated:1" } }, { ask: "keep", edge: { ...edge, name: "parser" } }, { ask: "end" }, { ask: "list" }, edge])
+        assert.deepEqual(await ask(gateway, apexMac, body), { ok: false, reason: "invalid" })
+      assert.deepEqual(await gateway.askTreeEdge(apexMac, "not json"), { ok: false, reason: "invalid" })
+      assert.deepEqual(await ask(gateway, mac, end()), { ok: false, reason: "forbidden" }, "nor does another device end it")
+      assert.deepEqual(gateway.treeEdges().length, 1)
+    } finally { await gateway.close() }
+  })
+
+  test("a device posts only for a child on record as its own: admitted under the record's start and held for the record's Apex's Session, and refused for any other with nothing held", async () => {
+    const gateway = createFakeGateway()
+    try {
+      const sender = { kind: "device", device: mac }
+      assert.deepEqual(await post(gateway, sender, noticeOf("1")), { admitted: false, reason: "forbidden" }, "no record yet")
+      const apexHost = await owner(gateway, `d-${apexMac}`, { takes: false })
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
+      assert.deepEqual(await post(gateway, sender, noticeOf("1", otherFin)), { admitted: false, reason: "forbidden" }, "a child with no record")
+      assert.deepEqual(await post(gateway, { kind: "device", device: apexMac }, noticeOf("1")), { admitted: false, reason: "forbidden" }, "a child on record as another device's")
+      assert.deepEqual(await post(gateway, sender, { ...noticeOf("1"), parent: { ...apex, session: otherFin } }), { admitted: false, reason: "forbidden" }, "for another Session than the record's Apex's")
+      assert.deepEqual(await post(gateway, sender, { ...noticeOf("1"), parent: { ...apex, thread: otherFin } }), { admitted: false, reason: "forbidden" }, "or another Thread")
+      assert.deepEqual(gateway.heldNotices(apex.session), [], "nothing of any was held")
+      assert.deepEqual(gateway.heldNotices(otherFin), [])
+      assert.equal(await apexHost.quiet(), true, "or delivered")
+      assert.deepEqual(await post(gateway, sender, noticeOf("1")), { admitted: true, seq: 1 })
+      assert.deepEqual(gateway.heldNotices(apex.session).map((held) => held.from), [{ op: edge.op, place: { kind: "device", device: mac }, seq: 1, at: gateway.heldNotices(apex.session)[0].from.at }], "stamped with the record's start and the device its credential names")
+      // A record for a cloud Thread admits no device, and a machine is admitted as it was, by the start it was made for.
+      assert.deepEqual(await ask(gateway, apexMac, keep({ ...edge, op: `start:${apex.session}:cloud`, child: otherFin, place: { kind: "cloud", thread: machine.thread } })), { ok: true })
+      assert.deepEqual(await post(gateway, sender, noticeOf("1", otherFin)), { admitted: false, reason: "forbidden" })
+      gateway.finMachine({ ...machine, op: `start:${apex.session}:cloud`, child: otherFin })
+      assert.deepEqual(await post(gateway, { kind: "machine", machine: machine.machine }, noticeOf("1", otherFin)), { admitted: true, seq: 2 })
+    } finally { await gateway.close() }
+  })
+
+  test("a device's notice reaches the Session's owner saying its record's start, and two records of one device are two Fins: the same ID under each is neither a repeat nor a conflict", async () => {
+    const gateway = createFakeGateway()
+    try {
+      const apexHost = await owner(gateway, `d-${apexMac}`)
+      const second = { ...edge, op: `start:${apex.session}:docs`, child: otherFin }
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
+      assert.deepEqual(await ask(gateway, apexMac, keep(second)), { ok: true })
+      const sender = { kind: "device", device: mac }
+      assert.deepEqual(await post(gateway, sender, noticeOf("1")), { admitted: true, seq: 1 })
+      const first = await apexHost.delivered()
+      assert.deepEqual([first.notice.from.op, first.notice.from.place, first.notice.child], [edge.op, { kind: "device", device: mac }, fin])
+      assert.deepEqual(first.operation.actor, { kind: "runtime", runtimeId: `gateway:${apex.thread}` }, "as the account itself, acting on the Apex's Thread")
+      apexHost.answer(first.operation, { heard: true })
+      assert.deepEqual(await post(gateway, sender, noticeOf("1", otherFin)), { admitted: true, seq: 2 })
+      const next = await apexHost.delivered()
+      assert.deepEqual([next.notice.from.op, next.notice.child], [second.op, otherFin])
+      apexHost.answer(next.operation, { heard: true })
+      await settle()
+      assert.deepEqual(await post(gateway, sender, noticeOf("1")), { admitted: true, seq: 1 }, "each Fin's last notice is its own")
+      assert.deepEqual(gateway.heldNotices(apex.session), [])
+    } finally { await gateway.close() }
+  })
+
+  test("a record ended with nothing held goes at once; with notices held it stands until they're taken, so a device is refused for want of one only while nothing of its Fin's is held", async () => {
+    const gateway = createFakeGateway()
+    try {
+      const sender = { kind: "device", device: mac }
+      let apexHost = await owner(gateway, `d-${apexMac}`, { takes: false })
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
+      assert.deepEqual(await ask(gateway, apexMac, end()), { ok: true })
+      assert.deepEqual(gateway.treeEdges(), [], "nothing held: gone")
+      assert.deepEqual(await ask(gateway, apexMac, end()), { ok: true }, "ended again is done already")
+      assert.deepEqual(await post(gateway, sender, noticeOf("1")), { admitted: false, reason: "forbidden" })
+      // Kept again, it admits; ended while its notice is held, it admits still.
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
+      assert.deepEqual(await post(gateway, sender, noticeOf("1")), { admitted: true, seq: 1 })
+      assert.deepEqual(await ask(gateway, apexMac, end()), { ok: true })
+      assert.deepEqual(gateway.treeEdges(), [{ edge, ending: true }])
+      assert.deepEqual(await post(gateway, sender, noticeOf("2")), { admitted: true, seq: 2 }, "behind the one held, in its order")
+      // Kept again while it was ending, it stands; ended once more, it goes when its owner has taken what's held.
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
+      assert.deepEqual(gateway.treeEdges(), [{ edge, ending: false }])
+      assert.deepEqual(await ask(gateway, apexMac, end()), { ok: true })
+      apexHost.link.close()
+      await settle()
+      apexHost = await owner(gateway, `d-${apexMac}`)
+      for (const seq of [1, 2]) {
+        const delivered = await apexHost.delivered()
+        assert.equal(delivered.notice.from.seq, seq)
+        assert.equal(gateway.treeEdges().length, 1, "still on record while this one is held")
+        apexHost.answer(delivered.operation, { heard: true })
+      }
+      await settle()
+      assert.deepEqual(gateway.treeEdges(), [], "taken: gone")
+      assert.deepEqual(await post(gateway, sender, noticeOf("3")), { admitted: false, reason: "forbidden" })
+      assert.deepEqual(gateway.heldNotices(apex.session), [])
+      // An archived Apex's records go with what was held for it, and a notice under one that stands is gone.
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
+      apexHost.link.close()
+      await settle()
+      assert.deepEqual(await post(gateway, sender, noticeOf("4")), { admitted: true, seq: 3 })
+      assert.deepEqual(await ask(gateway, apexMac, end()), { ok: true })
+      gateway.archiveTree(apex.session)
+      assert.deepEqual(gateway.treeEdges(), [], "ending, and what held it was dropped")
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
+      assert.deepEqual(await post(gateway, sender, noticeOf("5")), { admitted: false, reason: "gone" })
     } finally { await gateway.close() }
   })
 })

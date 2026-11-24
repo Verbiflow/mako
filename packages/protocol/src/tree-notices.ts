@@ -23,10 +23,23 @@ import { PROTOCOL_VERSION } from "./version.js"
  *
  * A notice is its ID and its report. How its Fin stands (`standing`) is the Fin's latest word on itself, said again
  * with the same report whenever it changes: the newest replaces the one before, and is never a conflict.
+ *
+ * A cloud machine is the account's own making, so the account knows whose Fin it runs. A device isn't: the account
+ * knows a Fin on one only by the record its Apex's device keeps there (`TreeEdgeSchema`), and admits a device's notice
+ * only under such a record. A Fin on a device whose Apex's device keeps none sends its notices to that device itself.
  */
 
-/** Where a device's host posts a notice of a Fin it runs, and reads the answer (`TreeNoticeAnswerSchema`). A device's path: a machine has its own. */
+/**
+ * Where a device's host posts a notice of a Fin it runs, on the device's own credential, and reads the answer
+ * (`TreeNoticeAnswerSchema`). A device's path: a machine has its own.
+ */
 export const TREE_NOTICES_PATH = "/v1/tree/notices"
+
+/**
+ * Where the device that owns an Apex's Session keeps the account's record of a Fin it placed elsewhere, and ends it:
+ * it posts an ask (`TreeEdgeAskSchema`) on its own credential and reads the answer (`TreeEdgeAnswerSchema`).
+ */
+export const TREE_EDGES_PATH = "/v1/tree/edges"
 
 /** Where a cloud machine's host posts a notice of its Fin, on the machine's credential, and reads the same answer. */
 export function machineNoticesPath(machine: string): string {
@@ -142,9 +155,9 @@ export type TreeNotice = z.infer<typeof TreeNoticeSchema>
 /**
  * Who sent a notice, as the account says it from the sender's credential: where the Fin runs (a cloud Thread's
  * machine under its generation, or a device), the notice's number among its Apex's Session's, and when it was admitted.
- * `op` is the start that made the Fin, wherever the account has it on record: a machine's is the start the machine
- * was made for, and a device's is the one its Apex's device recorded with the account for that Fin. A device's
- * credential names no start by itself, so a device's notice goes without `op` until the account has that record.
+ * `op` is the start that made the Fin, as the account has it on record: a machine's is the start the machine was made
+ * for, and a device's is its record's (`TreeEdgeSchema`), which its Apex's device keeps with the account. A device's
+ * credential names no start by itself, so its notice is admitted only under such a record, and is stamped with it.
  */
 export const TreeNoticeFromSchema = z.lazy(() => z.object({
   op: z.string().min(1).max(512).optional(),
@@ -164,7 +177,8 @@ export type TreeNoticeDelivery = z.infer<typeof TreeNoticeDeliverySchema>
 /**
  * Why a notice wasn't admitted. `full` and `rate` pass: the sender keeps its report and posts it again. The rest don't,
  * and posting the same again answers the same: `gone` is as good as taken, since nothing is left to hear it;
- * `conflict` is another report under the same ID; `forbidden` is a notice for a Fin or an Apex that isn't the sender's.
+ * `conflict` is another report under the same ID; `forbidden` is a notice for a Fin or an Apex that isn't the sender's:
+ * a machine's for another child or Apex than its own, a device's with no record that names the three (`treeEdgeOfNotice`).
  */
 export const TreeNoticeRefusalSchema = z.enum(["conflict", "gone", "full", "rate", "invalid", "too-large", "forbidden"])
 export type TreeNoticeRefusal = z.infer<typeof TreeNoticeRefusalSchema>
@@ -225,6 +239,111 @@ export function newerTreeStanding(said: TreeStandingMark | undefined, next: Tree
   return !said || next.owner > said.owner || (next.owner === said.owner && next.seq > said.seq)
 }
 
+/**
+ * The account's record of a Fin that runs off its Apex's host: the start that made it (`op`), its Apex, its Thread as
+ * its Apex knows it (`child`) and where it runs, a device of the account or a cloud Thread. The device that owns the
+ * Apex's Session keeps it there once the Fin is placed, and it's what the account holds a device's notices to: only the
+ * device a record names posts for that record's child, and only to that record's Apex. It says nothing else of the
+ * Fin, and isn't the tree: a Fin with no record is one its Apex's device alone knows.
+ *
+ * The start is one of its own Apex's Session's (`apexSessionOfStart`); a record whose start names another isn't one.
+ */
+const Edge = z.object({
+  op: z.string().min(1).max(512),
+  apex: z.object({ thread: z.uuid(), session: z.uuid() }).strict(),
+  child: z.uuid(),
+  place: z.discriminatedUnion("kind", [
+    z.object({ kind: z.literal("device"), device: z.uuid() }).strict(),
+    z.object({ kind: z.literal("cloud"), thread: z.string().regex(/^t-[0-9a-f]{16}$/) }).strict(),
+  ]),
+}).strict()
+
+const TREE_EDGE_RULE = "A record's start is start:{its Apex's Session}:{clientKey}"
+
+export const TreeEdgeSchema = z.lazy(() => Edge.refine((edge) => apexSessionOfStart(edge.op) === edge.apex.session, TREE_EDGE_RULE))
+export type TreeEdge = z.infer<typeof TreeEdgeSchema>
+
+/**
+ * What an Apex's device asks of the account's records: `keep` this one, or `end` the one under a start. Either again
+ * is the same ask, so one whose answer was lost is asked again as it is.
+ */
+export const TreeEdgeAskSchema = z.lazy(() => z.discriminatedUnion("ask", [
+  z.object({ ask: z.literal("keep"), edge: TreeEdgeSchema }).strict(),
+  z.object({ ask: z.literal("end"), op: z.string().min(1).max(512) }).strict(),
+]))
+export type TreeEdgeAsk = z.infer<typeof TreeEdgeAskSchema>
+
+/**
+ * Why an ask wasn't done, and asking the same again answers the same: `forbidden` is an ask from a device that doesn't
+ * own the record's Apex's Session, as the account lists who owns it; `conflict` is a start already on record with
+ * another Apex, child or place; `invalid` is an ask that isn't one.
+ */
+export const TreeEdgeRefusalSchema = z.enum(["conflict", "forbidden", "invalid"])
+export type TreeEdgeRefusal = z.infer<typeof TreeEdgeRefusalSchema>
+
+/** The answer to an ask: done (a record kept that was kept already, or ended that wasn't there, is done too), or why not. */
+export const TreeEdgeAnswerSchema = z.lazy(() => z.discriminatedUnion("ok", [
+  z.object({ ok: z.literal(true) }),
+  z.object({ ok: z.literal(false), reason: TreeEdgeRefusalSchema }),
+]))
+export type TreeEdgeAnswer = z.infer<typeof TreeEdgeAnswerSchema>
+
+/** Each refusal as the Apex's host logs it. */
+export function treeEdgeRefusalText(reason: TreeEdgeRefusal): string {
+  switch (reason) {
+    case "conflict": return "That start is on record already, with another Apex, Fin or place."
+    case "forbidden": return "This device doesn't own that Apex's Session, as the account lists it."
+    case "invalid": return `${TREE_EDGE_RULE}, and an ask keeps a record or ends one.`
+  }
+}
+
+/** Whether two records are the same record: the same start, Apex, child and place. */
+export function sameTreeEdge(left: TreeEdge, right: TreeEdge): boolean {
+  return canonical(JSON.parse(JSON.stringify(left))) === canonical(JSON.parse(JSON.stringify(right)))
+}
+
+/**
+ * A record as the account keeps it. `ending`: its Apex's device ended it while the account still held notices admitted
+ * under it, so it stands until they're taken and goes then.
+ */
+export type KeptTreeEdge = { edge: TreeEdge; ending: boolean }
+
+/** What the account does with an ask it takes: `keep` the record, `end` the one it has, or `nothing`, a plain repeat. */
+export type TreeEdgeDecision = { ok: true; does: "keep" | "end" | "nothing" } | { ok: false; reason: "conflict" | "forbidden" }
+
+/**
+ * What the account answers an ask, from the record it has under that start (`kept`) and whether the asking device owns
+ * a Session (`owns`), by the account's own list of who owns each and never by the ask.
+ *
+ * Only the device that owns a record's Apex's Session keeps it or ends it. Which Session that is comes from the ask
+ * (a record's Apex, or the Session an ended start names, `apexSessionOfStart`) and is settled before anything is said
+ * of what's on record, so a device learns nothing of another Apex's records. A record kept again as it is changes
+ * nothing; the same start with another Apex, child or place is a conflict; and one that was ending stands again. Ending
+ * a start with no record is done already.
+ *
+ * `end` is the account's to carry out: with nothing held under the record it goes at once, and with notices still
+ * held it's `ending` until they're taken, admitting as before. So a device is refused a notice for want of a record
+ * only while the account holds nothing of that Fin's.
+ */
+export function decideTreeEdge(ask: TreeEdgeAsk, kept: KeptTreeEdge | undefined, owns: (session: string) => boolean): TreeEdgeDecision {
+  const session = ask.ask === "end" ? apexSessionOfStart(ask.op) : ask.edge.apex.session
+  if (session === undefined || !owns(session)) return { ok: false, reason: "forbidden" }
+  if (ask.ask === "end") return { ok: true, does: kept && !kept.ending ? "end" : "nothing" }
+  if (!kept) return { ok: true, does: "keep" }
+  if (!sameTreeEdge(kept.edge, ask.edge)) return { ok: false, reason: "conflict" }
+  return { ok: true, does: kept.ending ? "keep" : "nothing" }
+}
+
+/**
+ * The record a device's notice is admitted under, among the account's (`edges`, oldest first): the oldest that names
+ * that device as the Fin's place, the notice's child as its Fin and the notice's Apex, Thread and Session both, as its
+ * own. None, and the notice is `forbidden`. The device is the one its credential names. The notice is then held for
+ * the record's Apex's Session, under the record's start, which is what the account says sent it (`from.op`).
+ */
+export function treeEdgeOfNotice(edges: readonly TreeEdge[], device: string, notice: Pick<TreeNotice, "child" | "parent">): TreeEdge | undefined {
+  return edges.find((edge) => edge.place.kind === "device" && edge.place.device === device && edge.child === notice.child && edge.apex.thread === notice.parent.thread && edge.apex.session === notice.parent.session)
+}
+
 /** A notice the account holds for its Apex's Session: the number it was admitted at, and its bytes as posted. */
 export type HeldTreeNotice = { seq: number; bytes: number; notice: TreeNotice }
 
@@ -249,6 +368,7 @@ export type TreeNoticeAdmission =
  * under its start), how many notices and bytes the Session holds from every Fin (`count`, `bytes`), the last number
  * given there (`head`, 0 before any) and the last notice admitted from the sender (`last`). A notice is the sender's
  * own by its start and its ID together, so another Fin's notice under the same ID is neither this one nor a conflict.
+ * A machine's start is the one it was made for, and a device's is its record's (`treeEdgeOfNotice`).
  */
 export type TreeNoticeMailbox = { own: readonly HeldTreeNotice[]; count: number; bytes: number; head: number; last?: LastTreeNotice }
 

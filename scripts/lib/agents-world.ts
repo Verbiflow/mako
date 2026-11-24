@@ -250,6 +250,8 @@ export interface WorldOptions {
   away?: AgentsDeps["away"]
   /** On a cloud machine: where a Fin's notices go, the account (`AgentsDeps.post`); without it they go to its Apex's device. */
   post?: AgentsDeps["post"]
+  /** On a device: the account, for its trees (`AgentsDeps.tree`); without it every notice goes from device to device. */
+  tree?: AgentsDeps["tree"]
   /** The Git remote a folder is a checkout of (`AgentsDeps.remoteOf`). */
   remoteOf?: AgentsDeps["remoteOf"]
   /** This host's checkout of a remote, for a Fin placed here (`AgentsDeps.checkoutOf`). */
@@ -448,6 +450,7 @@ export class AgentsWorld {
       ...(this.options.now && { now: this.options.now }),
       ...(this.options.away && { away: this.options.away }),
       ...(this.options.post && { post: this.options.post }),
+      ...(this.options.tree && { tree: this.options.tree }),
       ...(this.options.remoteOf && { remoteOf: this.options.remoteOf }),
       ...(this.options.checkoutOf && { checkoutOf: this.options.checkoutOf }),
       ...(this.options.cloudFins && { cloudFins: this.options.cloudFins }),

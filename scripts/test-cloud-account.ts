@@ -43,8 +43,10 @@ import {
   serveRuntime,
   PROBE_ANSWER_MS,
   SILENT_WHILE_WORKING_MS,
+  TREE_NOTICES_LINK_VERSION,
 } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { TREE_EDGES_PATH, TREE_NOTICES_PATH, noticeIdOf, type TreeEdge } from "@mako/protocol/tree-notices"
 import { QuietNoteSchema, type QuietNote } from "@mako/protocol/handoff"
 import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
 import { HandoffSchema, type Handoff } from "@mako/host/contracts/thread-execution"
@@ -89,7 +91,7 @@ const recordPath = (name: string) => join(vault, "mako-sign-in", ...`${name}.jso
 type FakeDevice = CloudDevice & { credential: string; removed: boolean; successor?: string | undefined; retired: string[] }
 
 /** The gateway's identity API, in memory. */
-async function fakeCloud({ runtimeEnrolled, finLimits }: { runtimeEnrolled?: Promise<void>; finLimits?: () => CloudFinStatus | null | Promise<CloudFinStatus | null> } = {}) {
+async function fakeCloud({ runtimeEnrolled, finLimits, tree = true }: { runtimeEnrolled?: Promise<void>; finLimits?: () => CloudFinStatus | null | Promise<CloudFinStatus | null>; tree?: boolean } = {}) {
   const codes = new Map<string, { challenge: string; device: Pick<CloudDevice, "name" | "platform" | "appVersion"> }>()
   const devices = new Map<string, FakeDevice>()
   /** Every live socket: whose device, and whether it's the account's connection or the device's runtime's link. */
@@ -201,6 +203,20 @@ async function fakeCloud({ runtimeEnrolled, finLimits }: { runtimeEnrolled?: Pro
     if (request.method === "POST" && ["/v1/cloud/fins/reserve", "/v1/cloud/fins/cancel"].includes(url.pathname)) {
       const limits = await finLimits?.()
       return limits ? send(200, JSON.stringify({ ok: false, reason: "slots", limits })) : send(404)
+    }
+    // A tree's two paths as the account answers a device: the sender is the token's device, a notice admitted is 202,
+    // a refusal 200 (`rate` with `retry-after`), and a cloud from before either path has neither.
+    if (tree && request.method === "POST" && url.pathname === TREE_NOTICES_PATH) {
+      let text = ""
+      for await (const chunk of request) text += chunk
+      const answer = await gateway.postNotice({ kind: "device", device: caller.id }, text)
+      response.writeHead(answer.admitted ? 202 : 200, { "content-type": "application/json", ...(!answer.admitted && answer.reason === "rate" && { "retry-after": "2" }) }).end(JSON.stringify(answer))
+      return
+    }
+    if (tree && request.method === "POST" && url.pathname === TREE_EDGES_PATH) {
+      let text = ""
+      for await (const chunk of request) text += chunk
+      return send(200, JSON.stringify(await gateway.askTreeEdge(caller.id, text)))
     }
     if (request.method === "GET" && url.pathname === "/v1/cloud/fins") {
       const limits = await finLimits?.()
@@ -1937,4 +1953,46 @@ test("a failed cloud Fin refresh keeps the last reading and throttles failures; 
     await mac.accounts.cloudFinLimits()
     assert.equal(cloud.calls.filter((call) => call === "GET /v1/cloud/fins").length, before + 1)
   }
+})
+
+test("a device posts its Fin's notice and keeps a Fin's record on its own sign-in, only once its link agreed the account holds notices, and a cloud with neither path says so", async () => {
+  const apex = { thread: randomUUID(), session: randomUUID() }
+  const child = randomUUID()
+  const report = (key: string) => ({ id: `report:${child}:${key}`, child, status: "done", summary: `Step ${key}.` })
+  const notice = (key: string) => ({ id: noticeIdOf(child, report(key).id), parent: apex, child, report: report(key) })
+  const cloud = await fakeCloud()
+  const unlinked = await signedIn(cloud)
+  assert.equal(unlinked.accounts.holdsTreeNotices(), false, "before any runtime link agreed a version, nothing says the account holds notices")
+  await unlinked.accounts.close()
+  const before: CloudRuntime = {
+    serve: (link, { runtimeId, credential, threads }) =>
+      serveRuntime(link, { runtimeId, build: "test", credential, threads, versions: { min: 1, max: TREE_NOTICES_LINK_VERSION - 1 }, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true }) }),
+  }
+  let older = 0
+  const old = await signedIn(cloud, { runtime: before, onRuntimeLinked: () => { older += 1 } })
+  await waitFor(() => older === 1, "the older link enrolled")
+  assert.equal(old.accounts.holdsTreeNotices(), false, "nor a link that agreed the version before")
+  await old.accounts.close()
+  let linked = 0
+  const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { linked += 1 } })
+  await waitFor(() => linked === 1, "the link enrolled")
+  assert.equal(mac.accounts.holdsTreeNotices(), true)
+  const device = (await mac.accounts.deviceId())!
+  const edge: TreeEdge = { op: `start:${apex.session}:k1`, apex, child, place: { kind: "device", device } }
+  // This device owns no such Session as the account lists them, and the account has no record of the Fin: both refused, as answers.
+  assert.deepEqual(await mac.accounts.treeEdge({ ask: "keep", edge }), { ok: false, reason: "forbidden" })
+  assert.deepEqual(await mac.accounts.postTreeNotice(notice("one")), { answer: { admitted: false, reason: "forbidden" } })
+  cloud.gateway.treeEdge(edge)
+  assert.deepEqual(await mac.accounts.postTreeNotice(notice("one")), { answer: { admitted: true, seq: 1 } }, "on record as this device's, it's admitted, by the token's device")
+  assert.deepEqual(cloud.gateway.heldNotices(apex.session).map((held) => held.from.place), [{ kind: "device", device }])
+  assert.deepEqual(await mac.accounts.postTreeNotice(notice("one")), { answer: { admitted: true, seq: 1 } }, "again, the number it had")
+  for (let more = 0; more < 18; more += 1) await mac.accounts.postTreeNotice(notice("one"))
+  assert.deepEqual(await mac.accounts.postTreeNotice(notice("two")), { answer: { admitted: false, reason: "rate" }, retryAfterMs: 2_000 }, "a rate refusal says how long to wait")
+  assert.equal(cloud.calls.filter((call) => call === `POST ${TREE_NOTICES_PATH}`).length, 22)
+  await mac.accounts.close()
+  // A cloud from before either path: unserved, which is no failure.
+  const pathless = await fakeCloud({ tree: false })
+  const there = await signedIn(pathless)
+  assert.equal(await there.accounts.treeEdge({ ask: "end", op: edge.op }), "unserved")
+  assert.equal(await there.accounts.postTreeNotice(notice("one")), "unserved")
 })
