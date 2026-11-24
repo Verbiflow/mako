@@ -343,9 +343,23 @@ export const providers = {
     return next
   },
 
-  /** Installs a missing runtime on the host, then re-reads which agents can run so the row turns ready. */
+  /**
+   * Installs a missing runtime on the host, then re-reads which agents can run so the row turns ready. Every place
+   * that offers the install shows it working from the click, before the host's own reading says so, and a refusal
+   * lands as the reading's failure, so each of them says it the same way.
+   */
   async runRuntimeInstall(provider: string): Promise<HarnessUpdateInfo> {
-    const next = await getMako().runHarnessInstall(provider)
+    const working: HarnessUpdateInfo = { ...providerStore.get().runtimeUpdates?.[provider], phase: "installing" }
+    delete working.result
+    admitRuntimeUpdates({ ...providerStore.get().runtimeUpdates, [provider]: working })
+    let next: HarnessUpdateInfo
+    try {
+      next = await getMako().runHarnessInstall(provider)
+    } catch (error) {
+      next = { ...providerStore.get().runtimeUpdates?.[provider] ?? working }
+      delete next.phase
+      next.result = { at: Date.now(), outcome: "failed", message: error instanceof Error ? error.message : String(error) }
+    }
     admitRuntimeUpdates({ ...providerStore.get().runtimeUpdates, [provider]: next })
     if (next.result?.outcome === "installed")
       await providers.loadAll(true).then(() => providers.loadStatus())

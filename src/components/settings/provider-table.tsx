@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import { ChevronDownIcon, RefreshCwIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import { Action } from "@/components/ui/kit"
@@ -116,6 +116,12 @@ function ProviderRow({
       ? missing
       : undefined
   const [expanded, setExpanded] = useState(false)
+  // A sign-in started for this harness from anywhere (the composer's line after an install, this row) is finished
+  // here, so the row opens to show it.
+  const signingIn = useAccounts((state) => state.signIn?.harness === agent.id)
+  useEffect(() => {
+    if (signingIn) setExpanded(true)
+  }, [signingIn])
   const [keyOpen, setKeyOpen] = useState(false)
   const selected = providerAccounts.find((account) => account.active)
   const summary = selected
@@ -127,9 +133,11 @@ function ProviderRow({
       : accountsLoaded
         ? "Not signed in"
         : "Checking connection…"
-  const needsSignIn = connection
+  // Not installed comes first: signing in to a harness that isn't here yet is the step after its Install.
+  const notInstalled = Boolean(installable) || (installed === false && !primary)
+  const needsSignIn = !notInstalled && (connection
     ? connection.state.status === "signed-out"
-    : Boolean(accountProvider && providerAccounts.length === 0)
+    : Boolean(accountProvider && providerAccounts.length === 0))
   const browserOnly =
     connection?.actions?.length &&
     !connection.actions.includes("sign-in-key") &&
@@ -156,7 +164,9 @@ function ProviderRow({
           <div className="min-w-0 flex-1">
             <span className="block text-ui font-medium">{agent.name}</span>
             <div className="mt-0.5 text-label text-muted-foreground">
-              {connection ? (
+              {notInstalled ? (
+                <span className="block break-words">Not installed</span>
+              ) : connection ? (
                 <ConnectionStatus connection={connection} />
               ) : (
                 <span className={cn("block break-words", accountProvider && selected?.missing && "text-caution")}>
@@ -218,6 +228,7 @@ function ProviderRow({
               runtimeId={agent.id}
               name={agent.name}
               info={installable}
+              onInstalled={() => setExpanded(true)}
             />
           ) : (
             <span className="text-label text-faint">

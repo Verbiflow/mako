@@ -519,6 +519,8 @@ export class RuntimeUpdates {
         next.install = source.install.find(
           (plan) => resolveExecutable(plan.command, env) !== null
         )
+        const installs = pinnedInstall(next.install, source.versions)
+        if (installs) next.installs = installs
       }
     } catch (error) {
       next.error = error instanceof Error ? error.message : String(error)
@@ -598,13 +600,16 @@ export class RuntimeUpdates {
       return
     }
     if (info.channel === "self" && source.native) {
-      info.update = source.native.installVersion
-        ? { ...source.native.installVersion(info.latest), label: source.native.label }
-        : {
+      const pinned = source.native.installVersion?.(info.latest)
+      const update = source.native.installVersion
+        ? pinned && { ...pinned, label: source.native.label }
+        : source.native.args && {
             label: source.native.label,
             command: info.binary,
             args: [...source.native.args, info.latest],
           }
+      if (update) info.update = update
+      else delete info.update
     } else if (
       info.channel === "brew" &&
       source.versions &&
@@ -1124,6 +1129,18 @@ export interface RestoreRuntime {
   offer: RuntimeUpdateOffer
 }
 
+/**
+ * The version an install plan puts in place, when it names the harness's `tested` (npm's `<pkg>@<tested>`, a
+ * versioned installer's URL or argument, a verified download's file), or for a runtime Mako ships, the package
+ * version that carries `tested` (Claude Code's build in the Agent SDK's): what the person is told it installs. None
+ * for a plan that takes whatever its source has (Homebrew, an unversioned script).
+ */
+export function pinnedInstall(plan: HarnessUpdateCommand | undefined, versions: HarnessVersions | undefined): string | undefined {
+  if (!plan || !versions) return undefined
+  const named = versions.bundled ? `@${versions.bundled.version}` : versions.tested
+  return [plan.command, ...plan.args].some((part) => part.includes(named)) ? versions.tested : undefined
+}
+
 /** A plan as a person types it: the script of a `bash -c`, else the command and its arguments. */
 function commandText(plan: HarnessUpdateCommand): string {
   const script = plan.args.indexOf("-c")
@@ -1180,7 +1197,9 @@ export function resolveRuntimeChannel(
   if (native && paths.some((path) => native.ownsPath(path, env)))
     return {
       channel: "self",
-      update: { label: native.label, command: binary, args: native.args },
+      // A CLI whose only updater is its installer is updated by that installer at `tested` (`pinUpdate`), never by
+      // launching the bare binary.
+      ...native.args && { update: { label: native.label, command: binary, args: native.args } },
     }
   const lower = normalized.map((path) => path.toLowerCase())
   const has = (...needles: string[]) =>

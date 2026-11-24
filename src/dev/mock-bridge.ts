@@ -2,6 +2,7 @@ import { getMako } from "@/lib/bridge"
 import type { LimitNoticeChoice } from "@mako/host/contracts/agents"
 import { fixtureHarnesses } from "./harness-fixtures"
 import type { ToolStep } from "@mako/host/contracts/tool-steps"
+import type { HarnessUpdateInfo, HarnessUpdates } from "@mako/host/contracts/harness-updates"
 import { FileIndexCore, type FileFoldersOptions, type FileGrepResults } from "@mako/host/contracts/file-index"
 import { mockAppshots } from "./mock-appshots"
 import { crowdedRail } from "./mock-crowded-rail"
@@ -226,6 +227,32 @@ const mockContinues = new ContinueRecorder()
  * cloud doesn't say what it runs.
  */
 const mockHarnessScene = new URLSearchParams(globalThis.location?.search).get("harnesses")
+/**
+ * `?install=<harness>`: that harness isn't installed here, with its pinned install plan, and nobody is signed in to
+ * it; Install takes a moment and lands its tested version (`?install=<harness>-fails`: the download fails, once, and
+ * Try again lands it). `window.mockInstallRuns` lists the installs the window asked for.
+ */
+const mockInstallParam = new URLSearchParams(globalThis.location?.search).get("install")
+const mockInstallHarness = mockInstallParam?.replace(/-fails$/, "") ?? undefined
+let mockInstallFails = Boolean(mockInstallParam?.endsWith("-fails"))
+/** `&install-ms=<ms>`: how long the install takes, long enough to look at it working. */
+const mockInstallMs = Number(new URLSearchParams(globalThis.location?.search).get("install-ms") ?? 1_500)
+let mockInstalled = false
+const mockInstallRuns: string[] = []
+if (mockInstallHarness) Object.assign(globalThis, { mockInstallRuns })
+const MOCK_INSTALLS = new Map([
+  ["devin", { installs: "3000.14.30821", install: { label: "Install", command: "/bin/bash", args: ["-o", "pipefail", "-c", "curl -fsSL https://static.devin.ai/cli/3000.14.30821/setup.sh | bash"] } }],
+  ["antigravity", { installs: "1.5.15", install: { label: "Install Antigravity", command: "/bin/bash", args: ["-eu", "-o", "pipefail", "-c", "…"], summary: "Downloads Google's agy 1.5.15, checks its SHA-512 and puts it in ~/.local/bin" } }],
+  ["codex", { installs: "0.170.0", install: { label: "Install with npm", command: "npm", args: ["install", "-g", "--allow-scripts=@openai/codex", "@openai/codex@0.170.0"] } }],
+])
+/** The scene's harness as the host reads it: missing with its plan, or installed at what the plan put in place. */
+function mockInstallReading(): HarnessUpdateInfo | undefined {
+  const plan = mockInstallHarness ? MOCK_INSTALLS.get(mockInstallHarness) : undefined
+  if (!mockInstallHarness || !plan) return undefined
+  if (mockInstalled)
+    return { provider: mockInstallHarness, binary: `/Users/you/.local/bin/${mockInstallHarness === "antigravity" ? "agy" : mockInstallHarness}`, installed: plan.installs, channel: "self", checkedAt: Date.now(), versions: { tested: plan.installs, standing: "tested" } }
+  return { provider: mockInstallHarness, checkedAt: Date.now(), ...plan }
+}
 const MOCK_CLOUD_HARNESSES = new Map([["codex", "0.164.0"], ["opencode", "2.1.4"], ["devin", "3000.11.205"], ["grok", "1.0.70"]])
 /** This Mac's versions in the scene: an update takes one to the cloud's; a test sets Devin's as Devin.app would. */
 export const mockHarnessesHere = new Map([["codex", "0.159.3"], ["opencode", "2.0.1"], ["devin", "3000.10.23"], ["grok", "1.0.46"]])
@@ -832,10 +859,82 @@ export function installMockBridge() {
   if (scene === "apex") titles.set(APEX_THREAD, { thread: APEX_THREAD, title: APEX_TITLE, source: "user" })
   /** The rail scene's runs are reported once, as the host would after the catalog. */
   let railRunsSent = false
+  /** One harness at each version standing: Codex below its oldest, OpenCode between oldest and tested, Devin at tested and Grok newer than tested. */
+  const mockRuntimeReadings = (): HarnessUpdates => ({
+    codex: outdatedScene || unknownWriterScene ? outdatedCodexReading() : {
+      provider: "codex",
+      binary: "/Users/you/.nvm/versions/node/v24.19.0/bin/codex",
+      installed: "0.140.0",
+      latest: "0.159.3",
+      channel: "npm",
+      update: {
+        label: "Update with npm",
+        command: "npm",
+        args: ["install", "-g", "--allow-scripts=@openai/codex", "@openai/codex@0.159.3"],
+      },
+      checkedAt: Date.now() - 90_000,
+      latestCheckedAt: Date.now() - 90_000,
+      // A feature floor no harness declares today, so the review picker's unavailable line can be seen.
+      versions: { oldest: "0.146.0", tested: "0.159.3", standing: "below-oldest", needs: { review: "0.155.0" } },
+    },
+    opencode: {
+      provider: "opencode",
+      label: "OpenCode 2",
+      binary: "/Users/you/.nvm/versions/node/v24.19.0/bin/opencode",
+      installed: "2.0.20",
+      latest: "2.0.27",
+      channel: "npm",
+      update: {
+        label: "Update with npm",
+        command: "npm",
+        args: ["install", "-g", "--allow-scripts=@opencode/cli", "@opencode/cli@2.0.27"],
+      },
+      checkedAt: Date.now() - 90_000,
+      latestCheckedAt: Date.now() - 90_000,
+      versions: { oldest: "2.0.0", tested: "2.0.27", standing: "supported" },
+    },
+    grok: {
+      provider: "grok",
+      binary: "/Users/you/.grok/bin/grok",
+      installed: "1.0.52",
+      latest: "1.0.46",
+      channel: "self",
+      checkedAt: Date.now() - 90_000,
+      latestCheckedAt: Date.now() - 90_000,
+      versions: { tested: "1.0.46", standing: "newer" },
+    },
+    claude: {
+      binary: "/Users/you/.local/bin/claude",
+      installed: "2.1.266",
+      latest: "2.1.266",
+      channel: "self",
+      update: { label: "Update Claude Code", command: "/Users/you/.local/bin/claude", args: ["update"] },
+      checkedAt: Date.now() - 90_000,
+      latestCheckedAt: Date.now() - 90_000,
+    },
+    cursor: {
+      binary: "/Users/you/.local/bin/cursor-agent",
+      installed: "2026.09.10-fd3934a",
+      channel: "self",
+      update: { label: "Update Cursor Agent", command: "/Users/you/.local/bin/cursor-agent", args: ["update"] },
+      checkedAt: Date.now() - 90_000,
+    },
+    devin: {
+      provider: "devin",
+      binary: "/Library/Application Support/Zed/external_agents/registry/devin/bin/devin",
+      installed: "3000.10.23",
+      channel: "managed",
+      managedBy: "Zed",
+      checkedAt: Date.now() - 90_000,
+      versions: { tested: "3000.10.23", standing: "tested" },
+    },
+  })
   // The host gives every profile Mako's default for new conversations.
   const profiles = () =>
     MOCK_PROFILES.map((profile) => ({ ...profile, settings: workDefault(fixtureHarnesses.find((entry) => entry.provider === profile.id)?.defaults, profile.models) ?? profile.settings })).map((profile) =>
       scene === "setup-fallback" && profile.id === "codex" ? { ...profile, available: false, error: "Not signed in" } : profile
+    ).map((profile) =>
+      profile.id === mockInstallHarness && !mockInstalled ? { ...profile, available: false, error: `${profile.label} isn't installed` } : profile
     )
   /** A scripted turn's next updates, delivered the way the host batches them. */
   /** A prompt names the harness it went to, as the host's dispatch stamps it, so each turn keeps its own agent's name after a switch. */
@@ -2100,6 +2199,7 @@ export function installMockBridge() {
           source: "model-provider",
         },
       ]
+      if (mockInstallHarness) list = list.filter((account) => account.harness !== mockInstallHarness)
       const logins = new Map<string, { login: AccountLogin; finish: (result: AccountLoginResult) => void; result: Promise<AccountLoginResult> }>()
       let added = 0
       const startLogin = async (harness: string, renew?: string): Promise<AccountLogin> => {
@@ -2338,78 +2438,29 @@ export function installMockBridge() {
       grok: true,
       devin: true,
       opencode: true,
+      ...mockInstallHarness && { [mockInstallHarness]: mockInstalled },
     }),
     // One harness at each version standing: Codex below its oldest, OpenCode
     // between oldest and tested, Devin at tested and Grok newer than tested.
-    harnessUpdates: async () => ({
-      codex: outdatedScene || unknownWriterScene ? outdatedCodexReading() : {
-        provider: "codex",
-        binary: "/Users/you/.nvm/versions/node/v24.19.0/bin/codex",
-        installed: "0.140.0",
-        latest: "0.159.3",
-        channel: "npm",
-        update: {
-          label: "Update with npm",
-          command: "npm",
-          args: ["install", "-g", "--allow-scripts=@openai/codex", "@openai/codex@0.159.3"],
-        },
-        checkedAt: Date.now() - 90_000,
-        latestCheckedAt: Date.now() - 90_000,
-        // A feature floor no harness declares today, so the review picker's unavailable line can be seen.
-        versions: { oldest: "0.146.0", tested: "0.159.3", standing: "below-oldest", needs: { review: "0.155.0" } },
-      },
-      opencode: {
-        provider: "opencode",
-        label: "OpenCode 2",
-        binary: "/Users/you/.nvm/versions/node/v24.19.0/bin/opencode",
-        installed: "2.0.20",
-        latest: "2.0.27",
-        channel: "npm",
-        update: {
-          label: "Update with npm",
-          command: "npm",
-          args: ["install", "-g", "--allow-scripts=@opencode/cli", "@opencode/cli@2.0.27"],
-        },
-        checkedAt: Date.now() - 90_000,
-        latestCheckedAt: Date.now() - 90_000,
-        versions: { oldest: "2.0.0", tested: "2.0.27", standing: "supported" },
-      },
-      grok: {
-        provider: "grok",
-        binary: "/Users/you/.grok/bin/grok",
-        installed: "1.0.52",
-        latest: "1.0.46",
-        channel: "self",
-        checkedAt: Date.now() - 90_000,
-        latestCheckedAt: Date.now() - 90_000,
-        versions: { tested: "1.0.46", standing: "newer" },
-      },
-      claude: {
-        binary: "/Users/you/.local/bin/claude",
-        installed: "2.1.266",
-        latest: "2.1.266",
-        channel: "self",
-        update: { label: "Update Claude Code", command: "/Users/you/.local/bin/claude", args: ["update"] },
-        checkedAt: Date.now() - 90_000,
-        latestCheckedAt: Date.now() - 90_000,
-      },
-      cursor: {
-        binary: "/Users/you/.local/bin/cursor-agent",
-        installed: "2026.09.10-fd3934a",
-        channel: "self",
-        update: { label: "Update Cursor Agent", command: "/Users/you/.local/bin/cursor-agent", args: ["update"] },
-        checkedAt: Date.now() - 90_000,
-      },
-      devin: {
-        provider: "devin",
-        binary: "/Library/Application Support/Zed/external_agents/registry/devin/bin/devin",
-        installed: "3000.10.23",
-        channel: "managed",
-        managedBy: "Zed",
-        checkedAt: Date.now() - 90_000,
-        versions: { tested: "3000.10.23", standing: "tested" },
-      },
-    }),
+    harnessUpdates: async () => {
+      const install = mockInstallReading()
+      return { ...mockRuntimeReadings(), ...install?.provider && { [install.provider]: install } }
+    },
+    runHarnessInstall: async (provider: string) => {
+      mockInstallRuns.push(provider)
+      await new Promise((resolve) => setTimeout(resolve, mockInstallMs))
+      const reading = mockInstallReading()
+      if (provider !== mockInstallHarness || !reading)
+        return { binary: `/Users/you/.local/bin/${provider}`, installed: "1.0.0", channel: "self" as const, checkedAt: Date.now(), result: { at: Date.now(), outcome: "installed" as const, to: "1.0.0" } }
+      // The host words the installer's own output (`updateFailureWords`) and keeps it in its log.
+      if (mockInstallFails) {
+        mockInstallFails = false
+        return { ...reading, result: { at: Date.now(), outcome: "failed" as const, message: "The download didn't get through. Check the connection." } }
+      }
+      mockInstalled = true
+      const installed = mockInstallReading() ?? reading
+      return { ...installed, result: { at: Date.now(), outcome: "installed" as const, to: installed.installed } }
+    },
     // An update goes to the tested version, so the reading comes back at it.
     runHarnessUpdate: async (provider: string) => {
       await new Promise((resolve) => setTimeout(resolve, 1_200))
@@ -2443,13 +2494,6 @@ export function installMockBridge() {
         versions: { oldest: "0.146.0", tested: "0.159.3", standing: "tested" },
       }
     },
-    runHarnessInstall: async (provider: string) => ({
-      binary: `/Users/you/.local/bin/${provider}`,
-      installed: "1.0.0",
-      channel: "self",
-      checkedAt: Date.now(),
-      result: { at: Date.now(), outcome: "installed", to: "1.0.0" },
-    }),
     daemonStatus: async () => ({
       pid: 4242,
       startedAt: Date.now() - 7_200_000,

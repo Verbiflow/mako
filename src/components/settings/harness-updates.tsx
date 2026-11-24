@@ -4,7 +4,9 @@ import { Action } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
 import { Skeleton } from "@/components/ui/skeleton"
 import { harnessLabel } from "@/lib/harness-label"
-import { installCommandText, runtimeRowView } from "@/lib/runtime-updates"
+import { runtimeRowView } from "@/lib/runtime-updates"
+import { installPlanText } from "@/lib/harness-install"
+import { installHarness } from "@/state/harness-install"
 import { providers, useProviders } from "@/state/providers"
 import { cn } from "@/lib/utils"
 import { ACTION_TOAST_MS } from "@/lib/toast-duration"
@@ -124,43 +126,28 @@ export function RuntimeRow({
   )
 }
 
-/** A missing runtime: the installer the host found on this machine, shown before it runs. */
+/**
+ * A missing runtime: the installer the host found on this machine and the version it puts in place, shown before
+ * it runs. Progress and a failure come from the host's reading, so an install started from the harness picker or
+ * the composer shows here too; the row's harness opens once it's in, to sign in.
+ */
 export function InstallRow({
   runtimeId,
   name,
   info,
+  onInstalled,
 }: {
   runtimeId: string
   name: string
   info: HarnessUpdateInfo
+  onInstalled(): void
 }) {
-  const [pending, setPending] = useState(false)
-  const installing = pending || info.phase === "installing"
+  const installing = info.phase === "installing"
   const failed =
     info.result?.outcome === "failed" ? info.result.message : undefined
   const runInstall = async () => {
-    setPending(true)
-    try {
-      const next = await providers.runRuntimeInstall(runtimeId)
-      if (next.result?.outcome === "installed")
-        toast.success(`${name} is installed`, {
-          description: `Version ${next.installed ?? next.result.to ?? "unknown"} is ready for new conversations.`,
-        })
-      else
-        toast.error(`${name} was not installed`, {
-          description: next.result?.message ?? "The installer did not finish.",
-          duration: ACTION_TOAST_MS,
-          action: { label: "Try again", onClick: () => void runInstall() },
-        })
-    } catch (error) {
-      toast.error(`${name} was not installed`, {
-        description: error instanceof Error ? error.message : String(error),
-        duration: ACTION_TOAST_MS,
-        action: { label: "Try again", onClick: () => void runInstall() },
-      })
-    } finally {
-      setPending(false)
-    }
+    const next = await installHarness(runtimeId)
+    if (next.result?.outcome === "installed") onInstalled()
   }
   return (
     <div aria-label={`${name} installation`} aria-busy={installing}>
@@ -171,10 +158,14 @@ export function InstallRow({
         >
           {installing ? (
             <Shimmer text={`Installing ${name}…`} />
-          ) : info.install ? (
-            "CLI not installed"
+          ) : !info.install ? (
+            `Mako can’t install ${name} here. Install it from its website, then refresh.`
+          ) : info.installs ? (
+            <>
+              Installs <span className="tabular">{info.installs}</span>, the version Mako is tested with
+            </>
           ) : (
-            `CLI not installed. Install ${name} from its website, then refresh.`
+            `Installs ${name}’s current version`
           )}
         </span>
         {info.install ? (
@@ -191,13 +182,19 @@ export function InstallRow({
       </div>
       {info.install ? (
         <p className="mt-1 text-label text-faint">
-          Runs{" "}
-          <code className="font-mono text-code break-all">
-            {installCommandText(info.install)}
-          </code>
+          {info.install.summary ? (
+            info.install.summary
+          ) : (
+            <>
+              Runs{" "}
+              <code className="font-mono text-code break-all">
+                {installPlanText(info.install)}
+              </code>
+            </>
+          )}
         </p>
       ) : null}
-      {failed ? (
+      {failed && !installing ? (
         <p role="alert" className="mt-1 text-label text-removed">
           Install failed: {failed}
         </p>

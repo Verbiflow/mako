@@ -26,6 +26,11 @@ accounts.reload = async () => {}
 providerConnections.load = () => {}
 providerConnections.reload = async () => {}
 export const calls: string[] = []
+/** How many installs fail before one lands (`installFailsOnce`). */
+let installFails = 0
+export function installFailsOnce() {
+  installFails = 1
+}
 const versions: HarnessUpdates = {
   claude: {
     installed: "2.1.266",
@@ -77,8 +82,9 @@ const versions: HarnessUpdates = {
     install: {
       label: "Install",
       command: "/bin/bash",
-      args: ["-o", "pipefail", "-c", "curl -fsSL https://cli.devin.ai/install.sh | bash"],
+      args: ["-o", "pipefail", "-c", "curl -fsSL https://static.devin.ai/cli/3000.14.30821/setup.sh | bash"],
     },
+    installs: "3000.14.30821",
   },
 }
 providerStore.set({
@@ -112,6 +118,13 @@ accountsStore.set({
       label: "OpenCode",
       mode: "observed",
       loginCommand: "opencode auth login",
+    },
+    {
+      provider: "devin",
+      label: "Devin",
+      mode: "selectable",
+      loginCommand: "devin auth login",
+      nativeLogin: true,
     },
   ],
   accounts: [
@@ -195,23 +208,23 @@ window.mako = {
     calls.push(`install:${id}`)
     const held = providerStore.get().runtimeUpdates?.[id]
     if (!held?.install) throw new Error("Nothing to install")
-    providerStore.set({
-      runtimeUpdates: {
-        ...providerStore.get().runtimeUpdates,
-        [id]: { ...held, phase: "installing" },
-      },
-    })
+    // The window shows the install working on its own, before the host says so.
+    if (held.phase !== "installing") throw new Error("The row didn't show the install working")
     await new Promise((resolve) => setTimeout(resolve, 400))
+    if (installFails > 0) {
+      installFails -= 1
+      return { ...held, phase: undefined, result: { at: Date.now(), outcome: "failed", message: "The download didn't get through. Check the connection." } }
+    }
     providerStore.set({
       availability: { ...providerStore.get().availability, [id]: true },
     })
     return {
       provider: id,
       binary: "/Users/developer/.local/bin/devin",
-      installed: "3000.11.3",
-      channel: "manual",
+      installed: "3000.14.30821",
+      channel: "self",
       checkedAt: Date.now(),
-      result: { at: Date.now(), outcome: "installed", to: "3000.11.3" },
+      result: { at: Date.now(), outcome: "installed", to: "3000.14.30821" },
     }
   },
   providerConnectionAction: async (provider, action) => {

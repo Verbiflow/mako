@@ -202,19 +202,31 @@ async function review() {
   assert.deepEqual(await fixture("return f.calls"), ["sign-in-key", "opencode", "sign-in-browser"])
   await screenshot("agents-grok-connected.png")
 
-  // A missing CLI installs from its row: the exact command is shown before it runs.
+  // A missing CLI installs from its row: the version Mako tested and the exact command are shown before it runs.
   const devinRow = `document.querySelector('[role="listitem"][aria-label="Devin"]')`
   await evaluate(`${devinRow}.scrollIntoView({block:'center'})`)
-  assert.equal(await evaluate(`${devinRow}.textContent.includes('CLI not installed')`), true)
-  assert.equal(await evaluate(`${devinRow}.textContent.includes('curl -fsSL https://cli.devin.ai/install.sh | bash')`), true)
+  const devinText = () => evaluate(`${devinRow}.innerText.replace(/\\s+/g, ' ')`)
+  assert.ok((await devinText()).includes("Not installed"), await devinText())
+  assert.equal((await devinText()).includes("Sign in"), false, "signing in waits until it's installed")
+  assert.ok((await devinText()).includes("Installs 3000.14.30821, the version Mako is tested with"), await devinText())
+  assert.ok((await devinText()).includes("curl -fsSL https://static.devin.ai/cli/3000.14.30821/setup.sh | bash"), await devinText())
   await screenshot("agents-install.png")
+  // The first try fails: the row says why and offers Retry, and shows the install working from the click.
+  await fixture("f.installFailsOnce()")
   await click("Install")
   await until(`document.querySelector('[aria-label="Devin installation"][aria-busy="true"]') !== null`)
   await screenshot("agents-installing.png")
-  await until(`${devinRow}.textContent.includes('3000.11.3')`)
-  assert.equal(await evaluate(`${devinRow}.textContent.includes('Installed')`), true)
-  assert.equal(await evaluate(`${devinRow}.textContent.includes('CLI not installed')`), false)
-  assert.deepEqual(await fixture("return f.calls"), ["sign-in-key", "opencode", "sign-in-browser", "install:devin"])
+  await until(`${devinRow}.textContent.includes("Install failed: The download didn't get through. Check the connection.")`)
+  assert.equal(await evaluate(`[...${devinRow}.querySelectorAll('button')].some(b => b.textContent.trim() === 'Retry')`), true)
+  await screenshot("agents-install-failed.png")
+  await click("Retry")
+  await until(`${devinRow}.textContent.includes('3000.14.30821') && ${devinRow}.textContent.includes('Installed')`)
+  assert.equal(await evaluate(`${devinRow}.textContent.includes('Install failed')`), false)
+  // Installed, the row opens on its sign-in.
+  await until(`document.querySelector('#provider-devin-accounts')?.textContent.includes('No Devin account yet.')`)
+  assert.equal(await evaluate(`[...document.querySelectorAll('#provider-devin-accounts button')].some(b => b.textContent.trim() === 'Sign in')`), true, "sign-in is offered right after the install")
+  assert.deepEqual(await fixture("return f.calls"), ["sign-in-key", "opencode", "sign-in-browser", "install:devin", "install:devin"])
+  await evaluate(`${devinRow}.scrollIntoView({block:'start'})`)
   await screenshot("agents-installed.png")
 
   // A version that could not be read says so plainly, and the row that says it reads again.

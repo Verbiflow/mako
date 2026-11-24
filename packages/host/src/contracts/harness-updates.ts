@@ -25,6 +25,8 @@ export const HarnessUpdateCommandSchema = z.lazy(() => z.object({
   label: z.string(),
   command: z.string(),
   args: z.array(z.string()),
+  /** What the plan does in a line, for a script of Mako's own that nobody would read: shown in its place. */
+  summary: z.string().optional(),
 }))
 export type HarnessUpdateCommand = z.infer<typeof HarnessUpdateCommandSchema>
 
@@ -71,6 +73,8 @@ export const HarnessUpdateInfoSchema = z.lazy(() => z.object({
   update: HarnessUpdateCommandSchema.optional(),
   /** The installer Mako can run while no binary is found: the first plan whose command exists here. */
   install: HarnessUpdateCommandSchema.optional(),
+  /** The version `install` puts in place: the harness's `tested`, where its installs are pinned to it. */
+  installs: z.string().optional(),
   /** What the host is doing with this runtime right now. Never persisted. */
   phase: z.enum(["checking", "updating", "installing"]).optional(),
   /** When the installed reading was taken. */

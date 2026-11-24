@@ -7,7 +7,9 @@ import { updateFailureWords, type HarnessUpdates } from "@mako/host/contracts/ha
 import { compareVersions, parseVersion, versionBehind } from "@mako/host/contracts/runtime-version"
 import { scriptInstall, type ProviderUpdateSource } from "@mako/host/harnesses/update-source"
 import { RuntimeUpdates, resolveRuntimeChannel } from "@mako/host/harnesses/runtime-updates"
-import { installCommandText, runtimeRowView, runtimeRows, runtimesBehind } from "../src/lib/runtime-updates.ts"
+import { runtimeRowView, runtimeRows, runtimesBehind } from "../src/lib/runtime-updates.ts"
+import { installPlanText, justInstalled, missingHarness } from "../src/lib/harness-install.ts"
+import { antigravityInstall } from "@mako/host/harnesses/antigravity/install"
 import { featureFloor, featureFloorText, sessionRuntime, tooOld, tooOldText } from "../src/lib/runtime-versions.ts"
 import { featureNeeds, runtimeVersions, versionStanding, versionsCompatible, type HarnessVersions } from "@mako/host/contracts/harness-versions"
 import { npmInstall, pinnedPolicy } from "@mako/host/harnesses/update-source"
@@ -731,8 +733,20 @@ assert.equal(
   "Installed",
   "a fresh install is named until it reads as merely present"
 )
-assert.equal(installCommandText(scriptInstall("https://cli.devin.ai/install.sh")), "curl -fsSL https://cli.devin.ai/install.sh | bash")
-assert.equal(installCommandText({ label: "Install with npm", command: "npm", args: ["install", "-g", "@openai/codex@latest"] }), "npm install -g @openai/codex@latest")
+assert.equal(installPlanText(scriptInstall("https://cli.devin.ai/install.sh")), "curl -fsSL https://cli.devin.ai/install.sh | bash")
+assert.equal(installPlanText({ label: "Install with npm", command: "npm", args: ["install", "-g", "@openai/codex@latest"] }), "npm install -g @openai/codex@latest")
+// A missing harness reads the same everywhere its install is offered: the plan, the pinned version, progress, failure.
+const devinPlan = scriptInstall("https://static.devin.ai/cli/3000.14.30821/setup.sh")
+assert.equal(missingHarness({ devin: { phase: "checking" } }, "devin"), undefined, "nothing is said before the first reading")
+assert.deepEqual(missingHarness({ devin: { checkedAt: now, install: devinPlan, installs: "3000.14.30821" } }, "devin"), { id: "devin", install: devinPlan, installs: "3000.14.30821", installing: false })
+assert.equal(missingHarness({ devin: { checkedAt: now, install: devinPlan, phase: "installing" } }, "devin")?.installing, true)
+assert.equal(missingHarness({ devin: { checkedAt: now, install: devinPlan, result: { at: now, outcome: "failed", message: "The disk is full." } } }, "devin")?.failure, "The disk is full.")
+assert.equal(missingHarness({ devin: { checkedAt: now, binary: "/u/bin/devin", installed: "3000.14.30821" } }, "devin"), undefined, "installed is not missing")
+assert.equal(justInstalled({ devin: { binary: "/u/bin/devin", result: { at: now - 1_000, outcome: "installed", to: "3000.14.30821" } } }, "devin", now), true)
+assert.equal(justInstalled({ devin: { binary: "/u/bin/devin", result: { at: now - 3_600_000, outcome: "installed", to: "3000.14.30821" } } }, "devin", now), false, "an old install offers nothing more")
+// Antigravity's verified download is said in a line, not as the script that does it.
+const agy = antigravityInstall()
+if (agy) assert.match(installPlanText(agy), /^Downloads Google's agy \d+\.\d+\.\d+, checks its SHA-512 and puts it in ~\/\.local\/bin$/)
 assert.equal(runtimeRowView({ installed: "0.147.0", phase: "updating" }, now).busy, true, "an update in flight reads as work, not a result")
 assert.equal(runtimeRowView({ installed: "0.147.0", channel: "npm" }, now).busy, true, "a version with no reading yet is still being checked")
 assert.equal(runtimeRowView({ installed: "0.147.0", phase: "checking" }, now).version, "0.147.0", "a re-read keeps the version on screen")
@@ -859,7 +873,7 @@ try {
     provider: "devin",
     binary: () => binaries.get("devin") ?? null,
     versions: { tested: "3000.10.23", checked: { on: "x", how: "x" }, feed: { npm: "x" } },
-    native: { label: "Update Devin", args: [], ownsPath: (path) => path.includes("/.local/share/devin/"), installVersion: (version) => scriptInstall(`https://static.devin.ai/cli/${version}/setup.sh`) },
+    native: { label: "Update Devin", ownsPath: (path) => path.includes("/.local/share/devin/"), installVersion: (version) => scriptInstall(`https://static.devin.ai/cli/${version}/setup.sh`) },
     install: [],
   }
   const runtimes = new RuntimeUpdates({
