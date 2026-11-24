@@ -16,7 +16,6 @@ import { finMovedText, finResumedText, worktreeRemadeText, worktreeRemadeWords }
 import type { WorktreeRestored } from "../contracts/thread-worktrees.js"
 import { isLimitAsk, limitNoticeId, limitNoticeLine, limitNoticeWords, movedLine, movedWords, outOfAccountsLine, placeKey, stepKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep, type FinMove } from "../contracts/fin-fallback.js"
 import { errorMessage } from "../base/error-message.js"
-import { insideOf, within } from "../base/path-style.js"
 import { z } from "zod"
 import type { TreePlace } from "@mako/protocol/moves"
 import { homedir } from "node:os"
@@ -145,7 +144,7 @@ import {
   frontDoorNote,
   LEGACY_SHIVER_SCOPE,
 } from "../contracts/agent-tools.js"
-import { agentWords, answerText, COLLIDE_FILES, collisionLine, sharingWords, FOCUS_MS, isBrief, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, childStateOf, finName, fromApex, HANDED_OVER_NOTE, membershipLine, openAsk, type OpenAsk, PASSED_ON_NOTE, passedOn, personsApproval, QUIET_MS, quietLine, rollup, stoodFor, YOUR_APEX } from "../contracts/children.js"
+import { agentWords, answerText, FOCUS_MS, isBrief, apexAsk, apexNote, briefText, askWords, CHILD_GROUPS, childGroup, childLine, childStateOf, finName, fromApex, HANDED_OVER_NOTE, membershipLine, openAsk, type OpenAsk, PASSED_ON_NOTE, passedOn, personsApproval, QUIET_MS, quietLine, rollup, stoodFor, YOUR_APEX } from "../contracts/children.js"
 import { KeyedAdmission } from "../base/keyed-admission.js"
 import type { FinAtWork } from "./fin-cost-sampler.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
@@ -179,8 +178,6 @@ import { FinMoves, type FinPlace } from "./fin-moves.js"
 import type { TurnReply } from "./live-goals.js"
 import { PULL_WATCH_EVERY_MS, PullWatch, type PullWait } from "./pull-watch.js"
 import { QuietWatch } from "./fin-quiet.js"
-import { FinCollisions, statedWrites, type Mate } from "./fin-collisions.js"
-import type { ToolEffects } from "@mako/sessions/tool-effects"
 import { TurnWaits } from "./turn-waits.js"
 import { SHIVER_STEPS_MAX, SHIVER_WAIT, shiverWaitNote, shiverWaitSeconds, turnWaitItemKey, turnWaitItemWords, turnWaitDescription, turnWaitLine, turnWaitMovedNote, type ShiverFin, type TurnWait, type TurnWaitItem, type TurnWaitLine } from "../contracts/turn-waits.js"
 import { AFTER_WAIT, type TurnWaitInput, type TurnWaitResult } from "../contracts/thread-tools.js"
@@ -469,8 +466,6 @@ export interface AgentsDeps {
   holdMs?: number
   /** How long a working Fin may show no activity before its Apex hears it (`QuietWatch`); `QUIET_MS` without it. */
   quietMs?: number
-  /** How long a collision's notice waits for the rest of its burst (`FinCollisions`); `COLLIDE_BURST_MS` without it. */
-  collideMs?: number
   /**
    * The pull requests whose head is `branch` in `repoRoot`, as this host last read them (the worktree summaries'),
    * without asking GitHub; none before any were read.
@@ -722,9 +717,7 @@ const HELD_PREFIX = "after:"
 const QUIET_PREFIX = "quiet:"
 /** Another Apex's reply to a message (`apexReplied`): `reply:<conversation>:<request>`; once its sender heard it, its message is settled. */
 const REPLY_PREFIX = "reply:"
-/** A collision's notice (`FinCollisions`): `collide:<thread>:<thread>`, one a pair, which no report row holds. */
-const COLLIDE_PREFIX = "collide:"
-const stored = (id: string) => !id.startsWith(HELD_PREFIX) && !id.startsWith(QUIET_PREFIX) && !id.startsWith(REPLY_PREFIX) && !id.startsWith(COLLIDE_PREFIX)
+const stored = (id: string) => !id.startsWith(HELD_PREFIX) && !id.startsWith(QUIET_PREFIX) && !id.startsWith(REPLY_PREFIX)
 
 /** How many of a tree's Threads work now and how many it started, as its budget counts them. */
 /**
@@ -919,8 +912,6 @@ export class Agents implements AgentOperations, ConversationChildren {
   readonly quiet: QuietWatch
   /** What each quiet Fin's notice read of it: its last step then, and whether that ran. */
   private readonly quietSteps = new Map<string, { since: number; step?: string; running?: true }>()
-  /** Threads of one Shiver that changed the same file in one folder, from the writes their calls state (`FinCollisions`). */
-  readonly collisions: FinCollisions
   /** Conversations that aren't a Fin's, so activity in them costs a set lookup: emptied when the edges change. */
   private readonly notFins = new Set<string>()
   /** Turns' waits (`wait`): armed in the store, met by Fins' results and ends and pull requests' outcomes, fired once. */
@@ -1049,18 +1040,6 @@ export class Agents implements AgentOperations, ConversationChildren {
       heard: (child) => this.quietChanged(child),
       ...(deps.quietMs !== undefined && { quietMs: deps.quietMs }),
     })
-    this.collisions = new FinCollisions({
-      now: () => this.now(),
-      // Its own timer, as the quiet watch's: a burst's window is no wait on an answer.
-      later: (ms, run) => {
-        const timer = setTimeout(run, ms)
-        timer.unref()
-        return () => clearTimeout(timer)
-      },
-      mates: (thread) => this.mates(thread),
-      collided: (a, b, files, first) => this.tellCollision(a, b, files, first),
-      ...(deps.collideMs !== undefined && { burstMs: deps.collideMs }),
-    })
     // Only while there's something to read the room for: a Fin here holding a place, or a start waiting for one
     // (`roomNeeded`). With neither, the job holds no timer, and an idle host reads no load and no process table.
     this.roomDemand = deps.jobs.demand("Fins at work or starts waiting here")
@@ -1106,12 +1085,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** A digest never says a Fin ended, or was cut short, while its Session shows it at work: the end the host inferred for its run is past. */
-  private current(notice: Pick<Notice, "report" | "quiet" | "collision">): boolean {
+  private current(notice: Pick<Notice, "report" | "quiet">): boolean {
     const { report } = notice
     // A quiet Fin that did something since, or stopped working, isn't quiet: its notice leaves any digest still unsent.
     if (notice.quiet) return this.quiet.stillQuiet(report.child, notice.quiet.since)
-    // Nor do two collide once either was stopped or closed: there's nothing left to keep apart.
-    if (notice.collision) return this.sharedApex(report.child, notice.collision.mate) !== undefined
     if (this.store()?.edges().internalRuns.some((edge) => edge.child === report.child)) return false
     if (report.retainsQuestion && !this.store()?.openReportAsks(report.child).some((open) => open.id === report.id)) return false
     // Nor a question a message answered before this digest went.
@@ -3969,7 +3946,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.noticeEnds.clear()
     this.stopped = true
     this.quiet.stop()
-    this.collisions.stop()
     for (const { timer } of this.cutChecks.values()) clearTimeout(timer)
     this.cutChecks.clear()
     this.stopRoomWatch()
@@ -6046,18 +6022,12 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   // ── What a Fin shows ──
 
-  /** A Fin's reading, with the quiet stretch `QuietWatch` holds now, while it holds, and the file it shares with another (`FinCollisions`). */
+  /** A Fin's reading, with the quiet stretch `QuietWatch` holds now, while it holds. */
   private childReading(edge: ThreadParent): ChildThread {
     const reading = this.liveReading(edge)
     const since = reading.working ? this.quiet.quietSince(edge.child) : undefined
     const told = since === undefined ? undefined : this.quietSteps.get(edge.child)
-    const sharing = this.sharingOf(edge)
-    if (since === undefined && !sharing) return reading
-    return {
-      ...reading,
-      ...(since !== undefined && { quiet: { since, ...(told?.since === since && told.step && { step: told.step }), ...(told?.since === since && told.running && { running: true as const }) } }),
-      ...(sharing && { sharing }),
-    }
+    return since === undefined ? reading : { ...reading, quiet: { since, ...(told?.since === since && told.step && { step: told.step }), ...(told?.since === since && told.running && { running: true as const }) } }
   }
 
   /** What the Fin's Thread shows now, from whatever runs its current turn: one source at a time. */
@@ -6413,109 +6383,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (this.stopped) return
     const edge = this.store()?.edges().of(child)
     if (edge) this.childMoved(edge, true)
-  }
-
-  /**
-   * A finished call said what it did (`mako:tool-effects`, what attribution's journal takes as that call's evidence): the
-   * files it states it wrote are stamped for its Thread (`FinCollisions`). Called for every finished call of every
-   * conversation, so one that wrote nothing costs a walk of its effects, and one in no Shiver two lookups more.
-   */
-  wrote(conversation: string, call: ToolEffects): void {
-    if (this.stopped || call.status !== "completed") return
-    const paths = statedWrites(call.effects)
-    if (!paths.length) return
-    const thread = this.childOfConversation(conversation) ?? this.store()?.journalPlacement(conversation)?.thread
-    if (thread) this.collisions.wrote(thread, paths)
-  }
-
-  /**
-   * Who a Thread may collide with: its open Fins, and as a Fin its Apex and that Apex's other open Fins, here. A change
-   * counts from the later of the two starts, so what an Apex wrote before it started a Fin, or a Fin before its
-   * sibling was started, is the base the other began from. A Fin placed elsewhere writes in another checkout.
-   */
-  private mates(thread: string): Mate[] {
-    const edges = this.store()?.edges()
-    if (!edges) return []
-    const here = (edge: ThreadParent) => edge.closedAt === undefined && !edge.placed && !edge.remote
-    const mates = edges.children(thread).filter(here).map((edge): Mate => ({ thread: edge.child, since: edge.createdAt }))
-    const own = edges.of(thread)
-    if (!own || !here(own)) return mates
-    mates.push({ thread: own.parent, since: own.createdAt })
-    for (const edge of edges.children(own.parent)) if (edge.child !== thread && here(edge)) mates.push({ thread: edge.child, since: Math.max(own.createdAt, edge.createdAt) })
-    return mates
-  }
-
-  /**
-   * The Apex two colliding Threads share while both are open, and which of them are its Fins: the one that leads the
-   * other (`fin` alone), or the parent of both. Undefined once either Fin was stopped or closed.
-   */
-  private sharedApex(a: string, b: string): { apex: string; fin: ThreadParent; other?: ThreadParent } | undefined {
-    const edges = this.store()?.edges()
-    const [one, other] = [edges?.of(a), edges?.of(b)]
-    const open = (edge: ThreadParent) => edge.closedAt === undefined
-    if (one?.parent === b) return open(one) ? { apex: b, fin: one } : undefined
-    if (other?.parent === a) return open(other) ? { apex: a, fin: other } : undefined
-    return one && other && one.parent === other.parent && open(one) && open(other) ? { apex: one.parent, fin: one, other } : undefined
-  }
-
-  /**
-   * Two Threads of one Shiver each changed `files` in one folder: both rows say so, and their Apex hears it once a pair,
-   * as Mako's own notice (never held, `asksNothing`) under the pair's ID, so the receipt its queue keeps (`carried`) says
-   * it once across a restart. Files the pair shares after that ride the Apex's next digest and wake nobody. Neither Fin
-   * is told: each would stop for the other. A pair whose spawns asked to be heard only on results, or never, isn't said.
-   */
-  private tellCollision(a: string, b: string, files: readonly string[], first: boolean): void {
-    const shared = this.sharedApex(a, b)
-    if (!shared || this.stopped) return
-    const { apex, fin, other } = shared
-    this.childMoved(fin, true)
-    if (other) this.childMoved(other, true)
-    hostLog("agents", "fins collided", { op: fin.op, ...(other && { with: other.op }), files: files.length, first })
-    if ((fin.asked.wake ?? "decisions") !== "decisions" && (other?.asked.wake ?? "decisions") !== "decisions") return
-    const front = this.frontOf(apex, fin.parentSession)
-    if (!front) return
-    const label = (edge: ThreadParent) => `"${edge.name}" (${this.deps.harnessLabel(this.harnessOf(edge))})`
-    const collision = { mate: other?.child ?? apex, ...(other && { with: label(other) }), ...this.collidedIn(files, this.deps.live.session(front)?.cwd) }
-    if (!first) {
-      this.movedNotes.set(apex, [...(this.movedNotes.get(apex) ?? []), `${label(fin)} ${collisionLine(collision, true)}`])
-      return
-    }
-    const report: Report = {
-      id: `${COLLIDE_PREFIX}${a}:${b}`,
-      child: ThreadIdSchema.parse(fin.child),
-      status: "progress",
-      summary: collisionLine(collision),
-      implicit: true,
-      ownerGeneration: this.generation,
-      at: this.now(),
-    }
-    this.wakes.notice(front, this.rootOf(apex), {
-      id: `notice:${report.id}`,
-      report,
-      label: label(fin),
-      fin: { name: fin.name, harness: this.harnessOf(fin) },
-      from: this.store()?.thread(fin.child)?.sessions[0] ?? fin.parentSession,
-      collision,
-    })
-  }
-
-  /** A collision's first files as its Apex's folder holds them, and how many more there are. */
-  private collidedIn(files: readonly string[], folder: string | undefined) {
-    const shown = files.slice(0, COLLIDE_FILES).map((file) => (folder && file !== folder && within(folder, file) ? insideOf(folder, file) : file))
-    return { files: shown, more: files.length - shown.length }
-  }
-
-  /** What a Fin's row says of the newest pair it's in whose other Thread is still open (`sharingWords`). */
-  private sharingOf(edge: ThreadParent): string | undefined {
-    const pairs = this.collisions.of(edge.child)
-    for (let index = pairs.length - 1; index >= 0; index -= 1) {
-      const pair = pairs[index]!
-      const mate = pair.a === edge.child ? pair.b : pair.a
-      if (!this.sharedApex(edge.child, mate)) continue
-      const named = mate === edge.parent ? undefined : this.store()?.edges().of(mate)?.name
-      return sharingWords({ ...(named && { with: named }), files: pair.files.slice(-1), more: pair.files.length - 1 })
-    }
-    return undefined
   }
 
   private later(ms: number, run: () => void): () => void {

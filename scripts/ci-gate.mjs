@@ -136,8 +136,6 @@ export const STEPS = [
   // A Fin's turn's end with no report: work its harness holds, that work's process ending, a promise nothing wakes.
   [10, "npm run test:fin-turn-ends"],
   [20, "npm run test:fin-quiet"],
-  // Two Fins changing one file in one folder: their Apex hears it once a pair, never held, and not again after a restart.
-  [8, "npm run test:fin-collisions"],
   // What comes back: a crash, a recovery or a Fin moved, with its queue kept through SIGKILL.
   [40, "MAKO_TEST_HARNESSES=claude npm run test:fin-move"],
   [40, "MAKO_TEST_HARNESSES=codex npm run test:fin-move"],

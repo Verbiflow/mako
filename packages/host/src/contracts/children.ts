@@ -54,35 +54,6 @@ export function quietLine(quiet: { forMs: number; step?: string; running?: true 
   return `${how}. It still reads as working.`
 }
 
-/**
- * Two Threads of one Shiver changed the same file in one folder (`FinCollisions`): how long their Apex's notice waits
- * for the rest of the burst, so a patch across forty shared files is one notice naming a few and counting the rest.
- */
-export const COLLIDE_BURST_MS = 5_000
-/** The files a collision names; the rest are a count. */
-export const COLLIDE_FILES = 3
-
-/** A collision as it's said: who else changed the files (another Fin by name; without one, the Apex), the first few, and how many more. */
-export interface CollisionSaid {
-  with?: string
-  files: readonly string[]
-  more: number
-}
-
-/**
- * A collision as its Apex's digest says it, after the Fin's name: "and "docs" (Claude) both changed src/a.ts, src/b.ts
- * and 38 more." `also`: the pair was said before, and these are more of its files.
- */
-export function collisionLine(collision: CollisionSaid, also = false): string {
-  return `and ${collision.with ?? "you"} ${also ? "also both" : "both"} changed ${collision.files.join(", ")}${collision.more ? ` and ${collision.more} more` : ""}.`
-}
-
-/** A collision on a Fin's row: "Also editing agents.ts with tests", "Also editing agents.ts and 3 more with its Apex". */
-export function sharingWords(collision: CollisionSaid): string {
-  const others = collision.files.length - 1 + collision.more
-  return `Also editing ${shortPath(collision.files[0] ?? "")}${others ? ` and ${others} more` : ""} with ${collision.with ?? `its ${APEX_WORD}`}`
-}
-
 export const FROM_AGENTS = `[mako · from ${YOUR_FINS}, not the person]`
 /**
  * What opens a Fin's brief sent again after Mako closed unexpectedly while sending it, with nothing to say its harness

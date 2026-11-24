@@ -42,7 +42,6 @@ import { desktop } from "@/state/desktop"
 import { shallowEqual } from "@/state/store"
 import { useWorktreeSummaries, useWorktrees } from "@/state/worktrees"
 import { FinMovedLine } from "./fin-moved-line"
-import { FinSharingLine } from "./fin-sharing-line"
 
 /**
  * An Apex's Overview, what its right rail opens on: who needs the person, who works, who waits, who failed and who's
@@ -238,7 +237,6 @@ const FinRow = memo(function FinRow({
           </span>
           <span className={cn("truncate text-label", needs ? "text-foreground/90" : "text-muted-foreground")}>{line}</span>
           <FinMovedLine agent={agent} />
-          <FinSharingLine agent={agent} />
           {agent.runsOn?.note ? (
             <span data-fin-fell-back className="truncate text-label text-caution" title={agent.runsOn.note}>
               {agent.runsOn.note}

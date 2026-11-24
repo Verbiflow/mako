@@ -198,8 +198,6 @@ export interface WorldOptions {
   holdMs?: number
   /** How long a working Fin may show no activity before its Apex hears it (`AgentsDeps.quietMs`). */
   quietMs?: number
-  /** How long a collision's notice waits for the rest of its burst (`AgentsDeps.collideMs`). */
-  collideMs?: number
   /** The engine's timers for those waits (`AgentsDeps.later`): a fake clock a test advances itself. */
   later?: AgentsDeps["later"]
   /** The pull requests the host last read for a worktree's branch (`AgentsDeps.heldPulls`). */
@@ -441,7 +439,6 @@ export class AgentsWorld {
       ...(this.options.focusMs !== undefined && { focusMs: this.options.focusMs }),
       ...(this.options.holdMs !== undefined && { holdMs: this.options.holdMs }),
       ...(this.options.quietMs !== undefined && { quietMs: this.options.quietMs }),
-      ...(this.options.collideMs !== undefined && { collideMs: this.options.collideMs }),
       ...(this.options.later && { later: this.options.later }),
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
       ...(this.options.restoreWorktree && { restoreWorktree: (conversation: string) => {

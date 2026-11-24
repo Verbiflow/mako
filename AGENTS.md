@@ -752,26 +752,7 @@ notice kept nowhere, never a state, which leaves an unsent digest once the Fin
 moves again (`AgentWakes.current`), and only under the default `wake`. A long
 command counts as quiet; the line names it and the Apex decides. A Fin whose
 turn ended leaves the watch, and an idle one is never named
-(`test:fin-quiet`). Fins share their Apex's folder unless it gives one a
-`workspace`, and two that change the same file there are named to it
-(`FinCollisions`, `conversations/fin-collisions.ts`): each finished call's
-report of what it did (`mako:tool-effects`, what the journal takes as that
-call's evidence) stamps the files the tool states it wrote, never one its
-harness only saw change (`seen`) nor a command's, for its Thread
-(`Agents.wrote`, `statedWrites`), a map write and nothing read or watched. A
-file a second open Thread of the Shiver stamps (a Fin of the same Apex, or
-the Apex itself) is a collision when the other's last write there is no older
-than the later of their starts. Files are absolute paths, so a Fin in its own
-worktree collides with nobody until a merge. The Apex hears a pair once,
-`COLLIDE_BURST_MS` after its first file so a patch across forty is one
-notice ("1 pair changed the same files in one folder", three files and a
-count, `collisionLine`): Mako's own notice, never held, under the pair's ID,
-whose receipt in the Apex's queue (`carried`) keeps it once across a restart;
-the pair's later files ride its next digest and wake nobody, and only under
-the default `wake`. Neither Fin is told. Both rows say "Also editing
-agents.ts with tests" (`child.sharing`, `sharingWords`) while both are open,
-from what this host saw (`test:fin-collisions`). What a shell command wrote
-names no file and isn't counted. A pull request is its
+(`test:fin-quiet`). A pull request is its
 repository's (`owner/name`, from its URL) and number (`pullRef`, `pullKey`),
 never its number alone, since a Thread can hold several repositories; a bare
 `#12` is the Fin's one repository's, or stays unqualified when it has several,
