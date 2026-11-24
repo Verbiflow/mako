@@ -186,6 +186,7 @@
   --color-fill-hover: var(--fill-hover);
   --color-fill-selected: var(--fill-selected);
   --color-sea: var(--sea);
+  --color-on-sea: var(--on-sea);
   --color-sea-soft: var(--sea-soft);
   --color-positive: var(--positive);
   --color-negative: var(--negative);
@@ -324,14 +325,15 @@
    * Sea is the brand's one hue: the steel blue of the fin's lit face in the
    * icon kit (`mako-icons/_masters`, #415f81 to #6386a6) and the site's
    * `--sea`. It is punctuation: the open Thread's working comet, the live
-   * dot, the composer caret, at most one badge. Never on links, borders,
-   * focus, selection, hover fills, icons at rest, or any fill larger than
-   * a badge. If two sea moments are visible in one pane, one is wrong.
+   * dot, the composer caret and its send once there is something to send,
+   * at most one badge. Never on links, borders, focus, selection, hover
+   * fills, icons at rest, or any other fill larger than a badge. If two sea
+   * moments are visible in one pane, one is wrong.
    */
   --sea: oklch(0.74 0.08 245);
   --sea-soft: color-mix(in oklab, var(--sea) 14%, transparent);
-  /* The composer while you type in it: a breath lighter than its raised tone. */
-  --composer-lift: color-mix(in oklab, var(--foreground) 3.5%, transparent);
+  /* Words and glyphs on a sea fill: the composer's send. */
+  --on-sea: var(--shell);
   /* The light that crosses a working fin: the sea itself on the light fin of the dark theme. */
   --fin-glint: var(--sea);
 
@@ -452,7 +454,7 @@
 
   --sea: oklch(0.5 0.09 248);
   --sea-soft: color-mix(in oklab, var(--sea) 12%, transparent);
-  --composer-lift: color-mix(in oklab, white 32%, transparent);
+  --on-sea: var(--surface);
   /* On the dark fin of the light theme, the sea lifted toward white so the band reads. */
   --fin-glint: color-mix(in oklab, var(--sea) 45%, white);
 
@@ -1569,22 +1571,24 @@ diffs-container {
 }
 
 /*
- * The composer: one square box a tone up from the conversation, nothing around it. Typing in it lifts it a breath,
- * and its send is an arrow alone until there is something to send, when a solid square grows in behind it. Both are
- * an opacity (and the square's scale) on a layer of their own, so the compositor runs them.
+ * The composer: one square box on the pane's own surface, framed by a hairline, the same in a new Thread and an
+ * existing one. Typing in it firms the hairline to the input's tone, and its send is an arrow alone until there is
+ * something to send, when a sea square grows in behind it. Both are an opacity (and the square's scale) on a layer of
+ * their own, so the compositor runs them.
  */
 .composer-box {
   isolation: isolate;
+  box-shadow: inset 0 0 0 1px var(--hairline);
 }
 .composer-box::after {
   content: "";
   position: absolute;
   inset: 0;
-  z-index: -1;
+  z-index: 1;
   pointer-events: none;
-  background: var(--composer-lift);
+  box-shadow: inset 0 0 0 1px var(--input);
   opacity: 0;
-  transition: opacity 220ms var(--ease-out);
+  transition: opacity 180ms var(--ease-out);
 }
 .composer-box:focus-within::after {
   opacity: 1;
@@ -1597,7 +1601,7 @@ diffs-container {
   position: absolute;
   inset: 0;
   z-index: -1;
-  background: var(--foreground);
+  background: var(--sea);
   opacity: 0;
   transform: scale(0.82);
   transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out);
@@ -2384,10 +2388,12 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   --ocean-filter: grayscale(1);
 }
 
-/* The scene belongs to the whole agent pane, including the composer. Its
- * geometry must never depend on how many lines the user has drafted. */
+/* The scene belongs to the whole agent pane and fades out where the
+ * composer's resting box begins (its one-line height with the status line
+ * under it), so the waves never run behind the box's margins or the status
+ * line. Its geometry must never depend on how many lines the user has drafted. */
 .agent-surface > .ocean-scene {
-  bottom: 84px;
+  bottom: 130px;
 }
 
 .ocean-engraving {
@@ -2569,17 +2575,27 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   .composer-input { field-sizing: content; }
 }
 
-/* The routing row gives way in order when short of room (`use-compact-row.ts`
-   stamps the level it needed): level 1 hides the access label, level 2 the
-   harness label as well. The model and its reasoning are never shortened. */
-.composer-routing:is([data-compact="1"], [data-compact="2"]) [data-collapse="1"],
-.composer-routing[data-compact="2"] [data-collapse="2"] {
+/* The status line under the composer gives way in order when short of room
+   (`use-compact-row.ts` stamps the level it needed): level 1 hides where it
+   runs and the access level's words, level 2 the branch as well. Full access
+   keeps its words. The control row's model and reasoning are never shortened. */
+.composer-status:is([data-compact="1"], [data-compact="2"]) [data-collapse="1"],
+.composer-status[data-compact="2"] [data-collapse="2"] {
   display: none;
+}
+
+/* The status line reads a size down from the controls above it: its pieces
+   are the same chips (`text-ui`), so the line lends them the label size. */
+.composer-status {
+  --text-ui: var(--text-label);
+  --text-ui--line-height: var(--text-label--line-height);
+  --text-ui--letter-spacing: var(--text-label--letter-spacing);
 }
 
 /* Scrolling rows clip anything drawn outside their chips; an outset focus
    ring survived only as a bracket on the chip's right edge. */
 .composer-routing :focus-visible,
+.composer-status :focus-visible,
 .terminal-tabs :focus-visible,
 [data-side-rail] :focus-visible {
   outline-width: 1.5px;
@@ -2588,13 +2604,13 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 
 /* The row hides its scrollbar; the edge that still hides a control fades
    so the cut is visible. */
-:is(.composer-routing, .terminal-tabs, .attachment-strip)[data-overflow="end"] {
+:is(.composer-routing, .composer-status, .terminal-tabs, .attachment-strip)[data-overflow="end"] {
   mask-image: linear-gradient(to right, black calc(100% - 28px), transparent);
 }
-:is(.composer-routing, .terminal-tabs, .attachment-strip)[data-overflow="start"] {
+:is(.composer-routing, .composer-status, .terminal-tabs, .attachment-strip)[data-overflow="start"] {
   mask-image: linear-gradient(to right, transparent, black 28px);
 }
-:is(.composer-routing, .terminal-tabs, .attachment-strip)[data-overflow="both"] {
+:is(.composer-routing, .composer-status, .terminal-tabs, .attachment-strip)[data-overflow="both"] {
   mask-image: linear-gradient(to right, transparent, black 28px, black calc(100% - 28px), transparent);
 }
 

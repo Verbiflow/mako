@@ -7,9 +7,10 @@ than its own. `src/index.css` holds the tokens and nothing else does. `npm run l
 ## Tone
 
 - **Surfaces are tones, not boxes.** Chrome is `--shell`; a pane's body is `--surface`; anything raised above it
-  (the composer, a prompt, a row's selection, a card) is `--raised` or a tint of the text colour (`--fill-hover`,
+  (a prompt, a row's selection, a card) is `--raised` or a tint of the text colour (`--fill-hover`,
   `--fill-selected`). Sections part by tone and spacing, never a hairline, and nothing has an outline for its own
-  sake. Hairlines (`--hairline`) stay for content (a diff's file header, a table) and an input's focus.
+  sake. Hairlines (`--hairline`) stay for content (a diff's file header, a table) and inputs: the composer is the one
+  input framed at rest, on the pane's own surface.
 - **Shadows only float.** Menus, the palette, dialogs and toasts (`--elevation-*`) cast one; nothing in a pane does.
 - **The ramp is warm neutrals**, quiet in both themes. Hue appears only where it means something.
 
@@ -17,7 +18,7 @@ than its own. `src/index.css` holds the tokens and nothing else does. `npm run l
 
 | Token | Means | Never |
 | --- | --- | --- |
-| `--sea` | The brand's one accent (the fin's lit face, hue 245): the open Thread's lit fin, the glint on a working fin (`--fin-glint`), the caret | links, borders, focus, hover, icons at rest, any fill bigger than a badge; two in one pane |
+| `--sea` | The brand's one accent (the fin's lit face, hue 245): the open Thread's lit fin, the glint on a working fin (`--fin-glint`), the caret, the composer's send once there's something to send (its glyph `--on-sea`) | links, borders, focus, hover, icons at rest, any other fill bigger than a badge; two in one pane |
 | `--attention` | Waits on the person: needs you, an ask, an approval, the pip, the ask's edge | warnings |
 | `--caution` | A warning: risky access, a limit near, a step that went wrong but can go on | needs you, "changed", decoration |
 | `--negative` / `--positive` | Failed, removed / done, added | anything else |
@@ -71,7 +72,7 @@ Use these; don't redraw them.
 | A list of an Apex's Fins | the Shiver card (`viewer/shiver-card.tsx`): needs you, working, queued, failed; done and idle folded. A row's time is how long the Fin has stood as it does (`since`): a working one's current turn, never its age |
 | A row of a rail's fixed top | `RailRow` (`rail/rail-row.tsx`): the left rail's New thread and Inbox, the right rail's Changes and Files |
 | A message | `Prompt` and `FinReports` (`transcript/`), the avatar beside the message's last line |
-| The composer | one square raised box, no outline, a short field and one row: plus, model, access glyph, send |
+| The composer | the same in every view (`composer-frame.tsx`): in the transcript's column, one square box on the pane's surface with a hairline frame, the draft, then one row of plus, harness and model with its reasoning, send; under the box a quiet status line of where and how the work runs (this Mac or the cloud, the folder or branch, the access level in words, `--caution` only for full access) and the context reading at its end |
 
 ## The rails and tabs
 
@@ -89,6 +90,9 @@ Apex again. The phone's the same: a count in the bar and the Shiver card, no chi
 - No hint lines that explain the interface ("To the Apex · it passes it on…"); the placeholder or the menu that's
   asked for says it.
 - Placeholders say the action in a few words: "Ask anything", "Steer Claude · ⌘↩ queues", "Message Dictation".
+  An idle composer reads "Ask anything" in a new Thread and an existing one alike: the model chip already names who
+  answers, so a placeholder names the harness only when the send does something particular with it (steers, queues,
+  moves the conversation, starts a session beside the others).
 - Counts of Fins are the roster's one vocabulary (`rollupLine`, `rollupChip`, `rollupLabel`).
 
 ## Motion

@@ -1,7 +1,8 @@
 import { AgentsToggle } from "@/components/inspector/agents-panel"
 import { useState } from "react"
 import { RadioGroup } from "radix-ui"
-import { CheckIcon, ShieldIcon, TriangleAlertIcon } from "lucide-react"
+import { CheckIcon, ShieldAlertIcon, ShieldIcon } from "lucide-react"
+import { cn } from "@/lib/utils"
 import { ACCESS_TIERS, accessTierInfo } from "@mako/host/contracts/access"
 import type { LiveSessionMode } from "@/lib/types"
 import { useAccessChoices } from "@/state/access-choices"
@@ -96,7 +97,7 @@ export function AccessModeList({
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="flex items-center gap-1.5 text-ui">
                 {mode.access === "full" ? (
-                  <TriangleAlertIcon className="size-3 shrink-0 text-caution" />
+                  <ShieldAlertIcon className="size-3 shrink-0 text-caution" />
                 ) : null}
                 <span className="truncate">{modeLabel(mode)}</span>
               </span>
@@ -204,8 +205,18 @@ function AccessPicker({
   // The Plan toggle beside it already names plan mode; the chip says what it allows.
   const label = selected ? (selected.access === "plan" ? "Read-only" : modeLabel(selected)) : unresolvedLabel
   const full = selected?.access === "full"
+  // The level in words, in the status line under the composer. Only full access is coloured, the one level that
+  // never waits for the person; a warning glyph on every message read as an alarm that never went away.
+  const reading = (
+    <>
+      {full ? <ShieldAlertIcon className="size-3 shrink-0" /> : <ShieldIcon className="size-3 shrink-0" />}
+      <span data-collapse={full ? undefined : "1"} className="truncate">
+        {selected ? label : "Default access"}
+      </span>
+    </>
+  )
   if (modes.length === 1 && selected) {
-    // A one-mode provider offers nothing to choose: the chip states the one
+    // A one-mode provider offers nothing to choose: the line states the one
     // level there is rather than opening a ladder of a single rung.
     const title = [modeDetail(selected, harness), selected.access ? accessTierInfo(selected.access).summary : null]
       .filter(Boolean)
@@ -214,13 +225,10 @@ function AccessPicker({
       <span
         aria-label={`Access: ${label}`}
         title={title || label}
-        className="flex size-7 shrink-0 items-center justify-center text-faint"
+        data-access={selected.access ?? selected.id}
+        className={cn("flex h-7 min-w-0 shrink-0 items-center gap-1.5 px-2 text-ui", full ? "text-caution" : "text-faint")}
       >
-        {full ? (
-          <TriangleAlertIcon className="size-3.5 shrink-0 text-caution" />
-        ) : (
-          <ShieldIcon className="size-3.5 shrink-0" />
-        )}
+        {reading}
       </span>
     )
   }
@@ -230,14 +238,14 @@ function AccessPicker({
         <button
           type="button"
           aria-label={`Access: ${label}`}
-          title={selected ? (modeDetail(selected, harness) ?? label) : unresolvedDetail}
-          className="pressable flex size-7 shrink-0 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground"
-        >
-          {full ? (
-            <TriangleAlertIcon className="size-3.5 shrink-0 text-caution" />
-          ) : (
-            <ShieldIcon className="size-3.5 shrink-0" />
+          title={selected ? (modeDetail(selected, harness) ?? (selected.access ? accessTierInfo(selected.access).summary : label)) : unresolvedDetail}
+          data-access={selected ? (selected.access ?? selected.id) : "default"}
+          className={cn(
+            "pressable flex h-7 min-w-0 shrink-0 items-center gap-1.5 px-2 text-ui hover:bg-fill-hover data-[state=open]:bg-fill-selected",
+            full ? "text-caution" : "text-faint hover:text-foreground"
           )}
+        >
+          {reading}
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="start" sideOffset={8} className="w-80 p-1">

@@ -306,7 +306,7 @@ function ThreadWorkspace({ thread, cwd }: { thread: string; cwd: string | undefi
           className={triggerClass}
         >
           {moving ? <Spinner className="size-3 shrink-0" /> : branch ? <GitBranchIcon className="size-3 shrink-0" /> : <FolderIcon className="size-3 shrink-0" />}
-          <span data-collapse="1" className="truncate">
+          <span data-collapse="2" className="truncate">
             {label}
           </span>
         </button>
@@ -393,7 +393,7 @@ function NewThreadWorkspace() {
           className={triggerClass}
         >
           {!ownBranch ? <FolderIcon className="size-3 shrink-0" /> : existing?.start.kind === "pull" ? <GitPullRequestIcon className="size-3 shrink-0" /> : <GitBranchIcon className="size-3 shrink-0" />}
-          <span data-collapse="1" className="truncate">
+          <span data-collapse="2" className="truncate">
             {label}
           </span>
         </button>
