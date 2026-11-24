@@ -28,6 +28,7 @@ import type { NativeAgent, NativeAgentRoster } from "@/lib/types"
 import { finTuningLine } from "@mako/host/contracts/fin-tuning"
 import { SignpostIcon } from "lucide-react"
 import { FinMovedLine } from "./fin-moved-line"
+import { FinSharingLine } from "./fin-sharing-line"
 import { WorkGlyph } from "./work-glyph"
 
 export { WorkGlyph }
@@ -383,6 +384,7 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
             </span>
           ) : null}
           <FinMovedLine agent={agent} />
+          <FinSharingLine agent={agent} />
           {agent.runsOn?.note ? (
             <span data-fin-fell-back className="line-clamp-2 text-label text-caution" title={agent.runsOn.note}>
               {agent.runsOn.note}

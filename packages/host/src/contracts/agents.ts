@@ -642,6 +642,12 @@ export const NoticeSchema = z.lazy(() => z.object({
    * turns ended, a reminder among them (`Agents.owedOf`). Its report is the digest's words alone, kept nowhere.
    */
   unanswered: z.object({ request: z.string(), at: z.number(), turns: z.number(), line: z.string().max(400) }).optional(),
+  /**
+   * Not a report: this Fin and another Thread of its Shiver (`mate`: a Fin of the same Apex, named as `with`, or with
+   * none its Apex) each changed `files` in one folder while both were open (`FinCollisions`), `more` files besides.
+   * Said once a pair. Its report is the digest's words alone, kept nowhere, and changes how the Fin reads in nothing.
+   */
+  collision: z.object({ mate: z.string(), with: z.string().max(400).optional(), files: z.array(z.string().max(4096)).max(8), more: z.number().int().nonnegative() }).optional(),
 }))
 export type Notice = z.infer<typeof NoticeSchema>
 
@@ -688,6 +694,8 @@ export interface ChildThread {
   step?: string
   /** It reads as working and nothing came of it past `QUIET_MS` (`QuietWatch`): since when, its last step, whether it ran. */
   quiet?: { since: number; step?: string; running?: true }
+  /** Another open Thread of its Shiver changed a file it changed, in one folder (`FinCollisions`), as its row says it (`sharingWords`). */
+  sharing?: string
   /** Its work waits for its own Fins, a move or provider recovery: pending, but holding no execution room. */
   awaiting?: string
   /** When its work now began: its turn's start, or with `awaiting`, when that turn ended. Absent when nothing says. */
@@ -895,7 +903,7 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
     provider: thread.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown",
     observedAt: thread.updatedAt ?? edge.createdAt,
     startedAt: thread.startedAt ?? edge.createdAt,
-    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(edge.placed && edge.asked.place && { place: edge.asked.place }), ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }) },
+    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(edge.placed && edge.asked.place && { place: edge.asked.place }), ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }), ...(thread.sharing && { sharing: thread.sharing }) },
   }
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
