@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.170.0"
+    "version": "0.172.0"
   },
   "about": "In one code cell, view swatch.png with your image tool and tell me its colour. Don't run commands. A code cell that views an image file through the harness's own image tool, then the answer.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/18/rollout-2026-11-18T15-41-15-01a1ef51-c2dc-7c31-ae0e-1b5b00f212fb.jsonl",
+      "path": ".codex/sessions/2026/11/24/rollout-2026-11-24T17-46-11-01a20eaa-4ba3-7980-903e-73494e6d406d.jsonl",
       "known": []
     }
   ]

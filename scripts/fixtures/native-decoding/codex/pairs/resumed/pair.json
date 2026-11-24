@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.170.0"
+    "version": "0.172.0"
   },
   "about": "Read notes.md and tell me the release day. Don't run commands. / /compact / (resumed) / Without reading anything, which day did notes.md name? A turn, a manual compaction, the harness's process closed and the session resumed in a new one, then a turn that leans on the summary. What the harness replays while it opens is history.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/18/rollout-2026-11-18T15-41-58-01a1ef52-6b81-7473-a77f-383842936e41.jsonl",
+      "path": ".codex/sessions/2026/11/24/rollout-2026-11-24T17-46-53-01a20eaa-f092-7a23-8636-5443c8df4f71.jsonl",
       "known": []
     }
   ]

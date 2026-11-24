@@ -1,7 +1,7 @@
 {
   "harness": "codex",
-  "version": "0.170.0",
-  "on": "2026-11-18",
+  "version": "0.172.0",
+  "on": "2026-11-24",
   "searched": "codex",
   "probed": 14,
   "missing": [],
