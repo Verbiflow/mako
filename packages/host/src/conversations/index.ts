@@ -39,7 +39,7 @@ import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject,
 import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
 import { placeLink } from "./place-link.js"
-import { accountNotices, deviceTree, type NoticeLink } from "./notice-post.js"
+import { accountNotices, type NoticeLink } from "./notice-post.js"
 import { PlacedCheckouts } from "./placed-checkouts.js"
 import { captureFinSource, verifyFinSource } from "./fin-source.js"
 import type { AgentRefused, AgentsDirectInput, AgentsRespondInput, AgentsRedirectInput } from "../contracts/agents.js"
@@ -232,7 +232,7 @@ export interface ConversationsDeps {
    * The Mako account this host is signed in to, through which it reaches the person's other devices: with it a Fin can
    * be placed on one, and one placed here reports to its Apex's device. Without it Fins start here only.
    */
-  account?(): Pick<CloudAccount, "deviceId" | "devices" | "session" | "heldCloudFinLimits" | "holdsTreeNotices" | "postTreeNotice" | "treeEdge"> | undefined
+  account?(): Pick<CloudAccount, "deviceId" | "devices" | "session" | "heldCloudFinLimits"> | undefined
   /**
    * On a cloud machine: its link to the account, null until its agent gave one. With it a Fin here posts its notices
    * to the account on the machine's credential (`accountNotices`): a machine has no device's sign-in to reach its
@@ -516,8 +516,6 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       watchCheck: (conversation, tier, onEnd) => deps.watchCheck?.(conversation, tier, onEnd) ?? Promise.resolve(false),
       ...(away && { away }),
       ...(deps.machineNotices && { post: accountNotices(deps.machineNotices) }),
-      // A device's own sign-in to the account, for its trees; a cloud machine has none, and posts on its machine's credential.
-      ...(deps.account && !deps.machineNotices && { tree: deviceTree(deps.account) }),
       remoteOf: (cwd) => deps.git.output(cwd, ["remote", "get-url", "origin"]).then((text) => text.trim() || undefined, () => undefined),
       checkoutOf: (remote) => checkouts.find(remote),
       verifySource: (folder, source) => verifyFinSource(deps.git, folder, source),

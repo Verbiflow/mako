@@ -3,7 +3,7 @@ import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage, type FailureBoundary } from "../base/error-message.js"
 import { z } from "zod"
 import type { Json } from "@mako/protocol"
-import { treeNoticeRefusalText, type TreeEdgeAnswer, type TreeEdgeAsk, type TreeNoticeAnswer, type TreeNoticeRefusal } from "@mako/protocol/tree-notices"
+import { treeNoticeRefusalText, type TreeNoticeAnswer, type TreeNoticeRefusal } from "@mako/protocol/tree-notices"
 import { ACCESS_TIER_NAMES } from "../contracts/access.js"
 import {
   FIN_WORD,
@@ -107,13 +107,11 @@ export interface OutboxNotice {
 /**
  * How a post of a notice to the account went: its answer, with how long a `rate` refusal said to wait; `unauthorized`
  * when the account no longer takes this machine's credential (it rotated, or the machine is being enrolled again);
- * `unserved` from an account with no path for a device's notices; `failed` when no answer came that can be read (the
- * network, or the account failing).
+ * `failed` when no answer came that can be read (the network, or the account failing).
  */
 export type NoticePosted =
   | { kind: "answered"; answer: TreeNoticeAnswer; retryAfterMs?: number }
   | { kind: "unauthorized" }
-  | { kind: "unserved" }
   | { kind: "failed"; why: string }
 
 /**
@@ -124,33 +122,14 @@ export interface NoticePost {
   post(body: string): Promise<NoticePosted>
 }
 
-/**
- * A device's way to the account for its trees (`AgentsDeps.tree`): the record of each Fin it placed elsewhere, kept
- * and ended there (`TreeEdgeAskSchema`), and the notices of Fins here whose Apex's device keeps such a record. `open`:
- * whether this device's link agreed the version whose account holds notices (`TREE_NOTICES_LINK_VERSION`). Until it
- * has, nothing is asked or posted, and a notice goes to its Apex's device.
- */
-export interface TreeAccount extends NoticePost {
-  open(): boolean
-  /** An ask of the account's records, answered; `unserved` from an account that keeps none. */
-  edge(ask: TreeEdgeAsk): Promise<TreeEdgeAnswer | "unserved">
-}
-
 /** The refusals no later post answers otherwise: the report is posted no more (`TreeNoticeRefusalSchema`). */
 const REFUSED_FOR_GOOD: ReadonlySet<TreeNoticeRefusal> = new Set(["conflict", "invalid", "forbidden", "too-large"])
 
-/** How one notice went to its Apex's device: that device has it or never will (`taken`), the account refused it for good, or it waits. */
-type Direct =
+/** How one notice went: its Apex has it or never will (`taken`), the account refused it for good, or it waits. */
+type Sent =
   | { kind: "taken"; fields: Record<string, string | number | boolean> }
   | { kind: "refused"; reason: TreeNoticeRefusal }
   | { kind: "waits"; why: string; waitMs?: number }
-
-/**
- * How one notice went: as `Direct`, or `unrecorded` from a device's post, when the account has no record of the Fin or
- * keeps none at all. The account says so only while it holds nothing of that Fin's (`decideTreeEdge`), so the notice
- * goes to its Apex's device with none of the Fin's before it still on its way.
- */
-type Sent = Direct | { kind: "unrecorded"; why: string }
 
 export interface AgentPlacesDeps {
   link: PlaceLink
@@ -164,11 +143,6 @@ export interface AgentPlacesDeps {
    * sign-in to call another device with, and the account holds a notice while the Apex's device is off.
    */
   post?: NoticePost
-  /**
-   * On a device: the account, for a Fin whose Apex's device keeps a record of it there (`RemoteParent.account`). It
-   * holds a notice while that device is off, which the device's own runtime can't.
-   */
-  account?: TreeAccount
   /** The account refused a report's notice for good: it leaves the outbox unheard, and is never marked taken. */
   refused?(report: Report, reason: TreeNoticeRefusal, at: number): void
   /** How a Fin here stands as a notice of `report` is sent (`AgentsNoticeInput.standing`). */
@@ -183,15 +157,7 @@ export interface AgentPlacesDeps {
  * `ApexCaller`. For a Fin here whose Apex is elsewhere: its notices, each sent to the Apex's device
  * (`mako:agents-notice`) until that device takes it. The outbox is the store's undelivered reports, so nothing is
  * kept here but when each device is next tried. On a cloud machine each is posted to the account instead
- * (`NoticePost`), which holds it for the Apex's Session: admitted there, it's taken here. A device posts one to the
- * account too where the Fin's Apex's device keeps a record of the Fin there (`way`), so the two devices needn't be on
- * at once.
- *
- * A Fin's notices reach its Apex in the order they were made, and the two ways never carry one Fin's at once. The
- * outbox sends an Apex's device's notices one at a time, each answered before the next leaves. A call to that device
- * is answered once the device has the notice. A post is answered once the account holds it, which may be long before
- * the device takes it, so a notice goes to the device itself after a post only when the account said it has no record
- * of the Fin (`unrecorded`), which it says only while it holds nothing of that Fin's.
+ * (`NoticePost`), which holds it for the Apex's Session: admitted there, it's taken here.
  */
 export class AgentPlaces {
   private readonly deps: AgentPlacesDeps
@@ -200,8 +166,6 @@ export class AgentPlaces {
   private readonly retries = new Map<string, { at: number; waitMs: number }>()
   private readonly flushing = new Map<string, Promise<void>>()
   private readonly again = new Set<string>()
-  /** The account said it has no path for a device's notices: it's posted none until this device's link is next up (`linked`). */
-  private pathless = false
   private readonly demand
   private readonly stopJob: () => void
   private stopped = false
@@ -381,35 +345,23 @@ export class AgentPlaces {
   restate(notice: OutboxNotice): void {
     const device = notice.edge.remote?.device
     if (!device || this.stopped) return
-    const post = this.way(notice.edge)
+    const post = this.deps.post
+    if (post) {
+      // Still in the outbox: its own post says how the Fin stands as it goes, in its turn behind any before it.
+      if (this.deps.waiting().some(({ report }) => report.id === notice.report.id)) return this.queued(device)
+      // Admitted before: the account puts the newer standing on the notice it holds, or sends it on to the owner once.
+      const input = this.noticeOf(notice)
+      this.posted(post, input).then(
+        (sent) => hostLog("agents", sent.kind === "taken" ? "standing sent" : "standing not sent", { notice: input.id, working: input.standing?.working ?? false, ...(sent.kind === "taken" ? sent.fields : { why: sent.kind === "refused" ? sent.reason : sent.why }) }),
+        (error: Error) => hostLog("agents", "standing not sent", { notice: input.id, why: errorMessage({ error }) }),
+      )
+      return
+    }
     const input = this.noticeOf(notice)
-    const direct = () => this.deps.link.call({ kind: "device", device, name: device }, "mako:agents-notice", [wire(input)]).then(
+    this.deps.link.call({ kind: "device", device, name: device }, "mako:agents-notice", [wire(input)]).then(
       () => hostLog("agents", "standing sent", { notice: input.id, device, working: input.standing?.working ?? false }),
       (error: Error) => hostLog("agents", "standing not sent", { notice: input.id, device, why: errorMessage({ error }) }),
     )
-    if (!post) return void direct()
-    // Still in the outbox: its own post says how the Fin stands as it goes, in its turn behind any before it.
-    if (this.deps.waiting().some(({ report }) => report.id === notice.report.id)) return this.queued(device)
-    // Admitted before: the account puts the newer standing on the notice it holds, or sends it on to the owner once.
-    this.posted(post, input).then(
-      (sent) => {
-        // No record of the Fin there, so nothing of its is held there: its Apex's device is told itself.
-        if (sent.kind === "unrecorded") return direct()
-        hostLog("agents", sent.kind === "taken" ? "standing sent" : "standing not sent", { notice: input.id, working: input.standing?.working ?? false, ...(sent.kind === "taken" ? sent.fields : { why: sent.kind === "refused" ? sent.reason : sent.why }) })
-      },
-      (error: Error) => hostLog("agents", "standing not sent", { notice: input.id, why: errorMessage({ error }) }),
-    )
-  }
-
-  /**
-   * Where a Fin's notices are posted, or undefined when they go to its Apex's device itself. A cloud machine posts
-   * every one. A device posts a Fin's only where its Apex's device said it keeps a record of the Fin with the account
-   * (`RemoteParent.account`) and this device's link agreed that the account holds notices: without either, an older
-   * device or an older account, the notice goes as it always did.
-   */
-  private way(edge: ThreadParent): NoticePost | undefined {
-    if (this.deps.post) return this.deps.post
-    return edge.remote?.account && !this.pathless && this.deps.account?.open() ? this.deps.account : undefined
   }
 
   private noticeOf({ edge, report }: OutboxNotice): AgentsNoticeInput {
@@ -437,14 +389,6 @@ export class AgentPlaces {
   /** This machine's credential was renewed, or its link is up: what the account turned away with the old one goes now. */
   renewed(): void {
     if (!this.deps.post || this.stopped) return
-    this.retries.clear()
-    this.resume()
-  }
-
-  /** This device is back on its account: what waited for the account, or for a device that may be back as well, goes now. */
-  linked(): void {
-    if (this.deps.post || this.stopped) return
-    this.pathless = false
     this.retries.clear()
     this.resume()
   }
@@ -488,10 +432,7 @@ export class AgentPlaces {
       const input = this.noticeOf({ edge, report })
       const id = input.id
       const began = this.now()
-      const post = this.way(edge)
-      const posted = post ? await this.posted(post, input) : undefined
-      if (posted?.kind === "unrecorded") hostLog("agents", "notice goes to its Apex's device", { notice: id, device, why: posted.why })
-      const sent = !posted || posted.kind === "unrecorded" ? await this.called(device, input) : posted
+      const sent = this.deps.post ? await this.posted(this.deps.post, input) : await this.called(device, input)
       if (sent.kind === "waits") return this.wait(device, id, sent.why, sent.waitMs)
       this.retries.delete(device)
       if (sent.kind === "refused") {
@@ -508,7 +449,7 @@ export class AgentPlaces {
   }
 
   /** One notice to its Apex's device's runtime, as a device sends it. */
-  private async called(device: string, input: AgentsNoticeInput): Promise<Direct> {
+  private async called(device: string, input: AgentsNoticeInput): Promise<Sent> {
     let answer: AgentsNoticed
     try {
       const parsed = NoticedSchema.safeParse(await this.deps.link.call({ kind: "device", device, name: device }, "mako:agents-notice", [wire(input)]))
@@ -521,11 +462,10 @@ export class AgentPlaces {
   }
 
   /**
-   * One notice posted to the account: what a notice says and no more (`TreeNoticeSchema`), so no `op`, which the
-   * account says itself from this sender's credential. Admitted, the account holds it for the Apex's Session, which
-   * is the Apex's device taking it as far as this host goes; a repeat answers the number it had. `gone` is as good as
-   * taken, since nothing is left to hear it. `rate` and `full` pass. The rest never do, but for a device's
-   * `forbidden`: the account has no record of the Fin (`unrecorded`), as an account with no path for it has none.
+   * One notice posted to the account, as a cloud machine sends it: what a notice says and no more (`TreeNoticeSchema`),
+   * so no `op`, which the account says itself from this machine's credential. Admitted, the account holds it for the
+   * Apex's Session, which is the Apex's device taking it as far as this host goes; a repeat answers the number it
+   * had. `gone` is as good as taken, since nothing is left to hear it. `rate` and `full` pass. The rest never do.
    */
   private async posted(post: NoticePost, input: AgentsNoticeInput): Promise<Sent> {
     const notice = { id: input.id, parent: input.parent, child: input.child, report: input.report, ...(input.standing && { standing: input.standing }) }
@@ -536,18 +476,11 @@ export class AgentPlaces {
       went = { kind: "failed", why: errorMessage({ error }) }
     }
     if (went.kind === "failed") return { kind: "waits", why: went.why }
-    const device = post !== this.deps.post
-    if (went.kind === "unserved") {
-      if (!device) return { kind: "waits", why: "the account has no path for this machine's notices" }
-      this.pathless = true
-      return { kind: "unrecorded", why: "the account has no path for a device's notices" }
-    }
     // Its credential is renewed by the machine's agent, and what waits goes as it is (`renewed`): until then, the longest wait.
     if (went.kind === "unauthorized") return { kind: "waits", why: "the account no longer takes this machine's credential", waitMs: OUTBOX_RETRY_MAX_MS }
     const answer = went.answer
     if (answer.admitted) return { kind: "taken", fields: { seq: answer.seq } }
     if (answer.reason === "gone") return { kind: "taken", fields: { refused: answer.reason } }
-    if (device && answer.reason === "forbidden") return { kind: "unrecorded", why: "the account has no record of this Fin" }
     if (REFUSED_FOR_GOOD.has(answer.reason)) return { kind: "refused", reason: answer.reason }
     const waitMs = answer.reason === "rate" && went.retryAfterMs !== undefined ? Math.min(OUTBOX_RETRY_MAX_MS, Math.max(1_000, went.retryAfterMs)) : undefined
     return { kind: "waits", why: `${answer.reason}: ${treeNoticeRefusalText(answer.reason)}`, ...(waitMs !== undefined && { waitMs }) }

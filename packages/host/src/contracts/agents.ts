@@ -74,12 +74,6 @@ export const RemoteParentSchema = z.lazy(() => z.object({
   access: z.enum(ACCESS_TIER_NAMES),
   /** The newest of its Apex's messages that reached it, by the count its Apex's device keeps of them (`Placed.epoch`). */
   heard: z.number().int().positive().optional(),
-  /**
-   * Its Apex's device keeps a record of each Fin it places with the account, as its start said
-   * (`AgentsPlaceInput.parent.records`): this Fin's notices are posted to the account, which holds them while that
-   * device is off, and go to the device itself only when the account says it has no record of the Fin.
-   */
-  account: z.literal(true).optional(),
 }))
 export type RemoteParent = z.infer<typeof RemoteParentSchema>
 
@@ -118,11 +112,6 @@ export const PlacedSchema = z.lazy(() => z.object({
    * together, so an older word, a notice replayed or one that was on its way, changes nothing, after a restart too.
    */
   said: z.object({ owner: z.number(), seq: z.number() }).optional(),
-  /**
-   * The account has this device's record of it (`TreeEdgeSchema`), under which it takes the Fin's notices from its
-   * place: set once the account answered, and dropped once it answered the record's end.
-   */
-  recorded: z.literal(true).optional(),
 }))
 export type Placed = z.infer<typeof PlacedSchema>
 
@@ -1172,8 +1161,6 @@ export interface ApexCaller {
   forwards?: string
   /** With a message or an answer for a Fin: the count its Apex's device will keep once it reaches it (`Placed.epoch`). */
   epoch?: number
-  /** With a start: its device keeps a record of the Fin with the account (`AgentsPlaceInput.parent.records`). */
-  records?: true
 }
 
 /**
@@ -1205,15 +1192,13 @@ export interface PlaceWorkspace {
 /**
  * A Fin started here for an Apex on another device (`mako:agents-place`), settled by `op`
  * (`start:{apexSession}:{clientKey}`): a repeat answers the same Fin. `access` is at most the Apex's own; this device
- * caps it by its own ceiling too. `parent.records`: the Apex's device keeps a record of each Fin it places with the
- * account (`TreeEdgeSchema`), so this Fin's notices go to the account; a device from before that says nothing, and
- * is sent them itself.
+ * caps it by its own ceiling too.
  */
 export interface AgentsPlaceInput {
   version: number
   op: string
   clientKey: string
-  parent: { device: string; thread: string; session: string; conversation?: string; access: AccessTier; records?: true }
+  parent: { device: string; thread: string; session: string; conversation?: string; access: AccessTier }
   brief: Brief
   name: string
   title?: string

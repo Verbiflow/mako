@@ -1034,8 +1034,7 @@ again after 5 s, doubling to 5 minutes, on a job that runs only while one
 waits; it never expires, so a device away for weeks takes them when it's
 back. The Apex's device tells its places it's back when its runtime's link
 opens and when its host starts (`knock`), and a place that hears from it
-sends at once; it asks each how its Fins stand then too, which no notice
-says of a Fin with nothing to report. A Fin on a cloud machine has no device's sign-in to call its
+sends at once. A Fin on a cloud machine has no device's sign-in to call its
 Apex's device with, so its host posts each report to the account instead
 (`accountNotices`, `machineNoticesPath`, on the machine's credential): the
 account holds it for the Apex's Session and delivers it as the same
@@ -1053,31 +1052,7 @@ can post another Fin's child under its own start, and only this device knows
 which start made which. Its link says it takes them in every advertisement
 (`linkAdvertisement`), and its `knock` leaves a cloud machine asleep.
 `scripts/test-fins-notices.ts` holds both ends against the protocol's
-gateway. A Fin on a device posts to the account too, so the two devices
-needn't be on at once, once its Apex's device keeps a record of it there
-(`TreeEdgeSchema`, `TREE_EDGES_PATH`: the start, the Apex, the child and
-the place, kept by the device that owns the Apex's Session and by no
-other). A device's sign-in names no Fin, so the account admits a device's
-notice only under a record naming that device, that child and that Apex,
-and stamps it with the record's start (`from.op`). The Apex's device keeps
-the record as it writes the Fin's edge and says so on the edge once the
-account answered (`Placed.recorded`, `Agents.recordPlaced`); it ends it
-when the Fin is stopped and keeps it again when the Fin is sent on, and an
-ask not done is made again when the device is back and when the Fin is
-next heard of. The start tells the Fin's device its Apex's device keeps
-records (`AgentsPlaceInput.parent.records`, `RemoteParent.account`): such
-a Fin's notices are posted (`AgentPlaces.way`, `deviceTree`) while the
-device's link agreed version 30, and every other goes from device to
-device as before, so a device or an account from before this changes
-nothing. One Fin's notices never travel both ways at once: the outbox
-sends one at a time, and a notice goes to the Apex's device after a post
-only when the account said it has no record of the Fin (`forbidden`, or an
-account with no path), which it says only while it holds nothing of that
-Fin's, since a record ended with notices held stands until they're taken
-(`decideTreeEdge`). `scripts/test-fins-device-notices.ts` holds it: the
-two devices never on at once, each host restarted at each point, the two
-ways, each older build, a device posting for a child that isn't its own,
-and a record kept once and ended with its edge. `agents_list`, `agents_read`, `agents_send`,
+gateway. `agents_list`, `agents_read`, `agents_send`,
 `agents_answer`, `agents_stop` and `agents_move` on a placed Fin are the
 same host calls on its device with the Apex as their caller (`ApexCaller`);
 a device that can't be reached is said, and list and read fall back to what
