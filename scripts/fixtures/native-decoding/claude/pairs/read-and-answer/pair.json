@@ -1,13 +1,13 @@
 {
   "harness": "claude",
   "native": {
-    "version": "2.1.327"
+    "version": "2.1.331"
   },
   "about": "What do the notes in notes.md say? Reasoning, text, a file read, then the answer.",
   "stores": [
     {
       "reader": "claude",
-      "path": ".claude/projects/-tmp-mako-pair-project/ec0b9cfb-ff5d-482f-8c74-98c25b8a23bc.jsonl",
+      "path": ".claude/projects/-tmp-mako-pair-project/89759833-dec1-4754-a3c1-679f4ff023c3.jsonl",
       "known": []
     }
   ]
