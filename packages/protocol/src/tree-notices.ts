@@ -56,11 +56,32 @@ export function machineNoticesPath(machine: string): string {
 export const TREE_NOTICES_HELD = 500
 
 /**
- * How many notices a Fin may always hold for its Apex's Session, whatever its siblings hold: one, of any size a notice
- * may be (`TREE_NOTICE_BYTES`). So a Fin that holds none is never refused `full`, however many siblings flood the
- * Session: its next report is held as soon as its owner took its last one.
+ * The most Fins one tree has open off its Apex's host, as its host bounds them: 872. A Fin placed on a device keeps
+ * its record with the account only while it's at work or was within `FINISHED_CLOSE_MS` (6 hours) of its start, its
+ * last report or its last opening, and its Apex's device looks every 15 minutes (`FINISHED_SWEEP_MS`): so within 7
+ * hours of anything. A tree starts at most 120 Fins in any hour (`TREE_BUDGET.hourly`), so 840 in 7 hours, and at most
+ * 32 of its Fins work at once (`TREE_BUDGET.running`), one started earlier among them: 840 + 32. A cloud Fin is one of
+ * those starts too. Opening more than that many old Fins again within 7 hours is the one way past it, and is no
+ * legitimate tree's; past it the tree's own next record, or a Fin of it holding nothing, is refused, and no other
+ * tree's. `test-fins-device-notices` holds this number to the host's.
+ */
+export const TREE_FINS_OPEN = 7 * 120 + 32
+
+/**
+ * How many notices a Fin may always hold for its Apex's Session, whatever its siblings hold: one, of at most
+ * `TREE_NOTICE_FLOOR_BYTES`. So a Fin that holds none is never refused `full` for an ordinary report, however many
+ * siblings flood the Session: its next report is held as soon as its owner took its last one. A larger one goes within
+ * its share, which is that much or more while 64 Fins or fewer hold notices.
  */
 export const TREE_NOTICE_FIN_FLOOR = 1
+
+/**
+ * The most bytes of a notice a Fin holding none is always admitted: 256 KiB, sixteen times a report's whole summary
+ * (16,000 characters) at a byte each and room for its artifacts besides. Set so the most a Session can hold
+ * (`TREE_NOTICES_SESSION_BYTES`) is a small part of what one account's storage keeps: at 2 MiB, 872 Fins' floors alone
+ * would be 1.7 GiB.
+ */
+export const TREE_NOTICE_FLOOR_BYTES = 256 * 1024
 
 /** What a Fin holds, or may hold, in its Apex's Session: how many notices, and their bytes as posted. */
 export type TreeNoticeHolding = { count: number; bytes: number }
@@ -76,22 +97,37 @@ export function treeNoticeFinShare(holders: number): TreeNoticeHolding {
 
 /**
  * Whether a Fin may hold what it would hold after a post (`held`, its notices' count and bytes then) while `others`
- * other Fins hold notices in the same Session. At or under the floor it always may; past it, only within its fair
- * share among `others + 1` holders (`treeNoticeFinShare`).
+ * other Fins hold notices in the same Session. At or under the floor (one notice of at most `TREE_NOTICE_FLOOR_BYTES`)
+ * it always may; past it, only within its fair share among `others + 1` holders (`treeNoticeFinShare`).
  *
  * What decides is the Fin's own holdings and how many Fins hold: never how much the others hold. A Fin is refused only
  * when it holds its own share, so no sibling, however much it posts, refuses another's notice. The pool can't be
  * overdrawn by it either: with every Fin within the share of `h` holders, they hold `h × ⌊500 / h⌋ ≤ 500` notices, so a
  * pool check would admit whatever this does. What the shares can leave over the pool is what Fins took while they were
- * fewer and kept as more came: each keeps what it holds and takes no more until it's under the new share, so the
- * Session holds at most what each Fin's largest share was when it was admitted, `500 × (1 + ½ + … + 1/h)` notices for
- * `h` holders, and the same of 16 MiB, and each holder's one notice past that floor. Nothing waits on anything but its
- * owner taking notices, which admission never holds up, so nothing deadlocks.
+ * fewer and kept as more came: each keeps what it holds and takes no more until it's under the new share. Ranked by
+ * when each last took more, the k-th was then one of at least k holders, so it holds at most the larger of its floor
+ * and a k-th of the room (`treeNoticeSessionMost`). Nothing waits on anything but its owner taking notices, which
+ * admission never holds up, so nothing deadlocks.
  */
 export function treeNoticeFinRoom(held: TreeNoticeHolding, others: number): boolean {
-  if (held.count <= TREE_NOTICE_FIN_FLOOR) return true
+  if (held.count <= TREE_NOTICE_FIN_FLOOR && held.bytes <= TREE_NOTICE_FLOOR_BYTES) return true
   const share = treeNoticeFinShare(others + 1)
   return held.count <= share.count && held.bytes <= share.bytes
+}
+
+/**
+ * The most one Apex's Session can hold with `holders` Fins holding notices there: the k-th by when it last took more
+ * holds at most the larger of its floor and its share among k (`treeNoticeFinRoom`).
+ */
+export function treeNoticeSessionMost(holders: number): TreeNoticeHolding {
+  let count = 0
+  let bytes = 0
+  for (let rank = 1; rank <= holders; rank += 1) {
+    const share = treeNoticeFinShare(rank)
+    count += Math.max(TREE_NOTICE_FIN_FLOOR, share.count)
+    bytes += Math.max(TREE_NOTICE_FLOOR_BYTES, share.bytes)
+  }
+  return { count, bytes }
 }
 
 /**
@@ -110,6 +146,14 @@ export const TREE_NOTICE_BYTES = 2 * 1024 * 1024
  * of the largest notice there may be (`TREE_NOTICE_BYTES`). Shared as `TREE_NOTICES_HELD` is (`treeNoticeFinShare`).
  */
 export const TREE_NOTICES_HELD_BYTES = 8 * TREE_NOTICE_BYTES
+
+/**
+ * The most bytes one Apex's Session can hold, whatever its Fins do: `treeNoticeSessionMost` of the most Fins a tree
+ * has open (`TREE_FINS_OPEN`, past which no Fin holding none is admitted). 291,401,614 bytes (278 MiB): the first 64
+ * Fins' shares of 16 MiB (16 MiB × (1 + ½ + … + 1/64), 76 MiB) and 808 floors of 256 KiB (202 MiB). A Durable Object
+ * holds 10 GB, so one tree at its most is under 3% of its account's.
+ */
+export const TREE_NOTICES_SESSION_BYTES = treeNoticeSessionMost(TREE_FINS_OPEN).bytes
 
 /**
  * The most posts one Fin makes in any minute; one more is refused (`rate`). Every post counts, whatever became of it: a
@@ -221,7 +265,8 @@ export type TreeNoticeDelivery = z.infer<typeof TreeNoticeDeliverySchema>
  * Why a notice wasn't admitted. `full` and `rate` pass: the sender keeps its report and posts it again. The rest don't,
  * and posting the same again answers the same: `gone` is as good as taken, since nothing is left to hear it;
  * `conflict` is another report under the same ID; `forbidden` is a notice for a Fin or an Apex that isn't the sender's:
- * a machine's for another child or Apex than its own, a device's with no record that names the three (`treeEdgeOfNotice`).
+ * a machine's for another child or Apex than its own, a device's with no record that names the three
+ * (`treeEdgeOfNotice`), standing or one its Apex's device kept that ended or lapsed, which the post brings back.
  */
 export const TreeNoticeRefusalSchema = z.enum(["conflict", "gone", "full", "rate", "invalid", "too-large", "forbidden"])
 export type TreeNoticeRefusal = z.infer<typeof TreeNoticeRefusalSchema>
@@ -365,8 +410,9 @@ export type TreeEdgeDecision = { ok: true; does: "keep" | "end" | "nothing" } | 
  * a start with no record is done already.
  *
  * `end` is the account's to carry out: with nothing held under the record it goes at once, and with notices still
- * held it's `ending` until they're taken, admitting as before. So a device is refused a notice for want of a record
- * only while the account holds nothing of that Fin's.
+ * held it's `ending` until they're taken, admitting as before. One that went is remembered for a while
+ * (`TREE_EDGE_LEASE_MS`), and its own Fin's next post brings it back, so a Fin set to work again with its Apex's
+ * device off still reports through the account.
  */
 export function decideTreeEdge(ask: TreeEdgeAsk, kept: KeptTreeEdge | undefined, owns: (session: string) => boolean): TreeEdgeDecision {
   const session = ask.ask === "end" ? apexSessionOfStart(ask.op) : ask.edge.apex.session
@@ -410,8 +456,8 @@ export function treeEdgeNoticeKey(edge: TreeEdge): string | undefined {
  * ending, whose owner is no device. Past this they lapse (`treeEdgesStandUntil`), each once nothing admitted under it
  * is still held, so a record never goes while a notice its Fin posted under it waits.
  *
- * A record that lapsed is kept again as any is: the Fin's next notice goes to its Apex's device itself, and that device,
- * hearing from a Fin it had on record, asks the account to keep it again (`recordPlaced`).
+ * A record that lapsed is remembered for another lease, and the Fin's next post brings it back, with its Apex's device
+ * on or off; past that, the notice goes to its Apex's device itself, which asks the account to keep it again.
  */
 export const TREE_EDGE_LEASE_MS = 30 * 24 * 60 * 60_000
 
@@ -477,6 +523,8 @@ export function admitTreeNotice(mailbox: TreeNoticeMailbox, posted: TreeNotice, 
   if (first) return sameTreeNotice(first.notice, posted) ? { admitted: true, seq: first.seq, does: newer(first.notice.standing) ? "restand" : "nothing" } : { admitted: false, reason: "conflict" }
   if (mailbox.last?.id === posted.id) return { admitted: true, seq: mailbox.last.seq, does: newer(mailbox.last.said) ? "forward" : "nothing" }
   const held = { count: mailbox.own.length + 1, bytes: mailbox.own.reduce((sum, each) => sum + each.bytes, bytes) }
+  // A Fin holding none is one more holder: never past the most Fins a tree has open.
+  if (!mailbox.own.length && mailbox.others >= TREE_FINS_OPEN) return { admitted: false, reason: "full" }
   if (!treeNoticeFinRoom(held, mailbox.others)) return { admitted: false, reason: "full" }
   return { admitted: true, seq: mailbox.head + 1, does: "hold" }
 }

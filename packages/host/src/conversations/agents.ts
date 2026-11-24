@@ -284,7 +284,7 @@ export const DECISION_HEARD_BY_MS = FOCUS_MS + APEX_ANSWER_MS
  */
 export const FINISHED_CLOSE_MS = 6 * 60 * 60_000
 /** How often finished Fins are looked at again while one is open (`FINISHED_SWEEP_JOB`): a close may come this late. */
-const FINISHED_SWEEP_MS = 15 * 60_000
+export const FINISHED_SWEEP_MS = 15 * 60_000
 /** The job that closes finished Fins once their time has come. */
 export const FINISHED_SWEEP_JOB = "close finished Fins"
 
@@ -4206,6 +4206,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.standingHeard(edge.child, input.standing)
     hostLog("agents", "notice taken", { notice: input.id, child: edge.child, status: report.data.status, ownerGeneration: report.data.ownerGeneration, ...(kept.deduped && { deduped: true }), ...(from && { seq: from.seq }) })
     if (!from) this.recordLost(edge.child)
+    else this.recordHeld(edge.child)
     // A Fin there reported, so its place may have room now: what waits for it asks.
     if (!kept.deduped) void this.askRooms()
     return { heard: true, ...(kept.deduped && { deduped: true as const }) }
@@ -4233,8 +4234,8 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /**
    * The account's record of a Fin this device placed elsewhere follows the Fin's edge here: kept while its delegation
-   * is open, or closed only because it finished, and ended once it's stopped, by its Apex, the person or an archive.
-   * A stopped Fin that's sent on is put on record again. The edge says whether the account has it (`Placed.recorded`),
+   * is open, and ended once it's closed: stopped, by its Apex, the person or an archive, or closed as finished
+   * (`closeFinished`). A Fin opened again (sent on, or heard from) is put on record again. The edge says whether the account has it (`Placed.recorded`),
    * written once the account answered, so a host that restarts asks only for what's still owed. An ask not done (this
    * device isn't listed as the owner of its Apex's Session yet, the account can't be reached, or it keeps no records)
    * is made again when this device is back on its account and when the Fin is next heard of, no sooner than
@@ -4245,7 +4246,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     const store = this.store()
     const edge = store?.edges().of(child)
     if (!tree || !store || !edge?.placed || this.stopped || !tree.open()) return
-    const keep = !edgeStopped(edge)
+    // Kept while its delegation is open and the Fin has been at work within `FINISHED_CLOSE_MS`; ended once it's
+    // closed (stopped, or closed as finished) or idle that long (`placedIdle`).
+    const keep = edge.closedAt === undefined && !this.placedIdle(edge)
     const op = edge.op
     if (keep === (edge.placed.recorded === true) || this.recording.has(op)) return
     if (when !== "now" && this.now() - (this.recordAsked.get(op) ?? -Infinity) < RECORD_RETRY_MS) return
@@ -4280,11 +4283,38 @@ export class Agents implements AgentOperations, ConversationChildren {
    */
   private recordLost(child: string): void {
     const edge = this.store()?.edges().of(child)
-    if (!edge?.placed?.recorded || edgeStopped(edge) || !this.deps.tree?.open()) return
+    if (!edge?.placed?.recorded || edge.closedAt !== undefined || !this.deps.tree?.open()) return
     if (this.now() - (this.recordReasked.get(edge.op) ?? -Infinity) < RECORD_REASK_MS) return
     this.recordReasked.set(edge.op, this.now())
     hostLog("agents", "Fin's record asked for again", { op: edge.op, child, why: "its notice came from its device, not the account" })
     this.store()?.keepPlaced(child, { recorded: undefined })
+    this.recordPlaced(child, "now")
+  }
+
+  /**
+   * Whether a Fin this device placed elsewhere is idle past `FINISHED_CLOSE_MS`, as far as this device knows: its device
+   * said it isn't at work, and nothing of it (its start, its last report, its last opening) is newer than that. Its
+   * record ends then, whatever it still asks, since it reports again only once something sets it to work, which keeps
+   * it again: its Apex's message or answer here, or its next notice (`recordHeld`, `recordLost`). So a tree keeps
+   * records only for the Fins it started or heard from within that time, and those still at work.
+   */
+  private placedIdle(edge: ThreadParent): boolean {
+    if (!edge.placed || edge.placed.working) return false
+    const last = Math.max(edge.createdAt, this.latest.get(edge.child)?.at ?? 0, edge.resumed?.at ?? 0)
+    return this.now() - last >= FINISHED_CLOSE_MS
+  }
+
+  /**
+   * The account delivered a notice of a Fin under its record, so the account has one: it brought the record back
+   * itself from the Fin's own post, after it ended or lapsed (`TreeNotices.edgeOfNotice`), with neither device asking
+   * this one. The edge says so, and the record is kept or ended as the edge stands now (`recordPlaced`): a report opens
+   * a Fin closed as finished, which keeps it; one stopped asks the account to end it again.
+   */
+  private recordHeld(child: string): void {
+    const store = this.store()
+    const edge = store?.edges().of(child)
+    if (!store || !edge?.placed || edge.placed.recorded) return
+    store.keepPlaced(child, { recorded: true })
     this.recordPlaced(child, "now")
   }
 
@@ -5956,8 +5986,10 @@ export class Agents implements AgentOperations, ConversationChildren {
       this.childMoved(shut, false)
       current()
     }
-    // The job comes back only while an open Fin has finished, or will be found to have.
-    this.finishedDemand.set(!this.stopped && store.edges().all.some((edge) => edge.closedAt === undefined && this.finished(edge)))
+    // A placed Fin's record ends once it's idle past the close, whether or not its edge could close.
+    for (const edge of store.edges().all) if (edge.placed?.recorded && edge.closedAt === undefined && this.placedIdle(edge)) this.recordPlaced(edge.child)
+    // The job comes back only while an open Fin has finished, or will be found to have, or a placed Fin is on record.
+    this.finishedDemand.set(!this.stopped && store.edges().all.some((edge) => edge.closedAt === undefined && (this.finished(edge) || edge.placed?.recorded === true)))
     return closed
   }
 
@@ -6019,8 +6051,13 @@ export class Agents implements AgentOperations, ConversationChildren {
     const { store, now } = facts
     const child = edge.child
     if (edge.closedAt !== undefined) return "closed already"
-    // What a Fin placed elsewhere waits on is its device's to know, and what one placed here owes is its Apex's device's.
-    if (edge.placed || edge.remote) return "placed on another device"
+    // What a Fin placed here owes is its Apex's device's to know: that device closes it, and this one keeps its edge.
+    if (edge.remote) return "its Apex is on another device"
+    // A Fin this device placed elsewhere closes here as one here does, by what its device said last: idle (`working`),
+    // with no stop or start of it still owed to its device. Its record with the account ends with it
+    // (`recordPlaced`), so a tree's open placed Fins, and their records, are what it started or heard from within
+    // `FINISHED_CLOSE_MS` and what still works or asks. Whatever reaches it opens it again, its next report included.
+    if (edge.placed && (edge.placed.working || edge.placed.stop || this.queuedAway(edge.op))) return "its device hasn't said it's idle"
     const latest = this.latest.get(child)
     if (!latest || !this.finished(edge)) return "not finished"
     if (now - latest.at < FINISHED_CLOSE_MS) return "finished too recently"
@@ -6066,7 +6103,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const live = this.deps.live
     const conversations = this.conversationsOfThread(edge.child)
     // A run Mako never drove has no conversation here: its process's end, on this device, is all there is of it.
-    if (!conversations.length) return edge.run?.ended && edge.run.device === store?.deviceId ? undefined : "no conversation on this host"
+    // A Fin this device placed elsewhere has its conversation on its own device, which said it's idle (`keptOpen`).
+    if (!conversations.length) return edge.placed || (edge.run?.ended && edge.run.device === store?.deviceId) ? undefined : "no conversation on this host"
     for (const conversation of conversations) {
       if (this.deps.archived?.(conversation)) return "archived"
       const held = live.session(conversation) ? live.held(conversation) : undefined

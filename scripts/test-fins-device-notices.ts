@@ -14,10 +14,12 @@ import { createFakeGateway, type FakeGateway } from "@mako/protocol/fake-gateway
 import {
   TREE_NOTICE_OP, TreeNoticeSchema, noticeIdOf, treeNoticeOperation,
   type TreeEdge, type TreeEdgeAnswer, type TreeEdgeAsk, type TreeNoticeAnswer,
+  TREE_FINS_OPEN,
 } from "@mako/protocol/tree-notices"
 import { linkAdvertisement } from "@mako/host/base/advertiser"
 import { unwatchedWork } from "@mako/host/base/event-loop"
-import type { AgentsNoticeFrom, AgentsNoticeInput, Report, ThreadParent } from "@mako/host/contracts/agents"
+import { FINISHED_CLOSE, HOUR_MS, TREE_BUDGET, type AgentsNoticeFrom, type AgentsNoticeInput, type Report, type ThreadParent } from "@mako/host/contracts/agents"
+import { FINISHED_CLOSE_MS, FINISHED_SWEEP_MS } from "@mako/host/conversations/agents"
 import type { AgentsStarted, AgentsStartResult } from "@mako/host/contracts/agent-tools"
 import { gatewayHostCalls, sendWithRepeats } from "@mako/host/contracts/gateway-host-calls"
 import { fromHostOperation } from "@mako/host/contracts/host-operations"
@@ -97,8 +99,11 @@ interface Device {
   close(): Promise<void>
 }
 
-/** A device's host. `tree: false` is a build from before the account held a device's notices: it keeps no record and posts nothing. */
-function device(account: Account, name: string, script: Script, how: { tree?: boolean } = {}): Device {
+/**
+ * A device's host. `tree: false` is a build from before the account held a device's notices: it keeps no record and
+ * posts nothing. `now`: its engine's clock, which a case moves on.
+ */
+function device(account: Account, name: string, script: Script, how: { tree?: boolean; now?: () => number } = {}): Device {
   const id = randomUUID()
   let reach = true
   let session: Promise<ClientSession> | undefined
@@ -153,6 +158,7 @@ function device(account: Account, name: string, script: Script, how: { tree?: bo
     root: join(root, `${name}-${id.slice(0, 8)}`),
     script,
     noRoomWatch: true,
+    ...(how.now && { now: how.now }),
     away,
     ...(how.tree !== false && { tree }),
     remoteOf: async () => REMOTE,
@@ -255,7 +261,7 @@ async function deliver(to: Device, delivery: Delivered): Promise<z.infer<typeof 
 interface Placing {
   account?: Parameters<typeof accountOf>[0]
   /** Each device's build: `tree: false` is one from before the account held a device's notices. */
-  mac?: { tree?: boolean }
+  mac?: { tree?: boolean; now?: () => number }
   studio?: { tree?: boolean }
   /** A record the account already has as the Fin is started. */
   seeded?: (apex: { thread: string; session: string }, studio: Device) => TreeEdge
@@ -430,14 +436,15 @@ async function waysNeverCross(): Promise<void> {
     await mac.online()
     await until("the third and fourth on the Apex's device", () => summaries(mac, child).length === 4)
     await until("the record to go", () => account.gateway.treeEdges().length === 0)
-    // With nothing of the Fin's held and no record, its next goes to the Apex's device itself, after all before it.
+    // With nothing of the Fin's held, the record gone: its next post brings it back, after all before it.
     await report("five", "Step five.")
     await until("the fifth on the Apex's device", () => summaries(mac, child).length === 5)
     assert.deepEqual(summaries(mac, child), ["Step one.", "Step two.", "Step three.", "Step four.", "Step five."], "all five in order, each once")
-    assert.deepEqual(taken(mac).map((each) => each.by), ["account", "account", "account", "account", "device"])
-    assert.deepEqual(account.posts.at(-1)?.answer, { admitted: false, reason: "forbidden" })
-    assert.equal(taken(mac).at(-1)?.op, there.op, "as a device sends one: under its start's op")
-    console.log("ways: two reports that waited for the Apex's device went through the account in order once its record was there, a record ended with a notice held kept admitting, and the next went to the device only with nothing held")
+    assert.deepEqual(taken(mac).map((each) => each.by), ["account", "account", "account", "account", "account"])
+    assert.deepEqual(account.posts.at(-1)?.answer, { admitted: true, seq: 5 })
+    assert.deepEqual(account.gateway.treeEdges(), [{ edge, ending: false }], "brought back by its own post")
+    assert.equal(direct(account, studio), tried, "and nothing went to the device")
+    console.log("ways: two reports that waited for the Apex's device went through the account in order once its record was there, a record ended with a notice held kept admitting, and the next, with nothing held, brought the record back")
   } finally { await world.close() }
 }
 
@@ -590,10 +597,10 @@ async function recordedOnce(): Promise<void> {
   } finally { await clash.close() }
 }
 
-/** A Fin's record ends when its Apex stops it, and stands again when its Apex sends it on; one that only finished keeps its record. */
+/** A Fin's record ends when its Apex stops it, and stands again when its Apex sends it on. */
 async function endsWithItsEdge(): Promise<void> {
   const world = await placed()
-  const { account, mac, studio, apex, child, edge, report } = world
+  const { account, mac, apex, child, edge, report } = world
   try {
     await until("the Fin's record", () => recorded(mac, child))
     await report("one", "Done so far.")
@@ -605,7 +612,7 @@ async function endsWithItsEdge(): Promise<void> {
     await until("the edge to say so", () => !recorded(mac, child))
     assert.notEqual(mac.world.store.edges().of(child)?.closedAt, undefined, "its delegation is closed here")
     assert.deepEqual(account.asks.map((asked) => [asked.ask.ask, asked.answer.ok]), [["keep", true], ["end", true]])
-    assert.deepEqual(await account.gateway.postNotice({ kind: "device", device: studio.id }, JSON.stringify({ id: noticeIdOf(child, `report:${child}:late`), parent: edge.apex, child, report: { id: `report:${child}:late`, child } })), { admitted: false, reason: "forbidden" }, "and its device posts for it no more")
+    assert.deepEqual(await account.gateway.postNotice({ kind: "device", device: mac.id }, JSON.stringify({ id: noticeIdOf(child, `report:${child}:late`), parent: edge.apex, child, report: { id: `report:${child}:late`, child } })), { admitted: false, reason: "forbidden" }, "and no other device brings it back")
     // Its host restarts with the record ended: nothing is asked again.
     await mac.world.restart()
     await mac.online()
@@ -622,7 +629,7 @@ async function endsWithItsEdge(): Promise<void> {
     await until("its next report", () => summaries(mac, child).includes("The footer is checked."))
     assert.equal(taken(mac).at(-1)?.by, "account", "on record again, it reports through the account")
     assert.deepEqual(summaries(mac, child), ["Done so far.", "Carried on.", "The footer is checked."])
-    console.log("ends with its edge: a stopped Fin's record was ended and its device refused, a restart asked nothing again, and the Fin sent on was put on record again and reported through the account")
+    console.log("ends with its edge: a stopped Fin's record was ended, a restart asked nothing again, and the Fin sent on was put on record again and reported through the account")
   } finally { await world.close() }
 }
 
@@ -734,7 +741,7 @@ async function waitsAlone(): Promise<void> {
   } finally { await world.close() }
 }
 
-/** A record that lapsed while the Apex's device was away: the Fin's notice goes to that device itself, which asks the account to keep the record again. */
+/** A record that lapsed while the Apex's device was away: the Fin's own post brings it back, with neither device needing the other. */
 async function lapsedAskedAgain(): Promise<void> {
   const world = await placed()
   const { account, mac, studio, child, edge, report } = world
@@ -744,22 +751,125 @@ async function lapsedAskedAgain(): Promise<void> {
     account.gateway.lapseTreeEdges(world.session)
     assert.deepEqual(account.gateway.treeEdges(), [], "nothing held under it: it lapsed")
     await report("one", "Reported after the record lapsed.")
-    await until("the account to refuse it", () => account.posts.some((post) => post.answer?.admitted === false && post.answer.reason === "forbidden"))
-    assert.equal(undelivered(studio).length, 1, "it waits for the Apex's device, which is off")
+    await until("held by the account", () => account.gateway.heldNotices(world.session).length === 1)
+    assert.deepEqual(account.gateway.treeEdges(), [{ edge, ending: false }], "its post brought the record back")
+    assert.equal(direct(account, studio), 0, "and called no device")
+    // The Fin's device goes off too before the Apex's is back: neither was on with the other.
+    studio.offline()
     await mac.online()
     await until("the report on the Apex's device", () => summaries(mac, child).includes("Reported after the record lapsed."))
-    assert.ok(direct(account, studio) >= 1, "it went from device to device")
-    await until("the record kept again", () => account.gateway.treeEdges().length === 1)
+    assert.equal(recorded(mac, child), true)
+    assert.deepEqual(account.asks.map((asked) => asked.ask.ask), ["keep"], "nothing asked of the account again")
+    console.log("lapsed: a Fin whose record lapsed brought it back with its own post while its Apex's device was off, and that device took the report from the account later, never on with the Fin's")
+  } finally { await world.close() }
+}
+
+/** A Fin on record whose notice comes from its own device (its build posts none to the account) is asked for again by its Apex's device, once. */
+async function directAskedAgain(): Promise<void> {
+  const world = await placed({ studio: { tree: false } })
+  const { account, mac, child, report } = world
+  try {
+    await until("the Fin's record", () => recorded(mac, child))
+    account.gateway.lapseTreeEdges(world.session)
+    await report("one", "Sent itself.")
+    await until("the report on the Apex's device", () => summaries(mac, child).length === 1)
+    await until("the record asked for again", () => account.asks.length === 2)
+    assert.deepEqual(account.asks.map((asked) => [asked.ask.ask, asked.answer.ok]), [["keep", true], ["keep", true]])
+    await until("kept again", () => account.gateway.treeEdges().length === 1 && recorded(mac, child))
+    await report("two", "Sent itself again.")
+    await until("the second", () => summaries(mac, child).length === 2)
+    await mac.world.settle()
+    assert.equal(account.asks.length, 2, "asked again at most once a day")
+    console.log("direct: a recorded Fin's notice that came from its own device had its Apex's device ask for its record again, once")
+  } finally { await world.close() }
+}
+
+/** The tree's bound on open Fins, as the protocol states it, is the host's own: a start rate over the close and the running budget. */
+async function boundIsTheHosts(): Promise<void> {
+  const hours = Math.ceil((FINISHED_CLOSE_MS + FINISHED_SWEEP_MS) / HOUR_MS)
+  assert.equal(TREE_FINS_OPEN, TREE_BUDGET.hourly * hours + TREE_BUDGET.running, "starts in the close and the sweep's hours, and those at work")
+  console.log(`bound: a tree has at most ${TREE_FINS_OPEN} Fins on record: ${TREE_BUDGET.hourly} starts an hour over ${hours} hours, and ${TREE_BUDGET.running} at work`)
+}
+
+/** A Fin's own report as the person's message on its device makes it: done, asking nothing, or asking its Apex. */
+async function reportAs(studio: Device, conversation: string, key: string, summary: string, question?: string): Promise<void> {
+  const told = await studio.world.agents.report(studio.world.caller(conversation), { status: "done", summary, clientKey: key, ...(question && { question }) })
+  assert.ok(!("refused" in told), JSON.stringify(told))
+}
+
+/** A placed Fin that finished and sat idle for the close closes there as a Fin here does, its record with it; a message opens and records it again. */
+async function placedCloses(): Promise<void> {
+  const clock = { offset: 0 }
+  const world = await placed({ mac: { now: () => Date.now() + clock.offset } })
+  const { account, mac, studio, apex, child, edge, conversationOf } = world
+  try {
+    await until("the Fin's record", () => recorded(mac, child))
+    await reportAs(studio, conversationOf(child), "done", "The sidebar is fixed.")
+    studio.world.release(conversationOf(child))
+    await until("its Apex's device to hear it idle", () => mac.world.store.edges().of(child)?.placed?.working === false)
+    await mac.world.settle()
+    assert.deepEqual(await mac.world.agents.closeFinished(), [], "finished a moment ago: it stays open")
+    clock.offset = FINISHED_CLOSE_MS + 1_000
+    assert.deepEqual(await mac.world.agents.closeFinished(), [child], `six hours on, it closes as a Fin here does (open: ${mac.world.agents.keptOpenBy(child)})`)
+    assert.equal(mac.world.store.edges().of(child)?.closedReason, FINISHED_CLOSE)
+    await until("its record's end", () => account.gateway.treeEdges().length === 0 && !recorded(mac, child))
+    const sent = await mac.world.agents.send(mac.world.caller(apex.conversation), { to: "sidebar", text: "One more thing: the footer.", clientKey: "s1" })
+    assert.ok(!("refused" in sent), JSON.stringify(sent))
+    assert.equal(mac.world.store.edges().of(child)?.closedAt, undefined, "a message opens it")
+    await until("on record again", () => recorded(mac, child))
     assert.deepEqual(account.gateway.treeEdges(), [{ edge, ending: false }])
-    assert.deepEqual(account.asks.map((asked) => [asked.ask.ask, asked.answer.ok]), [["keep", true], ["keep", true]], "asked again once, by the device that heard the Fin itself")
-    await until("the edge to say so", () => recorded(mac, child))
-    // On record again: the next report goes through the account with the Apex's device off.
+    console.log("closes: a placed Fin idle six hours after its result closed as finished on its Apex's device, its record ended, and a message opened it and put it on record again")
+  } finally { await world.close() }
+}
+
+/** A placed Fin that sits idle asking its Apex keeps its open edge, and its record ends after the same six hours; its answer records it again. */
+async function idleRecordEnds(): Promise<void> {
+  const clock = { offset: 0 }
+  const world = await placed({ mac: { now: () => Date.now() + clock.offset } })
+  const { account, mac, studio, apex, child, edge, conversationOf } = world
+  try {
+    await until("the Fin's record", () => recorded(mac, child))
+    await reportAs(studio, conversationOf(child), "ask", "Which footer?", "Which footer, the old or the new?")
+    studio.world.release(conversationOf(child))
+    await until("its Apex's device to hear it idle", () => mac.world.store.edges().of(child)?.placed?.working === false)
+    await mac.world.settle()
+    clock.offset = FINISHED_CLOSE_MS + 1_000
+    assert.deepEqual(await mac.world.agents.closeFinished(), [], "it asks: its edge stays open")
+    await until("its record's end", () => account.gateway.treeEdges().length === 0 && !recorded(mac, child))
+    assert.equal(mac.world.store.edges().of(child)?.closedAt, undefined)
+    const sent = await mac.world.agents.send(mac.world.caller(apex.conversation), { to: "sidebar", text: "The new one.", clientKey: "s1" })
+    assert.ok(!("refused" in sent), JSON.stringify(sent))
+    await until("on record again", () => recorded(mac, child))
+    assert.deepEqual(account.gateway.treeEdges(), [{ edge, ending: false }])
+    console.log("idle: a placed Fin asking its Apex and idle six hours kept its open edge, lost its record, and was recorded again as its Apex sent it on")
+  } finally { await world.close() }
+}
+
+/** A closed placed Fin that reports again with its Apex's device off brings its record back with its own post: the Apex's device takes it later from the account and opens it. */
+async function closedReportsAlone(): Promise<void> {
+  const clock = { offset: 0 }
+  const world = await placed({ mac: { now: () => Date.now() + clock.offset } })
+  const { account, mac, studio, child, edge, conversationOf } = world
+  try {
+    await until("the Fin's record", () => recorded(mac, child))
+    await reportAs(studio, conversationOf(child), "done", "The sidebar is fixed.")
+    studio.world.release(conversationOf(child))
+    await until("its Apex's device to hear it idle", () => mac.world.store.edges().of(child)?.placed?.working === false)
+    await mac.world.settle()
+    clock.offset = FINISHED_CLOSE_MS + 1_000
+    assert.deepEqual(await mac.world.agents.closeFinished(), [child])
+    await until("its record's end", () => account.gateway.treeEdges().length === 0 && !recorded(mac, child))
+    // The person writes to the Fin on its own device with the Apex's device off: it reports again.
     mac.offline()
-    const calls = direct(account, studio)
-    const next = await report("two", "Through the account again.")
-    await until("held by the account", () => account.gateway.heldNotices(world.session).some((each) => each.report.id === next.id))
-    assert.equal(direct(account, studio), calls, "and called no device")
-    console.log("lapsed: a Fin whose record lapsed reported to its Apex's device itself, which asked the account to keep the record again, and its next report went through the account with that device off")
+    await reportAs(studio, conversationOf(child), "again", "The footer too, as asked here.")
+    await until("held by the account", () => account.gateway.heldNotices(world.session).length === 1)
+    assert.deepEqual(account.gateway.treeEdges(), [{ edge, ending: false }], "its own post brought its record back")
+    assert.equal(direct(account, studio), 0, "and called no device")
+    await mac.online()
+    await until("the report on the Apex's device", () => summaries(mac, child).includes("The footer too, as asked here."))
+    assert.equal(mac.world.store.edges().of(child)?.closedAt, undefined, "its report opened it")
+    await until("its edge to say it's on record", () => recorded(mac, child))
+    console.log("closed, then alone: a closed placed Fin reported with its Apex's device off, its post brought its record back at the account, and its Apex's device took it later and opened it")
   } finally { await world.close() }
 }
 
@@ -778,6 +888,11 @@ const cases: Array<[string, () => Promise<void>]> = [
   ["knock", knockStillAsks],
   ["waits-alone", waitsAlone],
   ["lapsed", lapsedAskedAgain],
+  ["direct", directAskedAgain],
+  ["bound", boundIsTheHosts],
+  ["closes", placedCloses],
+  ["idle", idleRecordEnds],
+  ["closed-alone", closedReportsAlone],
 ]
 
 const only = process.argv.slice(2)

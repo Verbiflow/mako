@@ -295,6 +295,12 @@ export function createFakeGateway(
   const archivedTrees = new Set<string>()
   /** By start: the records of Fins off their Apexes' hosts, oldest first (`TreeEdgeSchema`). */
   const treeEdges = new Map<string, KeptTreeEdge>()
+  /**
+   * By start: records that ended or lapsed, as the account keeps them to bring back at their Fin's next post
+   * (`TreeNoticeRefusalSchema`'s `forbidden`): only the device a record names posts it back, so nothing but what its
+   * Apex's device once kept is ever brought back.
+   */
+  const endedTreeEdges = new Map<string, TreeEdge>()
   /** By sender's scope: when it posted in the last minute, every post counted. */
   const noticePosts = new Map<string, number[]>()
   /** By sender's scope: the last notice admitted from it, which tells that one posted again from a new one once it's been taken. */
@@ -507,7 +513,9 @@ export function createFakeGateway(
   /** A record its Apex's device ended goes once nothing admitted under it is held: asked as it's ended, and as anything held is let go. */
   const endTreeEdges = () => {
     for (const [op, kept] of treeEdges) {
-      if (kept.ending && ![...mailboxes.values()].some((box) => box.held.some((held) => held.scope === op))) treeEdges.delete(op)
+      if (!kept.ending || [...mailboxes.values()].some((box) => box.held.some((held) => held.scope === op))) continue
+      treeEdges.delete(op)
+      endedTreeEdges.set(op, kept.edge)
     }
   }
   /**
@@ -1267,6 +1275,7 @@ export function createFakeGateway(
         // One that was ending stands again where it stood: a record's place among the others is when it was first kept.
         if (kept) kept.ending = false
         else treeEdges.set(op, { edge: ask.edge, ending: false })
+        endedTreeEdges.delete(op)
       }
       if (decided.does === "end" && kept) {
         kept.ending = true
@@ -1301,7 +1310,14 @@ export function createFakeGateway(
       if (fin && (fin.child ?? notice.child) !== notice.child) return refused("forbidden")
       // A device's credential names no start, child or Apex: the account knows a Fin on one only by the record its
       // Apex's device keeps. One that names this device, this child and this Apex admits the notice, and no other does.
-      const edge = sender.kind === "device" ? treeEdgeOfNotice([...treeEdges.values()].map((kept) => kept.edge), sender.device, notice) : undefined
+      const kept = sender.kind === "device" ? treeEdgeOfNotice([...treeEdges.values()].map((each) => each.edge), sender.device, notice) : undefined
+      // None standing: one that ended or lapsed and names this device, this child and this Apex comes back.
+      const back = sender.kind === "device" && !kept ? treeEdgeOfNotice([...endedTreeEdges.values()], sender.device, notice) : undefined
+      if (back && !archivedTrees.has(back.apex.session)) {
+        endedTreeEdges.delete(back.op)
+        treeEdges.set(back.op, { edge: back, ending: false })
+      }
+      const edge = kept ?? back
       // What's kept of a sender is under the start that made its Fin, so one Fin's notice is never another's by its ID
       // alone, and it's held for that start's Apex's Session: a machine's own start, a device's record's.
       const under = fin ? { op: fin.op, session: fin.apex.session } : edge && { op: edge.op, session: edge.apex.session }
