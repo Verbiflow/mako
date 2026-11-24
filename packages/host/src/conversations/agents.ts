@@ -107,6 +107,7 @@ import {
   type AgentsApexes,
   type AgentsShiver,
   type OtherApex,
+  type OtherThread,
   type AgentStrip,
   type ShiverMate,
   type AgentsLinkInput,
@@ -159,6 +160,9 @@ import { RESTART_RETIRED_MOVE, type ContextTransfer } from "../contracts/convers
 import type { LiveRequest, LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
 import type { LivePermissionResponse, LiveSessionMode, PromptAttachment } from "../contracts/providers-acp.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type ThreadId } from "../contracts/thread-identity.js"
+import { threadHandle } from "../contracts/thread-handles.js"
+import { projectFolder } from "../contracts/worktree-paths.js"
+import { answersAnotherThread } from "./thread-replies.js"
 import { continuationsSpent, continueTurnPrompt, crashedChildTurn, CUT_BY, RESTART_CHAIN, STRANDED_AFTER_MS, strandedTurn } from "../contracts/turn-continuation.js"
 import { uniqueName, type ApexMessage, type KeptAnswer, type KeptMark, type KeptPullWake, type ThreadCatalog, type ThreadStore } from "../threads/index.js"
 import { AgentRuns, lastStep, type ProcessReads, type RunEnd } from "./agent-runs.js"
@@ -313,19 +317,26 @@ interface Delivered {
 /** How long a steer waits for its child's turn to start, and then for its harness's answer, before the call answers without it. */
 const STEER_WAIT_MS = 3_000
 const STEER_ANSWER_MS = 2_000
-/** How `agents_send` names another of the person's Apexes: `apex:<title or Thread ID>`. */
+/** How `agents_send` names another of the person's top-level Threads: `apex:<handle, title or Thread ID>`. */
 const APEX_PREFIX = "apex:"
 /** Messages one Apex sends another in an hour; past them it's refused, so two Apexes can't talk in a loop. */
 const APEX_SENDS_PER_HOUR = 3
+/** The top-level Threads leading no open Fin that `scope: apexes` lists, those the person wrote in last; the rest are counted. */
+const OTHERS_LISTED = 5
 const HOUR_MS = 3_600_000
 /** How long a message to another Apex is owed its reply: past it, a turn that never answered it (its message removed, its Thread gone) is forgotten. */
 const APEX_REPLY_KEPT_MS = 7 * 24 * HOUR_MS
 
 /** Another of the person's Apexes as a message to it is addressed: its Thread, and the conversation that speaks for it. */
+/** A top-level Thread of the person's another may message (`topThreads`), with the conversation that speaks for it. */
 interface OtherApexRef {
   thread: string
   conversation: string
   title?: string
+  /** When the person last wrote in it, or it began: how recently it worked, for `scope: apexes`' order. */
+  worked: number
+  /** It has a Fin still open, so `scope: apexes` lists it whole, with its Fins. */
+  leads: boolean
 }
 
 /** A message Mako's exit or a crash paused, which the next host resumes for a Fin: never a Stop's, which waits for a deliberate resume. */
@@ -356,7 +367,7 @@ interface Crossing {
 
 type Live = Pick<
   LiveConversations,
-  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "leftSignInHold" | "turnCut" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn"
+  "session" | "held" | "nativeIds" | "atWork" | "resumeHeld" | "stopHolds" | "rewriteWaiting" | "rewordWaiting" | "adoptPin" | "wakeDue" | "snapshot" | "editQueued" | "switchSettled" | "stopMark" | "pinnedAccount" | "submit" | "act" | "cancel" | "continueTurn" | "leftUnsettled" | "leftSignInHold" | "turnCut" | "waitingOn" | "workOf" | "pendingAsk" | "permission" | "steersAtStep" | "steering" | "interrupt" | "turnReply" | "childrenChanged" | "connectedSession" | "recordDirect" | "recordNote" | "switching" | "readIn" | "listed"
 > & Partial<Pick<LiveConversations, "waitChanged" | "expect">>
 
 /** What starting a Fin in the cloud asks of the account and this device (`AgentsDeps.cloudFins`). */
@@ -720,7 +731,7 @@ const FILLED = "\0filled"
 const HELD_PREFIX = "after:"
 /** A quiet Fin's notice (`QuietWatch`): no report row holds it, and it goes once heard. */
 const QUIET_PREFIX = "quiet:"
-/** Another Apex's reply to a message (`apexReplied`): `reply:<conversation>:<request>`; once its sender heard it, its message is settled. */
+/** Another Thread's reply to a message (`apexReplied`): `reply:<conversation>:<request>`; once its sender heard it, its message is settled. */
 const REPLY_PREFIX = "reply:"
 /** A collision's notice (`FinCollisions`): `collide:<thread>:<thread>`, one a pair, which no report row holds. */
 const COLLIDE_PREFIX = "collide:"
@@ -2952,31 +2963,34 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * A message to another of the person's Apexes: Mako's words, never the
-   * person's, naming the Apex and Thread that sent it, after the other's turn
-   * unless the sender steers it into a turn whose work is wrong. The turn that
+   * A message to another of the person's top-level Threads, an Apex or not
+   * (`topThreads`): Mako's words, never the person's, naming the Thread that
+   * sent it, after the other's turn unless the sender steers it into a turn
+   * whose work is wrong; one idle takes it as its next turn. The turn that
    * answers it sends its reply back once, as the sender's wake
    * (`apexReplied`), which sends nothing on. At most `APEX_SENDS_PER_HOUR` go
-   * from one Apex to another; a repeat of the key answers the first. Only the
+   * from one Thread to another; a repeat of the key answers the first. Only the
    * top of a tree sends one: a Fin, a lead with Fins of its own too, reports
-   * what it needs to its Apex, whose call it is to ask. The message is kept
-   * in the store before it's sent (`ApexMessage`), so the hour's count and
-   * the reply it's owed outlast this host.
+   * what it needs to its Apex, whose call it is to ask. The other's
+   * conversation is read in first, so one this host hasn't read since it
+   * started takes it as one in memory does. The message is kept in the store
+   * before it's sent (`ApexMessage`), so the hour's count and the reply it's
+   * owed outlast this host.
    */
   private async sendToApex(sender: Apex, input: AgentsSendInput, began: number): Promise<AgentsSendResult> {
     const op = `send:${sender.session}:${input.clientKey}`
     const store = this.store()!
     const above = store.edges().of(sender.thread)
-    if (above) return this.refuse(op, "access", `Only the ${APEX_WORD} at the top of a tree messages another ${APEX_WORD}, and this Thread is a ${FIN_WORD} of ${above.parent}. Report what you need from ${input.to} to your ${APEX_WORD} with agents_report: whether to ask is its call. Nothing was sent.`)
+    if (above) return this.refuse(op, "access", `Only a Thread at the top of a tree messages another, and this Thread is a ${FIN_WORD} of ${above.parent}. Report what you need from ${input.to} to your ${APEX_WORD} with agents_report: whether to ask is its call. Nothing was sent.`)
     const kept = this.sent.get(op)
     if (kept) return { ...kept, deduped: true }
     const target = this.otherApexNamed(sender, input.to.slice(APEX_PREFIX.length))
     if ("refused" in target) return target
     const name = `${APEX_PREFIX}${target.title ?? target.thread}`
     const own = input.text?.trim()
-    if (input.forward) return this.refuse(op, "conflict", `forward passes the person's message on to a ${FIN_WORD}: to another ${APEX_WORD}, write everything it needs as text.`)
+    if (input.forward) return this.refuse(op, "conflict", `forward passes the person's message on to a ${FIN_WORD}: to another Thread, write everything it needs as text.`)
     if (!own) return this.refuse(op, "conflict", "A message needs text.")
-    if (input.deliver === "interrupt") return this.refuse(op, "conflict", `Another ${APEX_WORD}'s turn is its own to end: queue (the default), or steer when what it's doing now is wrong.`)
+    if (input.deliver === "interrupt") return this.refuse(op, "conflict", `Another Thread's turn is its own to end: queue (the default), or steer when what it's doing now is wrong.`)
     const now = this.now()
     const request = namedUuid(op)
     store.pruneApexMessages(now - HOUR_MS, now - APEX_REPLY_KEPT_MS)
@@ -2984,9 +2998,11 @@ export class Agents implements AgentOperations, ConversationChildren {
     const recent = store.apexMessage(request) ? [] : store.apexSends(sender.thread, target.thread, now - HOUR_MS)
     if (recent.length >= APEX_SENDS_PER_HOUR) {
       const minutes = Math.max(1, Math.ceil((recent[0]! + HOUR_MS - now) / 60_000))
-      return this.refuse(op, "rate-limited", `${name} had ${APEX_SENDS_PER_HOUR} messages from this ${APEX_WORD} in the last hour; the next can go in ${minutes} min. agents_list with scope apexes says how it stands.`)
+      return this.refuse(op, "rate-limited", `${name} had ${APEX_SENDS_PER_HOUR} messages from this Thread in the last hour; the next can go in ${minutes} min. agents_list with scope apexes says how it stands.`)
     }
     const conversation = target.conversation
+    // Read in, not only listed: a repeat of the key is found among its requests, and its harness is known.
+    if (!this.deps.live.held(conversation) && !(await this.deps.live.readIn([conversation], "read in a Thread another messages"))) return this.refuse(op, "unavailable", "Mako is stopping on this device.")
     const ready = this.ready(conversation)
     if (ready === "gone") return this.refuse(op, "unavailable", `${name}'s conversation isn't on this device.`)
     const senderTitle = store.thread(ThreadIdSchema.parse(sender.thread))?.title ?? (sender.conversation && this.deps.live.session(sender.conversation)?.title) ?? `Thread ${sender.thread}`
@@ -2997,7 +3013,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       const session = SessionIdSchema.parse(sender.session)
       const harness = this.deps.live.session(conversation)?.harness
       // Kept before it's sent: a host that stops between the two has counted it, and its repeat sends it.
-      const { existed } = store.keepApexMessage({ request, sender: { thread: ThreadIdSchema.parse(sender.thread), session }, thread: ThreadIdSchema.parse(target.thread), conversation, ...(input.reply === "none" && { notification: true as const }), label: `"${target.title ?? target.thread}" (${harness ? this.deps.harnessLabel(harness) : APEX_WORD})`, fin: { name: target.title ?? target.thread, ...(harness && { harness }) }, at: now })
+      const { existed } = store.keepApexMessage({ request, sender: { thread: ThreadIdSchema.parse(sender.thread), session }, thread: ThreadIdSchema.parse(target.thread), conversation, ...(input.reply === "none" && { notification: true as const }), label: `"${target.title ?? target.thread}" (${harness ? this.deps.harnessLabel(harness) : "Thread"})`, fin: { name: target.title ?? target.thread, ...(harness && { harness }) }, at: now })
       try {
         this.deps.live.submit(conversation, request, text, [], undefined, undefined, undefined, { kind: "agent", session }, input.reply === "none" ? { notification: true } : {})
       } catch (error) {
@@ -6968,8 +6984,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     const reach = this.reachOf(apex)
     const refs: string[] = []
     for (const { thread } of context) {
-      const ref = this.threadRef(apex, thread)
-      if (!ref) return { refused: "unknown-thread", why: `${thread} isn't a Thread here: name it by a thread:<harness>:<id> ref, a Thread ID or a ${FIN_WORD}'s name. agents_list with scope threads finds one.` }
+      const found = this.threadRef(apex, thread)
+      if (found && "refused" in found) return found
+      const ref = found?.ref
+      if (!ref) return { refused: "unknown-thread", why: `${thread} isn't a Thread here: name it by a thread:<harness>:<id> ref, a Thread's handle or ID, or a ${FIN_WORD}'s name. agents_list with scope threads finds one.` }
       if (!reach(ref)) return { refused: "access", why: `${thread} is outside this ${FIN_WORD}'s reach: it attaches Threads of its own tree and those it holds by reference. Its ${APEX_WORD} can hand one down with context.` }
       refs.push(ref)
     }
@@ -7011,15 +7029,21 @@ export class Agents implements AgentOperations, ConversationChildren {
     return (ref) => keysOf(ref).some((key) => reached.has(key))
   }
 
-  /** A ref as written, or the ref of a Thread by its ID or of a Fin of the caller's tree by its name. */
-  private threadRef(apex: Apex, named: string): string | undefined {
+  /**
+   * A ref as written, or the ref of a Thread by its ID or its handle, or of a Fin of the caller's tree by its name: a
+   * Fin's name first, so one that reads as a handle names the Fin. A handle several Threads share is refused with them.
+   */
+  private threadRef(apex: Apex, named: string): { ref: string } | AgentRefused | undefined {
     const bare = named.trim().replace(/^@/, "")
-    if (parseThreadToken(bare)) return bare
+    if (parseThreadToken(bare)) return { ref: bare }
     const store = this.store()!
     const name = finName(bare)
-    const thread = treeEdges(store.edges(), apex.thread).find((edge) => edge.child === bare || edge.name === name)?.child ?? ThreadIdSchema.safeParse(bare).data
-    if (!thread || !store.thread(thread)) return undefined
-    return this.refOfThread(thread)
+    const known = treeEdges(store.edges(), apex.thread).find((edge) => edge.child === bare || edge.name === name)?.child ?? ThreadIdSchema.safeParse(bare).data
+    const handled = known ? undefined : this.threadByHandle(bare, "unknown-thread")
+    if (handled && "refused" in handled) return handled
+    const thread = known ?? handled?.thread
+    const ref = thread && store.thread(thread) ? this.refOfThread(thread) : undefined
+    return ref === undefined ? undefined : { ref }
   }
 
   /** A Thread's ref: its newest session its harness keeps; `thread_history` reads every session of the Thread from any. */
@@ -7067,7 +7091,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const reach = this.reachOf(apex)
     const rows = references?.list({}) ?? []
     const refOf = (row: ThreadRef) => threadToken(row.harness, threadReferenceId(row)).slice(1)
-    const named = query ? this.threadRef(apex, query) : undefined
+    const one = query ? this.threadRef(apex, query) : undefined
+    const named = one && !("refused" in one) ? one.ref : undefined
     if (named) {
       const token = parseThreadToken(named)
       const exact = token ? findThreadReference(rows, token.harness, token.id) : undefined
@@ -8049,36 +8074,120 @@ export class Agents implements AgentOperations, ConversationChildren {
     }
   }
 
-  /** The person's other Apexes open here, each as it stands, from typed state: reading one never wakes it. */
+  /**
+   * The person's other top-level Threads here, from typed state; reading one never wakes it. Each that leads a Fin still
+   * open is listed whole, as an Apex is: what stands behind those is what another would touch. Of the rest, the
+   * `OTHERS_LISTED` the person wrote in last are listed in a line each, and the others counted: a Thread names one of
+   * them by its handle all the same. Listed whole, the 241 Threads of one person's Mac were about 13,000 tokens.
+   */
   private apexesOf(caller: Apex): AgentsApexes {
-    return { apexes: this.otherApexes(caller).map((other) => this.otherApex(other)) }
+    const tops = this.topThreads(caller)
+    const others = tops.filter((top) => !top.leads).sort((a, b) => b.worked - a.worked)
+    const listed = others.slice(0, OTHERS_LISTED)
+    return {
+      apexes: tops.filter((top) => top.leads).map((top) => this.otherApex(top)),
+      ...(listed.length && { others: listed.map((top) => this.otherThread(top)) }),
+      ...(others.length > listed.length && { more: others.length - listed.length }),
+    }
   }
 
-  /** Every tree's top Apex but the caller's own whose conversation is open on this host, with the conversation that speaks for it. */
-  private otherApexes(caller: Apex): OtherApexRef[] {
+  /**
+   * Every top-level Thread of the person's on this host but the caller's own tree's: no Thread above it, a
+   * conversation here that isn't archived or run from another device, read from the listing and the store, so one this
+   * host hasn't read in since it started is one too. The conversation that speaks for each is its front (`frontOf`).
+   */
+  private topThreads(caller: Apex): OtherApexRef[] {
     const store = this.store()!
     this.sync()
-    const roots = new Set(store.edges().all.map((edge) => this.rootOf(edge.parent)))
-    roots.delete(this.rootOf(caller.thread))
-    return [...roots].flatMap((thread) => {
+    const edges = store.edges()
+    const own = this.rootOf(caller.thread)
+    const found = new Map<string, { worked: number; title?: string }>()
+    for (const summary of this.deps.live.listed()) {
+      const id = summary.session.id
+      const thread = store.journalPlacement(id)?.thread
+      if (!thread || thread === own || edges.of(thread) || summary.elsewhere !== undefined || this.deps.archived?.(id)) continue
+      const worked = Math.max(summary.promptedAt ?? 0, summary.createdAt)
+      const held = found.get(thread)
+      if (!held || worked > held.worked) found.set(thread, { worked, ...(summary.session.title && { title: summary.session.title }) })
+    }
+    return [...found].flatMap(([thread, { worked, title: said }]) => {
       const record = store.thread(ThreadIdSchema.parse(thread))
       const first = record?.sessions[0]
       const conversation = first && this.frontOf(thread, first)
-      if (!conversation || !this.deps.live.held(conversation)) return []
-      const title = record.title ?? this.deps.live.session(conversation)?.title
-      return [{ thread, conversation, ...(title && { title }) }]
+      if (!conversation || this.deps.archived?.(conversation)) return []
+      const title = record.title ?? said
+      const leads = edges.children(thread).some((edge) => edge.closedAt === undefined)
+      return [{ thread, conversation, worked, leads, ...(title && { title }) }]
     })
   }
 
-  /** Another Apex by its title or Thread, as `scope: apexes` lists them; a title two share is refused with their Threads. */
+  /**
+   * Another top-level Thread by its Thread, its title or its handle (`topThreads`): a title before a handle, so
+   * one that reads as a handle still names its own Thread. A title two share is refused with their handles, and a
+   * handle several Threads share with each a character longer.
+   */
   private otherApexNamed(caller: Apex, ref: string): OtherApexRef | AgentRefused {
-    const others = this.otherApexes(caller)
+    const others = this.topThreads(caller)
     const words = ref.trim().toLowerCase()
     const found = others.filter((other) => other.thread === ref.trim() || other.title?.trim().toLowerCase() === words)
     if (found.length === 1) return found[0]!
-    if (found.length) return { refused: "unknown-apex", why: `${found.length} ${APEX_WORD}es are titled ${ref}: name one as apex:<Thread ID>: ${found.map((other) => other.thread).join(", ")}.` }
-    const listed = others.map((other) => `${APEX_PREFIX}${other.title ?? other.thread}`).join(", ")
-    return { refused: "unknown-apex", why: `No other ${APEX_WORD} of the person's open here is ${ref}${listed ? `; they are ${listed}` : ""}. agents_list with scope apexes shows them.` }
+    if (found.length) return { refused: "unknown-apex", why: `${found.length} Threads are titled ${ref}: name one by its handle: ${found.map((other) => `${APEX_PREFIX}${this.handleOf(other.thread)}`).join(", ")}.` }
+    const handled = this.threadByHandle(ref, "unknown-apex")
+    if (handled && "refused" in handled) return handled
+    const thread = handled?.thread ?? ThreadIdSchema.safeParse(ref.trim()).data
+    const named = thread && others.find((other) => other.thread === thread)
+    if (named) return named
+    // A Thread it does name, which isn't one to message: a Fin, whose Apex is; or the caller's own tree.
+    const above = thread && this.store()!.edges().of(thread)
+    if (above) return { refused: "unknown-apex", why: `${ref} is a ${FIN_WORD} of ${above.parent}, which speaks for it: message that Thread, at the top of its tree, instead. Nothing was sent.` }
+    if (thread && this.rootOf(thread) === this.rootOf(caller.thread)) return { refused: "unknown-apex", why: `${ref} is this Thread's own. Nothing was sent.` }
+    // Those `scope: apexes` lists: every one leading a Fin, and the few the person wrote in last.
+    const listed = [...others.filter((other) => other.leads), ...others.filter((other) => !other.leads).sort((a, b) => b.worked - a.worked).slice(0, OTHERS_LISTED)]
+      .map((other) => `${APEX_PREFIX}${this.handleOf(other.thread)}${other.title ? ` ("${noteLine(other.title, 60)}")` : ""}`).join(", ")
+    return { refused: "unknown-apex", why: `No other top-level Thread of the person's here is ${ref}${listed ? `; those that worked last are ${listed}` : ""}. Name one by its handle, title or Thread ID.` }
+  }
+
+  /**
+   * A Thread's handle as an agent reads and writes it (`threadHandle`): its project's word, from the folder its
+   * conversation works in or the project its worktree was made from, and as many characters of its code as name it
+   * alone among the person's Threads here, so a handle copied from a list finds one Thread.
+   */
+  private handleOf(thread: string, length?: number): string {
+    const store = this.store()!
+    const conversation = this.conversationOf(thread)
+    const cwd = conversation ? this.deps.live.session(conversation)?.cwd : undefined
+    return threadHandle(thread, projectFolder(store.worktrees(), cwd) ?? cwd, length ?? store.handleLength(thread))
+  }
+
+  /**
+   * The Thread a typed handle names (`ThreadStore.threadByHandle`); a refusal naming those that share what was typed,
+   * each by a handle that finds it alone; or undefined when it isn't a handle or no Thread has it.
+   */
+  private threadByHandle(typed: string, refused: AgentRefused["refused"]): { thread: ThreadId } | AgentRefused | undefined {
+    const found = this.store()!.threadByHandle(typed)
+    if (found?.kind === "found") return { thread: ThreadIdSchema.parse(found.thread) }
+    if (found?.kind !== "ambiguous") return undefined
+    const named = found.threads.map(({ thread, length }) => {
+      const title = this.store()!.thread(ThreadIdSchema.parse(thread))?.title
+      return `${this.handleOf(thread, length)}${title ? ` ("${noteLine(title, 60)}")` : ""}`
+    })
+    return { refused, why: `${found.threads.length + found.more} Threads share the handle ${typed.trim()}: ${named.join(", ")}${found.more ? ` and ${found.more} more` : ""}. Name one with more of its characters.` }
+  }
+
+  /** A top-level Thread that leads no open Fin, in a line: what it is and where it works. */
+  private otherThread(other: OtherApexRef): OtherThread {
+    const { thread, conversation } = other
+    const session = this.deps.live.session(conversation)
+    const ready = this.ready(conversation)
+    const branch = this.store()!.worktrees().find((worktree) => worktree.thread === thread)?.branch
+    return {
+      handle: this.handleOf(thread),
+      ...(other.title && { title: noteLine(other.title, 120) }),
+      ...(session && { harness: this.deps.harnessLabel(session.harness) }),
+      working: ready === "steer" || ready === "queue",
+      ...(session?.cwd && { folder: session.cwd }),
+      ...(branch && { branch }),
+    }
   }
 
   private otherApex(other: OtherApexRef): OtherApex {
@@ -8100,6 +8209,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const said = this.lastReply(conversation)
     return {
       thread,
+      handle: this.handleOf(thread),
       ...(other.title && { title: other.title }),
       ...(session && { harness: this.deps.harnessLabel(session.harness) }),
       working,
@@ -8205,8 +8315,9 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /**
-   * What the last host left of messages to other Apexes: a reply kept and not yet in its sender's queue goes once, and
-   * a message whose answering turn ended as that host stopped, before its reply was kept, replies now.
+   * What the last host left of messages to other Threads: a reply kept and not yet in its sender's queue goes once; a
+   * message whose answering turn ended as that host stopped, before its reply was kept, replies now; and one whose
+   * answering turn a crash cut goes on, as an Apex's does (`continueCrashed`), so a plain Thread's waits for no Continue.
    */
   private resumeApexMessages(store: ThreadStore): void {
     if (!store.writable) return
@@ -8221,6 +8332,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       let turn = requests.find((asked) => asked.id === (ask.steered ?? ask.request))
       for (let next = turn; next; next = requests.find((asked) => asked.continues?.requestId === next!.id)) turn = next
       if (turn?.status === "completed" || turn?.status === "failed") this.apexReplied(ask.conversation, turn.id)
+      else if (turn && answersAnotherThread(store, ask.conversation, requests, turn.id)) this.continueCrashed(ask.conversation, { apex: ask.thread })
     }
   }
 

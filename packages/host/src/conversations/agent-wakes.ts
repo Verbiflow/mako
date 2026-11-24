@@ -1,6 +1,6 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
-import { APEX_WORD, decisionWords, FIN_WORD, reportAsk, reportPhase, reportWord, UNFINISHED_WORDS, waitingWords, type Notice, type Report } from "../contracts/agents.js"
+import { decisionWords, FIN_WORD, reportAsk, reportPhase, reportWord, UNFINISHED_WORDS, waitingWords, type Notice, type Report } from "../contracts/agents.js"
 import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
 import { collisionLine, FOCUS_MS, HOLD_RESULTS_MS, quietLine, WAKE_COALESCE_MS } from "../contracts/children.js"
@@ -512,7 +512,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
     }
   }
   if (replies.length) {
-    lines.push(replies.length === 1 ? `Another ${APEX_WORD}'s reply to your message:` : `${replies.length} other ${APEX_WORD}es' replies to your messages:`)
+    lines.push(replies.length === 1 ? "Another Thread's reply to your message:" : `${replies.length} other Threads' replies to your messages:`)
     for (const notice of replies) {
       const { label, report } = notice
       cards.push(card(notice, opening(report.summary)))

@@ -33,6 +33,7 @@ export { SessionMemory, SessionHeldError, type ConversationEndpoint, type Conver
 export type { ApexMessage, JournalFacts, KeptAnswer, KeptMark, KeptPullWake, MoveBegan, SourceRef, ThreadStore } from "./store.js"
 export { uniqueName } from "./store.js"
 export { ThreadTitler } from "./thread-titler.js"
+export { conversationNamed } from "./thread-handles.js"
 export { discardChatFolder, ensureChatsRoot, newChatFolder, standsForNoProject } from "./chat-folders.js"
 export { nativeSessionPath, type NativeSourceIdentity } from "./native-source.js"
 export type {

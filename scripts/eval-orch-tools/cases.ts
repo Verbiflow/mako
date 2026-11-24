@@ -7,6 +7,7 @@ import { finPolicyNote } from "@mako/host/contracts/fin-tuning"
 import type { Report } from "@mako/host/contracts/agents"
 import { apexAsk } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { threadHandle } from "@mako/host/contracts/thread-handles"
 import { controlLine, controlNote } from "@mako/host/control/launch"
 import type { CallThread } from "@mako/host/contracts/native-calls"
 import { AppKeySchema, type ThreadEnvironment } from "@mako/host/contracts/thread-environments"
@@ -294,6 +295,7 @@ export function apexesAnswer(orchCase: OrchCase): AgentsApexes {
   return {
     apexes: (orchCase.setup.apexes ?? []).map((apex) => ({
       thread: namedUuid(`${orchCase.id}:${apex.title}`),
+      handle: threadHandle(namedUuid(`${orchCase.id}:${apex.title}`), apex.folder),
       ...apex,
       fins: { total: apex.fins.needs + apex.fins.working + apex.fins.queued + apex.fins.idle + apex.fins.failed + apex.fins.done, ...apex.fins },
     })),

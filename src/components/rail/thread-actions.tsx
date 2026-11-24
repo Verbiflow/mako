@@ -29,6 +29,8 @@ export interface ThreadMenuProps {
   controlled: boolean
   path?: string
   thread?: string
+  /** Its Thread's handle (`handleOfThread`), which the menu copies. */
+  handle?: string
   cwd?: string
   /** Every Session a folded row stands for; archive puts them all away. */
   archiveTargets?: ThreadTarget[]
@@ -140,7 +142,7 @@ export function ArchiveButton(props: ThreadMenuProps) {
 }
 
 function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: ReturnType<typeof useThreadMenu> }) {
-  const { target, title, archived, running, path, thread, cwd, pinned, onPin, onRename } = props
+  const { target, title, archived, running, path, thread, handle, cwd, pinned, onPin, onRename } = props
   const { controls, error } = menu
   const { archive, worktree, oneOfMany, cloud } = useArchive(props)
   const uncommitted = useWorktreeSummaries((state) => (worktree ? state.byPath[worktree.path]?.changes ?? 0 : 0))
@@ -155,6 +157,12 @@ function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Re
       {onRename ? (
         <MenuItem data-thread-action="rename" onSelect={menu.rename}>
           <PencilLineIcon className="size-3.5" />Rename
+        </MenuItem>
+      ) : null}
+      {handle ? (
+        <MenuItem data-thread-action="copy-handle" onSelect={() => { void navigator.clipboard.writeText(handle).then(() => toast("Handle copied")) }}>
+          <CopyIcon className="size-3.5" />Copy handle
+          <MenuKey>{handle}</MenuKey>
         </MenuItem>
       ) : null}
       {path || target.kind === "live" ? <MenuSeparator /> : null}

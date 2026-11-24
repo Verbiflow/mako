@@ -1221,25 +1221,43 @@ its name or Thread is progress, and stays quiet. So is progress whose
 someone else to act", since only the Apex or the person can bring that
 about, and the same wait narrated again stays quiet (`test:orch-comms`). `npm run test:orch-comms` covers all three, and `test:orch-deliver` the
 refusal.
-An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
-(`AgentsApexes`): every tree's top Apex but its own whose conversation is
-open here, each with its title, harness, whether it works and its last step,
-folder and branch, its Fins' `rollup`, and a digest of its open Fins' last
-reports and its own last reply's first paragraph. Reading wakes no one.
-`agents_send` `to: apex:<title or Thread>` messages one: Mako's words
-(`fromApex`, `apexNote`), never the person's, after its turn unless steered;
-the transcript draws it as a card from that Apex. Only a top-level Thread
-sends one: a Fin, a lead too, reads the list and is refused the send
-(`access`), since whether to ask is its own Apex's call. The turn that
-answers it sends its reply back once, as the sender's wake (`Notice.reply`),
-and that wake sends nothing on. At most three go from one Apex to another an
-hour (`rate-limited`). The store keeps each message before it's sent and its
-reply before that wake (`apex_messages`, `ApexMessage`), settled once the
-wake is in the sender's queue, so a host that stops anywhere between still
-sends one reply and counts the hour's three; a turn its stop cut replies as
-its continuation ends. Rows go once answered and an hour old, with an
+A top-level Thread reads the person's other top-level Threads on this host with `agents_list` `scope: apexes`
+(`AgentsApexes`, `topThreads`): those outside its own tree with a conversation here, not archived and not run from
+another device, read from the listing and the store, so one this host hasn't read in since it started counts too.
+Each that leads a Fin still open is listed whole (`apexes`): its handle, title, harness, whether it works and its last
+step, folder and branch, its Fins' `rollup`, and a digest of its open Fins' last reports and its own last reply's first
+paragraph (that last only while it's in memory). Of the rest, the five the person wrote in last are a line each
+(`others`: handle, title, harness, working, folder, branch, about 50 tokens) and the others counted (`more`): listed
+whole, one Mac's 241 were about 11,600 tokens. Reading wakes no one. `agents_send` `to: apex:<handle, title or Thread>`
+messages any of them, listed or not, an Apex or not, and a Fin is refused as a target, pointed at its Apex: Mako's
+words (`fromApex`, `apexNote`, "the Thread "…""), never the person's, after its turn unless steered, and one idle takes
+it as its next turn; the transcript draws it as a card from the Thread that sent it. The target's conversation is read
+in first, so a repeat of the key after a restart finds the message it sent. Only a top-level Thread sends one: a Fin,
+a lead too, reads the list and is refused the send (`access`), since whether to ask is its own Apex's call. The turn
+that answers it sends its reply back once, as the sender's wake (`Notice.reply`), and that wake sends nothing on. At
+most three go from one Thread to another an hour (`rate-limited`). The store keeps each message before it's sent and
+its reply before that wake (`apex_messages`, `ApexMessage`), settled once the wake is in the sender's queue, so a host
+that stops anywhere between still sends one reply and counts the hour's three; a turn its stop or a crash cut replies
+as its continuation ends. That turn goes on even when the person turned off continuing their own after a restart
+(`answersAnotherThread`): nobody watches it, and left for Continue its reply could wait out the week a message is kept. Rows go once answered and an hour old, with an
 archived Thread, or after a week unanswered. The rule for when to message is
 in `ORCHESTRATION_INSTRUCTIONS`; `test:orch-comms` covers it too.
+
+A Thread has a handle, `mako-7f3k`, to say and type where its title is too long or changes
+(`contracts/thread-handles.ts`). It's worked out from the Thread's ID and never kept, so every device, the cloud and
+a saved transcript say the same one with nothing to sync: twelve characters of a 31-letter alphabet (no 0/o or
+1/l/i) from the ID's SHA-256 are its code, and the handle shows the first four after its project's folder name. The
+word is only read: a lookup drops it, so a renamed project or a bare `7f3k` finds the same Thread. Four characters
+are 923,521 handles, so one of 5,300 Threads shares its four with another 0.6% of the time; as with a short commit
+hash, a lookup that finds several names each a character or more longer, and that finds one. The Thread store holds
+the one resolver (`ThreadStore.threadByHandle`, `ThreadHandles`): codes filed by their first three characters, the
+fewest a lookup takes, each Thread hashed once and the Threads made since read at the next lookup after a commit
+(5,300 Threads build in 25 ms; a lookup is under 20 µs). A person finds it in a rail row's tip and its menu's Copy
+handle, a Session tab's tooltip, and the `@` menu, where a typed handle finds its Thread and picks the token any
+mention writes; a row never draws it. An agent reads it beside each title in `scope: apexes`, at as many characters
+as name the Thread alone here, and writes it as `apex:<handle>`, in `context` and as `scope: threads`' query;
+`mako thread … --conversation` takes it too. `test-thread-handles.ts` (in `test:orch-comms`) holds the rule and the
+resolver, and `test-rail-calm-ui.mjs` the tip and the menu.
 
 The person's message in an Apex's conversation goes to the Apex, which
 passes it on (`agents_send`, drawn as a routing line). Nothing goes where
@@ -4143,7 +4161,7 @@ selection, or in the row's tip (`rail-tip.tsx`). A Thread row is 28 px: the fin 
 the title in 14 px fading at its edge (`.rail-fade`) at 72% (full while it needs the person, holds an unread answer
 or a Mark as unread; 45% once Done), and a trailing slot (`RowEnd`): the status glyph the person set
 (`WorkGlyph`), then the time, or "Failed" in faint grey. Under the pointer the slot gives way to Archive and `⋯`.
-The branch, worktree, Sessions, setup purpose, pin and app went to the tip. The top rows are quiet with one count,
+The branch, worktree, Sessions, setup purpose, pin, app and the Thread's handle went to the tip. The top rows are quiet with one count,
 the Inbox's in the attention hue; Pull requests and Automations say theirs in their tips, and an automation whose
 last run failed since Automations was opened counts in the Inbox (`failedAutomationRuns`), as a proposal does
 through its agent's ask. Customize sidebar (`prefs.railNav`, Setup hidden at first) is in the Projects header's

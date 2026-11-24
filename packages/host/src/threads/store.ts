@@ -56,6 +56,7 @@ import { FinTurnSchema, INTERNAL_RUN_CLOSE, LimitNoticeSchema, ReportSchema, Thr
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { enableSharedWal } from "../base/sqlite-wal.js"
 import { keepPreSplitCopy, SPLIT_TABLES, splitThreads } from "./thread-split.js"
+import { ThreadHandles, type HandleFound } from "./thread-handles.js"
 
 /**
  * The per-user Thread store: which Session every journal and native session
@@ -403,6 +404,8 @@ const ThreadRowSchema = z.object({
   revision: z.number(),
   merged_into: z.string().nullable(),
 })
+/** A Thread's row as the handles' index reads it: its place in the table, which only grows, and its ID. */
+const ThreadPlaceRowSchema = z.object({ place: z.number(), id: z.string() })
 const OperationRowSchema = z.object({ kind: z.string(), digest: z.string(), result: z.string() })
 const PlacementSchema = z.object({ thread: ThreadIdSchema, session: SessionIdSchema })
 const CountSchema = z.object({ count: z.number() })
@@ -935,6 +938,10 @@ export class ThreadStore {
   private readonly conversationsSeen = new Map<string, string[][]>()
   /** Read again only once the store moves, as a roster reads each Fin's on every look: */
   private readonly threadsSeen = new Map<string, ThreadRecord | null>()
+  /** Every Thread by its handle's code, and how far into the table it has read (`handles`). */
+  private readonly handlesKept = new ThreadHandles()
+  private handlesPlace = 0
+  private handlesRevision = -1
   private readonly reportAsksSeen = new Map<string, readonly Report[]>()
   /** Each tree's notice as `limitNotice` last read it, until a commit: asked of every row of the tree, each a read of the file. */
   private readonly limitNoticesSeen = new Map<string, LimitNotice | null>()
@@ -2792,6 +2799,42 @@ export class ThreadStore {
     const read = this.readThread(id)
     this.threadsSeen.set(id, read ?? null)
     return read
+  }
+
+  /**
+   * The person's Threads by handle (`ThreadHandles`), up to date: the Threads made since it last looked are read by
+   * their place in the table and added, once per commit this store sees, so a lookup between commits reads nothing.
+   * The first look hashes every Thread, 5,300 of them in 25 ms; none is hashed again.
+   */
+  private handles(): ThreadHandles {
+    this.syncVersion()
+    if (this.handlesRevision === this.revision && this.depth === 0) return this.handlesKept
+    const rows = this.sql("SELECT rowid AS place, id FROM threads WHERE rowid > ? ORDER BY rowid").all(this.handlesPlace).map((row) => ThreadPlaceRowSchema.parse(row))
+    this.handlesKept.add(rows.map((row) => row.id))
+    // Inside a write its place stays: a row rolled back gives its place to the next Thread, which is then read.
+    if (this.depth > 0) return this.handlesKept
+    this.handlesPlace = rows.at(-1)?.place ?? this.handlesPlace
+    this.handlesRevision = this.revision
+    return this.handlesKept
+  }
+
+  /** The Thread an ID names now, following merges, for the handles' index. */
+  private readonly currentThread = (id: string): string | undefined => {
+    const parsed = ThreadIdSchema.safeParse(id)
+    return parsed.success ? this.thread(parsed.data)?.id : undefined
+  }
+
+  /**
+   * The Thread a typed handle names (`handleCode`: with or without its word, in any case, three characters of its code
+   * or more), several when they share what was typed, or undefined when `typed` isn't a handle.
+   */
+  threadByHandle(typed: string): HandleFound | undefined {
+    return this.handles().find(typed, this.currentThread)
+  }
+
+  /** The fewest characters of a Thread's code that name it alone among the person's Threads (`ThreadHandles.length`). */
+  handleLength(thread: string): number {
+    return this.handles().length(thread, this.currentThread)
   }
 
   private readThread(id: ThreadId): ThreadRecord | undefined {

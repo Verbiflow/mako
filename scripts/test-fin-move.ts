@@ -10,6 +10,7 @@ import type { AgentCaller } from "@mako/host/contracts/agents"
 import type { LiveSnapshot } from "@mako/host/contracts/live-conversations"
 import type { AgentMoved, AgentsMoveInput, AgentsMoveResult } from "@mako/host/contracts/agent-tools"
 import { ActorSchema, SessionIdSchema, ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { threadHandle } from "@mako/host/contracts/thread-handles"
 import { arriving } from "@mako/host/contracts/request-hold"
 import { signInPause } from "@mako/host/contracts/sign-in-hold"
 import { FROM_AGENTS } from "@mako/host/conversations/agent-wakes"
@@ -1220,6 +1221,15 @@ async function attaching(): Promise<void> {
   assert.ok("threads" in found && found.threads[0]?.ref === raw.slice(1), JSON.stringify(found))
   const byName = await f.world.agents.list(f.apex.caller, { scope: "threads", query: "labels" })
   assert.ok("threads" in byName && byName.threads[0]?.ref.startsWith("thread:claude:"), JSON.stringify(byName))
+  // A Thread's handle names it as its ID does: found by it, and attached by it, in any case.
+  const handle = threadHandle(f.world.store.journalPlacement(f.fin().conversation)!.thread, f.world.root)
+  const byHandle = await f.world.agents.list(f.apex.caller, { scope: "threads", query: handle })
+  assert.deepEqual(byHandle, byName, `its handle finds the Thread its name does: ${JSON.stringify(byHandle)}`)
+  const third = await f.world.agents.start(f.apex.caller, { brief: { objective: "Read the labels" }, name: "third", harness: "codex", cwd: f.world.root, clientKey: "third", context: [{ thread: handle.toUpperCase() }] })
+  assert.ok(!("refused" in third), JSON.stringify(third))
+  await f.world.settle(40, 20_000)
+  const read3 = f.world.prompts.find((prompt) => prompt.text.includes("Read the labels"))!
+  assert.equal(readMessage(read3.text.slice(read3.text.indexOf("Read the labels"))).items[0]?.attrs.ref, "threads" in byName ? byName.threads[0]?.ref : undefined, "the item a handle attaches is the one its Thread's ref does")
   await f.world.close()
 }
 
