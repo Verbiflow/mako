@@ -221,6 +221,13 @@
    * (palette, error card) share the other. A third width is a bug.
    */
   --container-content: 800px;
+  /*
+   * The composer at rest (an empty one-line draft, its control row and the
+   * status line under it). The composer is never shorter (`min-h-(--composer-rest)`
+   * on every composer), the room a lazily loaded composer is held at is this,
+   * and the ocean scene fades out here. One number, so none of the three drifts.
+   */
+  --composer-rest: 130px;
   --container-dialog: 544px;
 
   /*
@@ -2389,11 +2396,11 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
 }
 
 /* The scene belongs to the whole agent pane and fades out where the
- * composer's resting box begins (its one-line height with the status line
- * under it), so the waves never run behind the box's margins or the status
- * line. Its geometry must never depend on how many lines the user has drafted. */
+ * composer at rest begins (`--composer-rest`), so the waves never run behind
+ * the box's margins or the status line. Its geometry must never depend on how
+ * many lines the user has drafted. */
 .agent-surface > .ocean-scene {
-  bottom: 130px;
+  bottom: var(--composer-rest);
 }
 
 .ocean-engraving {

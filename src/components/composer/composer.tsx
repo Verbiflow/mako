@@ -1206,7 +1206,7 @@ export function Composer() {
   // with its control row is one framed box in the transcript's column, with
   // where the work runs on the line under it (`composer-frame.tsx`).
   return (
-    <div data-composer inert={!draftReady} aria-busy={!draftReady} className={cn("flex min-h-0 shrink-0 flex-col", expanded ? "max-h-[80dvh]" : "max-h-[55dvh]")}>
+    <div data-composer inert={!draftReady} aria-busy={!draftReady} className={cn("flex min-h-(--composer-rest) shrink-0 flex-col", expanded ? "max-h-[80dvh]" : "max-h-[55dvh]")}>
       <div className={COMPOSER_COLUMN}>
         <div data-composer-row className="mx-3">
           <GoalBar />

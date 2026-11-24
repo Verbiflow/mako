@@ -152,6 +152,9 @@ async function check() {
         send: [at2(rect(send).width), at2(rect(send).height)],
         status: [at2(rect(status).height), at2(rect(status).top - rect(box).bottom), at2(pane.bottom - rect(status).bottom), style(status.firstElementChild).fontSize],
         placeholder: input.placeholder,
+        // At rest the composer is exactly the room held for it (--composer-rest): the lazy desk's placeholder and the
+        // ocean's fade are that number, so the transcript never moves when the composer arrives.
+        atRest: at2(composer.getBoundingClientRect().height) === parseFloat(getComputedStyle(composer).getPropertyValue('--composer-rest')),
         // Where the work runs is the status line's, never the control row's.
         placeInControls: Boolean(controls.querySelector('[data-run-place], [data-workspace], [aria-label^="Access:"]')),
       }
@@ -165,6 +168,7 @@ async function check() {
   assert.ok(existing && !existing.missing, `the existing Thread's composer: ${JSON.stringify(existing)}`)
   assert.equal(existing.placeInControls, false, "the control row holds no place, branch or access")
   assert.equal(existing.column, true, "the composer keeps to the transcript's column")
+  assert.equal(existing.atRest, true, "an empty composer is the room held for it")
   assert.deepEqual(fresh, existing, "a new Thread's composer is the existing Thread's")
   await capture("new-thread.png")
   // Widths differ only with the pane (a new Thread has no right rail open); each is its pane's column.

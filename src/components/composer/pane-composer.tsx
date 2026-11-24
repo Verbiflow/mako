@@ -61,7 +61,7 @@ export function PaneComposer() {
       data-composer
       data-pane-reply
       onPointerDown={(event) => event.preventDefault()}
-      className="flex max-h-[55dvh] min-h-0 shrink-0 cursor-text flex-col"
+      className="flex max-h-[55dvh] min-h-(--composer-rest) shrink-0 cursor-text flex-col"
     >
       <div className={COMPOSER_COLUMN}>
       <div className={COMPOSER_BOX}>
