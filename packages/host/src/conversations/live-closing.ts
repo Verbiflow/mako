@@ -4,6 +4,7 @@ import { edgeStopped } from "../contracts/agents.js"
 import { disconnectNativeAgents } from "../contracts/native-agents.js"
 import { autoContinueCandidate } from "../contracts/turn-continuation.js"
 import { stoppedWork } from "./interrupted-turn.js"
+import { answersAnotherThread } from "./thread-replies.js"
 import type { LiveActions } from "./live-actions.js"
 import type { LiveApprovals } from "./live-approvals.js"
 import { recordCutOff } from "./live-auto-continue.js"
@@ -110,7 +111,8 @@ export class LiveClosing {
       (request.status === "queued" || request.status === "held") && request.inputDigest && !request.pause && !request.editing && !request.signIn && !request.retry && !request.wake
         ? [{ id: request.id, inputDigest: request.inputDigest }] : [])
     // Publish intent before the healed journal or a slow provider close can outlive this host.
-    this.parts.restarts.leave([{ conversationId: resident.snapshot.session.id, requestId: running.id, waiting, ...(this.inTree(resident) && { always: true as const }) }])
+    const always = this.inTree(resident) || answersAnotherThread(this.access.dependencies.threads, resident.snapshot.session.id, resident.snapshot.requests, running.id)
+    this.parts.restarts.leave([{ conversationId: resident.snapshot.session.id, requestId: running.id, waiting, ...(always && { always: true as const }) }])
   }
 
   /** Whether a conversation's Thread is a Fin, or an Apex with Fins still open (`ThreadStore.edges`). */

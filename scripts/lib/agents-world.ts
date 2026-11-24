@@ -535,12 +535,12 @@ export class AgentsWorld {
     await this.resumed
   }
 
-  /** A top-level conversation on `harness` at `access`, on `tuning`'s model: an Apex once it starts a child. */
-  async apex(harness: string, access: AccessTier = "auto", tuning?: SessionSettings): Promise<{ conversation: string; caller: AgentCaller }> {
+  /** A top-level conversation on `harness` at `access`, on `tuning`'s model, titled `title`: an Apex once it starts a child. */
+  async apex(harness: string, access: AccessTier = "auto", tuning?: SessionSettings, title = `${harness} apex`): Promise<{ conversation: string; caller: AgentCaller }> {
     await this.resumed
     const conversation = randomUUID()
     const modeId = this.options.ladders?.[harness]?.find((mode) => mode.access === access)?.id ?? accessModeId(access)
-    await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} apex`, modeId, ...(tuning && { tuning }) })
+    await this.live.start(harness, this.root, { conversationId: conversation, title, modeId, ...(tuning && { tuning }) })
     return { conversation, caller: this.caller(conversation) }
   }
 
@@ -788,7 +788,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, wakeDue: () => [], snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, pinnedAccount: () => undefined, submit: none,
     act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, leftSignInHold: () => false, turnCut: () => false, waitingOn: () => undefined, workOf: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
-    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {}, readIn: async () => true,
+    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {}, readIn: async () => true, listed: () => [],
   }
 }
 

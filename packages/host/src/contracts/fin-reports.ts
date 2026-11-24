@@ -13,7 +13,7 @@ export const FinReportCardSchema = z.lazy(() => z.object({
   fin: z.string().min(1).max(200),
   name: z.string().min(1).max(400),
   harness: z.string().min(1).max(100).optional(),
-  /** Another Apex's reply to a message this one sent it, not a Fin's report. */
+  /** Another top-level Thread's reply to a message this one sent it, not a Fin's report. */
   apex: z.literal(true).optional(),
   status: ReportStatusSchema,
   /** Its turn ended without a result (`Report.unfinished`); its status is `failed`. A build before this reads the words. */

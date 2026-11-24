@@ -1221,23 +1221,25 @@ its name or Thread is progress, and stays quiet. So is progress whose
 someone else to act", since only the Apex or the person can bring that
 about, and the same wait narrated again stays quiet (`test:orch-comms`). `npm run test:orch-comms` covers all three, and `test:orch-deliver` the
 refusal.
-An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
-(`AgentsApexes`): every tree's top Apex but its own whose conversation is
-open here, each with its title, harness, whether it works and its last step,
-folder and branch, its Fins' `rollup`, and a digest of its open Fins' last
-reports and its own last reply's first paragraph. Reading wakes no one.
-`agents_send` `to: apex:<handle, title or Thread>` messages one: Mako's words
-(`fromApex`, `apexNote`), never the person's, after its turn unless steered;
-the transcript draws it as a card from that Apex. Only a top-level Thread
-sends one: a Fin, a lead too, reads the list and is refused the send
-(`access`), since whether to ask is its own Apex's call. The turn that
-answers it sends its reply back once, as the sender's wake (`Notice.reply`),
-and that wake sends nothing on. At most three go from one Apex to another an
-hour (`rate-limited`). The store keeps each message before it's sent and its
-reply before that wake (`apex_messages`, `ApexMessage`), settled once the
-wake is in the sender's queue, so a host that stops anywhere between still
-sends one reply and counts the hour's three; a turn its stop cut replies as
-its continuation ends. Rows go once answered and an hour old, with an
+A top-level Thread reads the person's other top-level Threads on this host with `agents_list` `scope: apexes`
+(`AgentsApexes`, `topThreads`): those outside its own tree with a conversation here, not archived and not run from
+another device, read from the listing and the store, so one this host hasn't read in since it started counts too.
+Each that leads a Fin still open is listed whole (`apexes`): its handle, title, harness, whether it works and its last
+step, folder and branch, its Fins' `rollup`, and a digest of its open Fins' last reports and its own last reply's first
+paragraph (that last only while it's in memory). Of the rest, the five the person wrote in last are a line each
+(`others`: handle, title, harness, working, folder, branch, about 50 tokens) and the others counted (`more`): listed
+whole, one Mac's 241 were about 11,600 tokens. Reading wakes no one. `agents_send` `to: apex:<handle, title or Thread>`
+messages any of them, listed or not, an Apex or not, and a Fin is refused as a target, pointed at its Apex: Mako's
+words (`fromApex`, `apexNote`, "the Thread "…""), never the person's, after its turn unless steered, and one idle takes
+it as its next turn; the transcript draws it as a card from the Thread that sent it. The target's conversation is read
+in first, so a repeat of the key after a restart finds the message it sent. Only a top-level Thread sends one: a Fin,
+a lead too, reads the list and is refused the send (`access`), since whether to ask is its own Apex's call. The turn
+that answers it sends its reply back once, as the sender's wake (`Notice.reply`), and that wake sends nothing on. At
+most three go from one Thread to another an hour (`rate-limited`). The store keeps each message before it's sent and
+its reply before that wake (`apex_messages`, `ApexMessage`), settled once the wake is in the sender's queue, so a host
+that stops anywhere between still sends one reply and counts the hour's three; a turn its stop or a crash cut replies
+as its continuation ends. That turn goes on even when the person turned off continuing their own after a restart
+(`answersAnotherThread`): nobody watches it, and left for Continue its reply could wait out the week a message is kept. Rows go once answered and an hour old, with an
 archived Thread, or after a week unanswered. The rule for when to message is
 in `ORCHESTRATION_INSTRUCTIONS`; `test:orch-comms` covers it too.
 

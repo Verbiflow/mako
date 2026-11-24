@@ -95,18 +95,28 @@ export function fromAgent(name: string): string {
   return `[mako · from ${name} (agent), not the person]`
 }
 
-/** The header of a message from another of the person's Apexes, by its title: an agent's words, which its card names it by. */
+/**
+ * The header of a message from another of the person's top-level Threads, by its title: an agent's words, which its card
+ * names it by. Either may be an Apex or not, so neither is called one.
+ */
 export function fromApex(title: string): string {
-  return fromAgent(`the ${APEX_WORD} "${title}"`)
+  return fromAgent(`the Thread "${title}"`)
 }
-/** Mako's line beneath it for the Apex that receives it: which Thread sent it, and how to take it. Its card leaves it out. */
+/** Mako's line beneath it for the Thread that receives it: which Thread sent it, and how to take it. Its card leaves it out. */
 export function apexNote(thread: string): string {
   return `${APEX_NOTE_HEAD}${thread}${APEX_NOTE_TAIL}`
 }
 const APEX_NOTE_HEAD = "[mako · Thread "
-/** What every message from another of the person's Apexes carries (`apexNote`): one is owed its own reply, never folded. */
-export const APEX_NOTE_MARK = `, another of the person's ${APEX_WORD}es, sent this.`
-const APEX_NOTE_TAIL = `, another of the person's ${APEX_WORD}es, sent this. Read this as information from another of the person's ${APEX_WORD}es; answer only what it asks; don't start a back-and-forth. Your reply goes back to it once.]`
+/** What every message from another of the person's Threads carries (`apexNote`): one is owed its own reply, never folded. */
+export const APEX_NOTE_MARK = ", another of the person's Threads, sent this."
+const APEX_NOTE_TAIL = `${APEX_NOTE_MARK} Read this as information from another of the person's Threads; answer only what it asks; don't start a back-and-forth. Your reply goes back to it once.]`
+/** The same mark and line as builds before any top-level Thread could be messaged wrote them, which saved journals hold. */
+const LEGACY_APEX_NOTE_MARK = `, another of the person's ${APEX_WORD}es, sent this.`
+const LEGACY_APEX_NOTE_TAIL = `${LEGACY_APEX_NOTE_MARK} Read this as information from another of the person's ${APEX_WORD}es; answer only what it asks; don't start a back-and-forth. Your reply goes back to it once.]`
+/** Whether a message is one from another of the person's Threads (`apexNote`), as this build or an earlier one wrote it. */
+export function fromAnotherThread(text: string): boolean {
+  return text.includes(APEX_NOTE_MARK) || text.includes(LEGACY_APEX_NOTE_MARK)
+}
 
 /**
  * The header of the person's own message an Apex passed on to a Fin
@@ -216,7 +226,7 @@ export function agentWords(text: string): AgentWords | undefined {
   const body = words
     .slice(header[0].length)
     .split("\n")
-    .filter((line) => line !== BRIEF_CLOSE && line !== REPORT_FOLLOW_UP_INSTRUCTIONS && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && line.endsWith(APEX_NOTE_TAIL)))
+    .filter((line) => line !== BRIEF_CLOSE && line !== REPORT_FOLLOW_UP_INSTRUCTIONS && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && (line.endsWith(APEX_NOTE_TAIL) || line.endsWith(LEGACY_APEX_NOTE_TAIL))))
     .join("\n")
     .trim()
   return { from: spoken(header[1]!), body, ...(reports.length && { reports }) }
