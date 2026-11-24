@@ -1,14 +1,13 @@
 import { randomUUID } from "node:crypto"
+import { rm } from "node:fs/promises"
 import type { Secrets } from "../base/secrets.js"
-import { GrantedSecrets } from "../base/secret-grants.js"
 import type { SelectableAccountCapability } from "./account-capability.js"
 import type { AccountRoot } from "./accounts-common.js"
 
 export const isApiKeyAccount = (name: string) => /^key\.[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(name)
 export const apiKeyAccountName = () => `key.${randomUUID()}`
 
-/** Each pasted key is a separate selectable account. Existing work keeps its credential lease
- * until the shared account owner can switch it. No key is written to settings or account metadata. */
+/** Each pasted key is a separate selectable account, its key in the keychain alone: never in settings or account metadata. */
 export function withApiKeyAccounts(
   native: SelectableAccountCapability,
   root: AccountRoot,
@@ -36,11 +35,9 @@ export function withApiKeyAccounts(
     },
     async accountEnv(name, base) {
       if (!name || !isApiKeyAccount(name)) return native.accountEnv(name, base)
-      const thread = base.MAKO_THREAD_ID
-      const lent = thread && secrets instanceof GrantedSecrets
-        ? await secrets.lend("saved-key", prefix + name, { thread, repository: base.PWD || "this-device" }, `Run ${native.label} with its API key`, randomUUID()) : undefined
-      if (lent && "refusal" in lent) throw new Error(`Access to the ${native.label} API key was refused.`)
-      const record = lent ? lent.record : await secrets.read("saved-key", prefix + name)
+      // The device reads its own saved key for a launch, as Cursor's are read. `base` is the host's environment: a
+      // MAKO_THREAD_ID or PWD in it came from whatever started the host, never the launching Thread, so no lease names it.
+      const record = await secrets.read("saved-key", prefix + name)
       if (!record) throw new Error(`The selected ${native.label} API key is missing. Choose an account in Settings.`)
       return configure(record.value, { ...base }, root.dir(native.provider, name))
     },
@@ -51,6 +48,8 @@ export function withApiKeyAccounts(
     async removeAccount(name) {
       if (!isApiKeyAccount(name)) return native.removeAccount(name)
       await secrets.delete("saved-key", prefix + name)
+      // What the harness kept in the key's own folder (Claude Code's config, Grok's sign-in file) goes with it.
+      await rm(root.dir(native.provider, name), { recursive: true, force: true })
       return {}
     },
   }

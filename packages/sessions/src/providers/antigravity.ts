@@ -13,11 +13,14 @@ import type { NativeFile, SessionProvider } from "./types.js"
 
 const idFile = /^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}\.db$/i
 export const AGY_KEY_DATA = "mako-antigravity-key"
+/** Where `agy acp` keeps a Google sign-in's conversations without `--app-data-dir`; the terminal CLI's own are beside it. */
+export const AGY_ACP_DATA = "antigravity-acp"
 export const AGY_CLI_DATA = "antigravity-cli"
+const DATA_DIRECTORIES = [AGY_ACP_DATA, AGY_CLI_DATA, AGY_KEY_DATA]
 const keyProfile = /^mako-antigravity-key\.[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/
 /** Each saved credential gets a separate native session store. The terminal can also supply its own key. */
 export function agyDataDirectory(env: NodeJS.ProcessEnv): string {
-  if (!env.GEMINI_API_KEY) return AGY_CLI_DATA
+  if (!env.GEMINI_API_KEY) return AGY_ACP_DATA
   const profile = env.MAKO_AGY_DATA_DIRECTORY
   return profile && keyProfile.test(profile) ? profile : AGY_KEY_DATA
 }
@@ -89,11 +92,11 @@ export function agyStoredCalls(blob: Uint8Array, row: "step" | "generation"): Ag
   })
 }
 
-function stepEntry(idx: number, kind: number, payload: Uint8Array): Entry {
+function stepEntry(idx: number, kind: number, payload: Uint8Array | null): Entry {
   const id = `agy-step-${idx}`
   const path = kind === 14 ? [19, 2] : kind === 15 ? [20, 1] : kind === 17 ? [24, 3, 2] : []
   if (path.length) {
-    let field: Uint8Array | undefined = payload
+    let field: Uint8Array | undefined = payload ?? undefined
     try {
       for (const tag of path) field = field && bytesField(field, tag)
       if (field) {
@@ -106,10 +109,17 @@ function stepEntry(idx: number, kind: number, payload: Uint8Array): Entry {
   return { type: "unread", id, kind: `Antigravity step ${kind}`, reason: path.length ? "unreadable" : "undrawn" }
 }
 
-const workspaces = z.array(z.string())
+/** The conversation's workspace folders, as the summary keeps them: a JSON list of `file:` URIs. */
+const Workspaces = z.string().transform((text, context) => {
+  try { return JSON.parse(text) }
+  catch {
+    context.addIssue({ code: "custom", message: "not JSON" })
+    return z.NEVER
+  }
+}).pipe(z.array(z.string()))
 const tableNames = z.array(z.object({ name: z.string() }))
 const summary = z.object({ title: z.string(), preview: z.string(), workspace_uris: z.string(), last_modified_time: z.string(), step_count: z.number() })
-const step = z.object({ idx: z.number(), step_type: z.number(), step_payload: z.instanceof(Uint8Array) })
+const step = z.object({ idx: z.number(), step_type: z.number(), step_payload: z.instanceof(Uint8Array).nullable() })
 const metadataRow = z.object({ data: z.instanceof(Uint8Array) })
 export class AntigravityProvider implements SessionProvider {
   readonly harness = "antigravity"
@@ -117,14 +127,14 @@ export class AntigravityProvider implements SessionProvider {
   constructor(private readonly stores: NativeStores, private readonly home = process.env.GEMINI_HOME || join(homedir(), ".gemini")) {}
   recordRoots() {
     const profiles = existsSync(this.home) ? readdirSync(this.home).filter(name => keyProfile.test(name)) : []
-    return [AGY_CLI_DATA, AGY_KEY_DATA, ...profiles].map((name) => ({ name, path: join(this.home, name) }))
+    return [...DATA_DIRECTORIES, ...profiles].map((name) => ({ name, path: join(this.home, name) }))
   }
   roots() { return this.recordRoots().map(({ path }) => join(path, "conversations")) }
   private root(path: string) {
     if (!idFile.test(basename(path))) return undefined
     const directory = dirname(dirname(path))
     const name = basename(directory)
-    if (name !== AGY_CLI_DATA && name !== AGY_KEY_DATA && !keyProfile.test(name)) return undefined
+    if (!DATA_DIRECTORIES.includes(name) && !keyProfile.test(name)) return undefined
     return join(this.home, name, "conversations") === dirname(path) ? { name, path: directory } : undefined
   }
   watchTarget(path: string) {
@@ -156,7 +166,7 @@ export class AntigravityProvider implements SessionProvider {
     try {
       const row = summary.safeParse(db.prepare("SELECT title, preview, workspace_uris, last_modified_time, step_count FROM conversation_summaries WHERE conversation_id = ?").get(nativeId)).data
       if (!row || !row.step_count) return null
-      const uri = workspaces.parse(JSON.parse(row.workspace_uris))[0]
+      const uri = Workspaces.safeParse(row.workspace_uris).data?.[0]
       return { harness: this.harness, nativeId, path: file.path, title: row.title || row.preview.slice(0, 120),
         cwd: uri?.startsWith("file:") ? fileURLToPath(uri) : undefined, updatedAt: row.last_modified_time, bytes: file.bytes }
     } finally { db.close() }

@@ -203,18 +203,8 @@
             "toolCallId": "call_2",
             "title": "write",
             "rawInput": {
-              "file_path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+              "file_path": "/Users/me/app/plan.md",
               "content": "# Plan: Add a greeting\n\nFrom the file.\n"
-            },
-            "_meta": {
-              "x.ai/tool": {
-                "version": 1,
-                "name": "write",
-                "kind": "write",
-                "namespace": "opencode",
-                "label": "Write",
-                "read_only": false
-              }
             },
             "sessionUpdate": "tool_call"
           }
@@ -230,7 +220,7 @@
             "name": "(undefined)",
             "toolKind": "(undefined)",
             "status": "pending",
-            "input": "{\n  \"file_path\": \"/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md\",\n  \"content\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\"\n}",
+            "input": "{\n  \"file_path\": \"/Users/me/app/plan.md\",\n  \"content\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\"\n}",
             "output": "(undefined)",
             "details": "(undefined)",
             "attachments": "(undefined)"
@@ -246,10 +236,10 @@
           "update": {
             "toolCallId": "call_2",
             "kind": "edit",
-            "title": "Write `/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md`",
+            "title": "Write `/Users/me/app/plan.md`",
             "content": [
               {
-                "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+                "path": "/Users/me/app/plan.md",
                 "oldText": "",
                 "newText": "# Plan: Add a greeting\n\nFrom the file.\n",
                 "type": "diff"
@@ -257,26 +247,13 @@
             ],
             "locations": [
               {
-                "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md"
+                "path": "/Users/me/app/plan.md"
               }
             ],
             "rawInput": {
               "variant": "Write",
-              "file_path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+              "file_path": "/Users/me/app/plan.md",
               "content": "# Plan: Add a greeting\n\nFrom the file.\n"
-            },
-            "_meta": {
-              "x.ai/tool": {
-                "version": 1,
-                "name": "write",
-                "kind": "write",
-                "namespace": "opencode",
-                "label": "Write",
-                "read_only": false,
-                "input": {
-                  "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md"
-                }
-              }
             },
             "sessionUpdate": "tool_call_update"
           }
@@ -288,20 +265,20 @@
           "update": {
             "kind": "tool-update",
             "id": "call_2",
-            "title": "Write `/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md`",
+            "title": "Write `/Users/me/app/plan.md`",
             "status": "(undefined)",
-            "input": "{\n  \"variant\": \"Write\",\n  \"file_path\": \"/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md\",\n  \"content\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\"\n}",
+            "input": "{\n  \"variant\": \"Write\",\n  \"file_path\": \"/Users/me/app/plan.md\",\n  \"content\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\"\n}",
             "output": "(undefined)",
             "details": [
               {
                 "type": "diff",
-                "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+                "path": "/Users/me/app/plan.md",
                 "oldText": "",
                 "newText": "# Plan: Add a greeting\n\nFrom the file.\n"
               },
               {
                 "type": "location",
-                "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+                "path": "/Users/me/app/plan.md",
                 "line": "(undefined)"
               }
             ],
@@ -318,24 +295,11 @@
           "toolCall": {
             "toolCallId": "call_2",
             "kind": "edit",
-            "title": "Write `/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md`",
+            "title": "Write `/Users/me/app/plan.md`",
             "rawInput": {
               "variant": "Write",
-              "file_path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md",
+              "file_path": "/Users/me/app/plan.md",
               "content": "# Plan: Add a greeting\n\nFrom the file.\n"
-            },
-            "_meta": {
-              "x.ai/tool": {
-                "version": 1,
-                "name": "write",
-                "kind": "write",
-                "namespace": "opencode",
-                "label": "Write",
-                "read_only": false,
-                "input": {
-                  "path": "/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md"
-                }
-              }
             }
           },
           "options": [
@@ -351,7 +315,7 @@
             },
             {
               "optionId": "reject-once",
-              "name": "No, and tell Grok what to do differently",
+              "name": "No, and tell Antigravity what to do differently",
               "kind": "reject_once"
             }
           ]
@@ -364,7 +328,7 @@
             "type": "ask",
             "ask": {
               "request": {
-                "title": "Write `/Users/me/.grok/sessions/%2FUsers%2Fme%2Fapp/01a0f597-8738-71a1-af27-c41317465be0/plan.md`",
+                "title": "Write `/Users/me/app/plan.md`",
                 "kind": "edit",
                 "options": [
                   {
@@ -379,7 +343,7 @@
                   },
                   {
                     "optionId": "reject-once",
-                    "name": "No, and tell Grok what to do differently",
+                    "name": "No, and tell Antigravity what to do differently",
                     "kind": "reject_once"
                   }
                 ]

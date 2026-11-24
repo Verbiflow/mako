@@ -3,15 +3,23 @@ import { hostPlatform } from "../../base/platform.js"
 import type { HarnessUpdateCommand } from "../../contracts/harness-updates.js"
 import { builds } from "./builds.js"
 
+/** Google's build for this machine, as its manifests and `builds` name it; none for a platform it doesn't build for. */
+export function antigravityTarget(): keyof typeof builds | undefined {
+  const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "amd64" : undefined
+  const platform = hostPlatform()
+  if (!arch || platform === "other") return undefined
+  if (platform === "win32") return `windows_${arch}`
+  if (platform === "darwin") return `darwin_${arch}`
+  return existsSync(`/lib/libc.musl-${arch === "amd64" ? "x86_64" : "aarch64"}.so.1`) ? `linux_${arch}_musl` : `linux_${arch}`
+}
+
 /** Google's installer follows latest. Install the release that Mako verified, checking Google's digest before replacing agy. */
 export function antigravityInstall(): HarnessUpdateCommand | undefined {
-  const arch = process.arch === "arm64" ? "arm64" : process.arch === "x64" ? "amd64" : undefined
-  if (!arch) return undefined
-  const platform = hostPlatform()
-  if (platform === "other") return undefined
+  const target = antigravityTarget()
+  if (!target) return undefined
+  const { url, sha512 } = builds[target]
   const label = "Install Antigravity"
-  if (platform === "win32") {
-    const { url, sha512 } = builds[`windows_${arch}`]
+  if (target.startsWith("windows_")) {
     const command = [
       "$ErrorActionPreference = 'Stop'",
       "$dir = Join-Path $HOME '.local/bin'",
@@ -21,9 +29,7 @@ export function antigravityInstall(): HarnessUpdateCommand | undefined {
     ].join("\n")
     return { label, command: "powershell.exe", args: ["-NoProfile", "-Command", command] }
   }
-  const musl = existsSync(`/lib/libc.musl-${arch === "amd64" ? "x86_64" : "aarch64"}.so.1`)
-  const { url, sha512 } = platform === "darwin" ? builds[`darwin_${arch}`] : builds[`linux_${arch}${musl ? "_musl" : ""}`]
-  const verify = platform === "darwin" ? "shasum -a 512 -c -" : "sha512sum -c -"
+  const verify = target.startsWith("darwin_") ? "shasum -a 512 -c -" : "sha512sum -c -"
   const command = [
     'dir="$HOME/.local/bin"', 'mkdir -p "$dir"', 'stage=$(mktemp -d "$dir/.agy.XXXXXXXX")',
     'trap \'rm -rf "$stage"\' EXIT', 'cd "$stage"', `curl -fsSL ${url} -o release`,

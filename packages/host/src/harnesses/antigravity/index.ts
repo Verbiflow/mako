@@ -10,13 +10,13 @@ import { acpDecoderSource } from "../acp-decoder-source.js"
 import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import type { ProviderModule } from "../host.js"
-import { antigravityInstall } from "./install.js"
+import { antigravityInstall, antigravityTarget } from "./install.js"
 import { antigravityAccounts } from "./accounts.js"
 import { antigravityAcp as acp } from "./acp.js"
 import { antigravityProfile } from "./profile.js"
 import { antigravityUsageHistory } from "./usage-history.js"
 
-const skillRoot = (folder: string) => join(process.env.GEMINI_HOME ?? join(homedir(), ".gemini"), folder, "skills")
+const skillRoot = (folder: string) => join(process.env.GEMINI_HOME || join(homedir(), ".gemini"), folder, "skills")
 export const installAntigravity: ProviderModule = (host, context) => {
   const install = antigravityInstall()
   return installHarness(host, {
@@ -70,7 +70,7 @@ export const installAntigravity: ProviderModule = (host, context) => {
     artifactPreview: notBuilt("Mako does not collect the agent's brain directory."),
     connection: lacks("Sign-in uses the agent's own ACP authentication."),
     updates: { provider: acp.provider, binary: (env) => resolveExecutable("agy", env),
-      versions: { tested: "1.5.15", oldest: "1.5.15", feed: { manifest: "https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/darwin_arm64.json" },
+      versions: { tested: "1.5.15", oldest: "1.5.15", feed: { manifest: `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/${antigravityTarget() ?? "darwin_arm64"}.json` },
         checked: { on: "2026-11-23", how: "ACP handshake, model discovery, HTTP MCP and a complete Gemini-compatible test turn with agy 1.5.15." } },
       install: install ? [install] : [],
       native: install && { label: "Update Antigravity", args: [], installVersion: () => install, ownsPath: (path, env) => path === join(env?.HOME || env?.USERPROFILE || homedir(), ".local", "bin", onWindows() ? "agy.exe" : "agy") },

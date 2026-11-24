@@ -16,7 +16,8 @@ export const ANTIGRAVITY_VOCABULARY = defineVocabulary({
   concepts: {
     checked, instructions: { files: ["GEMINI.md"], rules: [".agents/rules"], user: ["~/.gemini/GEMINI.md"], order: "The CLI loads its global and project instructions." },
     hooks: { absent: "Mako does not install hooks for the ACP worker." },
-    skills: [".agents/skills", ".gemini/skills", ".agent/skills", "~/.gemini/config/skills", "~/.gemini/antigravity-cli/skills"],
+    // In the order the CLI reads them, the first skill of a name winning; it never reads `~/.agents/skills`.
+    skills: ["~/.gemini/config/skills", ".gemini/skills", "~/.gemini/antigravity-cli/skills", ".agents/skills", ".agent/skills"],
     commands: { folders: [".agents/workflows"] }, agents: [], mcpConfig: ["~/.gemini/config/mcp_config.json"],
     output: { live: "ACP over stdio", headless: ["text", "json", "stream-json"] },
     models: "The model and thinking-level config options in ACP session/new.",

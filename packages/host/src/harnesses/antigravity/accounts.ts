@@ -12,7 +12,7 @@ export function antigravityAccounts(root: AccountRoot, secrets: Secrets) {
     provider: "antigravity", label: "Antigravity", mode: "selectable",
     loginCommand: "agy acp --login",
     async listAccounts(selection) {
-      return [{ harness: "antigravity", name: "default", active: !selection, source: "cli", route: "native", dir: join(homedir(), ".gemini") }]
+      return [{ harness: "antigravity", name: "default", active: !selection, source: "cli", route: "native", dir: process.env.GEMINI_HOME || join(homedir(), ".gemini") }]
     },
     async accountEnv(name, env) {
       if (name && name !== "default") throw new Error("This Antigravity account is no longer available.")

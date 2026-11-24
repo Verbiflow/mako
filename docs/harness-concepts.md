@@ -42,7 +42,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **OpenCode**: `~/.config/opencode/skills`, `~/.config/opencode/skill`, `.opencode/skills`, `.opencode/skill`, `~/.claude/skills`, `.claude/skills`, `~/.agents/skills`, `.agents/skills`
 - **Grok**: `.grok/skills`, `.claude/skills`, `.cursor/skills`, `.agents/skills`, `~/.grok/skills`, `~/.agents/skills`, `~/.claude/skills`, `~/.cursor/skills`
 - **Devin**: `.agents/skills`, `.devin/skills`, `.cognition/skills`, `.windsurf/skills`, `.claude/skills`, `~/.agents/skills`, `~/.config/devin/skills`, `~/.config/cognition/skills`
-- **Antigravity**: `.agents/skills`, `.gemini/skills`, `.agent/skills`, `~/.gemini/config/skills`, `~/.gemini/antigravity-cli/skills`
+- **Antigravity**: `~/.gemini/config/skills`, `.gemini/skills`, `~/.gemini/antigravity-cli/skills`, `.agents/skills`, `.agent/skills`
 
 ## Commands
 

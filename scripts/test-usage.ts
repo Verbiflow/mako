@@ -366,7 +366,7 @@ async function antigravityUsage(homeRoot: string): Promise<void> {
     summaries.prepare("INSERT INTO conversation_summaries VALUES (?, 'Usage', '', ?, '2026-08-20T10:00:00Z', ?)").run(basename(path, ".db"), steps.length, JSON.stringify([`file://${cwd}`]))
     summaries.close()
   }
-  const conversations = join(homeRoot, ".gemini", "antigravity-cli", "conversations")
+  const conversations = join(homeRoot, ".gemini", "antigravity-acp", "conversations")
   await mkdir(conversations, { recursive: true })
   write(join(conversations, "0b5c2c66-6a43-4c47-9d1b-3f1f2a6e8a01.db"), "/work/agy", [
     null,
