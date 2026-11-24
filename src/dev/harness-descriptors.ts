@@ -2030,9 +2030,8 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "reason": "ACP's `usage_update` carries the context used and its size, nothing itemized."
       },
       "outsideMako": {
-        "state": "absent",
-        "by": "mako",
-        "reason": "Mako reads usage from the running session., so only its sessions in Mako are counted."
+        "state": "implemented",
+        "via": "Its own store is read, so sessions run outside Mako are counted too."
       }
     },
     "artifacts": {

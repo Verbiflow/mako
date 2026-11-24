@@ -69,7 +69,7 @@ jobs:
         # record-locks.mjs, record-orphans.mjs, record-backfill.mjs and record-repack.mjs in node:24 containers:
         # as is, with no /proc, with no AF_UNIX, and two containers sharing one store.
         run: npm run test:linux-locks
-      - name: The host with no Electron, its first look and six harnesses
+      - name: The host with no Electron, its first look and every harness
         run: npm run test:host-linux -- --evidence "$PWD/evidence" --measure
       - name: Collect diagnostics
         if: always()

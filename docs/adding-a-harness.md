@@ -26,7 +26,7 @@ Create `packages/host/src/harnesses/<harness>/index.ts` calling `installHarness(
 | `skillEditing` | Importing and removing skills in the harness's own folders. | yes | yes | yes | yes | yes | yes | yes |
 | `mcpEditing` | Its MCP servers in its own configuration: copied in from another harness, turned off and on, and removed. | yes | yes | yes | yes | yes | yes | yes |
 | `updates` | Finding, versioning and updating the harness's binary. | yes | yes | yes | yes | yes | yes | yes |
-| `usageHistory` | Spend the harness's own store records; without it, Settings › Usage shows what Mako measured. | yes | yes | yes | yes | yes | yes | gap |
+| `usageHistory` | Spend the harness's own store records; without it, Settings › Usage shows what Mako measured. | yes | yes | yes | yes | yes | yes | yes |
 | `artifactPreview` | Previews of files the harness writes as artifacts. | none | none | yes | none | none | none | gap |
 
 ## 2. Live capabilities
@@ -63,7 +63,7 @@ Each is a field of the definition's `usage`: `implemented` with where the harnes
 | Cost | What the session cost (`cost` or `costSpent`). | Cost in the meter's popover and Settings › Usage. | implemented | harness has none | harness has none | implemented | implemented | Mako gap | harness has none |
 | Missed calls | Whether the harness says a report left calls out (`unrecorded`). | A note when its totals leave calls out. | harness has none | harness has none | harness has none | harness has none | implemented | harness has none | Mako gap |
 | Spend by tool | Whether the harness reports what a single tool call, skill or MCP server spent, rather than a call's or turn's total. | Nothing yet: no harness reports it, and Mako never splits a call's spend among its tools by guess. | harness has none | harness has none | harness has none | harness has none | harness has none | harness has none | Mako gap |
-| Spend outside Mako | The `usageHistory` family. | Settings › Usage counts its sessions outside Mako. | implemented | implemented | implemented | implemented | implemented | implemented | Mako gap |
+| Spend outside Mako | The `usageHistory` family. | Settings › Usage counts its sessions outside Mako. | implemented | implemented | implemented | implemented | implemented | implemented | implemented |
 | Reset credits | The accounts' `useResetCredit`, offered on the account's row. | Use a reset credit, on the account's row. | harness has none | implemented | harness has none | harness has none | harness has none | harness has none | Mako gap |
 | Balance | The `balances` its accounts' usage readings carry: credit or money left beyond the plan. | Credit or money left beyond the plan, on the account's row. | implemented | implemented | implemented | harness has none | Mako gap | implemented | Mako gap |
 | Switching at a limit | Whether Mako can offer another account when one nears its limit: selectable accounts whose `accountUsage` reads each one's own limits. | A line above the composer offering an account with room, when the one in use nears its limit or is refused. | implemented | implemented | implemented | harness has none | implemented | implemented | Mako gap |

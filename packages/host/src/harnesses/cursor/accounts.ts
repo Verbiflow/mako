@@ -13,6 +13,7 @@ import type {
   UsageWindow,
 } from "../../contracts/accounts.js"
 import {
+  KeyTokens,
   credentialFingerprint,
   jsonFields,
   jwtClaims,
@@ -322,6 +323,7 @@ export function createCursorAccountCapability(
   keys: CursorAccountKeys
 ): SelectableAccountCapability {
   const sessions: DashboardSessions = new Map()
+  const keyTokens = new KeyTokens()
   const saved = async (name: string): Promise<StoredCursorCredential> => {
     const credential = await keys.store(name).load()
     if (!credential) throw new Error("The selected Cursor account no longer exists. Choose another account in Settings → Agents.")
@@ -400,11 +402,13 @@ export function createCursorAccountCapability(
     credentialRevision: async (name, env) => {
       if (name !== "default") {
         const credential = await keys.store(name).load()
-        return credentialFingerprint([credential?.revision ?? null, credential?.apiKey ?? null])
+        // A key saved before records had revisions is told apart by its token until it is saved again.
+        return credentialFingerprint([credential?.revision ?? null, credential?.revision ? null : keyTokens.of(credential?.apiKey)])
       }
       const launch = await auth.childLaunch(env)
       const key = launch.env.CURSOR_API_KEY
-      if (key) return credentialFingerprint([key])
+      const revision = launch.credential.kind === "configured" && launch.credential.revision.kind === "reported" ? launch.credential.revision.value : undefined
+      if (key) return credentialFingerprint([revision ?? null, revision ? null : keyTokens.of(key)])
       const path = join(launch.env.HOME ?? homedir(), CURSOR_SDK_AUTH_FILE)
       const raw = await readFile(path, "utf8").catch(error => {
         if (error instanceof Error && "code" in error && error.code === "ENOENT") return null

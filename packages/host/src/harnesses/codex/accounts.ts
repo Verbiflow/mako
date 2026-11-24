@@ -18,6 +18,7 @@ import { homedir } from "node:os"
 import { join } from "node:path"
 import type { AccountRemoval, AccountUsage, HarnessAccount, ResetCreditOutcome } from "../../contracts/accounts.js"
 import {
+  KeyTokens,
   credentialFingerprint,
   loginPending,
   principalFingerprint,
@@ -385,6 +386,16 @@ async function useResetCredit(root: AccountRoot, processes: DiscoveryProcesses, 
 }
 
 /** Codex rewrites its tokens and `last_refresh` on every refresh; the account and the API key name the login. */
+/** `auth.json` with its API key, when it holds one, replaced by its token, so a fingerprint is never made of a key. */
+function withKeyToken(raw: string | null, keyTokens: KeyTokens): string | null {
+  if (raw === null) return null
+  try {
+    const auth = objectValue(JSON.parse(raw))
+    const key = auth && stringValue(auth.OPENAI_API_KEY)
+    return key ? JSON.stringify({ ...auth, OPENAI_API_KEY: keyTokens.of(key) }) : raw
+  } catch { return raw }
+}
+
 const CodexPrincipal = z.object({
   auth_mode: z.string().optional(),
   OPENAI_API_KEY: z.string().nullable().optional(),
@@ -469,6 +480,7 @@ export const codexCloudSignIn: CloudSignInCapability = {
 
 /** Codex's accounts: its own login, and those Mako keeps in `root`. */
 export function codexAccountCapability(root: AccountRoot, processes: DiscoveryProcesses, executables?: CodexExecutables): SelectableAccountCapability {
+  const keyTokens = new KeyTokens()
   return {
     provider: "codex",
     mode: "selectable",
@@ -515,7 +527,7 @@ export function codexAccountCapability(root: AccountRoot, processes: DiscoveryPr
           if (error instanceof Error && "code" in error && error.code === "ENOENT") return null
           throw error
         })
-      return credentialFingerprint([home, principalFingerprint(raw, CodexPrincipal)])
+      return credentialFingerprint([home, principalFingerprint(withKeyToken(raw, keyTokens), CodexPrincipal)])
     },
     useResetCredit: (name, attempt) => useResetCredit(root, processes, name, attempt),
   }

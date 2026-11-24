@@ -21,7 +21,9 @@ const providerHost = createHarnessHost(detachedHarnessContext(nativeStores))
 // One harness order for setup: the person's, then Mako's, which is the order harnesses install in.
 const MAKO_ORDER = providerHost.harnesses.list().map(({ provider }) => provider)
 const defaults = (harness: string) => providerHost.profiles.get(harness)?.defaults
-assert.deepEqual(MAKO_ORDER, ["claude", "codex", "cursor", "opencode", "grok", "devin"])
+// Read from `harnessModules`, so a harness added there needs no change here; only the lead is pinned.
+assert.deepEqual(MAKO_ORDER.slice(0, 2), ["claude", "codex"], "Claude Code, then Codex, lead Mako's order")
+assert.equal(new Set(MAKO_ORDER).size, MAKO_ORDER.length, "each harness once")
 assert.deepEqual(harnessOrder(undefined, MAKO_ORDER), MAKO_ORDER, "Mako's order until the person saves one")
 assert.deepEqual(harnessOrder(["grok", "codex"], ["claude", "codex", "grok", "pi"]), ["grok", "codex", "claude", "pi"], "the saved order first, then Mako's")
 assert.deepEqual(harnessOrder(["gone", "codex"], ["claude", "codex"]), ["codex", "claude"], "a harness that went away is dropped")

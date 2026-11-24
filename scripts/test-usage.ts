@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { appendFile, mkdir, mkdtemp, open, readFile, rename, rm, writeFile } from "node:fs/promises"
+import { appendFile, mkdir, mkdtemp, open, readFile, rename, rm, utimes, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { basename, dirname, join } from "node:path"
 import { DatabaseSync } from "node:sqlite"
@@ -252,6 +252,7 @@ try {
   console.log("Grok usage: per-model turn totals, cache apart from input, cost from ticks, subagents once, project from the store path or its .cwd")
 
   await cursorUsage(join(root, "cursor-home"))
+  await antigravityUsage(join(root, "antigravity-home"))
 
   await keptLedger(join(root, "ledger"))
   await invalidLedgerState(join(root, "invalid-ledger"))
@@ -330,6 +331,62 @@ async function cursorUsage(homeRoot: string): Promise<void> {
     isolated.close()
   }
   console.log("Cursor usage: each run's usage from the SDK's index, in Mako's state root and another program's store, cache apart from input, a run counted once and read again only when it changes")
+}
+
+/**
+ * Antigravity's usage from each conversation's database: a step's metadata
+ * and its generation's row name one call by the same id and count once, a
+ * retry is a call of its own, and a database untouched in the window is not
+ * read. The rows are protobuf, written here field by field.
+ */
+async function antigravityUsage(homeRoot: string): Promise<void> {
+  const varint = (value: number) => {
+    const bytes: number[] = []
+    for (; value > 127; value = Math.floor(value / 128)) bytes.push((value % 128) | 128)
+    return [...bytes, value]
+  }
+  // A varint field, a text field and a message field, each as its tag and value.
+  const count = (number: number, value: number) => [...varint(number * 8), ...varint(value)]
+  const bytes = (number: number, value: Uint8Array) => [...varint(number * 8 + 2), ...varint(value.length), ...value]
+  const text = (number: number, value: string) => bytes(number, new TextEncoder().encode(value))
+  const message = (...fields: number[][]): Uint8Array => Uint8Array.from(fields.flat())
+  const seconds = (iso: string) => message(count(1, Date.parse(iso) / 1000))
+  const model = bytes(24, message(text(12, "gemini-3.1-pro")))
+  const call1 = message(text(11, "call-1"), count(2, 1_000), count(5, 800), count(4, 100), count(3, 50))
+  const call2 = message(text(11, "call-2"), count(2, 40), count(3, 10))
+  const retry = message(text(11, "call-2-retry"), count(2, 5), count(9, 3), count(10, 2))
+  const write = (path: string, cwd: string, steps: (Uint8Array | null)[], generations: Uint8Array[]) => {
+    const db = new DatabaseSync(path)
+    db.exec("CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer NOT NULL DEFAULT 0, metadata blob, step_payload blob); CREATE TABLE gen_metadata (idx integer PRIMARY KEY, data blob)")
+    steps.forEach((metadata, idx) => db.prepare("INSERT INTO steps (idx, step_type, metadata) VALUES (?, 15, ?)").run(idx, metadata))
+    generations.forEach((data, idx) => db.prepare("INSERT INTO gen_metadata (idx, data) VALUES (?, ?)").run(idx, data))
+    db.close()
+    const summaries = new DatabaseSync(join(dirname(dirname(path)), "conversation_summaries.db"))
+    summaries.exec("CREATE TABLE IF NOT EXISTS conversation_summaries (conversation_id text PRIMARY KEY, title text NOT NULL DEFAULT '', preview text NOT NULL DEFAULT '', step_count integer NOT NULL DEFAULT 0, last_modified_time datetime NOT NULL, workspace_uris text NOT NULL)")
+    summaries.prepare("INSERT INTO conversation_summaries VALUES (?, 'Usage', '', ?, '2026-08-20T10:00:00Z', ?)").run(basename(path, ".db"), steps.length, JSON.stringify([`file://${cwd}`]))
+    summaries.close()
+  }
+  const conversations = join(homeRoot, ".gemini", "antigravity-cli", "conversations")
+  await mkdir(conversations, { recursive: true })
+  write(join(conversations, "0b5c2c66-6a43-4c47-9d1b-3f1f2a6e8a01.db"), "/work/agy", [
+    null,
+    message(bytes(9, call1), model, bytes(8, seconds("2026-08-20T10:00:00Z"))),
+    message(bytes(9, call2), model, bytes(8, seconds("2026-08-20T10:01:00Z")), bytes(28, message(bytes(2, retry)))),
+  ], [message(bytes(1, message(bytes(4, call1), text(19, "gemini-3.1-pro"), bytes(9, message(bytes(4, seconds("2026-08-20T10:00:00Z")))))))])
+  const old = join(conversations, "5d0e3f2a-1b2c-4d3e-8f4a-5b6c7d8e9f00.db")
+  write(old, "/work/agy-old", [message(bytes(9, message(text(11, "call-old"), count(2, 9_000), count(3, 9))), bytes(8, seconds("2026-06-01T10:00:00Z")))], [])
+  const june = new Date("2026-06-01T10:00:00Z")
+  await utimes(old, june, june)
+  const summary = month(await usageSummary(usageHarnesses(providerHost), join(homeRoot, ".mako"), homeRoot, undefined, { now: AUGUST_25 }))
+  const antigravity = summary.sources.find((source) => source.source === "Antigravity")
+  assert.equal(antigravity?.messages, 3, "a call its step and generation both record counts once; a retry is a call; a database untouched since June is not read")
+  assert.equal(antigravity?.input, 1_045, "input the cache didn't supply")
+  assert.equal(antigravity?.cacheRead, 800)
+  assert.equal(antigravity?.cacheWrite, 100)
+  assert.equal(antigravity?.output, 65, "a retry that gives reasoning and reply apart counts both")
+  assert.ok(summary.projects.some((project) => project.cwd === "/work/agy"), "the project is the conversation's workspace")
+  assert.ok(summary.models.some((model) => model.model === "gemini-3.1-pro"))
+  console.log("Antigravity usage: each call from its conversation's database once, retries apart, cache apart from input, project from its summary")
 }
 
 async function invalidLedgerState(root: string): Promise<void> {

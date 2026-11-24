@@ -18,6 +18,12 @@ export interface HarnessVocabulary<Tool extends string = string> {
   /** The native version these names were last checked against, when, and from what. */
   checked: { version: string; on: string; against: string }
   tools: { readonly [Name in Tool]: NativeTool }
+  /**
+   * A kind of tool the harness defines none of, with what it does instead, as its newest
+   * recorded definitions (scripts/fixtures/native-tools) show: its calls of that kind are
+   * another kind's rows, such as a search that runs as a command.
+   */
+  lacks?: { readonly [Kind in ToolKind]?: string }
   /** How the harness names tool `t` on MCP server `s`, besides Mako's own `mcp__s__t`. */
   mcp: readonly McpNaming[]
   concepts: HarnessConcepts

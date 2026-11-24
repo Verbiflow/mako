@@ -14,7 +14,9 @@ import { NativeStores } from "@mako/sessions/read-only-sqlite"
 
 const nativeStores = new NativeStores(false)
 
-const NAMES = ["claude", "codex", "grok", "devin", "opencode"]
+/** The executable each harness that launches its own is found by, which the recorder stands in for. */
+const EXECUTABLES = { claude: "claude", codex: "codex", grok: "grok", devin: "devin", opencode: "opencode", antigravity: "agy" }
+const NAMES = Object.keys(EXECUTABLES)
 
 if (!process.versions.electron) {
   const root = await mkdtemp(join(tmpdir(), "mako-thread-environment-launch-"))
@@ -31,8 +33,8 @@ appendFileSync(${JSON.stringify(join(root, "launches.jsonl"))}, JSON.stringify({
 if (args.includes("--version")) { console.log("2.0.0"); process.exit(0) }
 setTimeout(() => process.exit(1), 500)
 `)
-    for (const name of NAMES) {
-      const path = join(bin, name)
+    for (const [name, executable] of Object.entries(EXECUTABLES)) {
+      const path = join(bin, executable)
       await writeFile(path, `#!/bin/sh\nELECTRON_RUN_AS_NODE=1 exec "${process.execPath}" "${join(root, "recorder.mjs")}" ${name} "$@"\n`)
       await chmod(path, 0o755)
     }
@@ -157,5 +159,5 @@ async function check() {
   assert.deepEqual(Object.fromEntries(Object.entries(cursorEnv).filter(([key]) => key.startsWith("MAKO_THREAD_") || ["MAKO_APP_DATA_DIR", "PORT", "API_URL", "STALE_NAME"].includes(key))), expected, "the Cursor child starts with exactly its Thread's values")
   report.cursor = { start: "child options recorded before spawn" }
   console.log(JSON.stringify(report, null, 2))
-  console.log("thread environment launch: all six harnesses start their agent with the Thread's values and its recipe's names for them, and an inherited value never leaks")
+  console.log(`thread environment launch: all ${NAMES.length + 1} harnesses start their agent with the Thread's values and its recipe's names for them, and an inherited value never leaks`)
 }

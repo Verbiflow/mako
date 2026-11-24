@@ -7,7 +7,7 @@ import { childInput } from "@mako/sessions/child-input"
 import { heavy } from "../../base/heavy-packages.js"
 import { resolveExecutable } from "../../base/executable.js"
 import { acpReadable, acpWritable } from "../acp-stream.js"
-import { credentialFingerprint } from "../accounts-common.js"
+import { credentialFingerprint, KeyTokens } from "../accounts-common.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
 import { availableProviderProfile, type ProviderProfileLoader } from "../profile-loader.js"
 import { agyArgs } from "./acp.js"
@@ -41,10 +41,11 @@ export function antigravityCatalog(session: Pick<NewSessionResponse, "configOpti
 }
 
 export function antigravityProfile(processes: DiscoveryProcesses, dataRoot: string): ProviderProfileLoader {
+  const keyTokens = new KeyTokens()
   const loader: ProviderProfileLoader = {
     provider: "antigravity", label: "Antigravity", transport: "acp",
     defaults: { work: [], none: "Use Gemini Nano when the account offers it, otherwise the agent's selected model." },
-    cacheKey: (env) => credentialFingerprint([env.GEMINI_HOME ?? null, env.GEMINI_API_KEY ?? null, env.PATH ?? null]),
+    cacheKey: (env) => credentialFingerprint([env.GEMINI_HOME ?? null, keyTokens.of(env.GEMINI_API_KEY), env.PATH ?? null]),
     async load(env, _cwd, context) {
       const command = resolveExecutable("agy", env)
       if (!command) throw new Error("Install Antigravity CLI to use this harness.")

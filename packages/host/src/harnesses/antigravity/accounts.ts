@@ -1,11 +1,13 @@
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
 import { withApiKeyAccounts } from "../api-key-accounts.js"
-import { credentialFingerprint, type AccountRoot } from "../accounts-common.js"
+import { credentialFingerprint, KeyTokens, type AccountRoot } from "../accounts-common.js"
 import type { Secrets } from "../../base/secrets.js"
 
 /** OAuth remains in the official agent. Key sessions use their own ACP data directory. */
 export function antigravityAccounts(root: AccountRoot, secrets: Secrets) {
+  // The default account's key, if any, is the person's environment's: Mako keeps no version of it.
+  const keyTokens = new KeyTokens()
   return withApiKeyAccounts({
     provider: "antigravity", label: "Antigravity", mode: "selectable",
     loginCommand: "agy acp --login",
@@ -17,7 +19,7 @@ export function antigravityAccounts(root: AccountRoot, secrets: Secrets) {
       return { ...env }
     },
     selectedAccount: () => ({ name: "default" }),
-    credentialRevision: async (_name, env = process.env) => credentialFingerprint([env.GEMINI_HOME ?? null, env.GEMINI_API_KEY ?? null]),
+    credentialRevision: async (_name, env = process.env) => credentialFingerprint([env.GEMINI_HOME ?? null, keyTokens.of(env.GEMINI_API_KEY)]),
     accountUsage: async () => ({ status: "unavailable", detail: "Antigravity manages this account's limits." }),
     async removeAccount() { throw new Error("The terminal owns this sign-in.") },
   }, root, secrets, async (key, env, dir) => {

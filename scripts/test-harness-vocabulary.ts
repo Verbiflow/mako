@@ -15,8 +15,11 @@ for (const vocabulary of VOCABULARIES) {
     }
   }
   assert.ok(vocabulary.checked.version && vocabulary.checked.on && vocabulary.checked.against, `${vocabulary.harness} says what its names were checked against`)
-  for (const kind of ["shell", "read", "edit", "search"] as const)
-    assert.ok(nativeToolNames(vocabulary.harness, kind).length > 0, `${vocabulary.harness} declares a ${kind} tool`)
+  for (const kind of ["shell", "read", "edit", "search"] as const) {
+    const declared = nativeToolNames(vocabulary.harness, kind).length > 0
+    // A kind the harness has no tool for says so, and what it does instead; it can't both have one and lack it.
+    assert.ok(declared !== Boolean(vocabulary.lacks?.[kind]), `${vocabulary.harness} declares a ${kind} tool, or says why it has none`)
+  }
 }
 console.log(`harness vocabulary: ${VOCABULARIES.length} harnesses, one spelling per tool`)
 

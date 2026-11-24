@@ -14,6 +14,7 @@ import { antigravityInstall } from "./install.js"
 import { antigravityAccounts } from "./accounts.js"
 import { antigravityAcp as acp } from "./acp.js"
 import { antigravityProfile } from "./profile.js"
+import { antigravityUsageHistory } from "./usage-history.js"
 
 const skillRoot = (folder: string) => join(process.env.GEMINI_HOME ?? join(homedir(), ".gemini"), folder, "skills")
 export const installAntigravity: ProviderModule = (host, context) => {
@@ -65,7 +66,7 @@ export const installAntigravity: ProviderModule = (host, context) => {
     mcpEditing: antigravityMcpEditing,
     nativeRunner: notBuilt("Unattended work uses the ACP driver."),
     processProbe: antigravityProbe,
-    usageHistory: notBuilt("Mako reads usage from the running session."),
+    usageHistory: antigravityUsageHistory(context.stores),
     artifactPreview: notBuilt("Mako does not collect the agent's brain directory."),
     connection: lacks("Sign-in uses the agent's own ACP authentication."),
     updates: { provider: acp.provider, binary: (env) => resolveExecutable("agy", env),

@@ -6,6 +6,8 @@ import { basename, dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { z } from "zod"
 import type { Entry, ThreadRef } from "../format.js"
+import { agyStoredTokens, type ProtoFields } from "../harnesses/antigravity.js"
+import { tokenSum, type HarnessTokens } from "../harnesses/tokens.js"
 import type { NativeStores } from "../read-only-sqlite.js"
 import type { NativeFile, SessionProvider } from "./types.js"
 
@@ -25,13 +27,66 @@ export function agyConversationPath(env: NodeJS.ProcessEnv, id: string): string 
 }
 
 function bytesField(bytes: Uint8Array, field: number): Uint8Array | undefined {
+  return messageFields(bytes).bytes.get(field)?.[0]
+}
+
+/** A protobuf message's fields by number, its varints apart from its length-delimited values; fixed-width ones skipped. */
+function messageFields(bytes: Uint8Array): ProtoFields {
+  const varints = new Map<number, number>()
+  const delimited = new Map<number, Uint8Array[]>()
   const reader = new BinaryReader(bytes)
   while (reader.pos < reader.len) {
     const [number, type] = reader.tag()
-    if (number === field && type === WireType.LengthDelimited) return reader.bytes()
-    reader.skip(type, number)
+    if (type === WireType.Varint) {
+      const value = Number(reader.uint64())
+      if (!varints.has(number)) varints.set(number, value)
+    } else if (type === WireType.LengthDelimited) delimited.set(number, [...delimited.get(number) ?? [], reader.bytes()])
+    else reader.skip(type, number)
   }
-  return undefined
+  return { varints, bytes: delimited }
+}
+
+const NO_FIELDS: ProtoFields = { varints: new Map(), bytes: new Map() }
+const numberAt = (fields: ProtoFields, field: number) => fields.varints.get(field) ?? 0
+const messageAt = (fields: ProtoFields, field: number): ProtoFields => {
+  const bytes = fields.bytes.get(field)?.[0]
+  return bytes ? messageFields(bytes) : NO_FIELDS
+}
+const textAt = (fields: ProtoFields, field: number) => {
+  const bytes = fields.bytes.get(field)?.[0]
+  return bytes ? new TextDecoder().decode(bytes).trim() : ""
+}
+/** A `google.protobuf.Timestamp`'s instant, in epoch ms. */
+const instantAt = (fields: ProtoFields) => numberAt(fields, 1) * 1000 + Math.floor(numberAt(fields, 2) / 1e6) || undefined
+
+/** One model call's spend as the CLI's store keeps it, under the ids it gives the call. */
+export interface AgyStoredCall {
+  ids: string[]
+  model: string
+  at?: number
+  tokens: HarnessTokens
+}
+
+/**
+ * The calls one row of a conversation's database records. A step's `metadata`
+ * holds its call's usage (9), each retry's (28, under 2), the model (24) and
+ * when (8, else 1); a `gen_metadata` row holds the same under 1, as usage (4),
+ * retries (17, under 2), the model's names (19, 21) and when (9, under 4). A
+ * call recorded both ways carries the same ids (11, 12, 7), so it counts once.
+ */
+export function agyStoredCalls(blob: Uint8Array, row: "step" | "generation"): AgyStoredCall[] {
+  const root = messageFields(blob)
+  const data = row === "step" ? root : messageAt(root, 1)
+  const model = row === "step" ? messageAt(data, 24) : data
+  const names = row === "step" ? [textAt(model, 12), textAt(model, 8)] : [textAt(model, 19), textAt(model, 21)]
+  const at = row === "step" ? instantAt(messageAt(data, 8)) ?? instantAt(messageAt(data, 1)) : instantAt(messageAt(messageAt(data, 9), 4))
+  const usages = [messageAt(data, row === "step" ? 9 : 4), ...(data.bytes.get(row === "step" ? 28 : 17) ?? [])
+    .map((retry) => messageAt(messageFields(retry), 2))]
+  return usages.flatMap((usage) => {
+    const tokens = agyStoredTokens(usage)
+    if (!tokenSum(tokens)) return []
+    return [{ ids: [11, 12, 7].map((field) => textAt(usage, field)).filter(Boolean), model: names.find(Boolean) ?? "", ...(at && { at }), tokens }]
+  })
 }
 
 function stepEntry(idx: number, kind: number, payload: Uint8Array): Entry {
@@ -55,6 +110,7 @@ const workspaces = z.array(z.string())
 const tableNames = z.array(z.object({ name: z.string() }))
 const summary = z.object({ title: z.string(), preview: z.string(), workspace_uris: z.string(), last_modified_time: z.string(), step_count: z.number() })
 const step = z.object({ idx: z.number(), step_type: z.number(), step_payload: z.instanceof(Uint8Array) })
+const metadataRow = z.object({ data: z.instanceof(Uint8Array) })
 export class AntigravityProvider implements SessionProvider {
   readonly harness = "antigravity"
   readonly displayName = "Antigravity"
@@ -117,6 +173,27 @@ export class AntigravityProvider implements SessionProvider {
         entries.push(stepEntry(row.idx, row.step_type, row.step_payload))
       }
       return { ref, entries }
+    } finally { db.close() }
+  }
+  /**
+   * The calls a conversation's database records, as `agyStoredCalls` reads its
+   * steps and generations, one row's at a time: a generation's row can hold
+   * megabytes of context, so a caller on the host's event loop yields between them.
+   */
+  *calls(path: string): Generator<AgyStoredCall[]> {
+    if (!this.root(path)) return
+    const db = this.stores.open(path)
+    try {
+      const tables = new Set(tableNames.parse(db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all()).map(({ name }) => name))
+      const sources = [["steps", "step", "SELECT metadata AS data FROM steps WHERE metadata IS NOT NULL ORDER BY idx"],
+        ["gen_metadata", "generation", "SELECT data FROM gen_metadata ORDER BY idx"]] as const
+      for (const [table, row, query] of sources) {
+        if (!tables.has(table)) continue
+        for (const raw of db.prepare(query).iterate()) {
+          const blob = metadataRow.safeParse(raw).data?.data
+          if (blob) yield agyStoredCalls(blob, row)
+        }
+      }
     } finally { db.close() }
   }
   async records(path: string) {
