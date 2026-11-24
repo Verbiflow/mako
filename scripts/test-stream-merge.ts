@@ -110,7 +110,7 @@ for (const harness of (await readdir(FIXTURE_ROOT)).sort()) {
     assert.deepEqual(again.mismatches.map((item) => item.kind), merge.mismatches.map((item) => item.kind))
   }
 }
-assert.deepEqual([...harnesses].sort(), ["claude", "codex", "cursor", "devin", "grok", "opencode"], "every harness has pairs")
+assert.deepEqual([...harnesses].sort(), ["antigravity", "claude", "codex", "cursor", "devin", "grok", "opencode"], "every harness has pairs")
 assert.ok(named / entries > 0.97, `the merged entries name their frames (${named} of ${entries})`)
 console.log(`PASS: ${pairs} decode pairs on ${harnesses.size} harnesses merge into what their records draw plus ${supplied} declared stream-only entries and ${filled} calls the record left empty; ${named} of ${entries} replies and markers name their frames; the only differences reported are the pairs' known ones (${[...reported].map(([key, count]) => `${key} ${count}`).join(", ") || "none"}); merging again changes nothing`)
 

@@ -195,6 +195,7 @@ export function declareHarnessMethods(methods: MethodTable, { harnesses, appRoot
   methods.handle("mako:account-login-wait", (id: string) => logins.wait(id))
   methods.handle("mako:account-login-code", (id: string, code: string) => logins.submitCode(id, code))
   methods.handle("mako:account-login-cancel", (id: string) => logins.cancel(id))
+  methods.handle("mako:account-add-key", (harness: AccountHarness, key: string) => accounts.addApiKey(harness, key))
   methods.handle("mako:account-capture", (harness: AccountHarness, name: string) => accounts.capture(harness, name))
   methods.handle("mako:account-select", (harness: AccountHarness, name: string | null) => accounts.select(harness, name))
   methods.handle("mako:account-remove", (harness: AccountHarness, name: string) => accounts.remove(harness, name))

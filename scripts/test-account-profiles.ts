@@ -631,6 +631,26 @@ setInterval(() => {}, 1000);
     await assert.rejects(readCodexCredentials(nativeCodex), /backend yet/)
   }
   console.log("PASS: in-app sign-in (cancel, failure, code entry, status check, duplicate), signing in again (in place, failed, as someone else), Cursor per-account keys, Grok per-account auth files, Devin's terminal code sign-in, hidden unfinished profiles, the ordinary login as default whatever the shell exported, saved profiles, exact-environment revisions across six adapters, native refresh preservation, and Codex native/managed storage isolation")
+
+  const keyContext = detachedHarnessContext(nativeStores, join(root, "key-data"), join(root, "key-accounts"))
+  const keyHost = createHarnessHost({ ...keyContext, secrets: { ...keyContext.secrets, secrets: memorySecrets() } })
+  for (const [provider, variable] of Object.entries({ antigravity: "GEMINI_API_KEY", claude: "ANTHROPIC_API_KEY", grok: "XAI_API_KEY" })) {
+    const key = "fixture-key-" + provider
+    await keyHost.accounts.addApiKey(provider, key)
+    const launch = await keyHost.accounts.launch(provider, { HOME: root, GOOGLE_GEMINI_BASE_URL: "https://example.invalid" })
+    assert.equal(launch.env[variable], key)
+    const adapter = keyHost.accountCapabilities.get(provider)!
+    const listed = await adapter.listAccounts(launch.account.name)
+    assert.equal(listed.find(account => account.active)?.authType, "api")
+    assert.ok(!JSON.stringify(listed).includes(key))
+    if (provider === "antigravity") {
+      assert.equal(launch.env.GOOGLE_GEMINI_BASE_URL, undefined)
+      assert.equal(launch.env.MAKO_AGY_DATA_DIRECTORY, "mako-antigravity-" + launch.account.name)
+    }
+    await keyHost.accounts.select(provider, null)
+    await keyHost.accounts.remove(provider, launch.account.name)
+    assert.ok(!(await adapter.listAccounts(null)).some(account => account.name === launch.account.name))
+  }
 } finally {
   for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key]
   Object.assign(process.env, original)

@@ -1,4 +1,5 @@
 import { join } from "node:path"
+import { AntigravityProvider } from "./providers/antigravity.js"
 import { ClaudeProvider } from "./providers/claude.js"
 import { CodexProvider } from "./providers/codex.js"
 import { CursorProvider } from "./providers/cursor.js"
@@ -57,5 +58,6 @@ export const SAVED_HISTORY_READERS: readonly SavedHistoryReader[] = [
   (_stores, place) => new GrokProvider(place?.home),
   (stores, place) => new OpenCodeProvider(stores, place?.home),
   (stores, place) => new DevinLocalProvider(stores, place && join(place.home, DEVIN_APP_USER)),
+  (stores, place) => new AntigravityProvider(stores, place && join(place.home, ".gemini")),
   (stores, place) => new DevinCliProvider(stores, place?.home),
 ]

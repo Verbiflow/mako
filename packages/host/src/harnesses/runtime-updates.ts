@@ -506,7 +506,7 @@ export class RuntimeUpdates {
           next.description = policy.description
           next.primary = policy.primary
         }
-        const { npmRoot, ...placement } = resolveRuntimeChannel(policy, binary, real)
+        const { npmRoot, ...placement } = resolveRuntimeChannel(policy, binary, real, env)
         Object.assign(next, placement)
         if (npmRoot) this.npmRoots.set(provider, npmRoot)
         else this.npmRoots.delete(provider)
@@ -1163,7 +1163,8 @@ function npmRootOf(path: string): NpmRoot | undefined {
 export function resolveRuntimeChannel(
   source: RuntimeUpdateSource,
   binary: string,
-  real: string
+  real: string,
+  env: NodeJS.ProcessEnv = process.env,
 ): RuntimePlacement {
   const paths = [binary, real]
   const normalized = paths.map((path) => path.replaceAll("\\", "/"))
@@ -1176,7 +1177,7 @@ export function resolveRuntimeChannel(
     if (app) return { channel: "app", managedBy: app[1] }
   }
   const native = source.native
-  if (native && paths.some((path) => native.ownsPath(path)))
+  if (native && paths.some((path) => native.ownsPath(path, env)))
     return {
       channel: "self",
       update: { label: native.label, command: binary, args: native.args },

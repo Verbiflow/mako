@@ -51,6 +51,7 @@ interface AccountCapabilityBase
 
 interface SelectableAccounts extends AccountCapabilityBase {
   mode: "selectable"
+  addApiKey?(name: string, key: string): Promise<void>
   /** Copy the CLI's current login into a named profile. Adapters whose logins refresh in place leave this out. */
   captureAccount?(name: string): Promise<void>
   /** Forget the profile here; a key Mako minted for it is revoked at the provider first. */

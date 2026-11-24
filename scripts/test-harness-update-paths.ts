@@ -154,8 +154,8 @@ try {
       }
       const native = policy.native
       if (native) {
-        const candidates = [".local/bin/claude", ".local/share/cursor-agent/versions/1/cursor-agent", ".grok/bin/grok", ".opencode/bin/opencode", ".local/share/devin/cli/1/devin", `.local/bin/${name}`]
-        const own = candidates.map((each) => join(scratch, key.replace(":", "-"), "home", each)).find((path) => native.ownsPath(path))
+        const candidates = [".local/bin/agy", ".local/bin/agy.exe", ".local/bin/claude", ".local/share/cursor-agent/versions/1/cursor-agent", ".grok/bin/grok", ".opencode/bin/opencode", ".local/share/devin/cli/1/devin", `.local/bin/${name}`]
+        const own = candidates.map((each) => join(env.HOME!, each)).find((path) => native.ownsPath(path, env))
         assert.ok(own, `${key}: its own updater's install root (native.ownsPath) is placed here; add a path it owns to this list`)
         placements.push({ kind: "self", binary: await placed(own), real: own })
       }

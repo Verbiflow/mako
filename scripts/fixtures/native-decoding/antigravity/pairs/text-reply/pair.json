@@ -1,0 +1,14 @@
+{
+  "harness": "antigravity",
+  "native": {
+    "version": "1.5.15"
+  },
+  "about": "The official ACP worker answers through a local Gemini-compatible fixture. The native database retains only the recorded message fields.",
+  "stores": [
+    {
+      "reader": "antigravity",
+      "path": ".gemini/mako-antigravity-key/conversations/b031c61c-4843-4e41-9d69-b7f1b0c35c08.db",
+      "known": []
+    }
+  ]
+}

@@ -7,6 +7,7 @@ interface AuthenticationFlow<Value> {
   open(): Promise<Value>
   authenticate(methodId: string): Promise<void>
   select(methods: AuthMethod[]): Promise<string | null>
+  configured?: string
   methods: AuthMethod[]
   signal: AbortSignal
   /** Nobody is here to choose a sign-in (`ProviderStartOptions.unattended`): a session that needs one fails at once. */
@@ -17,6 +18,13 @@ export async function openAuthenticatedSession<Value>(
   flow: AuthenticationFlow<Value>
 ): Promise<Value> {
   flow.signal.throwIfAborted()
+  if (flow.configured) {
+    if (!flow.methods.some((method) => method.id === flow.configured))
+      throw new HostFailureError("auth", "The agent does not support the configured sign-in method.")
+    await untilStopped(flow.authenticate(flow.configured), flow.signal)
+    flow.signal.throwIfAborted()
+    return untilStopped(flow.open(), flow.signal)
+  }
   try {
     const session = await untilStopped(flow.open(), flow.signal)
     flow.signal.throwIfAborted()

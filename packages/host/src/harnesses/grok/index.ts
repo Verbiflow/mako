@@ -12,7 +12,8 @@ import { grokProcessProbe } from "./process-probe.js"
 import { grokProfileLoader } from "./profile.js"
 import { grokSkillSource } from "./skills.js"
 import { createGrokConnection } from "./connection.js"
-import { grokAccountCapability } from "./accounts.js"
+import { withApiKeyAccounts } from "../api-key-accounts.js"
+import { grokKeyEnvironment, grokAccountCapability } from "./accounts.js"
 import { npmInstall, scriptInstall } from "../update-source.js"
 import { GROK_VERSIONS } from "./versions.js"
 import { grokUsageHistory } from "./usage-history.js"
@@ -77,7 +78,7 @@ export const installGrok: ProviderModule = (host, context) => {
     live: createAcpLiveDriver(acp, host, context),
     decoder: acpDecoderSource(acp),
     profile,
-    accounts: grokAccountCapability(host.accounts.root, host.discovery),
+    accounts: withApiKeyAccounts(grokAccountCapability(host.accounts.root, host.discovery), host.accounts.root, context.secrets.secrets, grokKeyEnvironment),
     acp,
     nativeRunner: grokNativeRunner,
     processProbe: grokProcessProbe,

@@ -411,3 +411,11 @@ export function grokAccountCapability(root: AccountRoot, processes: DiscoveryPro
     cloudSignIn: grokCloudSignIn,
   }
 }
+
+/** A key session cannot pick up the active Grok subscription's session token. */
+export async function grokKeyEnvironment(key: string, base: NodeJS.ProcessEnv, dir: string): Promise<NodeJS.ProcessEnv> {
+  const env = { ...base }
+  for (const variable of AUTH_ENV) delete env[variable]
+  await mkdir(dir, { mode: 0o700, recursive: true })
+  return { ...env, XAI_API_KEY: key, GROK_AUTH_PATH: join(dir, "auth.json") }
+}

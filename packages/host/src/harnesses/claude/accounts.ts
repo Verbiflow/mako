@@ -749,3 +749,14 @@ const ClaudePrincipal = z.object({
 const ClaudeAccount = z.object({
   oauthAccount: z.object({ accountUuid: z.string().optional(), organizationUuid: z.string().optional() }).optional(),
 })
+
+/** An explicit Anthropic key uses Claude Code's public API endpoint. */
+export async function claudeKeyEnvironment(key: string, base: NodeJS.ProcessEnv, dir: string): Promise<NodeJS.ProcessEnv> {
+  const env = nativeEnv(base)
+  const home = defaultHome(env)
+  await assertProfileSettings(home)
+  await mkdir(dir, { recursive: true, mode: 0o700 })
+  await mkdir(join(home, "projects"), { recursive: true, mode: 0o700 })
+  await ensureSharedLinks(home, dir, SHARED_LINKS)
+  return { ...env, CLAUDE_CONFIG_DIR: dir, ANTHROPIC_API_KEY: key, ANTHROPIC_BASE_URL: "https://api.anthropic.com" }
+}

@@ -235,7 +235,10 @@ console.log("Seventh harness: one definition reaches its name, mark, defaults, o
 // The session flows, against a seventh definition whose ACP agent is scripted
 // (`fixtures/stand-in-harness.mjs`): each flow it declares passes, and each
 // other one is skipped with the reason its definition gives.
-const flows = spawnSync(process.execPath, ["scripts/test-session-flows.mjs", "--stand-in"], { encoding: "utf8", timeout: 5 * 60_000 })
+// This parent reads the report after the child exits and removes its scratch directory below.
+const flows = spawnSync(process.execPath, ["scripts/test-session-flows.mjs", "--stand-in"], {
+  encoding: "utf8", timeout: 5 * 60_000, env: { ...process.env, MAKO_KEEP_TEST_SCRATCH: "1" },
+})
 const flowsRoot = /^Session flows: (.+)$/m.exec(flows.stdout)?.[1]
 try {
   assert.equal(flows.status, 0, `${flows.stdout}\n${flows.stderr}`)

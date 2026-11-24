@@ -6,6 +6,7 @@ import { installedAppRoot } from "../base/host-environment.js"
 import { MachineAbsentError } from "../base/machine.js"
 import { detachedSecrets } from "../base/host-secrets.js"
 import { unwatchedWork } from "../base/event-loop.js"
+import { installAntigravity } from "./antigravity/index.js"
 import { installClaude } from "./claude/index.js"
 import { installCodex } from "./codex/index.js"
 import { installCursor } from "./cursor/index.js"
@@ -28,6 +29,7 @@ export const harnessModules: readonly ProviderModule[] = [
   installOpenCode,
   installGrok,
   installDevin,
+  installAntigravity,
 ]
 
 /** A provider host with every harness Mako ships installed on it. */

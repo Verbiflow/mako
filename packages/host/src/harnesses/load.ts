@@ -13,5 +13,6 @@ export const harnessesLoad = [
   () => import("./grok/index.js"),
   () => import("./devin/index.js"),
   () => import("./cursor/index.js"),
+  () => import("./antigravity/index.js"),
   () => import("./index.js"),
 ] as const

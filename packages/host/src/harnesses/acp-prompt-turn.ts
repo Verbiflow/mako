@@ -29,6 +29,10 @@ export class AcpPromptTurn {
     if (this.acceptsSteering) this.canceled = true
   }
 
+  failed(reason: string): void {
+    this.result = { kind: "failed", error: reason }
+  }
+
   async send(prompt: () => Promise<PromptResponse>, kind: "prompt" | "steer" = "prompt"): Promise<void> {
     if (this.closed) throw new Error("This ACP turn has finished")
     if (this.canceled) throw new Error("This ACP turn is stopping")

@@ -56,6 +56,7 @@ export const SHUTDOWN_GRACE_MS = 5_000
  * it, and a journal read later heals the same (`endedTurnsOnRead`).
  */
 export type BackgroundStop =
+  | { kind: "unobserved"; reason: string }
   | { kind: "ends-on-stop"; how: string }
   | { kind: "ends-with-turn"; evidence: string }
 

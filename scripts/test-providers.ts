@@ -1,3 +1,4 @@
+import { antigravityCatalog } from "@mako/host/harnesses/antigravity/profile"
 import { claudeRuntime } from "@mako/host/harnesses/claude/runtime"
 import { OPENCODE_OLDEST } from "@mako/host/harnesses/opencode/version"
 import {
@@ -583,8 +584,16 @@ assert.deepEqual(
 )
 assert.deepEqual(
   providerHost.acpSources.list().map((source) => source.provider),
-  ["grok", "devin"]
+  ["grok", "devin", "antigravity"]
 )
+const antigravityPicker = {
+  id: "model", name: "Model", category: "model", type: "select", currentValue: "gemini-3.1-pro",
+  options: [{ value: "gemini-3.1-pro", name: "Gemini 3.1 Pro" }],
+} as const
+const catalogWith = (options: Array<{ value: string; name: string }>) =>
+  antigravityCatalog({ configOptions: [{ ...antigravityPicker, options }] })
+assert.equal(catalogWith([...antigravityPicker.options]).settings?.model, "gemini-3.1-pro")
+assert.equal(catalogWith([...antigravityPicker.options, { value: "gemini-nano", name: "Gemini Nano" }]).settings?.model, "gemini-nano")
 assert.equal(providerHost.liveDrivers.get("opencode")?.resume.kind, "native")
 assert.equal(providerHost.liveDrivers.get("opencode")?.nativeAgents.kind, "observed")
 assert.deepEqual(
@@ -633,6 +642,7 @@ assert.deepEqual(
     ["opencode", "observed"],
     ["grok", "selectable"],
     ["devin", "selectable"],
+    ["antigravity", "selectable"],
   ]
 )
 assert.equal(

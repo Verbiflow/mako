@@ -96,7 +96,7 @@ export interface RuntimeUpdateSource {
   native?: {
     label: string
     args: string[]
-    ownsPath(path: string): boolean
+    ownsPath(path: string, env?: NodeJS.ProcessEnv): boolean
     /** Never run a moving channel target; require a verified public version. */
     pinVersion?: boolean
     /**

@@ -1,3 +1,4 @@
+import { isApiKeyAccount } from "./api-key-accounts.js"
 import type { AccountProvider, AccountUsage, HarnessAccount, ResetCreditOutcome } from "../contracts/accounts.js"
 import { hasReset, nextReset } from "../contracts/account-usage.js"
 import type { ProviderAccountCapability } from "./account-capability.js"
@@ -136,7 +137,7 @@ export class AccountUsageReadings {
    */
   async useResetCredit(harness: AccountProvider, name: string, attempt: string): Promise<ResetCreditOutcome> {
     const capability = this.capabilities.get(harness)
-    if (!capability?.useResetCredit)
+    if (!capability?.useResetCredit || isApiKeyAccount(name))
       throw new Error(`${capability?.label ?? harness} has no reset credits to use`)
     try {
       return await capability.useResetCredit(name, attempt)

@@ -5,7 +5,8 @@ import { createClaudeCommands, createClaudeHooks, createClaudeMcpEditing } from 
 import type { ProviderModule } from "../host.js"
 import { createClaudeLiveDriver } from "./live-driver.js"
 import { claudeDecoderSource } from "./decoder-source.js"
-import { claudeAccountCapability } from "./accounts.js"
+import { withApiKeyAccounts } from "../api-key-accounts.js"
+import { claudeKeyEnvironment, claudeAccountCapability } from "./accounts.js"
 import { claudeMcpSource } from "./mcp.js"
 import { claudeNativeRunner } from "./native-runner.js"
 import { claudeProcessProbe } from "./process-probe.js"
@@ -63,7 +64,7 @@ export const installClaude: ProviderModule = (host, context) => installHarness(h
   live: createClaudeLiveDriver(context, host.accounts.root),
   decoder: claudeDecoderSource,
   profile: createClaudeProfileLoader(host.discovery),
-  accounts: claudeAccountCapability(host.accounts.root),
+  accounts: withApiKeyAccounts(claudeAccountCapability(host.accounts.root), host.accounts.root, context.secrets.secrets, claudeKeyEnvironment),
   acp: lacks("Runs on the Claude Agent SDK"),
   nativeRunner: claudeNativeRunner,
   processProbe: claudeProcessProbe,

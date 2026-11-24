@@ -245,6 +245,12 @@ export const accounts = {
     }
   },
 
+  async addKey(harness: AccountHarness, key: string) {
+    await getMako().addAccountKey(harness, key)
+    accounts.load(true)
+    await providers.refreshAccount(harness)
+  },
+
   async select(harness: AccountHarness, name: string) {
     const key = usageKey(harness, name)
     if (accountsStore.get().busy) return

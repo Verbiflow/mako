@@ -357,6 +357,13 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
     "defaults": {
       "work": [
         {
+          "model": "gpt-6.2-sol",
+          "options": {
+            "effort": "medium",
+            "serviceTier": "default"
+          }
+        },
+        {
           "model": "gpt-6.1-sol",
           "options": {
             "effort": "medium",
@@ -1892,6 +1899,273 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
           "state": "absent",
           "by": "harness",
           "reason": "Devin has no code mode; each tool is its own call."
+        }
+      }
+    },
+    "unique": []
+  },
+  {
+    "provider": "antigravity",
+    "displayName": "Antigravity",
+    "presentation": {
+      "mark": {
+        "viewBox": "0 0 24 24",
+        "tint": "#4285F4",
+        "paths": [
+          {
+            "d": "M21.751 22.607c1.34 1.005 3.35.335 1.508-1.508C17.73 15.74 18.904 1 12.037 1 5.17 1 6.342 15.74.815 21.1c-2.01 2.009.167 2.511 1.507 1.506 5.192-3.517 4.857-9.714 9.715-9.714 4.857 0 4.522 6.197 9.714 9.715z"
+          }
+        ]
+      }
+    },
+    "defaults": {
+      "work": [],
+      "none": "Use Gemini Nano when the account offers it, otherwise the agent's selected model."
+    },
+    "resumable": false,
+    "capabilities": {
+      "resume": {
+        "state": "implemented",
+        "via": "ACP session/load reopens the conversation by its ID."
+      },
+      "residency": {
+        "state": "implemented",
+        "via": "Mako closes the process of an idle conversation, past the idle timeout or the warm pool, and never while a turn, approval, background task or subagent runs. The next message opens the saved Antigravity session."
+      },
+      "turnRecovery": {
+        "state": "implemented",
+        "via": "Accepted: The agent's first output of the turn, or the session/prompt response when nothing streams first. Exit: The connection's close aborts the turn, whose failed result then waits for the process exit, which settles the session failed and disconnected in one update, with the session's source located by its ID."
+      },
+      "fork": {
+        "state": "implemented",
+        "via": "Mako starts a fresh Antigravity session with the retained turns."
+      },
+      "steering": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Messages wait for the active ACP prompt to finish."
+      },
+      "compaction": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Mako has no completion receipt for Antigravity's /compact command."
+      },
+      "planning": {
+        "state": "implemented",
+        "via": "Its plan mode; the plan reaches Mako through A completed implementation_plan.md artifact that requests feedback.. A reply to it is the next message: An ACP permission answer carries the selected option."
+      },
+      "approvals": {
+        "state": "implemented",
+        "via": "The harness asks; Mako sees only that its answer was submitted."
+      },
+      "questions": {
+        "state": "implemented",
+        "via": "Antigravity sends choices through ACP permission requests.",
+        "asks": "request"
+      },
+      "modes": {
+        "state": "implemented",
+        "via": "ACP `session/set_mode`."
+      },
+      "nativeAgents": {
+        "state": "absent",
+        "by": "mako",
+        "reason": "ACP tool updates do not identify a child session."
+      },
+      "backgroundStop": {
+        "state": "absent",
+        "by": "mako",
+        "reason": "Antigravity does not report background task lifetimes over ACP."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "ACP's `usage_update` carries the context used and its size, nothing itemized."
+      }
+    },
+    "usage": {
+      "context": {
+        "state": "implemented",
+        "via": "The used tokens in an ACP usage update."
+      },
+      "window": {
+        "state": "implemented",
+        "via": "The context size in the same update."
+      },
+      "compaction": {
+        "state": "absent",
+        "by": "mako",
+        "reason": "Mako does not measure the context after /compact."
+      },
+      "tokens": {
+        "state": "implemented",
+        "via": "Token usage on the ACP prompt response."
+      },
+      "cost": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "Antigravity reports token counts without a billed amount."
+      },
+      "missedCalls": {
+        "state": "absent",
+        "by": "mako",
+        "reason": "Mako has no count of unreported calls."
+      },
+      "resetCredits": {
+        "state": "absent",
+        "by": "mako",
+        "reason": "Mako does not read Google reset credits."
+      },
+      "balance": {
+        "state": "absent",
+        "by": "mako",
+        "reason": "Mako does not read the Google billing balance."
+      },
+      "limitSwitch": {
+        "state": "absent",
+        "by": "mako",
+        "reason": "Mako does not read account limit windows."
+      },
+      "toolSpend": {
+        "state": "absent",
+        "by": "mako",
+        "reason": "Mako does not attribute model tokens to individual tools."
+      },
+      "contextBreakdown": {
+        "state": "absent",
+        "by": "harness",
+        "reason": "ACP's `usage_update` carries the context used and its size, nothing itemized."
+      },
+      "outsideMako": {
+        "state": "absent",
+        "by": "mako",
+        "reason": "Mako reads usage from the running session., so only its sessions in Mako are counted."
+      }
+    },
+    "artifacts": {
+      "state": "absent",
+      "by": "mako",
+      "reason": "Mako does not collect the agent's brain directory."
+    },
+    "features": {
+      "goals": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako asks the agent to continue after each turn until it reports the goal met or says what it needs, or until the goal's tokens reach its budget."
+        }
+      },
+      "review": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako asks the agent to review the changes without editing them and to end its reply with the findings as data, which the transcript shows as the review's card."
+        }
+      },
+      "sideQuestions": {
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako does not open a separate Antigravity session for side questions."
+        }
+      },
+      "scheduledPrompts": {
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako does not schedule Antigravity prompts."
+        }
+      },
+      "cloudRuns": {
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "This integration launches the local ACP agent."
+        }
+      },
+      "backgroundSessions": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako runs every conversation in its host, with no terminal open."
+        }
+      },
+      "fileRewind": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Rewind restores Mako's workspace checkpoint from before the turn."
+        }
+      },
+      "worktrees": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "A Thread moves into a worktree of its own, and its conversations run there."
+        }
+      },
+      "computerUse": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's browser and computer control, through its `mako-computer` MCP server."
+        }
+      },
+      "notifications": {
+        "mako": {
+          "state": "implemented",
+          "through": "mako",
+          "via": "Mako's desktop notifications."
+        }
+      },
+      "folderTrust": {
+        "mako": {
+          "state": "default",
+          "reason": "The CLI applies its workspace configuration."
+        }
+      },
+      "editApprovals": {
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "The client returns an option from the agent's permission request."
+        }
+      },
+      "plugins": {
+        "mako": {
+          "state": "default",
+          "reason": "Antigravity loads installed plugins."
+        }
+      },
+      "responseStyle": {
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako does not set a response style."
+        }
+      },
+      "webSearch": {
+        "native": {
+          "name": "search_web",
+          "where": "its `search_web` tool"
+        },
+        "mako": {
+          "state": "implemented",
+          "through": "harness",
+          "via": "Its tool rows in the transcript."
+        }
+      },
+      "imageGeneration": {
+        "mako": {
+          "state": "default",
+          "reason": "The agent can report image generation as ACP tool calls."
+        }
+      },
+      "codeMode": {
+        "mako": {
+          "state": "absent",
+          "by": "mako",
+          "reason": "Mako does not decode a separate code mode."
         }
       }
     },

@@ -2015,10 +2015,10 @@ export function installMockBridge() {
       // after something is pasted. The Devin account selected here no longer
       // exists, as when its folder was deleted outside Mako.
       const providers = [
-        { provider: "claude", label: "Claude Code", mode: "selectable", loginCommand: "claude /login", nativeLogin: true },
-        { provider: "codex", label: "Codex", mode: "selectable", loginCommand: "codex login", nativeLogin: true },
+        { provider: "claude", label: "Claude Code", mode: "selectable", loginCommand: "claude /login", apiKey: true, nativeLogin: true },
+        { provider: "codex", label: "Codex", mode: "selectable", loginCommand: "codex login", apiKey: true, nativeLogin: true },
         { provider: "cursor", label: "Cursor", mode: "selectable", loginCommand: "cursor-agent login", nativeLogin: true },
-        { provider: "grok", label: "Grok", mode: "selectable", loginCommand: "grok login", nativeLogin: true },
+        { provider: "grok", label: "Grok", mode: "selectable", loginCommand: "grok login", apiKey: true, nativeLogin: true },
         { provider: "devin", label: "Devin", mode: "selectable", loginCommand: "devin auth login", nativeLogin: true },
         {
           provider: "opencode",
@@ -2027,6 +2027,7 @@ export function installMockBridge() {
           loginCommand: "opencode auth login",
           readOnlyReason: "OpenCode keeps its logins inside the database that holds its sessions, so a second OpenCode login would split your OpenCode history.",
         },
+        { provider: "antigravity", label: "Antigravity", mode: "selectable", loginCommand: "agy acp --login", apiKey: true },
       ] satisfies AccountProviderInfo[]
       const pasteKinds = new Map<string, NonNullable<AccountLogin["paste"]>>([["claude", "code"], ["grok", "address"], ["devin", "code"]])
       const pageUrls = new Map([
@@ -2167,6 +2168,11 @@ export function installMockBridge() {
       }
       return {
         accounts: async () => ({ providers, accounts: list }),
+        addAccountKey: async (harness) => {
+          const name = "key." + crypto.randomUUID()
+          list = [...list.map(account => account.harness === harness ? { ...account, active: false } : account),
+            { harness, name, dir: "", active: true, source: "mako", route: "managed", authType: "api" }]
+        },
         captureAccount: async () => {},
         selectAccount: async (harness: string, name: string | null) => {
           await new Promise((resolve) => setTimeout(resolve, 250))

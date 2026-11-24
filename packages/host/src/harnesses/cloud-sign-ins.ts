@@ -1,3 +1,4 @@
+import { isApiKeyAccount } from "./api-key-accounts.js"
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
@@ -308,8 +309,9 @@ export class CloudSignInSync {
           const harness = CloudSignInHarnessSchema.safeParse(capability.provider)
           const hold = capability.cloudSignIn?.mirror?.hold?.bind(capability.cloudSignIn.mirror)
           if (!harness.success || !hold || !this.#inStep[harness.data]) return
-          const env = (await this.#accounts.launch(harness.data, childProcessEnv(process.env), { trackCredential: false }).catch(() => undefined))?.env
-          if (!env) return
+          const launch = await this.#accounts.launch(harness.data, childProcessEnv(process.env), { trackCredential: false }).catch(() => undefined)
+          if (!launch || isApiKeyAccount(launch.account.name)) return
+          const env = launch.env
           await new Promise<void>((held) => {
             const holding = async () => {
               try {
@@ -501,6 +503,7 @@ export class CloudSignInSync {
   ): Promise<CloudSignInRow> {
     try {
       const launch = await this.#accounts.launch(harness, childProcessEnv(process.env), { trackCredential: false })
+      if (isApiKeyAccount(launch.account.name)) return { harness, status: "signed-out", label: null, expiresAt: null }
       const env = launch.env
       // A read that fails (a locked keychain, a file mid-write) is a problem to show, never a sign-out to pass on.
       const local = await adapter.chain(env)
@@ -680,7 +683,7 @@ export class CloudSignInSync {
     try {
       const read = async () => {
         const launch = await this.#accounts.launch(harness, childProcessEnv(process.env), { trackCredential: false })
-        return { name: launch.account.name, exported: await adapter.export(launch.env) }
+        return { name: launch.account.name, exported: isApiKeyAccount(launch.account.name) ? null : await adapter.export(launch.env) }
       }
       // A read that fails (a locked keychain, a file mid-write) is a problem to show, never a sign-out to pass on.
       let { name, exported } = await read()

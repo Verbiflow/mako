@@ -91,7 +91,7 @@ async function everyHarness(): Promise<void> {
     const providers = [...new Set(catalog.views.map((entry) => entry.provider))]
     assert.deepEqual(catalog.views.length, providers.length * FAMILIES.length)
     const absent = catalog.views.filter((entry) => entry.absent).map((entry) => `${entry.provider}:${entry.family}`).sort()
-    assert.deepEqual(absent, ["codex:commands", "cursor:commands", "devin:commands"], "only harnesses with no commands of their own lack a family")
+    assert.deepEqual(absent, ["antigravity:commands", "antigravity:hooks", "codex:commands", "cursor:commands", "devin:commands"], "families without an editor explain the reason")
     for (const entry of catalog.views) {
       if (entry.absent) { assert.ok(entry.absent.reason.length > 20, `${entry.provider} ${entry.family} says why`); continue }
       assert.ok(entry.precedence && entry.reload, `${entry.provider} ${entry.family} declares its order and reload`)
@@ -465,6 +465,15 @@ function text(): void {
 }
 
 text()
+const agyWorld = await authoringWorld("antigravity")
+try {
+  const servers = await view(agyWorld, "antigravity", "mcp")
+  const server = servers.entries.find(entry => entry.name === "museum")
+  assert.ok(server)
+  assert.equal(server.enabled, false)
+  assert.equal(server.mcp?.url, "https://example.invalid/mcp")
+} finally { await agyWorld.cleanup() }
+
 await everyHarness()
 await claude()
 await codex()

@@ -1,3 +1,4 @@
+import { isApiKeyAccount } from "../api-key-accounts.js"
 import { HostFailureError } from "../../contracts/provider-failure.js"
 import { z } from "zod"
 import { existsSync } from "node:fs"
@@ -20,6 +21,7 @@ import {
   credentialFingerprint,
   loginPending,
   principalFingerprint,
+  clearLoginPending,
   markLoginPending,
   managedAccountHome,
   recordAccountHome,
@@ -38,7 +40,7 @@ import type { JsonValue } from "../../contracts/json.js"
 import type { AccountLoginLaunch, AccountLoginTarget, SelectableAccountCapability } from "../account-capability.js"
 import { chatGptUsage } from "../chatgpt-usage.js"
 import { chainFingerprint, jwtExpiry, objectValue, placeSecret, removeSecret, replaceFile, WITHHELD, type CloudSignInCapability, type CloudSignInMirror } from "../cloud-sign-in.js"
-import { rpcRequest, withDiscoveryRpc } from "../profile-transport.js"
+import { rpcRequest, runDiscovery, withDiscoveryRpc } from "../profile-transport.js"
 import type { DiscoveryProcesses } from "../discovery-process.js"
 import { resolveCodexExecutable, type CodexExecutables } from "./executable.js"
 import { parseCodexRateLimits, parseResetOutcome } from "./rate-limits.js"
@@ -206,6 +208,7 @@ async function listAccounts(
         harness: "codex",
         name,
         email: await accountEmail(dir),
+        ...(isApiKeyAccount(name) && { authType: "api" as const }),
         dir,
         active: selection === name,
         source: "mako",
@@ -316,7 +319,7 @@ async function accountEnv(
       "The selected Codex account's login is unreadable. Sign in again in Settings → Agents."
     )
   const home = await managedAccountHome(dir, join(homedir(), HOME), "sessions")
-  await managedCodexConfig(home, dir, Boolean(parseCodexAuth(credentials).accessToken))
+  await managedCodexConfig(home, dir, isApiKeyAccount(selection) ? "openai-key" : Boolean(parseCodexAuth(credentials).accessToken))
   await shareHome(home, dir)
   env.CODEX_HOME = dir
   return env
@@ -473,13 +476,36 @@ export function codexAccountCapability(root: AccountRoot, processes: DiscoveryPr
     label: "Codex",
     loginCommand: "codex login",
     listAccounts: (selection) => listAccounts(root, selection),
+    async addApiKey(name, key) {
+      const dir = root.dir("codex", name)
+      const home = join(homedir(), HOME)
+      await mkdir(root.provider("codex"), { recursive: true, mode: 0o700 })
+      await mkdir(dir, { mode: 0o700 })
+      try {
+        await markLoginPending(dir)
+        await recordAccountHome(dir, home)
+        await managedCodexConfig(home, dir, "openai-key")
+        await shareHome(home, dir)
+        const env = childProcessEnv(process.env)
+        for (const variable of [...AUTH_ENV, ...ROUTING_ENV]) delete env[variable]
+        env.CODEX_HOME = dir
+        const executable = await resolveCodexExecutable(env, executables)
+        if (!executable) throw new Error("Install Codex to add an API key.")
+        await runDiscovery(processes, executable, ["login", "--with-api-key"], env, key + "\n")
+        if (!hasCredentials(await readFile(join(dir, "auth.json"), "utf8"))) throw new Error("Codex did not save the key.")
+        await clearLoginPending(dir)
+      } catch (error) {
+        await rm(dir, { recursive: true, force: true })
+        throw error
+      }
+    },
     captureAccount: (name) => captureAccount(root, name),
     prepareAccountLogin: (target) => prepareAccountLogin(root, target),
     removeAccount: (name) => removeAccount(root, name),
     accountEnv: (selection, base) => accountEnv(root, selection, base),
     selectedAccount: (selection, env) =>
       ({ name: selection ?? "default", dir: codexHome(env) }),
-    accountUsage: (name) => accountUsage(root, processes, name, executables),
+    accountUsage: (name) => isApiKeyAccount(name) ? Promise.resolve({ status: "unavailable", detail: "Usage is billed to your API key." }) : accountUsage(root, processes, name, executables),
     cloudSignIn: codexCloudSignIn,
     credentialRevision: async (name) => {
       const home = name === "default" ? join(homedir(), HOME) : null

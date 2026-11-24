@@ -48,6 +48,8 @@ export interface AcpLaunchOptions {
 }
 
 export interface AcpLaunch {
+  /** Explicit credential method to authenticate before opening even a cached session. */
+  authenticateWith?: string
   /** Asked of the executable only when initialize names no build: it omits agentInfo.version, or reports one that names none (`namesBuild`). */
   versionArgs?: string[]
   command: string
@@ -200,6 +202,10 @@ export type AcpSideQuestions =
   | DriverAbsent
 
 export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<AcpPlanDecoder>, Pick<ProviderLiveDriver, "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity" | "questions" | "goals" | "review"> {
+  /** Reads spend on the prompt reply for agents that report it there. */
+  promptUsage?(result: PromptResponse | JsonObject): UsageObservation[]
+  /** Checks the native store for a terminal executor failure added by this prompt. */
+  watchPromptFailure?(locate: () => string | undefined): () => string | undefined
   fork: AcpFork
   sideQuestions: AcpSideQuestions
   agents: AcpAgents
