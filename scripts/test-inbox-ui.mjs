@@ -224,6 +224,10 @@ async function checkWindow() {
   assert.deepEqual(items.filter((item) => item.kind === "fin").map((item) => item.fin).sort(), [...facts.fins].sort(), "one item per asking Fin")
   assert.ok(items.filter((item) => item.kind === "fin").every((item) => item.text.includes("Mobile polish")), "each Fin's item says where it is")
   await capture("desktop-inbox.png")
+  // Each ask's anatomy, which the phone's and the iPad's cards share (`web-client/fin-ask.tsx`): where it is, the
+  // question, the answers in a row.
+  const deskAnatomy = await evaluate(`[...document.querySelectorAll(${JSON.stringify('[data-inbox-section="needs"] [data-inbox-item][data-inbox-kind="fin"]')})].map((card) => ({ head: Boolean(card.querySelector('[data-ask-head]')), question: card.querySelector('[data-ask-question]')?.innerText.trim() ?? null, answers: Boolean(card.querySelector('[data-ask-answers] [data-fin-typed], [data-ask-answers] button')), order: [...card.querySelectorAll('[data-ask-head], [data-ask-question], [data-ask-answers]')].map((node) => Object.keys(node.dataset).find((key) => key.startsWith('ask'))) }))`)
+  assert.ok(deskAnatomy.length > 0 && deskAnatomy.every((card) => card.head && card.question && card.answers), `the desk's Inbox asks: ${JSON.stringify(deskAnatomy)}`)
   // Every Fin's question (a Thread's approval answers with its harness's own options) offers words of the person's own beside its options, or as its only answer: no ask is a dead end.
   const deskTyped = await evaluate(`[...document.querySelectorAll('[data-inbox-section="needs"] [data-inbox-item][data-inbox-kind="fin"]')].filter((node) => !node.querySelector('[data-inbox-answer="allow"]')).map((node) => Boolean(node.querySelector('[data-fin-typed]')))`)
   assert.ok(deskTyped.length > 0 && deskTyped.every(Boolean), `every question in the Inbox takes typed words: ${JSON.stringify(deskTyped)}`)
@@ -277,7 +281,10 @@ async function checkWindow() {
   await capture("phone-inbox.png")
   const phoneCards = await evaluate(`[...document.querySelectorAll('[data-inbox] [data-ask=fin]')].map((card) => ({ approval: card.dataset.finAsk === 'approval', typed: Boolean(card.querySelector('[data-fin-typed]')), open: card.querySelector('[data-fin-open]')?.textContent ?? null }))`)
   assert.ok(phoneCards.filter((card) => !card.approval).every((card) => card.typed), `a phone Inbox question takes typed words: ${JSON.stringify(phoneCards)}`)
-  assert.ok(phoneCards.every((card) => card.open?.startsWith("Open Mobile polish")), `every phone Inbox ask opens its Apex: ${JSON.stringify(phoneCards)}`)
+  assert.ok(phoneCards.every((card) => card.open === "Open"), `every phone Inbox ask opens its Apex, in the desk's word: ${JSON.stringify(phoneCards)}`)
+  const phoneAnatomy = await evaluate(`[...document.querySelectorAll(${JSON.stringify('[data-inbox] [data-ask=fin]')})].map((card) => ({ head: Boolean(card.querySelector('[data-ask-head]')), question: card.querySelector('[data-ask-question]')?.innerText.trim() ?? null, answers: Boolean(card.querySelector('[data-ask-answers] [data-fin-typed], [data-ask-answers] button')), order: [...card.querySelectorAll('[data-ask-head], [data-ask-question], [data-ask-answers]')].map((node) => Object.keys(node.dataset).find((key) => key.startsWith('ask'))) }))`)
+  assert.deepEqual(phoneAnatomy.map((card) => card.order), deskAnatomy.slice(0, phoneAnatomy.length).map((card) => card.order), `the phone's asks in the desk's anatomy: ${JSON.stringify(phoneAnatomy)}`)
+  assert.deepEqual(phoneAnatomy.map((card) => card.question).sort(), deskAnatomy.map((card) => card.question).filter((question) => phoneAnatomy.some((card) => card.question === question)).sort(), "and the same questions")
   console.log("PASS: the phone's Inbox asks take typed words and open their Apex")
   const phoneTarget = await evaluate(`(() => { const card = document.querySelector('[data-inbox] [data-ask=fin]'); const button = card.querySelector('[data-fin-answer="allow"], [data-fin-answer="0"]'); button.setAttribute('data-inbox-test', 'answer'); return card.dataset.fin })()`)
   await click('[data-inbox-test="answer"]')
