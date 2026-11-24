@@ -1,5 +1,6 @@
 import { AUTOMATIONS_PATH, CloudClaimSchema, CloudHookSchema, CloudRunsSchema, type CloudAutomation, type CloudClaim, type CloudHook, type CloudRun } from "@mako/protocol/automations-cloud"
 import { CLOUD_FIN_START_PATH, CLOUD_FINS_PATH, CloudFinAnswerSchema, type CloudFinPlace, CloudFinPlacedSchema, CloudFinStatusSchema, type CloudFinStart, type CloudFinStatus } from "@mako/protocol/cloud-fins"
+import { TREE_EDGES_PATH, TREE_NOTICES_PATH, TreeEdgeAnswerSchema, TreeEdgeAskSchema, TreeNoticeAnswerSchema, type TreeEdgeAnswer, type TreeEdgeAsk, type TreeNoticeAnswer } from "@mako/protocol/tree-notices"
 import { SOURCE_PROJECT_PATH, SourceProjectReceiptSchema, type SourceProjectCommand } from "@mako/protocol/source-project"
 import { stoppingSignal } from "../base/host-stopping.js"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
@@ -54,6 +55,7 @@ import {
   QUIET_PROJECT_LINK_VERSION,
   QUIET_OTHERS_LINK_VERSION,
   QUIET_PROJECT_FROM_LINK_VERSION,
+  TREE_NOTICES_LINK_VERSION,
 } from "@mako/protocol"
 import {
   CloudBrowserSessionSchema,
@@ -1242,6 +1244,32 @@ export class CloudAccounts {
     const response = await this.#call("devices.owner", "POST", `/v1/devices/${encodeURIComponent(deviceId)}/owner`, OwnerAskSchema.parse(ask), false, [404])
     if (response.status === 404) return "unserved"
     return OwnerAnswerSchema.parse(await response.json())
+  }
+
+  /** Whether the account holds Fins' notices, as far as this Mac knows: its runtime's link last agreed `TREE_NOTICES_LINK_VERSION`. */
+  holdsTreeNotices(): boolean {
+    return (this.#agreed ?? 0) >= TREE_NOTICES_LINK_VERSION
+  }
+
+  /**
+   * A notice of a Fin this Mac runs, posted to the account for its Apex's Session on this Mac's own credential
+   * (`TREE_NOTICES_PATH`): admitted or refused at once, a `rate` refusal saying how long to wait (`retry-after`, in
+   * seconds). `unserved` from a gateway with no path for a device's notices.
+   */
+  async postTreeNotice(notice: JsonValue): Promise<{ answer: TreeNoticeAnswer; retryAfterMs?: number } | "unserved"> {
+    const response = await this.#call("tree.notice", "POST", TREE_NOTICES_PATH, notice, false, [404])
+    if (response.status === 404) return "unserved"
+    const seconds = Number(response.headers.get("retry-after"))
+    return { answer: TreeNoticeAnswerSchema.parse(await response.json()), ...(Number.isFinite(seconds) && seconds > 0 && { retryAfterMs: Math.ceil(seconds * 1_000) }) }
+  }
+
+  /**
+   * The account's record of a Fin this Mac placed elsewhere, kept or ended (`TREE_EDGES_PATH`), which only the device
+   * that owns the Fin's Apex's Session is answered. `unserved` from a gateway that keeps no records.
+   */
+  async treeEdge(ask: TreeEdgeAsk): Promise<TreeEdgeAnswer | "unserved"> {
+    const response = await this.#call("tree.edge", "POST", TREE_EDGES_PATH, TreeEdgeAskSchema.parse(ask), false, [404])
+    return response.status === 404 ? "unserved" : TreeEdgeAnswerSchema.parse(await response.json())
   }
 
   /** This Mac's device in the account, while it's signed in. */

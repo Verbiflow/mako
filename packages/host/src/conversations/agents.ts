@@ -184,12 +184,12 @@ import type { ToolEffects } from "@mako/sessions/tool-effects"
 import { TurnWaits } from "./turn-waits.js"
 import { SHIVER_STEPS_MAX, SHIVER_WAIT, shiverWaitNote, shiverWaitSeconds, turnWaitItemKey, turnWaitItemWords, turnWaitDescription, turnWaitLine, turnWaitMovedNote, type ShiverFin, type TurnWait, type TurnWaitItem, type TurnWaitLine } from "../contracts/turn-waits.js"
 import { AFTER_WAIT, type TurnWaitInput, type TurnWaitResult } from "../contracts/thread-tools.js"
-import { AgentPlaces, placeName, type AwayRefused, type NoticePost, type OutboxNotice, type PlacedAsk, type PlaceLink, type ResolvedPlace } from "./agent-places.js"
+import { AgentPlaces, placeName, type AwayRefused, type NoticePost, type OutboxNotice, type PlacedAsk, type PlaceLink, type ResolvedPlace, type TreeAccount } from "./agent-places.js"
 import { checkedFinSource } from "./fin-source.js"
 import { CommittedFinSourceSchema, type CommittedFinSource } from "../contracts/fin-source.js"
 import { CloudFinStartSchema, cloudFinInputSha256, cloudFinThread, type CloudFinAnswer, type CloudFinPlace, type CloudFinPlaced, type CloudFinStart } from "@mako/protocol/cloud-fins"
 import { ContinueRepositorySchema } from "@mako/protocol/continues"
-import { TreeNoticeDeliverySchema } from "@mako/protocol/tree-notices"
+import { TreeEdgeSchema, TreeNoticeDeliverySchema, treeEdgeRefusalText, type TreeEdgeAsk } from "@mako/protocol/tree-notices"
 import type { PullOutcome, PullReading, PullWaitUntil } from "../contracts/pull-waits.js"
 import type { PullTarget as ReadTarget } from "../git/index.js"
 import { localWords } from "@mako/protocol/computer-words"
@@ -252,6 +252,8 @@ function isPullNote(request: Pick<LiveRequest, "actor">): boolean {
 }
 /** How often what waits looks again, for a limit the person raised or a Fin that ended unseen. */
 const ROOM_EVERY_MS = 10_000
+/** How soon an ask of the account's records that wasn't done is made again when its Fin is next heard of (`Agents.recordPlaced`). */
+const RECORD_RETRY_MS = 60_000
 /** The job that looks every `ROOM_EVERY_MS`. */
 export const ROOM_WATCH_JOB = "read this device's capacity"
 /** How long an ask its Apex may answer waits on the Apex alone before the person is asked too. */
@@ -434,6 +436,12 @@ export interface AgentsDeps {
    * (`NoticePost`). A device gives none, and sends each to that runtime itself.
    */
   post?: NoticePost
+  /**
+   * On a device: the account, for its trees (`TreeAccount`). With it this device keeps a record there of each Fin it
+   * places elsewhere, and posts there the notices of a Fin here whose Apex's device does the same, so a Fin's report
+   * reaches its Apex with the two devices never on at once. Without it every notice goes from device to device.
+   */
+  tree?: TreeAccount
   /** The Git remote `cwd`'s repository is a checkout of (its `origin`), which a Fin placed elsewhere works in a checkout of; undefined for a folder with none. */
   remoteOf?(cwd: string): Promise<string | undefined>
   /** A checkout of `remote` on this device for a Fin placed here: one it has, or a clone it makes; refused with why. */
@@ -551,7 +559,7 @@ interface Apex {
    * It runs on another device and calls for the Fins it placed here (`ApexCaller`): its device, its conversation there,
    * its access as this device bounds it, and the person's message its turn answers.
    */
-  away?: { device: string; conversation?: string; access: AccessTier; forwards?: string; epoch?: number }
+  away?: { device: string; conversation?: string; access: AccessTier; forwards?: string; epoch?: number; records?: true }
 }
 
 /**
@@ -625,7 +633,7 @@ const QueuedByApexSchema = z.object({
   conversation: z.string().optional(),
   source: CommittedFinSourceSchema.optional(),
   sourceRoot: z.string().optional(),
-  away: z.object({ device: z.string(), conversation: z.string().optional(), access: z.enum(ACCESS_TIER_NAMES), forwards: z.string().optional() }).optional(),
+  away: z.object({ device: z.string(), conversation: z.string().optional(), access: z.enum(ACCESS_TIER_NAMES), forwards: z.string().optional(), records: z.literal(true).optional() }).optional(),
 })
 const QueuedStartSchema = z.object({
   lead: QueuedByApexSchema,
@@ -936,6 +944,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly placedSending = new Map<string, number>()
   /** Those whose device said how they stand while one was on its way: asked again once it has settled (`touchPlaced`). */
   private readonly placedMissed = new Set<string>()
+  /** Asks of the account's records under way, by the Fin's start: one at a time each (`recordPlaced`). */
+  private readonly recording = new Map<string, Promise<void>>()
+  /** By start: when the account was last asked for a record it hasn't answered as done. */
+  private readonly recordAsked = new Map<string, number>()
   /** How each Fin here whose Apex is elsewhere stood when its device last said so, and this host's count of sayings (`standingOf`). */
   private readonly standingSaid = new Map<string, boolean>()
   private standingSeq = 0
@@ -1086,6 +1098,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       waiting: () => this.outbox(),
       taken: (report, at) => this.store()?.markReportsDelivered([report.id], at),
       ...(deps.post && { post: deps.post }),
+      ...(deps.tree && { account: deps.tree }),
       refused: (report, reason, at) => this.store()?.refuseNotice(report.id, reason, at),
       standing: (edge, report) => this.standingOf(edge, report),
       ...(deps.now && { now: deps.now }),
@@ -2071,7 +2084,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       version: ORCHESTRATION_VERSION,
       op,
       clientKey: input.clientKey,
-      parent: { device: self, thread: apex.thread, session: apex.session, ...(apex.conversation && { conversation: apex.conversation }), access: this.tierOf(apex) },
+      parent: { device: self, thread: apex.thread, session: apex.session, ...(apex.conversation && { conversation: apex.conversation }), access: this.tierOf(apex), ...(this.deps.tree?.open() && { records: true as const }) },
       brief: input.brief,
       name,
       ...(input.title && { title: input.title }),
@@ -3992,14 +4005,15 @@ export class Agents implements AgentOperations, ConversationChildren {
    * the Apex's (`start:{apexSession}:{clientKey}`), so a repeat answers the same Fin. Its access is at most the
    * Apex's and this device's ceiling for such Fins; its folder is a worktree of this device's checkout of the
    * project's remote, cloned when it has none; and its edge names its Apex there (`ThreadParent.remote`), so its
-   * reports go to that device's runtime.
+   * reports go to that device's runtime, or to the account where its Apex's device keeps a record of it
+   * (`RemoteParent.account`).
    */
   async place(input: AgentsPlaceInput): Promise<AgentsPlaced | AgentRefused> {
     const store = this.store()
     if (!store) return { refused: "unavailable", why: `${FIN_WORD}s need the Thread store, which didn't open on this device.` }
     if (input.version !== ORCHESTRATION_VERSION)
       return { refused: "unsupported", why: `This device speaks version ${ORCHESTRATION_VERSION} of placing ${FIN_WORD}s and the caller version ${input.version}. Update Mako on ${input.version > ORCHESTRATION_VERSION ? "this device" : "the caller's"}.` }
-    const caller: ApexCaller = { kind: "apex", device: input.parent.device, thread: input.parent.thread, session: input.parent.session, ...(input.parent.conversation && { conversation: input.parent.conversation }), access: input.parent.access }
+    const caller: ApexCaller = { kind: "apex", device: input.parent.device, thread: input.parent.thread, session: input.parent.session, ...(input.parent.conversation && { conversation: input.parent.conversation }), access: input.parent.access, ...(input.parent.records === true && { records: true as const }) }
     const apex = this.apexOf(caller)
     if ("refused" in apex) return apex
     if (input.op !== `start:${apex.session}:${input.clientKey}`) return { refused: "conflict", why: "A placed start's op is start:{its Apex's Session}:{its clientKey}." }
@@ -4173,16 +4187,63 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /**
    * This device is back on its account (its link opened, or its host started): each place holding Fins it placed is
-   * asked once how they stand, which is kept (`listAway`) and also tells that place this device hears again, so the
-   * notices it kept go now. A cloud Thread's machine asleep isn't woken to be asked: its notices wait with the
-   * account, which sends them as this device's link says it takes them. The stops this device kept for places it
-   * couldn't reach go too.
+   * asked once how they stand, which is kept (`listAway`). What a Fin posted to the account while this device was off
+   * comes by itself, as this device's link says it takes notices; the ask is still made of every place, since how a
+   * Fin stands with nothing to report is in no notice, and a place from before the account held notices, or whose Fin
+   * the account has no record of, sends what it kept only once it hears this device again. A cloud Thread's machine
+   * asleep isn't woken to be asked. The stops this device kept for places it couldn't reach go too, each Fin it placed
+   * is put on record with the account or taken off it as its edge stands (`recordPlaced`), and what Fins here kept for
+   * the account goes.
    */
   knock(): void {
     const store = this.store()
     if (!store || !this.places || this.stopped) return
+    this.places.linked()
     this.retryStops()
-    void this.reconcilePlaced(store.edges().all.filter((edge) => edge.placed), "left")
+    const placed = store.edges().all.filter((edge) => edge.placed)
+    for (const edge of placed) this.recordPlaced(edge.child, "now")
+    void this.reconcilePlaced(placed, "left")
+  }
+
+  /**
+   * The account's record of a Fin this device placed elsewhere follows the Fin's edge here: kept while its delegation
+   * is open, or closed only because it finished, and ended once it's stopped, by its Apex, the person or an archive.
+   * A stopped Fin that's sent on is put on record again. The edge says whether the account has it (`Placed.recorded`),
+   * written once the account answered, so a host that restarts asks only for what's still owed. An ask not done (this
+   * device isn't listed as the owner of its Apex's Session yet, the account can't be reached, or it keeps no records)
+   * is made again when this device is back on its account and when the Fin is next heard of, no sooner than
+   * `RECORD_RETRY_MS` after the last; until it's done the Fin's notices come from its device itself.
+   */
+  private recordPlaced(child: string, when?: "now"): void {
+    const tree = this.deps.tree
+    const store = this.store()
+    const edge = store?.edges().of(child)
+    if (!tree || !store || !edge?.placed || this.stopped || !tree.open()) return
+    const keep = !edgeStopped(edge)
+    const op = edge.op
+    if (keep === (edge.placed.recorded === true) || this.recording.has(op)) return
+    if (when !== "now" && this.now() - (this.recordAsked.get(op) ?? -Infinity) < RECORD_RETRY_MS) return
+    const target = edge.placed.target
+    const record = TreeEdgeSchema.safeParse({ op, apex: { thread: edge.parent, session: edge.parentSession }, child, place: target.kind === "device" ? { kind: "device", device: target.device } : { kind: "cloud", thread: target.thread } })
+    // A start with no start's form (an edge from before starts had one) names no Session the account could hold it to.
+    if (!record.success) return
+    const ask: TreeEdgeAsk = keep ? { ask: "keep", edge: record.data } : { ask: "end", op }
+    this.recordAsked.set(op, this.now())
+    const asked = tree.edge(ask).then(
+      (answer) => {
+        if (answer === "unserved") return hostLog("agents", "Fin's record not asked", { op, child, ask: ask.ask, why: "the account keeps no records of Fins" })
+        if (!answer.ok) return hostWarn("agents", "Fin's record refused", { op, child, ask: ask.ask, refused: answer.reason, why: treeEdgeRefusalText(answer.reason) })
+        this.recordAsked.delete(op)
+        store.keepPlaced(child, { recorded: keep ? true : undefined })
+        hostLog("agents", keep ? "Fin on record with the account" : "Fin's record ended", { op, child, place: edge.asked.place ?? "" })
+      },
+      (error: Error) => hostLog("agents", "Fin's record not asked", { op, child, ask: ask.ask, why: errorMessage({ error }) }),
+    ).finally(() => {
+      this.recording.delete(op)
+      // Its edge may have closed or opened while the account was asked.
+      this.recordPlaced(child)
+    })
+    this.recording.set(op, asked)
   }
 
   // ── Starting ──
@@ -4224,8 +4285,9 @@ export class Agents implements AgentOperations, ConversationChildren {
       },
       op,
       startedBy: { kind: "agent", session: SessionIdSchema.parse(apex.session) },
-      // Its Apex is on another device: its notices go to that device's runtime, never to a conversation here.
-      ...(apex.away && { remote: { device: apex.away.device, ...(apex.away.conversation && { conversation: apex.away.conversation }), access: apex.away.access } }),
+      // Its Apex is on another device: its notices go to that device's runtime, or to the account where that device
+      // keeps a record of it, and never to a conversation here.
+      ...(apex.away && { remote: { device: apex.away.device, ...(apex.away.conversation && { conversation: apex.away.conversation }), access: apex.away.access, ...(apex.away.records && { account: true as const }) } }),
     }
     const decided = queued.tuned ?? await this.tuningOf(apex, harness, input)
     if ("refused" in decided) return this.refuse(op, "unknown-model", decided.refused)
@@ -6146,6 +6208,7 @@ export class Agents implements AgentOperations, ConversationChildren {
   private childMoved(edge: ThreadParent, progressOnly: boolean): void {
     if (this.stopped) return
     this.sync()
+    if (edge.placed) this.recordPlaced(edge.child)
     // Every batch of a working Fin comes here, so the Fin is read once for what it asks and for its entry. Only a batch
     // that changes what it asks drops its Apexes' kept walks.
     const moved = { reading: this.childReading(edge), journal: this.journalOf(edge.child) }
@@ -6757,7 +6820,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     return {
       session: session.data,
       thread: thread.data,
-      away: { device: caller.device, access: childAccess(ceiling, caller.access) ?? ceiling, ...(caller.conversation && { conversation: caller.conversation }), ...(caller.forwards !== undefined && { forwards: caller.forwards }), ...(caller.epoch !== undefined && { epoch: caller.epoch }) },
+      away: { device: caller.device, access: childAccess(ceiling, caller.access) ?? ceiling, ...(caller.conversation && { conversation: caller.conversation }), ...(caller.forwards !== undefined && { forwards: caller.forwards }), ...(caller.epoch !== undefined && { epoch: caller.epoch }), ...(caller.records && { records: true as const }) },
     }
   }
 
