@@ -357,13 +357,6 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
     "defaults": {
       "work": [
         {
-          "model": "gpt-6.2-sol",
-          "options": {
-            "effort": "medium",
-            "serviceTier": "default"
-          }
-        },
-        {
           "model": "gpt-6.1-sol",
           "options": {
             "effort": "medium",

@@ -660,7 +660,7 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   if (!(planning.feedback?.kind === "in-refusal" ? planning.feedback.via : planning.feedback?.reason ?? "").trim())
     throw new Error(`${driver.provider}: says nothing of how a reply to its plan reaches it`)
   const background = driver.backgroundStop
-  const reason = background?.kind === "ends-on-stop" ? background.how : background?.kind === "ends-with-turn" ? background.evidence : ""
+  const reason = background?.kind === "ends-on-stop" ? background.how : background?.kind === "ends-with-turn" ? background.evidence : background?.kind === "unobserved" ? background.reason : ""
   if (!reason.trim())
     throw new Error(`${driver.provider}: declare how Stop ends its background work, or the evidence that none outlives its turn`)
   if (driver.accountContinuation?.kind === "resumes" && !resumes)
