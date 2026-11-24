@@ -793,7 +793,7 @@
  * elements.
  *
  * Reuse, edit and rewind are the desk's: they need its composer and its checkout, so the phone shows a message's time
- * and its copy, and nothing it can't do. A laptop's browser has the desk's composer, so Reuse stays there. A reply's fork is the phone's Branch, under it and under a long press
+ * and its copy, and nothing it can't do. A laptop's browser has the desk's composer, so Reuse stays there. A reply's Fork and Copy answer are the desk's words under it and under a long press
  * (`reply.tsx`), where the host can make one.
  */
 .web-live [data-transcript-action],
@@ -1357,8 +1357,9 @@
 .web-reply-actions {
   @apply -ml-2 flex items-center gap-1;
 }
+/* The desk's answer footer (`exchange.tsx`): its words, glyphs and quiet weight, 36 px tall for a thumb. */
 .web-reply-action {
-  @apply flex h-9 items-center gap-1.5 px-2 text-label font-medium text-muted-foreground;
+  @apply flex h-9 items-center gap-1 px-2 text-label text-muted-foreground;
   transition: background-color 160ms ease, color 160ms ease;
 }
 .web-reply-action:active:not(:disabled) {

@@ -3,14 +3,14 @@ import { toast } from "sonner"
 import type { CompactReply } from "@/components/transcript/compact-presentation"
 import { createHook, createStore } from "@/state/store"
 
-/** Held this long on a reply, it offers Copy and Branch. */
+/** Held this long on a reply, it offers Copy answer and Fork. */
 const HOLD_MS = 500
 const MOVE_PX = 10
 
 /** What each reply on screen offers, by its exchange: read by a long press on it, beside its words. */
 const offered = new Map<string, CompactReply>()
 
-/** Offers a reply's Copy and Branch to a long press on it, until it's let go (the returned function). */
+/** Offers a reply's Copy answer and Fork to a long press on it, until it's let go (the returned function). */
 export function offerReply(reply: CompactReply): () => void {
   offered.set(reply.exchange, reply)
   return () => {
@@ -96,7 +96,7 @@ function swallowTap(): void {
 }
 
 /**
- * A long press on a reply, in `container`, outside its words: the reply's Copy and Branch in a sheet. Words stay the
+ * A long press on a reply, in `container`, outside its words: the reply's Copy answer and Fork in a sheet. Words stay the
  * platform's to select and copy, and a link keeps its own callout; while a press here is held, the platform starts no
  * selection or menu of its own under it. A press that moves (a scroll, which a phone also cancels) lets go, and none
  * starts while words are selected, so their handles can be dragged.

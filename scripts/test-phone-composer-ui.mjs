@@ -12,7 +12,7 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * - The mic held stops listening when the finger lifts; tapped, it listens on.
  * - Listening redraws nothing while no words arrive: the meter's samples don't render the composer.
  * - The Queue/Steer choice closes when it's no longer offered, and a later working turn doesn't open it again.
- * - An answer's words can be selected; a long press beside them still offers Copy and Branch.
+ * - An answer's words can be selected; a long press beside them still offers Copy answer and Fork, the desk's words.
  * - "Switched to" lines come from the Session's record, so a reload draws the same ones.
  * - The queue's actions, the steps line and the edit's Cancel are 44 px targets.
  * - The queue's count is said once, by the queue; a phone's transcript keeps no rail of turns, nor a gutter for one.
@@ -291,7 +291,7 @@ async function checkPhone() {
     assert.ok(drawn.some((words) => words.startsWith("Switched to") && /GPT-5.6 Sol/.test(words)), `the model switch is drawn: ${JSON.stringify(drawn)}`)
     console.log(`Switch lines from the record: ${drawn.join(", ")}`)
 
-    // 2. An answer's words are the platform's to select; beside them, a long press offers Copy and Branch.
+    // 2. An answer's words are the platform's to select; beside them, a long press offers Copy answer and Fork.
     assert.notEqual(await evaluate(`getComputedStyle([...document.querySelectorAll('[data-answer]')].at(-1)).userSelect`), "none", "an answer's words can be selected")
     const word = await evaluate(`(() => {
       const host = [...document.querySelectorAll('[data-answer]')].at(-1)
@@ -336,7 +336,10 @@ async function checkPhone() {
     assert.match(await evaluate("getSelection().toString()"), /^The backoff now doubles/)
     await capture("answer-selected-iphone-dark.png")
     await evaluate("getSelection().removeAllRanges(), true")
-    console.log("Answers: words selectable, Copy and Branch beside them")
+    // Under the newest answer, the desk's footer words (`exchange.tsx`): Copy answer and Fork, never words of its own.
+    const said = await evaluate("[...document.querySelectorAll('[data-reply-actions] [data-reply-action]')].map((node) => [node.dataset.replyAction, node.innerText.trim()])")
+    assert.ok(said.length > 0 && said.every(([action, words]) => (action === "copy" && words === "Copy answer") || (action === "fork" && words === "Fork")), `the answer's actions in the desk's words: ${JSON.stringify(said)}`)
+    console.log(`Answers: words selectable, ${said.map(([, words]) => words).join(" and ")} beside them`)
 
     // 3. The mic: held, it stops when the finger lifts; tapped, it listens on.
     const mic = '[aria-label="Dictate"]'
