@@ -106,12 +106,14 @@ accountsStore.set({
       label: "Claude Code",
       mode: "selectable",
       loginCommand: "claude auth login",
+      nativeLogin: true,
     },
     {
       provider: "codex",
       label: "Codex",
       mode: "selectable",
       loginCommand: "codex login",
+      nativeLogin: true,
     },
     {
       provider: "opencode",

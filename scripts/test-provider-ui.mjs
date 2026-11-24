@@ -82,6 +82,8 @@ async function review() {
     )
     await writeFile(join(root, name), (await page.capturePage()).toPNG())
   }
+  // A row opens by unfolding beneath its header: what's in it is clicked once it has settled.
+  const settled = () => evaluate("Promise.all(document.getAnimations().filter(a => a.effect.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))).then(() => true)")
   const until = async (code) => {
     const deadline = Date.now() + 20_000
     while (!(await evaluate(code))) {
@@ -133,6 +135,7 @@ async function review() {
   await evaluate(
     `document.querySelector('[aria-label="Manage Cursor"]').click()`
   )
+  await settled()
   await click("Paste API key")
   await until("document.activeElement?.type === 'password'")
   await page.debugger.sendCommand("Input.insertText", { text: "fixture-key" })
@@ -151,7 +154,9 @@ async function review() {
   await evaluate(
     `document.querySelector('[aria-label="Manage OpenCode"]').click()`
   )
-  await until("document.body.textContent.includes('OpenCode accounts')")
+  // The row opens beneath its own header: the logins first, nothing of the installation's paths.
+  await until("document.querySelector('#provider-opencode-accounts')?.textContent.includes('opencode auth login')")
+  assert.equal(await evaluate("document.querySelector('#provider-opencode-accounts').textContent.includes('/Users/developer/.opencode/bin/opencode')"), false, "a path is a detail")
   assert.equal(
     await evaluate("document.querySelectorAll('[role=list]').length"),
     1
@@ -241,13 +246,17 @@ async function review() {
   await screenshot("agents-version-checking.png")
   await until(`${claudeRow}.textContent.includes('Version 2.1.266')`)
   assert.equal(await evaluate(`${claudeRow}.textContent.includes('Couldn’t read')`), false)
-  // Refresh connection reads what the whole row shows, and shows it is working.
+  // Checking again, under Details with the installation's path, reads what the whole row shows, and shows it is working.
   await fixture("f.unreadVersion()")
   await until(`${claudeRow}.textContent.includes('Couldn’t read the installed version')`)
   await evaluate(`document.querySelector('[aria-label="Manage Claude Code"]').click()`)
-  await until("document.querySelector('#provider-claude-accounts')?.textContent.includes('Refresh connection')")
+  await until("Boolean(document.querySelector('#provider-claude-accounts'))")
+  assert.equal(await evaluate("document.querySelector('#provider-claude-accounts').innerText.includes('/Users/developer/.local/bin/claude')"), false, "the path waits under Details")
+  assert.equal(await evaluate("document.querySelector('#provider-claude-accounts [aria-label=\"Loading usage\"]')"), null, "usage not read yet draws no placeholder")
+  await evaluate(`[...document.querySelectorAll('#provider-claude-accounts button')].find(b => b.textContent.trim() === 'Details').click()`)
+  await until("document.querySelector('#provider-claude-accounts').innerText.includes('/Users/developer/.local/bin/claude')")
   await evaluate("document.querySelector('#provider-claude-accounts').scrollIntoView({block:'center'})")
-  await evaluate(`[...document.querySelectorAll('#provider-claude-accounts button')].find(b => b.textContent.trim() === 'Refresh connection').click()`)
+  await evaluate(`[...document.querySelectorAll('#provider-claude-accounts button')].find(b => b.textContent.trim() === 'Check sign-in and version again').click()`)
   await until(`document.querySelector('#provider-claude-accounts button[aria-busy="true"]')?.textContent === 'Checking…'`)
   await screenshot("agents-refresh-connection.png")
   await until(`${claudeRow}.textContent.includes('Version 2.1.266') && !document.querySelector('#provider-claude-accounts button[aria-busy="true"]')`)

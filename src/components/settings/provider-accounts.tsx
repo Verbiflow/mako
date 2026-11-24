@@ -13,6 +13,7 @@ import { FIELD, Action, ListCard } from "@/components/ui/kit"
 import { Collapse } from "@/components/ui/collapse"
 import { Shimmer } from "@/components/ui/shimmer"
 import { HarnessAccounts } from "@/components/identity/account-usage"
+import { useProviders } from "@/state/providers"
 import { accountIdentity, isSignedOut } from "@/lib/account-identity"
 import { cn } from "@/lib/utils"
 
@@ -40,6 +41,9 @@ export function ProviderAccounts({
   const signIn = useAccounts((state) =>
     state.signIn?.harness === providerId ? state.signIn : undefined
   )
+  // An ACP harness with no login of its own to run asks for its sign-in in the conversation (an authentication
+  // ask with its methods), so that, not a terminal, is where it signs in.
+  const inConversation = useProviders((state) => state.profiles[providerId]?.transport === "acp")
   if (!provider) return null
 
   const selectable = provider.mode === "selectable"
@@ -50,31 +54,32 @@ export function ProviderAccounts({
     : undefined
   return (
     <div className="@container flex flex-col gap-2">
-      {!addable && hint ? (
-        <p className="text-ui leading-relaxed text-faint">
-          {provider.readOnlyReason ? `${provider.readOnlyReason} ` : `${provider.label} owns this login. `}
-          To change it, run{" "}
-          <code className="font-mono text-muted-foreground">
-            {provider.loginCommand}
-          </code>{" "}
-          in a terminal, then refresh.
-        </p>
-      ) : null}
       {group ? (
         <HarnessAccounts
           group={group}
           heading={false}
+          quietUsage
           actions={(account) =>
             selectable && account.source === "mako" && !account.missing && !account.removing ? (
               <AccountActions account={account} renewable={addable && account.authType !== "api"} />
             ) : null
           }
         />
-      ) : addable ? null : (
-        <ListCard className="py-3 text-ui text-faint">
-          No {provider.label} login found.
-        </ListCard>
-      )}
+      ) : null}
+      {!addable && hint ? (
+        <p className="text-label leading-relaxed text-muted-foreground">
+          {inConversation && !provider.readOnlyReason ? (
+            `${provider.label} asks you to sign in in the conversation, the first time you send.`
+          ) : (
+            <>
+              {provider.readOnlyReason ? `${provider.readOnlyReason} ` : group ? `${provider.label} owns this login. ` : `No ${provider.label} login found. `}
+              To {group ? "change" : "add"} it, run{" "}
+              <code className="font-mono text-foreground/80">{provider.loginCommand}</code>{" "}
+              in a terminal, then check again under Details.
+            </>
+          )}
+        </p>
+      ) : null}
       {addable ? (
         signIn ? (
           <SignInCard
@@ -156,7 +161,7 @@ function ApiKeyForm({ harness, label }: { harness: string; label: string }) {
   const [key, setKey] = useState("")
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
-  if (!open) return <Action size="xs" className="self-start" onClick={() => setOpen(true)}>Use an API key</Action>
+  if (!open) return <Action size="xs" className="-ml-1.5 self-start font-normal" onClick={() => setOpen(true)}>Use an API key</Action>
   return <form className="flex flex-col gap-2" onSubmit={async (event) => {
     event.preventDefault()
     if (busy || !key.trim()) return

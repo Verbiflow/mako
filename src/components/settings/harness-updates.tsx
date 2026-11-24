@@ -203,11 +203,10 @@ export function InstallRow({
   )
 }
 
-/** Technical provenance is available on demand, away from connection and update actions. */
+/** Where the installation is and what updates it: diagnostics, under a harness row's Details. */
 export function InstallationDetails({ info }: { info: HarnessUpdateInfo }) {
   return (
     <div className="space-y-1 text-label text-faint">
-      <span className="font-medium text-muted-foreground">Installation</span>
       {info.managedBy ? (
         <p>
           This copy is included with {info.managedBy.replace(/\.app$/, "")}.

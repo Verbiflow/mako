@@ -861,6 +861,15 @@ export function installMockBridge() {
   let railRunsSent = false
   /** One harness at each version standing: Codex below its oldest, OpenCode between oldest and tested, Devin at tested and Grok newer than tested. */
   const mockRuntimeReadings = (): HarnessUpdates => ({
+    antigravity: {
+      provider: "antigravity",
+      binary: "/Users/you/.local/bin/agy",
+      installed: "1.5.15",
+      latest: "1.5.15",
+      channel: "self",
+      checkedAt: Date.now() - 90_000,
+      versions: { oldest: "1.5.15", tested: "1.5.15", standing: "tested" },
+    },
     codex: outdatedScene || unknownWriterScene ? outdatedCodexReading() : {
       provider: "codex",
       binary: "/Users/you/.nvm/versions/node/v24.19.0/bin/codex",
@@ -2438,6 +2447,7 @@ export function installMockBridge() {
       grok: true,
       devin: true,
       opencode: true,
+      antigravity: true,
       ...mockInstallHarness && { [mockInstallHarness]: mockInstalled },
     }),
     // One harness at each version standing: Codex below its oldest, OpenCode
@@ -4081,6 +4091,15 @@ const MOCK_PROFILES = [
       mockModel("openai/gpt-5.4", "GPT-5.4", [mockEffort("medium", ["low", "medium", "high"])]),
       mockModel("anthropic/claude-opus-5-5", "Claude Opus 5.5"),
     ],
+  },
+  {
+    id: "antigravity",
+    label: "Antigravity",
+    available: true,
+    transport: "acp" as const,
+    defaultModel: "gemini-3-pro",
+    settings: { model: "gemini-3-pro" },
+    models: [mockModel("gemini-3-pro", "Gemini 3 Pro"), mockModel("gemini-3-flash", "Gemini 3 Flash")],
   },
 ]
 
