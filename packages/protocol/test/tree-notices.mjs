@@ -6,9 +6,9 @@ import { decodeRuntimeFrame, encodeRuntimeFrame } from "../dist/wire.js"
 import { LINK_VERSION, SUPPORTED_VERSIONS, TREE_NOTICES_LINK_VERSION, negotiate } from "../dist/version.js"
 import { serveRuntime } from "../dist/runtime-client.js"
 import {
-  TREE_NOTICES_CAPABILITY, TREE_NOTICES_HELD, TREE_NOTICES_HELD_BYTES, TREE_NOTICES_PATH, TREE_NOTICE_ADMITS_PER_MINUTE, TREE_NOTICE_BYTES, TREE_NOTICE_DEAD_LETTERS, TREE_NOTICE_FIN_SHARE, TREE_NOTICE_OP, TREE_NOTICE_UNKNOWN_CHILD_MS,
+  TREE_NOTICES_CAPABILITY, TREE_NOTICES_HELD, TREE_NOTICES_HELD_BYTES, TREE_NOTICES_PATH, TREE_NOTICE_ADMITS_PER_MINUTE, TREE_NOTICE_BYTES, TREE_NOTICE_DEAD_LETTERS, TREE_NOTICE_FIN_FLOOR, TREE_NOTICE_OP, TREE_EDGE_LEASE_MS, TREE_NOTICE_UNKNOWN_CHILD_MS,
   TREE_EDGES_PATH, TreeEdgeAnswerSchema, TreeEdgeAskSchema, TreeEdgeRefusalSchema, TreeEdgeSchema, TreeNoticeAckSchema, TreeNoticeAnswerSchema, TreeNoticeDeliverySchema, TreeNoticeFromSchema, TreeNoticeRefusalSchema, TreeNoticeSchema,
-  admitTreeNotice, apexSessionOfStart, decideTreeEdge, machineNoticesPath, newerTreeStanding, noticeIdHolds, noticeIdOf, sameTreeEdge, sameTreeNotice, takesTreeNotices, treeEdgeOfNotice, treeEdgeRefusalText, treeNoticeBytes, treeNoticeAck, treeNoticeAckWord, treeNoticeDisposal, treeNoticeFits, treeNoticeOperation, treeNoticeRateOpen, treeNoticeRefusalText,
+  admitTreeNotice, apexSessionOfStart, decideTreeEdge, machineNoticesPath, newerTreeStanding, noticeIdHolds, noticeIdOf, sameTreeEdge, sameTreeNotice, takesTreeNotices, treeEdgeNoticeKey, treeEdgeOfNotice, treeEdgesStandUntil, treeNoticeEdgeKey, treeNoticeFinRoom, treeNoticeFinShare, treeEdgeRefusalText, treeNoticeBytes, treeNoticeAck, treeNoticeAckWord, treeNoticeDisposal, treeNoticeFits, treeNoticeOperation, treeNoticeRateOpen, treeNoticeRefusalText,
 } from "../dist/tree-notices.js"
 
 const apex = { thread: "11111111-1111-4111-8111-111111111111", session: "22222222-2222-4222-8222-222222222222" }
@@ -108,13 +108,14 @@ describe("tree notices: the contract", () => {
     assert.equal(TreeNoticeAnswerSchema.safeParse({ admitted: false, reason: "busy" }).success, false)
     assert.match(treeNoticeRefusalText("full"), /500/)
     assert.match(treeNoticeRefusalText("rate"), /posted 20 times/, "posts, not reports: one posted again counts")
-    assert.match(treeNoticeRefusalText("full"), /a quarter of either from one Fin/)
+    assert.match(treeNoticeRefusalText("full"), /shared equally among the Fins holding some, and always one/)
     assert.match(treeNoticeRefusalText("full"), /16 MiB/)
     assert.match(treeNoticeRefusalText("too-large"), /2 MiB/)
   })
 
-  test("the limits: 500 notices and 16 MiB held for a Session, a quarter of either from one Fin, 2 MiB a notice, 20 posts a minute for a Fin, 32 put aside, an hour unknown", () => {
-    assert.deepEqual([TREE_NOTICES_HELD, TREE_NOTICES_HELD_BYTES, TREE_NOTICE_FIN_SHARE, TREE_NOTICE_BYTES, TREE_NOTICE_ADMITS_PER_MINUTE, TREE_NOTICE_DEAD_LETTERS, TREE_NOTICE_UNKNOWN_CHILD_MS], [500, 16_777_216, 4, 2_097_152, 20, 32, 3_600_000])
+  test("the limits: 500 notices and 16 MiB shared among a Session's Fins, one always a Fin's, 2 MiB a notice, 20 posts a minute for a Fin, 32 put aside of a Fin, an hour unknown, 30 days a record outlives its owner", () => {
+    assert.deepEqual([TREE_NOTICES_HELD, TREE_NOTICES_HELD_BYTES, TREE_NOTICE_FIN_FLOOR, TREE_NOTICE_BYTES, TREE_NOTICE_ADMITS_PER_MINUTE, TREE_NOTICE_DEAD_LETTERS, TREE_NOTICE_UNKNOWN_CHILD_MS, TREE_EDGE_LEASE_MS], [500, 16_777_216, 1, 2_097_152, 20, 32, 3_600_000, 2_592_000_000])
+    assert.equal(TREE_NOTICES_HELD_BYTES, 8 * TREE_NOTICE_BYTES, "eight of the largest notice")
     assert.equal(treeNoticeFits("x".repeat(TREE_NOTICE_BYTES)), true)
     assert.equal(treeNoticeFits("x".repeat(TREE_NOTICE_BYTES + 1)), false)
     assert.equal(treeNoticeBytes("é".repeat(10)), 20, "bytes, not characters")
@@ -156,12 +157,12 @@ describe("tree notices: the contract", () => {
     assert.equal(newerTreeStanding({ owner: 2, seq: 5 }, { owner: 1, seq: 99 }), false, "an older host's, however many it said")
   })
 
-  test("admitting: a held notice again answers its number and takes a newer standing, another report under its ID is a conflict, the Fin's last notice is remembered once taken, and a Session is full by count or by bytes", () => {
+  test("admitting: a held notice again answers its number and takes a newer standing, another report under its ID is a conflict, and the Fin's last notice is remembered once taken", () => {
     const first = TreeNoticeSchema.parse(noticeOf("1", fin, { standing: standing(2, 5) }))
     const second = TreeNoticeSchema.parse(noticeOf("2"))
     const again = (more) => TreeNoticeSchema.parse(noticeOf("1", fin, more))
-    /** A mailbox holding only the sender's own notices: the Session's totals are theirs. */
-    const alone = (own, head, last) => ({ own, count: own.length, bytes: own.reduce((sum, each) => sum + each.bytes, 0), head, ...(last && { last }) })
+    /** A mailbox holding only the sender's own notices. */
+    const alone = (own, head, last) => ({ own, others: 0, head, ...(last && { last }) })
     assert.deepEqual(admitTreeNotice(alone([], 0), first, 10), { admitted: true, seq: 1, does: "hold" })
     const held = [{ seq: 1, bytes: 10, notice: first }]
     assert.deepEqual(admitTreeNotice(alone(held, 1), second, 10), { admitted: true, seq: 2, does: "hold" })
@@ -177,36 +178,53 @@ describe("tree notices: the contract", () => {
     assert.deepEqual(admitTreeNotice(alone([], 1, { ...last, said: { owner: 3, seq: 1 } }), again({ standing: standing(3, 1) }), 10), { admitted: true, seq: 1, does: "nothing" })
     assert.deepEqual(admitTreeNotice(alone([], 1, last), second, 10), { admitted: true, seq: 2, does: "hold" }, "the Fin's next report is new")
     assert.deepEqual(admitTreeNotice(alone([{ seq: 7, bytes: 10, notice: second }], 7), first, 10), { admitted: true, seq: 8, does: "hold" }, "after the last number given, not the count held")
-    // The Session's totals are every Fin's: full by them though the sender holds little, or nothing, itself.
-    assert.deepEqual(admitTreeNotice({ own: [], count: TREE_NOTICES_HELD, bytes: 5_000, head: TREE_NOTICES_HELD }, first, 10), { admitted: false, reason: "full" })
-    assert.deepEqual(admitTreeNotice({ own: [], count: TREE_NOTICES_HELD - 1, bytes: 5_000, head: 900 }, first, 10), { admitted: true, seq: 901, does: "hold" }, "room for one")
-    assert.deepEqual(admitTreeNotice({ own: held, count: TREE_NOTICES_HELD, bytes: 5_000, head: TREE_NOTICES_HELD }, again({}), 10), { admitted: true, seq: 1, does: "nothing" }, "one it holds is still the same notice when it's full")
-    assert.deepEqual(admitTreeNotice({ own: [], count: 1, bytes: TREE_NOTICES_HELD_BYTES - 100, head: 1 }, first, 100), { admitted: true, seq: 2, does: "hold" }, "to the byte")
-    assert.deepEqual(admitTreeNotice({ own: [], count: 1, bytes: TREE_NOTICES_HELD_BYTES - 100, head: 1 }, first, 101), { admitted: false, reason: "full" }, "one byte over what a Session holds")
+    const full = Array.from({ length: TREE_NOTICES_HELD }, (_, index) => ({ seq: index + 1, bytes: 10, notice: index ? TreeNoticeSchema.parse(noticeOf(`n${index}`)) : first }))
+    assert.deepEqual(admitTreeNotice(alone(full, TREE_NOTICES_HELD), again({}), 10), { admitted: true, seq: 1, does: "nothing" }, "one it holds is still the same notice when it holds its whole share")
   })
 
   test("admitting: a notice is the sender's own by its start, so another Fin's under the same ID is neither a repeat nor a conflict", () => {
     const first = TreeNoticeSchema.parse(noticeOf("1"))
     const other = { ...first, report: { ...first.report, summary: "Another Fin's, under the same ID." } }
-    // Another start holds a notice under this ID (the Session counts it); the sender holds none, and remembers none.
-    assert.deepEqual(admitTreeNotice({ own: [], count: 1, bytes: 10, head: 1 }, other, 10), { admitted: true, seq: 2, does: "hold" }, "new to this sender, whatever another holds")
-    assert.deepEqual(admitTreeNotice({ own: [], count: 1, bytes: 10, head: 1 }, first, 10), { admitted: true, seq: 2, does: "hold" }, "and never a repeat of another's")
-    assert.deepEqual(admitTreeNotice({ own: [{ seq: 2, bytes: 10, notice: other }], count: 2, bytes: 20, head: 2 }, first, 10), { admitted: false, reason: "conflict" }, "a conflict only with its own")
+    // Another start holds a notice under this ID; the sender holds none, and remembers none.
+    assert.deepEqual(admitTreeNotice({ own: [], others: 1, head: 1 }, other, 10), { admitted: true, seq: 2, does: "hold" }, "new to this sender, whatever another holds")
+    assert.deepEqual(admitTreeNotice({ own: [], others: 1, head: 1 }, first, 10), { admitted: true, seq: 2, does: "hold" }, "and never a repeat of another's")
+    assert.deepEqual(admitTreeNotice({ own: [{ seq: 2, bytes: 10, notice: other }], others: 1, head: 2 }, first, 10), { admitted: false, reason: "conflict" }, "a conflict only with its own")
   })
 
-  test("admitting: one Fin holds at most a quarter of what its Apex's Session holds, by count and by bytes, and is full alone", () => {
-    const share = TREE_NOTICES_HELD / TREE_NOTICE_FIN_SHARE
+  test("admitting: a Fin holds its fair share of the Session's room among the Fins holding notices there, by count and by bytes, and always one, so it's full alone", () => {
     const mine = (count, bytes = 10) => Array.from({ length: count }, (_, index) => ({ seq: index + 1, bytes, notice: TreeNoticeSchema.parse(noticeOf(`n${index}`)) }))
     const next = TreeNoticeSchema.parse(noticeOf("next"))
-    assert.equal(share, 125)
-    assert.deepEqual(admitTreeNotice({ own: mine(share - 1), count: share - 1, bytes: 1_240, head: 124 }, next, 10), { admitted: true, seq: 125, does: "hold" }, "its 125th")
-    assert.deepEqual(admitTreeNotice({ own: mine(share), count: share, bytes: 1_250, head: 125 }, next, 10), { admitted: false, reason: "full" }, "its 126th, in a Session with room for 375 more")
-    assert.deepEqual(admitTreeNotice({ own: [], count: share, bytes: 1_250, head: 125 }, next, 10), { admitted: true, seq: 126, does: "hold" }, "another Fin is admitted to the same Session")
-    assert.deepEqual(admitTreeNotice({ own: mine(share), count: share, bytes: 1_250, head: 125 }, mine(share)[7].notice, 10), { admitted: true, seq: 8, does: "nothing" }, "one it holds still answers its number")
-    const quarter = TREE_NOTICES_HELD_BYTES / TREE_NOTICE_FIN_SHARE
-    assert.deepEqual(admitTreeNotice({ own: mine(1, quarter - 100), count: 1, bytes: quarter - 100, head: 1 }, next, 100), { admitted: true, seq: 2, does: "hold" }, "to the byte")
-    assert.deepEqual(admitTreeNotice({ own: mine(1, quarter - 100), count: 1, bytes: quarter - 100, head: 1 }, next, 101), { admitted: false, reason: "full" }, "one byte over its share")
-    assert.deepEqual(admitTreeNotice({ own: [], count: 1, bytes: quarter - 100, head: 1 }, next, 101), { admitted: true, seq: 2, does: "hold" }, "which is no other Fin's limit")
+    // Alone, a Fin may hold the whole room.
+    assert.deepEqual(treeNoticeFinShare(1), { count: 500, bytes: 16_777_216 })
+    assert.deepEqual(admitTreeNotice({ own: mine(499), others: 0, head: 499 }, next, 10), { admitted: true, seq: 500, does: "hold" }, "its 500th, alone")
+    assert.deepEqual(admitTreeNotice({ own: mine(500), others: 0, head: 500 }, next, 10), { admitted: false, reason: "full" }, "its 501st")
+    // Four Fins holding: each an equal quarter.
+    assert.deepEqual(treeNoticeFinShare(4), { count: 125, bytes: 4_194_304 })
+    assert.deepEqual(admitTreeNotice({ own: mine(124), others: 3, head: 900 }, next, 10), { admitted: true, seq: 901, does: "hold" }, "its 125th beside three others")
+    assert.deepEqual(admitTreeNotice({ own: mine(125), others: 3, head: 900 }, next, 10), { admitted: false, reason: "full" }, "its 126th")
+    assert.deepEqual(admitTreeNotice({ own: mine(125), others: 3, head: 900 }, mine(125)[7].notice, 10), { admitted: true, seq: 8, does: "nothing" }, "one it holds still answers its number")
+    const quarter = TREE_NOTICES_HELD_BYTES / 4
+    assert.deepEqual(admitTreeNotice({ own: mine(2, quarter / 2 - 50), others: 3, head: 2 }, next, 100), { admitted: true, seq: 3, does: "hold" }, "to the byte of its share")
+    assert.deepEqual(admitTreeNotice({ own: mine(2, quarter / 2 - 50), others: 3, head: 2 }, next, 101), { admitted: false, reason: "full" }, "one byte over it")
+    // A Fin holding nothing always has room, however many hold and whatever they hold: its one, of any size a notice is.
+    for (const others of [3, 39, 499, 5_000]) {
+      assert.deepEqual(admitTreeNotice({ own: [], others, head: 9_000 }, next, TREE_NOTICE_BYTES), { admitted: true, seq: 9_001, does: "hold" }, `the first beside ${others} others`)
+      assert.deepEqual(admitTreeNotice({ own: mine(1), others, head: 9_000 }, next, 10).admitted, others + 1 <= TREE_NOTICES_HELD / 2, `a second beside ${others} others only within a share`)
+    }
+    assert.deepEqual(treeNoticeFinShare(41), { count: 12, bytes: 409_200 }, "forty flooding Fins and one more: twelve each")
+    assert.deepEqual(treeNoticeFinShare(5_001), { count: 1, bytes: 3_354 }, "never less than one, by count")
+  })
+
+  test("the fair share never needs the pool: Fins each within the share of h holders hold no more than the room, and a Fin's refusal reads nothing of what its siblings hold", () => {
+    for (const holders of [1, 2, 3, 4, 7, 40, 41, 499, 500, 501]) {
+      const share = treeNoticeFinShare(holders)
+      if (share.count > TREE_NOTICE_FIN_FLOOR) assert.ok(holders * share.count <= TREE_NOTICES_HELD, `${holders} holders at their share by count`)
+      assert.ok(holders * share.bytes <= TREE_NOTICES_HELD_BYTES, `${holders} holders at their share by bytes`)
+    }
+    // What decides is the Fin's own holding and how many hold: nothing else is an argument.
+    assert.equal(treeNoticeFinRoom({ count: 1, bytes: TREE_NOTICE_BYTES }, 10_000), true, "one is always room")
+    assert.equal(treeNoticeFinRoom({ count: 2, bytes: 20 }, 0), true)
+    assert.equal(treeNoticeFinRoom({ count: 126, bytes: 20 }, 3), false)
   })
 
   test("a start's op names its Apex's Session, and nothing else does", () => {
@@ -327,48 +345,42 @@ describe("tree notices: the fake gateway's mailbox", () => {
     } finally { await gateway.close() }
   })
 
-  test("a Session holds at most 500 notices from all its Fins, and 125 from one: a Fin at its share is full alone, and one held still answers its number", async () => {
+  test("one Fin flooding alone may hold the Session's whole room, yet four or forty flooding Fins never keep a sibling's notice out: each holds its share and a Fin holding none is always admitted", async () => {
     let at = 1_700_000_000_000
     const gateway = recorded(createFakeGateway({ now: () => new Date(at) }))
     try {
       const sender = { kind: "device", device: mac }
       const childOf = (each) => `66666666-6666-4666-8666-${String(each).padStart(12, "0")}`
-      recorded(gateway, ...[0, 1, 2, 3, 9].map(childOf), "77777777-7777-4777-8777-777777777777")
-      const share = TREE_NOTICES_HELD / TREE_NOTICE_FIN_SHARE
-      let held = 0
-      // Four Fins, each to its share, a minute's posts at a time.
-      for (let each = 0; each < TREE_NOTICE_FIN_SHARE; each += 1) {
-        for (let index = 0; index < share; index += 1, held += 1) {
+      const sibling = "77777777-7777-4777-8777-777777777777"
+      recorded(gateway, ...Array.from({ length: 42 }, (_, each) => childOf(each)), sibling)
+      let seq = 0
+      /** Posts a Fin's notices until the account says it's full: how many it took. */
+      const flood = async (child) => {
+        for (let index = 0; ; index += 1) {
           if (index % TREE_NOTICE_ADMITS_PER_MINUTE === 0) at += 60_001
-          assert.deepEqual(await post(gateway, sender, noticeOf(`c${index}`, childOf(each))), { admitted: true, seq: held + 1 })
+          const answer = await post(gateway, sender, noticeOf(`c${index}`, child))
+          if (!answer.admitted) {
+            assert.equal(answer.reason, "full")
+            return index
+          }
+          assert.equal(answer.seq, (seq += 1))
         }
-        if (each > 0) continue
-        at += 60_001
-        assert.deepEqual(await post(gateway, sender, noticeOf("one-more", childOf(0))), { admitted: false, reason: "full" }, "its 126th, with the Session a quarter full")
-        assert.deepEqual(await post(gateway, sender, noticeOf("c7", childOf(0))), { admitted: true, seq: 8 }, "one it holds still answers its number")
       }
-      assert.equal(held, TREE_NOTICES_HELD)
-      assert.deepEqual(await post(gateway, sender, noticeOf("late", "77777777-7777-4777-8777-777777777777")), { admitted: false, reason: "full" }, "a Fin that holds nothing, in a Session that holds its most")
+      assert.equal(await flood(childOf(0)), TREE_NOTICES_HELD, "alone, its share is the whole room")
       at += 60_001
-      assert.deepEqual(await post(gateway, sender, noticeOf("c0", childOf(3))), { admitted: true, seq: 3 * share + 1 }, "full, and one it holds still answers its number")
-      assert.equal(gateway.heldNotices(apex.session).length, TREE_NOTICES_HELD)
-      // Its owner is sent the first; unanswered, it stays held, and goes again when the owner is back.
-      const apexHost = await owner(gateway, "rt-apex")
-      const first = await apexHost.delivered()
-      assert.equal(first.notice.from.seq, 1)
-      apexHost.link.close()
-      await settle()
-      assert.equal(gateway.heldNotices(apex.session).length, TREE_NOTICES_HELD, "unanswered: still held")
-      const back = await owner(gateway, "rt-apex")
-      const again = await back.delivered()
-      assert.equal(again.notice.from.seq, 1)
-      // Taken, there is room for one more of that Fin's, numbered after the last.
-      back.answer(again.operation, { heard: true })
-      const second = await back.delivered()
-      assert.deepEqual(await post(gateway, sender, noticeOf("one-more", childOf(0))), { admitted: true, seq: TREE_NOTICES_HELD + 1 })
-      assert.equal(second.notice.from.seq, 2)
-      back.link.close()
-      await settle()
+      assert.deepEqual(await post(gateway, sender, noticeOf("c7", childOf(0))), { admitted: true, seq: 8 }, "one it holds still answers its number")
+      // Three more flood: each takes the share of the Fins holding then, never what another needs.
+      for (const each of [1, 2, 3]) assert.equal(await flood(childOf(each)), Math.floor(TREE_NOTICES_HELD / (each + 1)), `the ${each + 1}th flooder's share`)
+      at += 60_001
+      assert.deepEqual(await post(gateway, sender, noticeOf("first", sibling)), { admitted: true, seq: seq + 1 }, "four flooding Fins: a sibling holding none is admitted")
+      seq += 1
+      // Thirty-seven more, forty in all, and the sibling still has room for its next once it holds nothing.
+      for (let each = 4; each < 41; each += 1) assert.ok((await flood(childOf(each))) >= 1, `the ${each + 1}th flooder is admitted its first`)
+      at += 60_001
+      // Forty-two hold now, the sibling among them: its share is eleven, whatever the first flooders still hold beyond theirs.
+      for (let index = 2; index <= 11; index += 1) assert.deepEqual(await post(gateway, sender, noticeOf(`more${index}`, sibling)), { admitted: true, seq: (seq += 1) }, `the sibling's ${index}th`)
+      assert.deepEqual(await post(gateway, sender, noticeOf("past", sibling)), { admitted: false, reason: "full" }, "its twelfth is past its share, and full for it alone")
+      assert.ok(gateway.heldNotices(apex.session).length > TREE_NOTICES_HELD, "the shares the first flooders took while they were fewer stay theirs")
     } finally { await gateway.close() }
   })
 
@@ -590,7 +602,7 @@ describe("tree notices: the fake gateway's mailbox", () => {
     } finally { await gateway.close() }
   })
 
-  test("a Session holds at most 16 MiB of notices and one Fin 4 MiB of them: one that would take either over is full, and a notice over 2 MiB is too large", async () => {
+  test("by bytes too: 16 MiB is one Fin's alone and half each of two, a Fin holding none takes the largest notice there is beside them, and a notice over 2 MiB is too large", async () => {
     const gateway = recorded(createFakeGateway())
     try {
       const sender = { kind: "device", device: mac }
@@ -603,18 +615,15 @@ describe("tree notices: the fake gateway's mailbox", () => {
         return notice
       }
       assert.deepEqual(await post(gateway, sender, sized("over", TREE_NOTICE_BYTES + 1)), { admitted: false, reason: "too-large" })
-      // One Fin: two of the largest are its share, to the byte.
-      assert.deepEqual(await post(gateway, sender, sized("big0", TREE_NOTICE_BYTES)), { admitted: true, seq: 1 })
-      assert.deepEqual(await post(gateway, sender, sized("big1", TREE_NOTICE_BYTES)), { admitted: true, seq: 2 })
-      assert.deepEqual(await post(gateway, sender, sized("more", 600)), { admitted: false, reason: "full" }, "a quarter of the Session's bytes are its own")
+      // One Fin alone: eight of the largest are the whole room, to the byte.
+      for (let index = 0; index < 8; index += 1) assert.deepEqual(await post(gateway, sender, sized(`big${index}`, TREE_NOTICE_BYTES)), { admitted: true, seq: index + 1 })
+      assert.deepEqual(await post(gateway, sender, sized("more", 600)), { admitted: false, reason: "full" }, "alone, its share is all 16 MiB")
       assert.deepEqual(await post(gateway, sender, sized("big0", TREE_NOTICE_BYTES)), { admitted: true, seq: 1 }, "one it holds still answers its number")
-      // Three more Fins fill the Session, the last a byte short.
-      for (let each = 0; each < 3; each += 1) {
-        assert.deepEqual(await post(gateway, sender, sized("big0", TREE_NOTICE_BYTES, childOf(each))), { admitted: true, seq: 3 + each * 2 })
-        assert.deepEqual(await post(gateway, sender, sized("big1", TREE_NOTICE_BYTES - (each === 2 ? 1 : 0), childOf(each))), { admitted: true, seq: 4 + each * 2 })
-      }
-      assert.deepEqual(await post(gateway, sender, sized("more", 600, childOf(9))), { admitted: false, reason: "full" }, "one byte was left, and this Fin holds nothing")
-      assert.equal(gateway.heldNotices(apex.session).length, 8)
+      // Another Fin holds nothing: its largest goes in beside a Fin holding all 16 MiB, and half of the room is its share.
+      for (let index = 0; index < 4; index += 1) assert.deepEqual(await post(gateway, sender, sized(`big${index}`, TREE_NOTICE_BYTES, childOf(0))), { admitted: true, seq: 9 + index })
+      assert.deepEqual(await post(gateway, sender, sized("more", 600, childOf(0))), { admitted: false, reason: "full" }, "8 MiB is its half")
+      assert.deepEqual(await post(gateway, sender, sized("big0", TREE_NOTICE_BYTES, childOf(1))), { admitted: true, seq: 13 }, "and a third's largest goes in too")
+      assert.equal(gateway.heldNotices(apex.session).length, 13)
       const apexHost = await owner(gateway, "rt-apex")
       const first = await apexHost.delivered()
       apexHost.link.close()
@@ -811,6 +820,24 @@ describe("tree notices: the records of Fins off their Apexes' hosts", () => {
     assert.equal(treeEdgeOfNotice([], mac, notice), undefined)
   })
 
+  test("a notice finds its record by one key, the device, the Apex's Session and Thread and the child, which the record is kept under; a cloud Fin's record has none", () => {
+    const notice = noticeOf("1")
+    assert.equal(treeEdgeNoticeKey(edge), treeNoticeEdgeKey(mac, notice))
+    assert.equal(treeEdgeNoticeKey({ ...edge, place: { kind: "cloud", thread: machine.thread } }), undefined)
+    for (const other of [treeNoticeEdgeKey(apexMac, notice), treeNoticeEdgeKey(mac, noticeOf("1", otherFin)), treeNoticeEdgeKey(mac, { ...notice, parent: { ...apex, thread: otherFin } }), treeNoticeEdgeKey(mac, { ...notice, parent: { ...apex, session: otherFin } })])
+      assert.notEqual(other, treeEdgeNoticeKey(edge))
+  })
+
+  test("a Session's records stand 30 days past the last the account knew its owner was there: now while its link is up, when it went down, or its last ask", () => {
+    const day = 24 * 60 * 60_000
+    const now = 100 * day
+    assert.equal(treeEdgesStandUntil(0, { up: true, at: 1 }, now), now + TREE_EDGE_LEASE_MS, "an owner on its link renews them by being there")
+    assert.equal(treeEdgesStandUntil(0, { up: false, at: 90 * day }, now), 120 * day, "down ten days ago: twenty more")
+    assert.equal(treeEdgesStandUntil(95 * day, { up: false, at: 90 * day }, now), 125 * day, "an ask since it went down counts from the ask")
+    assert.ok(treeEdgesStandUntil(0, { up: false, at: 60 * day }, now) <= now, "down 40 days: lapsed")
+    assert.equal(treeEdgesStandUntil(50 * day, undefined, now), 80 * day, "no device owns it (the cloud, or off the list): from its owner's last ask")
+  })
+
   test("the fake keeps a record for the device whose runtime owns its Apex's Session, once, and refuses any other device, another record under the start, and what isn't an ask", async () => {
     const gateway = createFakeGateway()
     try {
@@ -876,6 +903,30 @@ describe("tree notices: the records of Fins off their Apexes' hosts", () => {
       await settle()
       assert.deepEqual(await post(gateway, sender, noticeOf("1")), { admitted: true, seq: 1 }, "each Fin's last notice is its own")
       assert.deepEqual(gateway.heldNotices(apex.session), [])
+    } finally { await gateway.close() }
+  })
+
+  test("a Session's records lapsed stand while a notice under them is held and go once it's taken; kept again, they admit again", async () => {
+    const gateway = createFakeGateway()
+    try {
+      const sender = { kind: "device", device: mac }
+      let apexHost = await owner(gateway, `d-${apexMac}`, { takes: false })
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
+      assert.deepEqual(await post(gateway, sender, noticeOf("1")), { admitted: true, seq: 1 })
+      gateway.lapseTreeEdges(apex.session)
+      assert.deepEqual(gateway.treeEdges(), [{ edge, ending: true }], "a notice the Fin posted under it waits: it stands")
+      assert.deepEqual(await post(gateway, sender, noticeOf("2")), { admitted: true, seq: 2 }, "and admits as before")
+      apexHost.link.close()
+      await settle()
+      apexHost = await owner(gateway, `d-${apexMac}`)
+      for (const seq of [1, 2]) apexHost.answer((await apexHost.delivered()).operation, { heard: true }, seq)
+      await settle()
+      assert.deepEqual(gateway.treeEdges(), [], "taken: gone")
+      assert.deepEqual(await post(gateway, sender, noticeOf("3")), { admitted: false, reason: "forbidden" }, "the Fin's host sends it to its Apex's device itself")
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true }, "which keeps it again")
+      assert.deepEqual(await post(gateway, sender, noticeOf("4")), { admitted: true, seq: 3 })
+      apexHost.link.close()
+      await settle()
     } finally { await gateway.close() }
   })
 

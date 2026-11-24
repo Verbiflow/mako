@@ -64,6 +64,8 @@ interface Account {
   lose: Set<string>
   /** How many asks of the records the account does and loses the answer of, from the next. */
   loseAsks: number
+  /** The Fins whose posts the account answers with this refusal of their own, as it does a Fin at its share or its rate. */
+  refuse: Map<string, "full" | "rate">
   /** Every call one device made of another's runtime, as it left. */
   calls: Array<{ from: string; to: string; channel: string }>
   close(): Promise<void>
@@ -71,7 +73,7 @@ interface Account {
 
 function accountOf(how: { versions?: VersionRange; edges?: Account["edges"]; notices?: Account["notices"] } = {}): Account {
   const gateway = createFakeGateway(how.versions ? { versions: how.versions } : {})
-  return { gateway, devices: [], edges: how.edges ?? "up", notices: how.notices ?? "up", posts: [], asks: [], lose: new Set(), loseAsks: 0, calls: [], close: () => gateway.close() }
+  return { gateway, devices: [], edges: how.edges ?? "up", notices: how.notices ?? "up", posts: [], asks: [], lose: new Set(), loseAsks: 0, refuse: new Map(), calls: [], close: () => gateway.close() }
 }
 
 /** One of the account's devices: a host served to the gateway as its runtime, reaching the others' runtimes and the account as itself. */
@@ -118,7 +120,14 @@ function device(account: Account, name: string, script: Script, how: { tree?: bo
     open: () => (made.agreed ?? 0) >= TREE_NOTICES_LINK_VERSION,
     post: async (body) => {
       if (!reach) return { kind: "failed", why: unreachable().message }
-      const notice = TreeNoticeSchema.safeParse(JSON.parse(body)).data?.id ?? ""
+      const read = TreeNoticeSchema.safeParse(JSON.parse(body)).data
+      const notice = read?.id ?? ""
+      const refusal = read && account.refuse.get(read.child)
+      if (refusal) {
+        const answer: TreeNoticeAnswer = { admitted: false, reason: refusal }
+        account.posts.push({ device: id, notice, answer })
+        return { kind: "answered", answer, ...(refusal === "rate" && { retryAfterMs: 1_000 }) }
+      }
       if (account.notices === "none") {
         account.posts.push({ device: id, notice })
         return { kind: "unserved" }
@@ -695,6 +704,65 @@ async function restated(): Promise<void> {
   } finally { await world.close() }
 }
 
+/** A Fin refused for its own share or rate waits alone: its sibling's notices, on the same device for the same Apex, go on at once. */
+async function waitsAlone(): Promise<void> {
+  const world = await placed()
+  const { account, mac, studio, child, start, report } = world
+  try {
+    await until("the Fin's record", () => recorded(mac, child))
+    const sibling = await start("docs", "k2")
+    assert.ok(sibling.child)
+    const other = sibling.child
+    await until("the sibling's record", () => recorded(mac, other))
+    mac.offline()
+    for (const refusal of ["full", "rate"] as const) {
+      account.refuse.set(child, refusal)
+      const first = await report(`${refusal}-1`, `The sidebar, ${refusal}.`)
+      await until("the Fin's post refused", () => account.posts.some((post) => post.notice === noticeIdOf(child, first.id) && post.answer?.admitted === false))
+      // The sibling reports after the refused one, and twice: neither waits behind the Fin at its share or its rate.
+      for (const key of [`${refusal}-a`, `${refusal}-b`]) {
+        const said = await report(key, `The docs, ${key}.`, other)
+        await until(`the sibling's ${key} admitted`, () => account.gateway.heldNotices(world.session).some((each) => each.report.id === said.id), 3_000)
+      }
+      await until(`only the ${refusal} Fin's to wait`, () => undelivered(studio).length === 1)
+      assert.deepEqual(undelivered(studio), [first.id], `only the ${refusal} Fin's waits`)
+      account.refuse.delete(child)
+      await until(`the ${refusal} Fin's own once the account takes it`, () => undelivered(studio).length === 0)
+    }
+    assert.equal(direct(account, studio), 0, "every one went through the account")
+    console.log("waits alone: a Fin the account refused for its share or its rate waited by itself, and its sibling's reports went through the account at once, behind none of its")
+  } finally { await world.close() }
+}
+
+/** A record that lapsed while the Apex's device was away: the Fin's notice goes to that device itself, which asks the account to keep the record again. */
+async function lapsedAskedAgain(): Promise<void> {
+  const world = await placed()
+  const { account, mac, studio, child, edge, report } = world
+  try {
+    await until("the Fin's record", () => recorded(mac, child))
+    mac.offline()
+    account.gateway.lapseTreeEdges(world.session)
+    assert.deepEqual(account.gateway.treeEdges(), [], "nothing held under it: it lapsed")
+    await report("one", "Reported after the record lapsed.")
+    await until("the account to refuse it", () => account.posts.some((post) => post.answer?.admitted === false && post.answer.reason === "forbidden"))
+    assert.equal(undelivered(studio).length, 1, "it waits for the Apex's device, which is off")
+    await mac.online()
+    await until("the report on the Apex's device", () => summaries(mac, child).includes("Reported after the record lapsed."))
+    assert.ok(direct(account, studio) >= 1, "it went from device to device")
+    await until("the record kept again", () => account.gateway.treeEdges().length === 1)
+    assert.deepEqual(account.gateway.treeEdges(), [{ edge, ending: false }])
+    assert.deepEqual(account.asks.map((asked) => [asked.ask.ask, asked.answer.ok]), [["keep", true], ["keep", true]], "asked again once, by the device that heard the Fin itself")
+    await until("the edge to say so", () => recorded(mac, child))
+    // On record again: the next report goes through the account with the Apex's device off.
+    mac.offline()
+    const calls = direct(account, studio)
+    const next = await report("two", "Through the account again.")
+    await until("held by the account", () => account.gateway.heldNotices(world.session).some((each) => each.report.id === next.id))
+    assert.equal(direct(account, studio), calls, "and called no device")
+    console.log("lapsed: a Fin whose record lapsed reported to its Apex's device itself, which asked the account to keep the record again, and its next report went through the account with that device off")
+  } finally { await world.close() }
+}
+
 const cases: Array<[string, () => Promise<void>]> = [
   ["never-on-at-once", neverOnAtOnce],
   ["restarts", restarts],
@@ -708,6 +776,8 @@ const cases: Array<[string, () => Promise<void>]> = [
   ["held-to-start", heldToItsStart],
   ["restate", restated],
   ["knock", knockStillAsks],
+  ["waits-alone", waitsAlone],
+  ["lapsed", lapsedAskedAgain],
 ]
 
 const only = process.argv.slice(2)

@@ -258,6 +258,13 @@ function isPullNote(request: Pick<LiveRequest, "actor">): boolean {
 const ROOM_EVERY_MS = 10_000
 /** How soon an ask of the account's records that wasn't done is made again when its Fin is next heard of (`Agents.recordPlaced`). */
 const RECORD_RETRY_MS = 60_000
+/**
+ * How soon a Fin on record that's heard from its own device again has its record asked for again (`Agents.recordLost`):
+ * a day. The account lets a record lapse only once its Apex's device was away for `TREE_EDGE_LEASE_MS` (30 days), so
+ * the first day back finds it, and a Fin's device whose every notice comes itself (a build from before the account
+ * held them) costs one ask a day.
+ */
+const RECORD_REASK_MS = 24 * 60 * 60_000
 /** The job that looks every `ROOM_EVERY_MS`. */
 export const ROOM_WATCH_JOB = "read this device's capacity"
 /** How long an ask its Apex may answer waits on the Apex alone before the person is asked too. */
@@ -959,6 +966,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly recording = new Map<string, Promise<void>>()
   /** By start: when the account was last asked for a record it hasn't answered as done. */
   private readonly recordAsked = new Map<string, number>()
+  /** By a Fin's start: when its record was last asked again for its notice coming from its device (`recordLost`). */
+  private readonly recordReasked = new Map<string, number>()
   /** How each Fin here whose Apex is elsewhere stood when its device last said so, and this host's count of sayings (`standingOf`). */
   private readonly standingSaid = new Map<string, boolean>()
   private standingSeq = 0
@@ -4196,6 +4205,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     // How it stands is its device's word as it sent this, never the report's: an earlier turn's report ends no later turn.
     this.standingHeard(edge.child, input.standing)
     hostLog("agents", "notice taken", { notice: input.id, child: edge.child, status: report.data.status, ownerGeneration: report.data.ownerGeneration, ...(kept.deduped && { deduped: true }), ...(from && { seq: from.seq }) })
+    if (!from) this.recordLost(edge.child)
     // A Fin there reported, so its place may have room now: what waits for it asks.
     if (!kept.deduped) void this.askRooms()
     return { heard: true, ...(kept.deduped && { deduped: true as const }) }
@@ -4260,6 +4270,22 @@ export class Agents implements AgentOperations, ConversationChildren {
       this.recordPlaced(child)
     })
     this.recording.set(op, asked)
+  }
+
+  /**
+   * A Fin this device has on record with the account sent a notice from its own device: its device found no record
+   * there (it lapsed while this device was away, `TREE_EDGE_LEASE_MS`), or it's a build that never posts to the
+   * account. Either way the record is asked for again, at most once a `RECORD_REASK_MS`, so the Fin's next notices go
+   * through the account and the two devices needn't be on at once again.
+   */
+  private recordLost(child: string): void {
+    const edge = this.store()?.edges().of(child)
+    if (!edge?.placed?.recorded || edgeStopped(edge) || !this.deps.tree?.open()) return
+    if (this.now() - (this.recordReasked.get(edge.op) ?? -Infinity) < RECORD_REASK_MS) return
+    this.recordReasked.set(edge.op, this.now())
+    hostLog("agents", "Fin's record asked for again", { op: edge.op, child, why: "its notice came from its device, not the account" })
+    this.store()?.keepPlaced(child, { recorded: undefined })
+    this.recordPlaced(child, "now")
   }
 
   // ── Starting ──

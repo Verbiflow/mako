@@ -1041,7 +1041,14 @@ Apex's device with, so its host posts each report to the account instead
 account holds it for the Apex's Session and delivers it as the same
 `mako:agents-notice`, saying who sent it (`from`, `tree-notices.ts`).
 Admitted there is taken here, as is `gone`; `rate` and `full` are waited
-out; `conflict`, `invalid`, `forbidden` and `too-large` end that report
+out by that Fin alone, its later reports behind it and every other Fin's
+going on (`Waits.fin`): the account's room for an Apex's Session is shared
+among the Fins holding notices there, each its equal share and always one
+(`treeNoticeFinRoom`), so no Fin's flood refuses a sibling's report. A
+device's Fin's record lapses 30 days after the account last knew its Apex's
+device was there (`TREE_EDGE_LEASE_MS`); its next notice then goes to that
+device itself, said as a warning, and that device asks for the record again
+(`recordLost`). `conflict`, `invalid`, `forbidden` and `too-large` end that report
 unheard (`agent_notice_refusals`, said in the log alone) and the Fin's later
 reports go on; a 401 waits for the machine's renewed credential. A post
 under way is the machine's work (`Agents.posting`), so it isn't paused with

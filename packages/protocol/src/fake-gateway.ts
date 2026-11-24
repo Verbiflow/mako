@@ -250,6 +250,11 @@ export type FakeGateway = Omit<GatewayUnderTest, "connectClient"> & {
   /** The records kept, oldest first, each as the account keeps it. */
   treeEdges(): KeptTreeEdge[]
   /**
+   * A Session's records lapsed, as the account's do `TREE_EDGE_LEASE_MS` after it last knew the Session's owner was
+   * there (`treeEdgesStandUntil`): each goes once nothing admitted under it is still held.
+   */
+  lapseTreeEdges(session: string): void
+  /**
    * A notice posted (a device to `TREE_NOTICES_PATH`, a machine to `machineNoticesPath`; `body` its JSON text), by a
    * sender as its credential names it and never as the body does: admitted or refused at once, and delivered to the
    * owner of its Apex's Session when there is one to take it. A device's is admitted only under a record that names
@@ -1270,6 +1275,10 @@ export function createFakeGateway(
       return answer({ ok: true })
     },
     treeEdges: () => [...treeEdges.values()].map((kept) => ({ ...kept })),
+    lapseTreeEdges: (session) => {
+      for (const kept of treeEdges.values()) if (kept.edge.apex.session === session) kept.ending = true
+      endTreeEdges()
+    },
     async postNotice(sender, body) {
       const answer = (said: TreeNoticeAnswer) => TreeNoticeAnswerSchema.parse(JSON.parse(JSON.stringify(said)))
       const refused = (reason: Extract<TreeNoticeAnswer, { admitted: false }>["reason"]) => answer({ admitted: false, reason })
@@ -1309,7 +1318,9 @@ export function createFakeGateway(
       const last = lastNotices.get(scope)
       const bytes = treeNoticeBytes(body)
       const own = box.held.filter((each) => each.scope === scope)
-      const admitted = admitTreeNotice({ own, count: box.held.length, bytes: box.held.reduce((sum, each) => sum + each.bytes, 0), head: box.head, ...(last && { last }) }, notice, bytes)
+      // The rule reads how many other Fins hold notices here, never what they hold (`treeNoticeFinRoom`).
+      const others = new Set(box.held.flatMap((each) => (each.scope === scope ? [] : [each.scope]))).size
+      const admitted = admitTreeNotice({ own, others, head: box.head, ...(last && { last }) }, notice, bytes)
       if (!admitted.admitted) return answer(admitted)
       const mark = notice.standing && { owner: notice.standing.owner, seq: notice.standing.seq }
       if (admitted.does === "restand") {
