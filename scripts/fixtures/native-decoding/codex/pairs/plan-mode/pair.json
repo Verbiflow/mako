@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.170.0"
+    "version": "0.172.0"
   },
   "about": "Plan how to move the release to Monday. Read notes.md first; don't change any file. Propose the plan when it's ready. / Thanks. Without changing anything, tell me in one line what the plan's first step is. A plan-mode turn that reads a file and proposes a plan, approved where the harness asks, then a turn in the session's own mode.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/18/rollout-2026-11-18T15-41-16-01a1ef51-c7cf-71d3-a918-44a72ed1e143.jsonl",
+      "path": ".codex/sessions/2026/11/24/rollout-2026-11-24T17-46-12-01a20eaa-5020-7402-8625-89b9644563e4.jsonl",
       "known": []
     }
   ]

@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.170.0"
+    "version": "0.172.0"
   },
   "about": "Open swatch.png with your file read tool and tell me its colour. Don't run commands. A file read whose result is an image, then the answer.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/18/rollout-2026-11-18T15-41-50-01a1ef52-4d5f-72b0-9a73-3355e834af7b.jsonl",
+      "path": ".codex/sessions/2026/11/24/rollout-2026-11-24T17-46-46-01a20eaa-d434-71c1-a1c9-bda47bc01e55.jsonl",
       "known": []
     }
   ]

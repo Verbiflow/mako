@@ -1,13 +1,13 @@
 {
   "harness": "codex",
   "native": {
-    "version": "0.170.0"
+    "version": "0.172.0"
   },
   "about": "Read log.md with your file read tool, once and without an offset or limit, then tell me the last line you were shown. Don't run commands. One read of a file longer than a harness shows at once, then the answer.",
   "stores": [
     {
       "reader": "codex",
-      "path": ".codex/sessions/2026/11/18/rollout-2026-11-18T15-41-12-01a1ef51-b762-77e1-9225-45bfc1831978.jsonl",
+      "path": ".codex/sessions/2026/11/24/rollout-2026-11-24T17-46-08-01a20eaa-4096-74e2-b7f9-3f34db837e1a.jsonl",
       "known": []
     }
   ]
