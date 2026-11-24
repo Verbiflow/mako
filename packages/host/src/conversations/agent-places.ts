@@ -200,6 +200,12 @@ export class AgentPlaces {
   private readonly retries = new Map<string, { at: number; waitMs: number }>()
   private readonly flushing = new Map<string, Promise<void>>()
   private readonly again = new Set<string>()
+  /**
+   * By report: a standing said again while that report was still in the outbox, its latest. The report's own post says
+   * how the Fin stands as it leaves, so one asked for before it leaves is said by it; one asked for while it's on its
+   * way is said once it's taken (`send`), since what that post carries is from before.
+   */
+  private readonly restated = new Map<string, OutboxNotice>()
   /** The account said it has no path for a device's notices: it's posted none until this device's link is next up (`linked`). */
   private pathless = false
   private readonly demand
@@ -382,14 +388,17 @@ export class AgentPlaces {
     const device = notice.edge.remote?.device
     if (!device || this.stopped) return
     const post = this.way(notice.edge)
+    // Still in the outbox: it goes in its turn behind any before it, and says how the Fin stands then, or after (`restated`).
+    if (post && this.deps.waiting().some(({ report }) => report.id === notice.report.id)) {
+      this.restated.set(notice.report.id, notice)
+      return this.queued(device)
+    }
     const input = this.noticeOf(notice)
     const direct = () => this.deps.link.call({ kind: "device", device, name: device }, "mako:agents-notice", [wire(input)]).then(
       () => hostLog("agents", "standing sent", { notice: input.id, device, working: input.standing?.working ?? false }),
       (error: Error) => hostLog("agents", "standing not sent", { notice: input.id, device, why: errorMessage({ error }) }),
     )
     if (!post) return void direct()
-    // Still in the outbox: its own post says how the Fin stands as it goes, in its turn behind any before it.
-    if (this.deps.waiting().some(({ report }) => report.id === notice.report.id)) return this.queued(device)
     // Admitted before: the account puts the newer standing on the notice it holds, or sends it on to the owner once.
     this.posted(post, input).then(
       (sent) => {
@@ -485,6 +494,8 @@ export class AgentPlaces {
     for (const { edge, report } of this.deps.waiting()) {
       if (this.stopped) return
       if (edge.remote?.device !== device) continue
+      // What this post says of how the Fin stands is as it is now: a standing asked for before it is said by it.
+      this.restated.delete(report.id)
       const input = this.noticeOf({ edge, report })
       const id = input.id
       const began = this.now()
@@ -498,11 +509,18 @@ export class AgentPlaces {
         // Nothing this host posts again answers otherwise, and nothing its Fin does mends it: it's kept unheard, out
         // of the outbox, and said here alone. The Fin's later reports go on behind it.
         this.deps.refused?.(report, sent.reason, this.now())
+        this.restated.delete(report.id)
         hostWarn("agents", "notice refused for good", { notice: id, child: edge.child, device, refused: sent.reason, why: treeNoticeRefusalText(sent.reason) })
         continue
       }
       this.deps.taken(report, this.now())
       hostLog("agents", "notice sent", { notice: id, device, ms: this.now() - began, ...sent.fields })
+      // The Fin stood otherwise while this was on its way, which what it carried can't say: said now, once.
+      const after = this.restated.get(report.id)
+      if (after) {
+        this.restated.delete(report.id)
+        this.restate(after)
+      }
     }
     if (!this.deps.waiting().length) this.demand.set(false)
   }
