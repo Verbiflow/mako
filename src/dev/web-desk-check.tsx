@@ -23,6 +23,8 @@ import { fixtureHarnesses } from "./harness-fixtures"
 import { BUSY_CWD, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE, busyActivity, busySnapshot } from "./mock-busy-thread"
 import { apexFins, apexSnapshot, placedSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE, PLACED_ASKS, PLACED_CONVERSATION, PLACED_DEVICE, PLACED_SCENE, PLACED_SESSION, PLACED_THREAD, PLACED_TITLE, PLACED_WHERE } from "./mock-apex-thread"
 import { listedFins } from "@mako/host/contracts/children"
+import { decodeRuntimeArgs, RuntimeArgsSchema } from "@mako/host/contracts/runtime"
+import { z } from "zod"
 import { installMockBridge, MOCK_HEADS } from "./mock-bridge"
 import { mockThreads } from "./mock-runtime-fixtures"
 import "../web-client/style.css"
@@ -40,6 +42,8 @@ const search = new URLSearchParams(location.search)
 applyTheme(search.get("theme") === "light" ? "light" : "dark")
 
 const mock = installMockBridge()
+/** The Mac's own host, as its window reaches it: what a host call from this browser reaches through the gateway. */
+const macBridge = window.mako
 // As the browser's own bridge answers (`WebConversations`): a conversation's calls go to its owner, and what only a
 // Mac's own window asks of its host (its checkouts' branches, worktrees, the Thread store) isn't offered.
 const refused = () => Promise.reject(new Error("That isn't offered in the browser."))
@@ -165,13 +169,42 @@ function opened(session: WebSession): LiveSnapshot {
   }
 }
 
+/**
+ * The Mac's host as the gateway reaches it from this page: the calls New makes of a Mac (its harness order, each
+ * harness's tuning in a folder, its access ladders, its worktrees) answered by the Mac's own mock bridge, as its window
+ * would answer them, so New lists the desk's harnesses, models, projects and access in their real words. Any other call
+ * fails, as a host that doesn't answer it would.
+ */
+async function macAnswer(channel: string, args: readonly unknown[]): Promise<string> {
+  const answer =
+    channel === "harness-order-saved"
+      ? fixtureHarnesses.map((entry) => entry.provider)
+      : channel === "harness-tuning"
+        ? await macBridge?.harnessTuning(String(args[0]), args[1] === undefined || args[1] === null ? undefined : String(args[1]))
+        : channel === "harness-descriptors"
+          ? await macBridge?.harnessDescriptors()
+          : channel === "worktrees"
+            ? await macBridge?.worktrees()
+            : undefined
+  if (answer === undefined) throw new Error(`The fixture's Mac doesn't answer ${channel}`)
+  return JSON.stringify(answer)
+}
+const MacCallSchema = z.object({ args: RuntimeArgsSchema })
+const macSession = {
+  async call(operation: { op: string; input: { text: string } }) {
+    const channel = operation.op.slice("host.".length)
+    const text = await macAnswer(channel, decodeRuntimeArgs(MacCallSchema.parse(JSON.parse(operation.input.text)).args))
+    return { ok: true, value: { text } }
+  },
+}
+
 // A stand-in for the started client, without its constructor's gateway: what the desk asks of it, answered from the
 // fixtures. Opening a Session applies its snapshot as its owner's would arrive.
 const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
   account: { id: "account-check", name: "You", email: "you@example.com", image: null, entitlements: [] },
   deviceId: "browser-check",
   options: { origin: location.origin, base: search.get("webapp") !== null ? "/scripts/web-desk.html/" : "/", build: "fixture" },
-  gateway: { wake: () => undefined, connection: async () => ({ cloud: location.origin }), rest: async (_method: string, path: string) => ((search.get("setup") || search.get("side") === "setup") && path.startsWith("/v1/borrow/") ? { grants: [], leases: [], events: [], asks: [] } : Promise.reject(new Error("The fixture has no gateway"))) },
+  gateway: { session: macSession, wake: () => undefined, connection: async () => ({ cloud: location.origin }), rest: async (_method: string, path: string) => ((search.get("setup") || search.get("side") === "setup") && path.startsWith("/v1/borrow/") ? { grants: [], leases: [], events: [], asks: [] } : Promise.reject(new Error("The fixture has no gateway"))) },
   list: { refreshDevices: async () => undefined },
   push: { seen: async () => undefined, standing: async () => ({ standing: "unsupported", quietHours: null, timeZone: "UTC" }) },
   conversations: async () => ({

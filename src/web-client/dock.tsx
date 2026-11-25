@@ -202,6 +202,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
             waiting={switching ? "Switching access…" : undefined}
             tools={said.chip}
             status={said.access}
+            foldStatus
             header={sendsTo && harnessId ? <SendsTo harness={harnessId} words={sendsTo} /> : undefined}
             hold={asksFirst && ask?.kind !== "question" && !running ? <StaleSend words={asksFirst} onSure={() => setSure(true)} /> : undefined}
           />

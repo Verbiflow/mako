@@ -1,5 +1,8 @@
 import { useEffect } from "react"
 
+/** Taller than this, what covers the page's foot is the on-screen keyboard rather than a bar of suggestions. */
+const KEYBOARD_PX = 120
+
 /** After a field lets go, iOS may still pan the page back for a moment: the page is put back again this much later. */
 const SETTLE_AFTER_BLUR_MS = 350
 
@@ -9,6 +12,8 @@ const SETTLE_AFTER_BLUR_MS = 350
  * a composer pinned to the bottom would sit under the keyboard. The app's height follows the visual viewport
  * (`--app-height`), and while a field is focused its top follows the visual viewport's (`--app-top`), so the app sits
  * on the rectangle iOS shows and the composer rides on the keyboard on both.
+ *
+ * While the on-screen keyboard is up, the root says so (`data-keyboard`), for what folds away under it.
  *
  * The page is put back at its top only as a field lets go of the keyboard, and once more after iOS's own pan settles,
  * never on each of the viewport's scrolls: putting it back while the keyboard is up fights iOS's own pan, a jump on
@@ -27,7 +32,10 @@ export function useKeyboardInset(): void {
         if (viewport.scale > 1.01) return
         root.style.setProperty("--app-height", `${Math.round(viewport.height)}px`)
         root.style.setProperty("--app-top", `${typing() ? Math.max(0, Math.round(viewport.offsetTop)) : 0}px`)
-        root.style.setProperty("--keyboard", `${Math.max(0, Math.round(innerHeight - viewport.height - viewport.offsetTop))}px`)
+        const keyboard = Math.max(0, Math.round(innerHeight - viewport.height - viewport.offsetTop))
+        root.style.setProperty("--keyboard", `${keyboard}px`)
+        // The on-screen keyboard is up (a bar of suggestions alone is shorter): the composer folds what it can spare.
+        root.toggleAttribute("data-keyboard", keyboard > KEYBOARD_PX && typing())
       })
     }
     const putBack = () => {

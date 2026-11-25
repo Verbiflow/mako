@@ -1728,3 +1728,34 @@
     transition: none;
   }
 }
+
+/*
+ * A Thread's status line under a finger, while the field has the on-screen keyboard up (`data-keyboard`, from
+ * `keyboard.ts`): it folds away, so the transcript keeps the 44 px, and comes back as the field lets go. A short fold
+ * on the desk's leaving curve, and back on its arriving one; under reduced motion it simply goes and comes. Outside the
+ * layer, so it wins over the line's own height utility.
+ */
+@media (pointer: coarse) {
+  .web-composer[data-fold-status] > .web-composer-status {
+    overflow: hidden;
+    transition:
+      height 200ms var(--ease-out),
+      opacity 160ms var(--ease-out);
+  }
+  /* The box keeps a breath off the keyboard's edge where the line stood. */
+  :root[data-keyboard] .web-composer[data-fold-status][data-typing] {
+    padding-bottom: 6px;
+  }
+  :root[data-keyboard] .web-composer[data-fold-status][data-typing] > .web-composer-status {
+    height: 0;
+    opacity: 0;
+    transition:
+      height 160ms var(--ease-swift),
+      opacity 100ms var(--ease-swift);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .web-composer[data-fold-status] > .web-composer-status {
+    transition: none !important;
+  }
+}

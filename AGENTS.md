@@ -3824,8 +3824,9 @@ deliberate action and never rides along with a commit.
   surface, the same in a new Thread, an existing one, a resting pane and the
   web app's on every form (`composer-frame.tsx`, which `web-client/composer.tsx`
   draws too: a phone's and an iPad's take a finger's sizes, a 36 px send and a
-  44 px control row and status line, and keep their mic; `test:composer-edges-ui`
-  measures each). Hairlines stay
+  44 px control row and status line, and keep their mic; a Thread's status
+  line folds away while the on-screen keyboard is up and comes back as the
+  field lets go, New's never; `test:composer-edges-ui` measures each). Hairlines stay
   for content (a diff's file headers, a table) and controls (an input's or a
   button's outline). **Every corner is square**, as the fin is: the radius tokens
   (`--radius-*`) are all 0, so panes, rows, tabs, cards, fields, buttons,

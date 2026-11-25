@@ -78,6 +78,7 @@ export function Composer({
   straight = false,
   hold,
   stopFor,
+  foldStatus = false,
 }: {
   placeholder: string
   /** Sends a message under `id`; says whether it went. One that didn't comes back into an empty field, or to `onUnsent`. */
@@ -121,6 +122,11 @@ export function Composer({
   straight?: boolean
   /** A send that asks first: pressed, the words stay in the field and this line stands above it (`HeldSendContext`). */
   hold?: ReactNode
+  /**
+   * The status line folds away while the field has the on-screen keyboard up, and comes back as it lets go: a Thread's,
+   * whose access can wait for the keyboard to go. New's never folds, since it says where the Thread will run.
+   */
+  foldStatus?: boolean
 }) {
   const [text, setText] = useState(() => (draftKey ? openingText(draftKey, outboxHolds) : ""))
   const [picked, setPicked] = useState<Picked[]>([])
@@ -135,6 +141,8 @@ export function Composer({
     }
   }, [])
   const [problem, setProblem] = useState<string | undefined>(undefined)
+  // Whether the field has focus, for what folds away while the keyboard is up (`foldStatus`).
+  const [focused, setFocused] = useState(false)
   const input = useRef<HTMLTextAreaElement>(null)
   const files = useRef<HTMLInputElement>(null)
   const [previews] = useState(() => new HeldPreviews())
@@ -392,6 +400,8 @@ export function Composer({
       <form
         className={cn(COMPOSER_COLUMN, "web-composer")}
         data-desk={desk || undefined}
+        data-fold-status={foldStatus || undefined}
+        data-typing={focused || undefined}
         onSubmit={(event) => {
           event.preventDefault()
           void send()
@@ -424,6 +434,8 @@ export function Composer({
             placeholder={dictation.listening ? "Listening…" : placeholder}
             aria-label="Message"
             className="web-composer-input"
+            onFocus={() => setFocused(true)}
+            onBlur={() => setFocused(false)}
             onKeyDown={(event) => {
               // A hardware keyboard sends with ⌘↩, as on a Mac; ↩ alone is a new line, as phones expect. On the desk, ↩ sends
               // and ⇧↩ is the new line, as the desktop's composer does.

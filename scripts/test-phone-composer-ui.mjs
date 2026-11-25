@@ -159,6 +159,33 @@ async function checkPhone() {
     await until(`!document.querySelector('${sheet}')`, "the sheet closing on a flick")
   }
 
+  /**
+   * A Thread's status line while the field has the on-screen keyboard up: folded away, the transcript keeping its 44 px,
+   * and back as the field lets go. The page says the keyboard is up as `useKeyboardInset` does (`data-keyboard`); a
+   * test's window has no on-screen keyboard to raise.
+   */
+  const checkFold = async () => {
+    await phone("dark")
+    const status = "document.querySelector('.web-composer > [data-composer-status]')"
+    const height = () => evaluate(`Math.round(${status}.getBoundingClientRect().height)`)
+    assert.equal(await height(), 44, "the status line at rest")
+    // A hidden test window holds its focus events until it's shown: the field's focus is said as the browser says it.
+    await evaluate(`(() => { document.documentElement.setAttribute('data-keyboard', ''); const field = document.querySelector('.web-composer-input'); field.focus({ preventScroll: true }); field.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); return true })()`)
+    await until(`Math.round(${status}.getBoundingClientRect().height) === 0 && getComputedStyle(${status}).opacity === '0'`, "the status line folded under the keyboard")
+    await capture("composer-keyboard-iphone-dark.png")
+    await evaluate("(() => { const field = document.querySelector('.web-composer-input'); field.blur(); field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); document.documentElement.removeAttribute('data-keyboard'); return true })()")
+    await until(`Math.round(${status}.getBoundingClientRect().height) === 44`, "the status line back as the field lets go")
+    assert.notEqual(await evaluate(`getComputedStyle(${status}).transitionDuration`), "0s", "it folds and comes back on a short transition")
+    // Under reduced motion it goes and comes at once.
+    await page.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] })
+    assert.ok((await evaluate(`getComputedStyle(${status}).transitionDuration`)).split(",").every((each) => each.trim() === "0s"), "no transition under reduced motion")
+    await evaluate(`(() => { document.documentElement.setAttribute('data-keyboard', ''); const field = document.querySelector('.web-composer-input'); field.focus({ preventScroll: true }); field.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); return true })()`)
+    assert.equal(await height(), 0, "folded at once under reduced motion")
+    await evaluate("(() => { const field = document.querySelector('.web-composer-input'); field.blur(); field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); document.documentElement.removeAttribute('data-keyboard'); return true })()")
+    await page.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [] })
+    console.log("Fold: a Thread's status line folds while the keyboard is up and comes back on blur; at once under reduced motion")
+  }
+
   /** The one chip and its sheet, on Codex (every model with effort) and on Grok (ending on a model without). */
   const checkSettings = async () => {
     // The bar keeps what a thumb needs: add, the one chip, the mic and send.
@@ -437,6 +464,7 @@ async function checkPhone() {
     await capture("answer-iphone-light.png")
 
     await checkSettings()
+    await checkFold()
   } finally {
     clearTimeout(watchdog)
   }
