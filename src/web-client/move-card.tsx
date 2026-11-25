@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react"
+import { comingBackWords, MOVE_WORDS, moveAway, stillOnWords } from "@/lib/move-words"
 import { ArrowDownIcon, ArrowUpIcon, ChevronDownIcon, CloudIcon, LaptopIcon, MoonIcon, RotateCwIcon } from "lucide-react"
 import { continuedWords, continueLostDetail, continueStepDetail, continueStepWords, continueTitle } from "@mako/host/contracts/cloud-continues"
 import { cn } from "@/lib/utils"
@@ -159,10 +160,11 @@ export function MoveStrip({ thread, move, onRetry }: { thread: string; move: Sho
   const title = move.continued
     ? continueTitle(end?.kind === "failed" ? "failed" : done ? "continued" : undefined)
     : end?.kind === "failed"
-    ? up ? "Couldn't move to the cloud" : "It stayed in the cloud"
-    : end?.kind === "unsettled" ? "Waiting for the cloud's answer"
+    ? up ? stillOnWords(moveAway(move.mac.name)) : "It stayed in the cloud"
+    : end?.kind === "unsettled" ? MOVE_WORDS.cloudAnswer
+    : unconfirmed ? MOVE_WORDS.unconfirmed
     : done ? (up ? "Moved to the cloud" : `Back on ${move.mac.name}`)
-    : up ? "Moving to the cloud" : `Bringing it back to ${move.mac.name}`
+    : up ? (move.handOff ? MOVE_WORDS.handingOff : MOVE_WORDS.moving) : comingBackWords(moveAway(move.mac.name))
   const words = unconfirmed
     ? `Not confirmed · asking ${move.continued ? "your account" : move.mac.name} again`
     : done ? (move.continued ? continuedWords(move.mac.name) : up ? "It goes on in a cloud machine, at the same folder." : `It goes on on ${move.mac.name}.`)
@@ -201,7 +203,7 @@ export function MoveStrip({ thread, move, onRetry }: { thread: string; move: Sho
           {onRetry && (end?.kind === "failed" || unconfirmed) ? (
             <button type="button" className={unconfirmed ? "web-quiet-button" : "web-button"} onClick={onRetry}>
               <RotateCwIcon className="size-4" />
-              {unconfirmed ? "Ask now" : "Retry"}
+              {unconfirmed ? MOVE_WORDS.checkStatus : MOVE_WORDS.retry}
             </button>
           ) : null}
           {problem ? (

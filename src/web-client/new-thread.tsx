@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { CheckIcon, ChevronDownIcon, CloudIcon, FolderIcon, LaptopIcon, ShieldAlertIcon, ShieldIcon, XIcon } from "lucide-react"
-import { MakoMark } from "@/components/ui/mako-mark"
+import { OceanScene } from "@/components/ui/ocean-scene"
+import { Welcome } from "@/components/transcript/transcript"
 import { modelByIdentity } from "@mako/sessions/settings"
 import { startFailure } from "@mako/host/contracts/cloud-threads"
 import { errorMessage } from "@mako/host/contracts/error-message"
@@ -59,7 +60,11 @@ export function StartSheet({ open, onDismiss, onStarted, adding }: { open: boole
   )
 }
 
-/** New on a wide screen: the pane beside the list, as the desk's new tab, its composer waiting in the middle. */
+/**
+ * New on a tablet: the pane beside the list, as the desk's new Thread is (`DeskStart`): the opening screen's headline
+ * over the engraving, and the composer at the pane's foot, which the keyboard lifts. Its bar keeps Close, a finger's
+ * way out where the desk has Escape.
+ */
 export function StartPane({ onDismiss, onStarted }: { onDismiss: () => void; onStarted: (started: Started, where: string) => void }) {
   return (
     <section aria-label="New thread" className="web-start-pane flex min-h-0 flex-1 flex-col bg-surface">
@@ -69,8 +74,11 @@ export function StartPane({ onDismiss, onStarted }: { onDismiss: () => void; onS
           <XIcon className="size-[18px]" />
         </button>
       </header>
-      <div className="web-start-pane-body web-enter">
-        <MakoMark className="mx-auto mb-7 size-8 opacity-30" />
+      <div className="agent-surface relative isolate flex min-h-0 flex-1 flex-col overflow-hidden">
+        <OceanScene />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Welcome />
+        </div>
         <StartForm onStarted={onStarted} />
       </div>
     </section>

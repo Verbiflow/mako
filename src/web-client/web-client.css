@@ -243,6 +243,10 @@
   .web-setup-card {
     @apply mx-4 mt-3 bg-raised;
   }
+  /* At the foot of an iPad's rail, as the desk's rail has it, inset with the rail's rows. */
+  [data-list="rail"] .web-setup-card {
+    @apply mx-2 mt-2;
+  }
   .web-setup-step {
     @apply flex min-h-11 w-full items-center gap-3 px-3 text-left text-ui;
     transition: background-color 220ms ease;
@@ -716,13 +720,6 @@
     animation-play-state: paused;
   }
 
-  /* New: the composer, waiting in the middle of the pane. */
-  .web-start-pane-body {
-    @apply mx-auto flex w-full min-h-0 max-w-[680px] flex-1 flex-col justify-center px-6 pb-[12vh];
-  }
-  .web-start-pane .web-composer {
-    @apply px-0;
-  }
   .web-start-line {
     @apply mx-auto w-full max-w-content px-4 pb-1.5;
   }
@@ -739,25 +736,6 @@
   }
   .web-attachment-remove {
     @apply absolute top-1 right-1 flex size-5 items-center justify-center bg-black/65 text-white;
-  }
-
-  .web-switch {
-    @apply relative h-[30px] w-[50px] shrink-0 rounded-full bg-fill-selected ring-1 ring-hairline;
-    transition: background-color 160ms var(--ease-out);
-  }
-  .web-switch > span {
-    @apply absolute top-[3px] left-[3px] size-6 rounded-full bg-foreground/80 shadow-sm;
-    transition: transform 200ms var(--ease-out), background-color 160ms ease;
-  }
-  .web-switch-on {
-    @apply bg-positive;
-  }
-  .web-switch-on > span {
-    @apply bg-white;
-    transform: translateX(20px);
-  }
-  .web-switch:disabled {
-    @apply opacity-40;
   }
 
   .web-waiting {

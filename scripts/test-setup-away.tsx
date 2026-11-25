@@ -14,10 +14,10 @@ import { allAsks, readFailure, readSetup, setSetupDrafter, setSetupSource, setup
 import { ASK_TOUCH, askNotice, runChoice } from "@/lib/ask-card"
 import { inboxCount, inboxModel } from "@/state/inbox"
 import DeskSettings from "@/web-client/desk-settings"
+import { webSettingsSections } from "@/web-client/settings-sections"
 import { closeSetup, openSetup, setupOpenStore } from "@/web-client/setup-open"
 import { SetupRailRow } from "@/web-client/setup-rail-row"
 import type { ScreenRoute } from "@/web-client/route"
-import { Settings } from "@/web-client/settings"
 import { SetupScreen } from "@/web-client/setup-screen"
 import { listedAsker, webSetup, type BorrowGateway } from "@/web-client/setup-source"
 
@@ -67,10 +67,9 @@ const source = webSetup(gateway, "acct", () => [{ id: MAC, name: "MacBook Pro", 
 // 1. A laptop's browser: Settings is given a way to open a project's Setup, which draws in its pane at the desk's form.
 const opened: ScreenRoute[] = []
 const settings = DeskSettings({ route: { kind: "settings" }, open: (next) => opened.push(next) })
-assert.equal(settings.type, Settings, "the pane holds Settings")
-assert.ok(settings.props.onSetup, "and Settings offers each project's Setup")
-settings.props.onSetup("shop")
-assert.deepEqual(opened, [{ kind: "setup", project: "shop" }])
+assert.equal(settings.type.name, "DeskSettingsPanes", "the pane holds the desktop's Settings panes")
+const setupSection = webSettingsSections((project) => opened.push({ kind: "setup", project })).find((entry) => entry.id === "setup")
+assert.equal(setupSection?.group, "Project", "and Settings offers each project's Setup in its Project group")
 const pane = DeskSettings({ route: { kind: "setup", project: "shop" }, open: (next) => opened.push(next) })
 assert.equal(pane.type, SetupScreen, "the pane draws the project's Setup")
 assert.equal(pane.props.desk, true, "at the desk's form")
