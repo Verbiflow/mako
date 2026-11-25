@@ -250,6 +250,11 @@ export type FakeGateway = Omit<GatewayUnderTest, "connectClient"> & {
   /** The records kept, oldest first, each as the account keeps it. */
   treeEdges(): KeptTreeEdge[]
   /**
+   * A Session's records lapsed, as the account's do `TREE_EDGE_LEASE_MS` after it last knew the Session's owner was
+   * there (`treeEdgesStandUntil`): each goes once nothing admitted under it is still held.
+   */
+  lapseTreeEdges(session: string): void
+  /**
    * A notice posted (a device to `TREE_NOTICES_PATH`, a machine to `machineNoticesPath`; `body` its JSON text), by a
    * sender as its credential names it and never as the body does: admitted or refused at once, and delivered to the
    * owner of its Apex's Session when there is one to take it. A device's is admitted only under a record that names
@@ -290,6 +295,14 @@ export function createFakeGateway(
   const archivedTrees = new Set<string>()
   /** By start: the records of Fins off their Apexes' hosts, oldest first (`TreeEdgeSchema`). */
   const treeEdges = new Map<string, KeptTreeEdge>()
+  /**
+   * By start: records that ended or lapsed, as the account keeps them to bring back at their Fin's next post
+   * (`TreeNoticeRefusalSchema`'s `forbidden`): only the device a record names posts it back, so nothing but what its
+   * Apex's device once kept is ever brought back.
+   */
+  const endedTreeEdges = new Map<string, TreeEdge>()
+  /** By start: records ending because their Fin was stopped (`TreeEdgeEndSchema`), which go and are not remembered. */
+  const stoppedTreeEdges = new Set<string>()
   /** By sender's scope: when it posted in the last minute, every post counted. */
   const noticePosts = new Map<string, number[]>()
   /** By sender's scope: the last notice admitted from it, which tells that one posted again from a new one once it's been taken. */
@@ -502,7 +515,10 @@ export function createFakeGateway(
   /** A record its Apex's device ended goes once nothing admitted under it is held: asked as it's ended, and as anything held is let go. */
   const endTreeEdges = () => {
     for (const [op, kept] of treeEdges) {
-      if (kept.ending && ![...mailboxes.values()].some((box) => box.held.some((held) => held.scope === op))) treeEdges.delete(op)
+      if (!kept.ending || [...mailboxes.values()].some((box) => box.held.some((held) => held.scope === op))) continue
+      treeEdges.delete(op)
+      // A stopped Fin's record is never brought back: only one that ended as finished, or lapsed.
+      if (!stoppedTreeEdges.delete(op)) endedTreeEdges.set(op, kept.edge)
     }
   }
   /**
@@ -1262,14 +1278,24 @@ export function createFakeGateway(
         // One that was ending stands again where it stood: a record's place among the others is when it was first kept.
         if (kept) kept.ending = false
         else treeEdges.set(op, { edge: ask.edge, ending: false })
+        endedTreeEdges.delete(op)
+        stoppedTreeEdges.delete(op)
       }
       if (decided.does === "end" && kept) {
+        if (ask.ask === "end" && ask.why !== "finished") stoppedTreeEdges.add(op)
         kept.ending = true
         endTreeEdges()
       }
       return answer({ ok: true })
     },
     treeEdges: () => [...treeEdges.values()].map((kept) => ({ ...kept })),
+    lapseTreeEdges: (session) => {
+      for (const kept of treeEdges.values()) if (kept.edge.apex.session === session) {
+        kept.ending = true
+        stoppedTreeEdges.delete(kept.edge.op)
+      }
+      endTreeEdges()
+    },
     async postNotice(sender, body) {
       const answer = (said: TreeNoticeAnswer) => TreeNoticeAnswerSchema.parse(JSON.parse(JSON.stringify(said)))
       const refused = (reason: Extract<TreeNoticeAnswer, { admitted: false }>["reason"]) => answer({ admitted: false, reason })
@@ -1292,7 +1318,14 @@ export function createFakeGateway(
       if (fin && (fin.child ?? notice.child) !== notice.child) return refused("forbidden")
       // A device's credential names no start, child or Apex: the account knows a Fin on one only by the record its
       // Apex's device keeps. One that names this device, this child and this Apex admits the notice, and no other does.
-      const edge = sender.kind === "device" ? treeEdgeOfNotice([...treeEdges.values()].map((kept) => kept.edge), sender.device, notice) : undefined
+      const kept = sender.kind === "device" ? treeEdgeOfNotice([...treeEdges.values()].map((each) => each.edge), sender.device, notice) : undefined
+      // None standing: one that ended or lapsed and names this device, this child and this Apex comes back.
+      const back = sender.kind === "device" && !kept ? treeEdgeOfNotice([...endedTreeEdges.values()], sender.device, notice) : undefined
+      if (back && !archivedTrees.has(back.apex.session)) {
+        endedTreeEdges.delete(back.op)
+        treeEdges.set(back.op, { edge: back, ending: false })
+      }
+      const edge = kept ?? back
       // What's kept of a sender is under the start that made its Fin, so one Fin's notice is never another's by its ID
       // alone, and it's held for that start's Apex's Session: a machine's own start, a device's record's.
       const under = fin ? { op: fin.op, session: fin.apex.session } : edge && { op: edge.op, session: edge.apex.session }
@@ -1309,7 +1342,9 @@ export function createFakeGateway(
       const last = lastNotices.get(scope)
       const bytes = treeNoticeBytes(body)
       const own = box.held.filter((each) => each.scope === scope)
-      const admitted = admitTreeNotice({ own, count: box.held.length, bytes: box.held.reduce((sum, each) => sum + each.bytes, 0), head: box.head, ...(last && { last }) }, notice, bytes)
+      // The rule reads how many other Fins hold notices here, never what they hold (`treeNoticeFinRoom`).
+      const others = new Set(box.held.flatMap((each) => (each.scope === scope ? [] : [each.scope]))).size
+      const admitted = admitTreeNotice({ own, others, head: box.head, ...(last && { last }) }, notice, bytes)
       if (!admitted.admitted) return answer(admitted)
       const mark = notice.standing && { owner: notice.standing.owner, seq: notice.standing.seq }
       if (admitted.does === "restand") {

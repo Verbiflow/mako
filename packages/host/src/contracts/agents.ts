@@ -123,6 +123,11 @@ export const PlacedSchema = z.lazy(() => z.object({
    * place: set once the account answered, and dropped once it answered the record's end.
    */
   recorded: z.literal(true).optional(),
+  /**
+   * When this device last took a report of it, by this device's own clock: what its closing and its record's idle
+   * time count from (`Agents.placedIdle`), never the report's own time, which is its device's clock.
+   */
+  heardAt: z.number().int().nonnegative().optional(),
 }))
 export type Placed = z.infer<typeof PlacedSchema>
 

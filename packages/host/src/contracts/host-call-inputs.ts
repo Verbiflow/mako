@@ -1990,6 +1990,7 @@ const inputs = {
                   .object({ owner: z.number(), seq: z.number() })
                   .optional(),
                 recorded: z.literal(true).optional(),
+                heardAt: z.number().optional(),
               })
               .optional(),
           })

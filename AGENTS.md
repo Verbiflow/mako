@@ -539,8 +539,12 @@ no message queued, held or being sent, nothing asked, no work its harness
 left running, no cut turn, no armed wait). `keptOpen` and
 `conversationHolds` read all of it in the same step as the write; a
 conversation not in memory is read in first, a slice at a time, and one
-this host can't read stays open. A Fin placed on another device, or whose
-Apex is, is left alone. Closing is bookkeeping: its reason is
+this host can't read stays open. A Fin this device placed on another closes
+the same way by its device's last word (idle, no stop or start of it owed
+there), and its record with the account ends with it; one idle six hours
+that still asks keeps its edge and loses its record, which the next thing
+that sets it to work keeps again (`placedIdle`). One whose Apex is on
+another device is its Apex's device's to close. Closing is bookkeeping: its reason is
 `FINISHED_CLOSE`, a stop's reason on the wire, so an older build shows it
 as any closed edge and opens it as it opens a stopped one; this build reads
 it as done or failed (`childState`), never stopped. Nothing is cancelled,
@@ -1041,7 +1045,21 @@ Apex's device with, so its host posts each report to the account instead
 account holds it for the Apex's Session and delivers it as the same
 `mako:agents-notice`, saying who sent it (`from`, `tree-notices.ts`).
 Admitted there is taken here, as is `gone`; `rate` and `full` are waited
-out; `conflict`, `invalid`, `forbidden` and `too-large` end that report
+out by that Fin alone, its later reports behind it and every other Fin's
+going on (`Waits.fin`): the account's room for an Apex's Session is shared
+among the Fins holding notices there, each its equal share and always one
+(`treeNoticeFinRoom`), so no Fin's flood refuses a sibling's report. A
+device's Fin's record lapses 30 days after the account last knew its Apex's
+device was there (`TREE_EDGE_LEASE_MS`); a record that ended or lapsed is
+remembered a lease more, and the Fin's own next post brings it back, its
+Apex's device on or off (`revive` in the account, `recordHeld` here); one
+ended because its Fin was stopped is never brought back (the end says why,
+`TreeEdgeEndSchema`). A placed Fin's six hours count from when this device
+took its last report (`Placed.heardAt`), never from its device's clock. Past
+that its notice goes to that device itself, said as a warning, and that
+device asks for the record again (`recordLost`). A tree has at most
+`TREE_FINS_OPEN` (872) Fins on record, so a Session holds at most
+`TREE_NOTICES_SESSION_BYTES` (278 MiB). `conflict`, `invalid`, `forbidden` and `too-large` end that report
 unheard (`agent_notice_refusals`, said in the log alone) and the Fin's later
 reports go on; a 401 waits for the machine's renewed credential. A post
 under way is the machine's work (`Agents.posting`), so it isn't paused with
