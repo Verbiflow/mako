@@ -90,11 +90,14 @@ export function AccountLimits({ density }: { density: Density }) {
 export function HarnessAccounts({
   group,
   heading = true,
+  quietUsage = false,
   actions,
 }: {
   group: AccountGroup
   /** Off where the surrounding row already names the harness. */
   heading?: boolean
+  /** Usage not read yet draws nothing, and arrives when it's read: where usage is beside the point, as a harness's row. */
+  quietUsage?: boolean
   /** Per-account controls a surface adds, such as removing a saved login. */
   actions?: (account: ProviderAccount) => ReactNode
 }) {
@@ -119,6 +122,7 @@ export function HarnessAccounts({
             label={provider.label}
             switchable={switchable}
             renewable={provider.nativeLogin === true}
+            quietUsage={quietUsage}
             actions={actions?.(account)}
           />
         ))}
@@ -147,6 +151,7 @@ function PageAccount({
   label,
   switchable,
   renewable,
+  quietUsage,
   actions,
 }: {
   account: ProviderAccount
@@ -154,6 +159,7 @@ function PageAccount({
   switchable: boolean
   /** The provider can sign this account in again from here. */
   renewable: boolean
+  quietUsage: boolean
   actions?: ReactNode
 }) {
   const key = usageKey(account.harness, account.name)
@@ -260,8 +266,8 @@ function PageAccount({
             Sign in again
           </Action>
         </div>
-      ) : (
-        <div className={cn(switchable && "pl-7")}>
+      ) : quietUsage && !usage ? null : (
+        <div className={cn(switchable && "pl-7", quietUsage && "animate-enter")}>
           <UsageLines usage={usage} label={label} density="page" className="mt-3" />
           <Footer usage={usage} account={account} label={label} density="page" className="mt-2.5" />
         </div>

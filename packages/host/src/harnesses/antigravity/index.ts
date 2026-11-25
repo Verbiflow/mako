@@ -11,6 +11,7 @@ import { installHarness, lacks, notBuilt } from "../harness-definition.js"
 import { byDefault, harnessLacks, implemented, makoLacks } from "../live-capabilities.js"
 import type { ProviderModule } from "../host.js"
 import { antigravityInstall, antigravityTarget } from "./install.js"
+import { version as built } from "./builds.js"
 import { antigravityAccounts } from "./accounts.js"
 import { antigravityAcp as acp } from "./acp.js"
 import { antigravityProfile } from "./profile.js"
@@ -70,10 +71,12 @@ export const installAntigravity: ProviderModule = (host, context) => {
     artifactPreview: notBuilt("Mako does not collect the agent's brain directory."),
     connection: lacks("Sign-in uses the agent's own ACP authentication."),
     updates: { provider: acp.provider, binary: (env) => resolveExecutable("agy", env),
-      versions: { tested: "1.5.15", oldest: "1.5.15", feed: { manifest: `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/${antigravityTarget() ?? "darwin_arm64"}.json` },
+      // Tested is the build `builds` holds the files and digests of: the install and Update put exactly it in place.
+      versions: { tested: built, oldest: "1.5.15", feed: { manifest: `https://antigravity-cli-auto-updater-974169037036.us-central1.run.app/manifests/${antigravityTarget() ?? "darwin_arm64"}.json` },
         checked: { on: "2026-11-23", how: "ACP handshake, model discovery, HTTP MCP and a complete Gemini-compatible test turn with agy 1.5.15." } },
       install: install ? [install] : [],
-      native: install && { label: "Update Antigravity", args: [], installVersion: () => install, ownsPath: (path, env) => path === join(env?.HOME || env?.USERPROFILE || homedir(), ".local", "bin", onWindows() ? "agy.exe" : "agy") },
+      // Its own updater is the CLI itself, so Update is the verified install at `tested`, never the bare `agy`.
+      native: install && { label: "Update Antigravity", installVersion: antigravityInstall, ownsPath: (path, env) => path === join(env?.HOME || env?.USERPROFILE || homedir(), ".local", "bin", onWindows() ? "agy.exe" : "agy") },
     },
   })
 }

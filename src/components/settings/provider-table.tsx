@@ -19,6 +19,8 @@ import {
 import { ProviderAccounts } from "./provider-accounts"
 import { HarnessCapabilities } from "./harness-capabilities"
 import { InstallRow, RuntimeRow, InstallationDetails } from "./harness-updates"
+import { Collapse } from "@/components/ui/collapse"
+import { Disclosure } from "@/components/ui/notice"
 import { runtimeBusy, runtimeRows } from "@/lib/runtime-updates"
 import { accountIdentity } from "@/lib/account-identity"
 import { cn } from "@/lib/utils"
@@ -116,6 +118,14 @@ function ProviderRow({
       ? missing
       : undefined
   const [expanded, setExpanded] = useState(false)
+  // A sign-in started for this harness from anywhere (the composer's line after an install, this row) is finished
+  // here, so the row opens to show it.
+  const signingIn = useAccounts((state) => state.signIn?.harness === agent.id)
+  const [heardSignIn, setHeardSignIn] = useState(false)
+  if (signingIn !== heardSignIn) {
+    setHeardSignIn(signingIn)
+    if (signingIn) setExpanded(true)
+  }
   const [keyOpen, setKeyOpen] = useState(false)
   const selected = providerAccounts.find((account) => account.active)
   const summary = selected
@@ -127,9 +137,11 @@ function ProviderRow({
       : accountsLoaded
         ? "Not signed in"
         : "Checking connection…"
-  const needsSignIn = connection
+  // Not installed comes first: signing in to a harness that isn't here yet is the step after its Install.
+  const notInstalled = Boolean(installable) || (installed === false && !primary)
+  const needsSignIn = !notInstalled && (connection
     ? connection.state.status === "signed-out"
-    : Boolean(accountProvider && providerAccounts.length === 0)
+    : Boolean(accountProvider && providerAccounts.length === 0))
   const browserOnly =
     connection?.actions?.length &&
     !connection.actions.includes("sign-in-key") &&
@@ -156,7 +168,9 @@ function ProviderRow({
           <div className="min-w-0 flex-1">
             <span className="block text-ui font-medium">{agent.name}</span>
             <div className="mt-0.5 text-label text-muted-foreground">
-              {connection ? (
+              {notInstalled ? (
+                <span className="block break-words">Not installed</span>
+              ) : connection ? (
                 <ConnectionStatus connection={connection} />
               ) : (
                 <span className={cn("block break-words", accountProvider && selected?.missing && "text-caution")}>
@@ -195,7 +209,7 @@ function ProviderRow({
           >
             {expanded
               ? "Close"
-              : needsSignIn && !browserOnly
+              : needsSignIn && !browserOnly && (connection || accountProvider?.nativeLogin)
                 ? "Sign in"
                 : "Manage"}
             <ChevronDownIcon
@@ -218,6 +232,7 @@ function ProviderRow({
               runtimeId={agent.id}
               name={agent.name}
               info={installable}
+              onInstalled={() => setExpanded(true)}
             />
           ) : (
             <span className="text-label text-faint">
@@ -231,89 +246,79 @@ function ProviderRow({
             </span>
           )}
         </div>
-      </div>
-      {expanded ? (
-        <div
-          id={detailsId}
-          className="space-y-4 bg-surface px-4 py-4"
-        >
-          {connection || accountProvider ? (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <span className="text-label font-medium">
-                  {agent.name}
-                  {providerAccounts.length > 1 ? " accounts" : " account"}
-                </span>
-                <Action
-                  size="xs"
-                  disabled={Boolean(connectionBusy) || rechecking}
-                  aria-busy={rechecking}
-                  onClick={() => void recheck()}
-                >
-                  {rechecking ? "Checking…" : "Refresh connection"}
-                </Action>
-              </div>
-              {connection ? (
-                <>
-                  {working ? (
-                    <p
-                      role="status"
-                      className="text-label text-muted-foreground"
-                    >
-                      {connectionBusy.action === "sign-in-browser"
-                        ? "Complete sign-in in your browser. This will refresh when you’re connected."
-                        : "Updating connection…"}
-                    </p>
-                  ) : null}
-                  <ConnectionControls
-                    connection={connection}
-                    keyOpen={keyOpen}
-                    onPasteKey={() => {
-                      providerConnections.dismissFailure(connection.provider)
-                      setKeyOpen(true)
-                    }}
-                  />
-                  {keyOpen ? (
-                    <ConnectionKeyForm
-                      connection={connection}
-                      onClose={() => setKeyOpen(false)}
-                    />
-                  ) : null}
-                  <ConnectionNotes connection={connection} keyOpen={keyOpen} />
-                </>
-              ) : null}
-              {accountProvider ? (
-                <ProviderAccounts providerId={agent.id} hint={!connection} />
-              ) : null}
-            </div>
-          ) : (
-            <p className="text-label text-muted-foreground">
-              {installed === false
-                ? `Install ${agent.name} to connect.`
-                : `${agent.name} manages sign-in in its own CLI.`}
-            </p>
-          )}
-          {primary ? <InstallationDetails info={primary[1]} /> : null}
-          {runtimes.length > 1 ? (
-            <div className="space-y-3 pt-3">
-              <p className="text-label font-medium">Other installations</p>
-              <p className="text-label text-faint">
-                New conversations use the version shown above. These copies may
-                be used by older conversations.
+        {/* The row opens beneath its own header, at the same width and indent: who it's signed in as and what
+            that leaves first, then what works in Mako and the installation's details, quieter. */}
+        <Collapse open={expanded}>
+          <div
+            id={detailsId}
+            className="mt-3 ml-11 space-y-3 border-t border-hairline pt-3 @max-[400px]:ml-0"
+          >
+            {connection ? (
+              <>
+                {working ? (
+                  <p role="status" className="text-label text-muted-foreground">
+                    {connectionBusy.action === "sign-in-browser"
+                      ? "Complete sign-in in your browser. This will refresh when you’re connected."
+                      : "Updating connection…"}
+                  </p>
+                ) : null}
+                <ConnectionControls
+                  connection={connection}
+                  keyOpen={keyOpen}
+                  onPasteKey={() => {
+                    providerConnections.dismissFailure(connection.provider)
+                    setKeyOpen(true)
+                  }}
+                />
+                {keyOpen ? (
+                  <ConnectionKeyForm connection={connection} onClose={() => setKeyOpen(false)} />
+                ) : null}
+                <ConnectionNotes connection={connection} keyOpen={keyOpen} />
+              </>
+            ) : null}
+            {accountProvider && !notInstalled ? (
+              <ProviderAccounts providerId={agent.id} hint={!connection} />
+            ) : !connection && !notInstalled ? (
+              <p className="text-label text-muted-foreground">
+                {agent.name} uses the sign-in of its own CLI.
               </p>
-              {runtimes.slice(1).map(([id, info]) => (
-                <div key={id} className="space-y-2">
-                  <RuntimeRow runtimeId={id} provider={agent.id} info={info} />
-                  <InstallationDetails info={info} />
+            ) : null}
+            {runtimes.length > 1 ? (
+              // Two copies is when a path helps: it says which one new conversations run.
+              <div className="space-y-2">
+                <p className="text-label text-muted-foreground">
+                  Also installed. New conversations use the version above; older ones may use these.
+                </p>
+                {runtimes.slice(1).map(([id, info]) => (
+                  <div key={id} className="space-y-1">
+                    <RuntimeRow runtimeId={id} provider={agent.id} info={info} />
+                    {info.binary ? (
+                      <p className="font-mono text-code break-all text-faint">{info.binary}</p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            <div className="space-y-0.5">
+              <HarnessCapabilities harness={agent.id} />
+              <Disclosure summary="Details" bodyClassName="pt-2 pb-1">
+                <div className="space-y-2">
+                  {primary ? <InstallationDetails info={primary[1]} /> : null}
+                  <Action
+                    size="xs"
+                    className="-ml-1.5 font-normal"
+                    disabled={Boolean(connectionBusy) || rechecking}
+                    aria-busy={rechecking}
+                    onClick={() => void recheck()}
+                  >
+                    {rechecking ? "Checking…" : "Check sign-in and version again"}
+                  </Action>
                 </div>
-              ))}
+              </Disclosure>
             </div>
-          ) : null}
-          <div className="pt-3">
-            <HarnessCapabilities harness={agent.id} />
           </div>
-        </div>
-      ) : null}
+        </Collapse>
+      </div>
     </div>
   )
 }

@@ -56,6 +56,10 @@ import { setComposerHarness } from "@/state/threads"
 import { formatTokens } from "@/lib/format"
 import { rankModels } from "./model-rank"
 import { cn } from "@/lib/utils"
+import { missingHarness } from "@/lib/harness-install"
+import { installHarness } from "@/state/harness-install"
+import { ACTION_TOAST_MS } from "@/lib/toast-duration"
+import { toast } from "sonner"
 import type { HarnessModel, HarnessProfile } from "@/lib/types"
 import { settingSourceLabel, settingValueLabel } from "./settings-source"
 import { useComposerSettings, type ComposerSettingsView } from "./use-composer-settings"
@@ -312,6 +316,43 @@ function HarnessRow({ harness, composer }: { harness: string; composer: Composer
   const view = useComposerSettings(harness)
   const profile = view.profile
   const active = composer.target.harness === harness
+  const updates = useProviders((state) => state.runtimeUpdates)
+  const missing = missingHarness(updates, harness)
+  if (missing?.install) {
+    // Not installed: one click picks it and installs it. A new thread's composer takes the harness, so the line
+    // above it follows the install through to signing in; a conversation on screen keeps its own, so the outcome is
+    // said once it's known.
+    const install = async () => {
+      const label = harnessLabel(harness)
+      setComposerHarness(harness)
+      if (composer.target.kind === "new") {
+        await installHarness(harness)
+        return
+      }
+      const next = await installHarness(harness)
+      if (next.result?.outcome === "installed") toast.success(`${label} is installed`)
+      else
+        toast.error(`${label} wasn't installed`, {
+          description: next.result?.message,
+          duration: ACTION_TOAST_MS,
+          action: { label: "Try again", onClick: () => void install() },
+        })
+    }
+    return (
+      <MenuItem
+        disabled={missing.installing}
+        data-harness-install={harness}
+        title={missing.failure ?? (missing.installs ? `Installs ${missing.installs}, the version Mako is tested with` : undefined)}
+        onSelect={() => void install()}
+      >
+        <HarnessIcon harness={harness} className="size-3.5" tinted={false} />
+        <span className="flex-1 truncate text-foreground/70">{harnessLabel(harness)}</span>
+        <span className={cn("text-label", missing.failure && !missing.installing ? "text-caution" : "text-faint")}>
+          {missing.installing ? <Shimmer text="Installing…" /> : missing.failure ? "Retry install" : "Install"}
+        </span>
+      </MenuItem>
+    )
+  }
   if (profile && !profile.pending && !profile.available) {
     return (
       <MenuItem

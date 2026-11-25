@@ -13,7 +13,8 @@ import { compareVersions, parseVersion } from "@mako/host/contracts/runtime-vers
 import { resolveExecutable } from "@mako/host/base/executable"
 import { DiscoveryProcesses } from "@mako/host/harnesses/discovery-process"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
-import { RuntimeUpdates } from "@mako/host/harnesses/runtime-updates"
+import { pinnedInstall, RuntimeUpdates } from "@mako/host/harnesses/runtime-updates"
+import { antigravityInstall } from "@mako/host/harnesses/antigravity/install"
 import type { ProviderUpdateSource, RuntimeUpdateSource } from "@mako/host/harnesses/update-source"
 
 /**
@@ -233,6 +234,49 @@ try {
     }
     assert.ok(offeredUpdates >= 8, `npm and each harness's own updater are offered and run (${offeredUpdates})`)
     console.log(`  ${checked} installs across ${keys.length} runtimes, ${offeredUpdates} with an update: each offer is the update that runs`)
+  }
+
+  // 2b. Install and Update pin the version Mako tested, for every harness. A CLI whose only updater is its installer
+  //     (Devin, Antigravity) declares no bare updater, so its Update can only be that installer at `tested`; one
+  //     without a verified build of a version offers none, not an older build under the newer number; and a missing
+  //     harness's reading says which version its install puts in place.
+  {
+    const scratch = join(root, "pins")
+    const host = createHarnessHost(detachedHarnessContext(new NativeStores(false), join(scratch, "data")))
+    const sources = host.updateSources.list()
+    for (const source of sources)
+      for (const installation of [source, ...source.installations ?? []])
+        assert.notDeepEqual(installation.native?.args, [], `${source.provider}: a native updater with no arguments would launch the agent itself`)
+    const antigravity = sources.find((source) => source.provider === "antigravity")
+    assert.ok(antigravity?.versions && antigravity.native?.installVersion, "Antigravity installs and updates through Mako")
+    const tested = antigravity.versions.tested
+    assert.ok(antigravity.native.installVersion(tested), "its verified build installs at tested")
+    assert.equal(antigravity.native.installVersion(newer(tested)), undefined, "a version Mako holds no verified build of is never installed")
+    assert.equal(antigravityInstall(newer(tested)), undefined)
+
+    const bin = join(scratch, "bin")
+    await mkdir(bin, { recursive: true })
+    for (const tool of ["npm", "brew"]) await writeFile(join(bin, tool), "#!/bin/sh\nexit 0\n", { mode: 0o755 })
+    const env: NodeJS.ProcessEnv = { PATH: [bin, "/usr/bin", "/bin"].join(delimiter), HOME: join(scratch, "home") }
+    const missing = sources.map((source) => ({ ...source, binary: () => null, installations: (source.installations ?? []).map((other) => ({ ...other, binary: () => null })) }))
+    const updates = new RuntimeUpdates({ processes, sources: () => missing, path: join(scratch, "readings.json"), env: () => env, emit: () => {} })
+    const read = await updates.refresh()
+    let pinned = 0
+    for (const source of sources) {
+      const reading = read[source.provider]
+      if (!reading?.install) continue
+      const expected = pinnedInstall(reading.install, source.versions)
+      assert.equal(reading.installs, expected, `${source.provider}: the reading names what its install puts in place`)
+      if (source.versions && !source.versions.bundled) {
+        assert.equal(reading.installs, source.versions.tested, `${source.provider}: a missing harness installs the version Mako tested (${[reading.install.command, ...reading.install.args].join(" ")})`)
+        pinned += 1
+      }
+    }
+    assert.ok(pinned >= 5, `Codex, OpenCode, Grok, Devin and Antigravity install their tested version (${pinned})`)
+    const claude = sources.find((source) => source.provider === "claude")
+    if (read.claude?.install) assert.equal(read.claude.installs, claude?.versions?.tested, "Claude Code installs the build the Agent SDK Mako ships carries")
+    assert.equal(read.cursor?.installs, undefined, "Cursor's installer takes its vendor's newest, and says no version")
+    updates.stop()
   }
 
   // 3. A reading asked for is taken after the ask: a refresh right after an update or a terminal's install answers the

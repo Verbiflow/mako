@@ -82,6 +82,8 @@ async function review() {
     )
     await writeFile(join(root, name), (await page.capturePage()).toPNG())
   }
+  // A row opens by unfolding beneath its header: what's in it is clicked once it has settled.
+  const settled = () => evaluate("Promise.all(document.getAnimations().filter(a => a.effect.getTiming().iterations !== Infinity).map(a => a.finished.catch(() => {}))).then(() => true)")
   const until = async (code) => {
     const deadline = Date.now() + 20_000
     while (!(await evaluate(code))) {
@@ -133,6 +135,7 @@ async function review() {
   await evaluate(
     `document.querySelector('[aria-label="Manage Cursor"]').click()`
   )
+  await settled()
   await click("Paste API key")
   await until("document.activeElement?.type === 'password'")
   await page.debugger.sendCommand("Input.insertText", { text: "fixture-key" })
@@ -151,7 +154,9 @@ async function review() {
   await evaluate(
     `document.querySelector('[aria-label="Manage OpenCode"]').click()`
   )
-  await until("document.body.textContent.includes('OpenCode accounts')")
+  // The row opens beneath its own header: the logins first, nothing of the installation's paths.
+  await until("document.querySelector('#provider-opencode-accounts')?.textContent.includes('opencode auth login')")
+  assert.equal(await evaluate("document.querySelector('#provider-opencode-accounts').textContent.includes('/Users/developer/.opencode/bin/opencode')"), false, "a path is a detail")
   assert.equal(
     await evaluate("document.querySelectorAll('[role=list]').length"),
     1
@@ -202,19 +207,31 @@ async function review() {
   assert.deepEqual(await fixture("return f.calls"), ["sign-in-key", "opencode", "sign-in-browser"])
   await screenshot("agents-grok-connected.png")
 
-  // A missing CLI installs from its row: the exact command is shown before it runs.
+  // A missing CLI installs from its row: the version Mako tested and the exact command are shown before it runs.
   const devinRow = `document.querySelector('[role="listitem"][aria-label="Devin"]')`
   await evaluate(`${devinRow}.scrollIntoView({block:'center'})`)
-  assert.equal(await evaluate(`${devinRow}.textContent.includes('CLI not installed')`), true)
-  assert.equal(await evaluate(`${devinRow}.textContent.includes('curl -fsSL https://cli.devin.ai/install.sh | bash')`), true)
+  const devinText = () => evaluate(`${devinRow}.innerText.replace(/\\s+/g, ' ')`)
+  assert.ok((await devinText()).includes("Not installed"), await devinText())
+  assert.equal((await devinText()).includes("Sign in"), false, "signing in waits until it's installed")
+  assert.ok((await devinText()).includes("Installs 3000.14.30821, the version Mako is tested with"), await devinText())
+  assert.ok((await devinText()).includes("curl -fsSL https://static.devin.ai/cli/3000.14.30821/setup.sh | bash"), await devinText())
   await screenshot("agents-install.png")
+  // The first try fails: the row says why and offers Retry, and shows the install working from the click.
+  await fixture("f.installFailsOnce()")
   await click("Install")
   await until(`document.querySelector('[aria-label="Devin installation"][aria-busy="true"]') !== null`)
   await screenshot("agents-installing.png")
-  await until(`${devinRow}.textContent.includes('3000.11.3')`)
-  assert.equal(await evaluate(`${devinRow}.textContent.includes('Installed')`), true)
-  assert.equal(await evaluate(`${devinRow}.textContent.includes('CLI not installed')`), false)
-  assert.deepEqual(await fixture("return f.calls"), ["sign-in-key", "opencode", "sign-in-browser", "install:devin"])
+  await until(`${devinRow}.textContent.includes("Install failed: The download didn't get through. Check the connection.")`)
+  assert.equal(await evaluate(`[...${devinRow}.querySelectorAll('button')].some(b => b.textContent.trim() === 'Retry')`), true)
+  await screenshot("agents-install-failed.png")
+  await click("Retry")
+  await until(`${devinRow}.textContent.includes('3000.14.30821') && ${devinRow}.textContent.includes('Installed')`)
+  assert.equal(await evaluate(`${devinRow}.textContent.includes('Install failed')`), false)
+  // Installed, the row opens on its sign-in.
+  await until(`document.querySelector('#provider-devin-accounts')?.textContent.includes('No Devin account yet.')`)
+  assert.equal(await evaluate(`[...document.querySelectorAll('#provider-devin-accounts button')].some(b => b.textContent.trim() === 'Sign in')`), true, "sign-in is offered right after the install")
+  assert.deepEqual(await fixture("return f.calls"), ["sign-in-key", "opencode", "sign-in-browser", "install:devin", "install:devin"])
+  await evaluate(`${devinRow}.scrollIntoView({block:'start'})`)
   await screenshot("agents-installed.png")
 
   // A version that could not be read says so plainly, and the row that says it reads again.
@@ -229,13 +246,17 @@ async function review() {
   await screenshot("agents-version-checking.png")
   await until(`${claudeRow}.textContent.includes('Version 2.1.266')`)
   assert.equal(await evaluate(`${claudeRow}.textContent.includes('Couldn’t read')`), false)
-  // Refresh connection reads what the whole row shows, and shows it is working.
+  // Checking again, under Details with the installation's path, reads what the whole row shows, and shows it is working.
   await fixture("f.unreadVersion()")
   await until(`${claudeRow}.textContent.includes('Couldn’t read the installed version')`)
   await evaluate(`document.querySelector('[aria-label="Manage Claude Code"]').click()`)
-  await until("document.querySelector('#provider-claude-accounts')?.textContent.includes('Refresh connection')")
+  await until("Boolean(document.querySelector('#provider-claude-accounts'))")
+  assert.equal(await evaluate("document.querySelector('#provider-claude-accounts').innerText.includes('/Users/developer/.local/bin/claude')"), false, "the path waits under Details")
+  assert.equal(await evaluate("document.querySelector('#provider-claude-accounts [aria-label=\"Loading usage\"]')"), null, "usage not read yet draws no placeholder")
+  await evaluate(`[...document.querySelectorAll('#provider-claude-accounts button')].find(b => b.textContent.trim() === 'Details').click()`)
+  await until("document.querySelector('#provider-claude-accounts').innerText.includes('/Users/developer/.local/bin/claude')")
   await evaluate("document.querySelector('#provider-claude-accounts').scrollIntoView({block:'center'})")
-  await evaluate(`[...document.querySelectorAll('#provider-claude-accounts button')].find(b => b.textContent.trim() === 'Refresh connection').click()`)
+  await evaluate(`[...document.querySelectorAll('#provider-claude-accounts button')].find(b => b.textContent.trim() === 'Check sign-in and version again').click()`)
   await until(`document.querySelector('#provider-claude-accounts button[aria-busy="true"]')?.textContent === 'Checking…'`)
   await screenshot("agents-refresh-connection.png")
   await until(`${claudeRow}.textContent.includes('Version 2.1.266') && !document.querySelector('#provider-claude-accounts button[aria-busy="true"]')`)

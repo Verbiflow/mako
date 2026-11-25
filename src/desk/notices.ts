@@ -3,6 +3,7 @@ import { useProviderConnectionNotice } from "@/components/composer/connection-no
 import { useAccountLimitNotice, useAccountSwitchNotice, useLimitContinueNotice } from "@/components/composer/account-notice"
 import { useModelChoiceNotice } from "@/components/composer/model-notice"
 import { useRuntimeVersionNotice } from "@/components/composer/runtime-version-notice"
+import { useHarnessInstallNotice } from "@/components/composer/harness-install-notice"
 import { useRestoreVersionNotice } from "@/components/composer/restore-version-notice"
 import { useLedgerNotice } from "@/components/composer/ledger-notice"
 import { useCopyNotice } from "@/components/composer/copy-notice"
@@ -31,6 +32,7 @@ export function installComposerNotices(): Array<() => void> {
   return [
     registerNotice("element-pick", useElementPickNotice),
     registerNotice("stale-send", useStaleSendNotice, -11),
+    registerNotice("harness-install", useHarnessInstallNotice, -10),
     registerNotice("runtime-version", useRuntimeVersionNotice, -10),
     registerNotice("restore-version", useRestoreVersionNotice, -9),
     registerNotice("newer-ledger", useLedgerNotice, -8),

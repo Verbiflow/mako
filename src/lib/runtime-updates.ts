@@ -1,5 +1,4 @@
 import type {
-  HarnessUpdateCommand,
   HarnessUpdateInfo,
   HarnessUpdates,
 } from "@mako/host/contracts/harness-updates"
@@ -166,13 +165,6 @@ function ownerText(info: HarnessUpdateInfo): string | undefined {
     return `Included with ${info.managedBy.replace(/\.app$/, "")}`
   if (info.channel === "brew" && !info.update) return "Installed with Homebrew"
   return undefined
-}
-
-/** The installer as the user would type it: a vendor script shows its `curl … | bash` line. */
-export function installCommandText(install: HarnessUpdateCommand): string {
-  return install.command === "/bin/bash"
-    ? (install.args.at(-1) ?? install.command)
-    : [install.command, ...install.args].join(" ")
 }
 
 /** Rows worth showing: runtimes found on this machine, or ones that would not say their version. */

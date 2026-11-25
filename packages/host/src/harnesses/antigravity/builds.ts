@@ -1,4 +1,6 @@
 // Release files and SHA-512 digests from Google's platform manifests for agy 1.5.15.
+/** The version every file below is: what Mako installs, and so what it declares tested. */
+export const version = "1.5.15"
 export const builds = {
   "darwin_arm64": {
     "url": "https://storage.googleapis.com/antigravity-public/antigravity-cli/1.5.15-5514532022517760/darwin-arm/cli_mac_arm64.tar.gz",

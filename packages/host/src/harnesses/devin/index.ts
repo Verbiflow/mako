@@ -79,10 +79,10 @@ export const installDevin: ProviderModule = (host, context) => {
       managedBy: [["external_agents", "Zed"]],
       versions: DEVIN_VERSIONS,
       // The standalone install keeps versions under ~/.local/share/devin and
-      // links ~/.local/bin/devin; its versioned setup script installs one.
+      // links ~/.local/bin/devin; its versioned setup script installs one. No `args`: Mako's Update is that script
+      // at `tested`, never `devin update`.
       native: {
         label: "Update Devin",
-        args: [],
         ownsPath: (path) => path.includes("/.local/share/devin/"),
         installVersion: devinSetup,
       },

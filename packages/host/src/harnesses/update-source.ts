@@ -95,7 +95,12 @@ export interface RuntimeUpdateSource {
    */
   native?: {
     label: string
-    args: string[]
+    /**
+     * Arguments of the CLI's own update (`update`, `upgrade`). Left out for a CLI whose only updater is its
+     * installer (Devin's, Antigravity's): its update is `installVersion` at `tested`, and none where that can't
+     * apply. Never empty: the bare binary is the agent itself, not an update.
+     */
+    args?: [string, ...string[]]
     ownsPath(path: string, env?: NodeJS.ProcessEnv): boolean
     /** Never run a moving channel target; require a verified public version. */
     pinVersion?: boolean
@@ -103,9 +108,9 @@ export interface RuntimeUpdateSource {
      * The command that installs one exact version, for a CLI whose own
      * updater only goes to the vendor's newest (Grok's `update`). Without
      * it a pinned update passes the version to `args`, as `opencode upgrade
-     * <version>` takes it.
+     * <version>` takes it. None for a version it holds no verified build of: then nothing is offered.
      */
-    installVersion?(version: string): HarnessUpdateCommand
+    installVersion?(version: string): HarnessUpdateCommand | undefined
   }
   /** Path fragments meaning another app owns this install, e.g. Zed's registry. */
   managedBy?: [needle: string, owner: string][]

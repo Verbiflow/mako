@@ -1,7 +1,7 @@
 import { existsSync } from "node:fs"
 import { hostPlatform } from "../../base/platform.js"
 import type { HarnessUpdateCommand } from "../../contracts/harness-updates.js"
-import { builds } from "./builds.js"
+import { builds, version as built } from "./builds.js"
 
 /** Google's build for this machine, as its manifests and `builds` name it; none for a platform it doesn't build for. */
 export function antigravityTarget(): keyof typeof builds | undefined {
@@ -13,12 +13,17 @@ export function antigravityTarget(): keyof typeof builds | undefined {
   return existsSync(`/lib/libc.musl-${arch === "amd64" ? "x86_64" : "aarch64"}.so.1`) ? `linux_${arch}_musl` : `linux_${arch}`
 }
 
-/** Google's installer follows latest. Install the release that Mako verified, checking Google's digest before replacing agy. */
-export function antigravityInstall(): HarnessUpdateCommand | undefined {
+/**
+ * Google's installer follows latest. Install the release that Mako verified, checking Google's digest before replacing
+ * agy. Only `version` is installed: none for a version whose files and digests aren't in `builds`, so a `tested` moved
+ * without them can't install the old build under the new number.
+ */
+export function antigravityInstall(version: string = built): HarnessUpdateCommand | undefined {
   const target = antigravityTarget()
-  if (!target) return undefined
+  if (!target || version !== built) return undefined
   const { url, sha512 } = builds[target]
   const label = "Install Antigravity"
+  const summary = `Downloads Google's agy ${version}, checks its SHA-512 and puts it in ~/.local/bin`
   if (target.startsWith("windows_")) {
     const command = [
       "$ErrorActionPreference = 'Stop'",
@@ -27,7 +32,7 @@ export function antigravityInstall(): HarnessUpdateCommand | undefined {
       "$tmp = Join-Path $dir ([guid]::NewGuid().ToString() + '.exe')",
       `try { curl.exe --fail --location ${url} --output $tmp; if ($LASTEXITCODE -ne 0 -or (Get-FileHash $tmp -Algorithm SHA512).Hash -ne '${sha512}') { throw 'Antigravity download failed verification' }; Move-Item -Force $tmp (Join-Path $dir 'agy.exe') } finally { Remove-Item -ErrorAction SilentlyContinue $tmp }`,
     ].join("\n")
-    return { label, command: "powershell.exe", args: ["-NoProfile", "-Command", command] }
+    return { label, command: "powershell.exe", args: ["-NoProfile", "-Command", command], summary }
   }
   const verify = target.startsWith("darwin_") ? "shasum -a 512 -c -" : "sha512sum -c -"
   const command = [
@@ -35,5 +40,5 @@ export function antigravityInstall(): HarnessUpdateCommand | undefined {
     'trap \'rm -rf "$stage"\' EXIT', 'cd "$stage"', `curl -fsSL ${url} -o release`,
     `echo '${sha512}  release' | ${verify}`, 'tar -xzf release antigravity', 'chmod 755 antigravity', 'mv -f antigravity "$dir/agy"',
   ].join("\n")
-  return { label, command: "/bin/bash", args: ["-eu", "-o", "pipefail", "-c", command] }
+  return { label, command: "/bin/bash", args: ["-eu", "-o", "pipefail", "-c", command], summary }
 }
