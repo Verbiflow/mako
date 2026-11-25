@@ -147,6 +147,11 @@ export type HostEventBody =
   /** The preferences that follow the person's account, as they're in effect now (`contracts/preferences.ts`). */
   | { type: "fin-defaults"; reading: import("./fin-tuning.js").FinChoicesReading }
   | { type: "preferences"; values: import("./preferences.js").PreferenceValues }
+  /**
+   * A move's "Bring these" or "Put back" happened, from a window or by the Thread's agent with worktree_bring: the card
+   * above `conversationId`'s composer shows the move as it is now. Older windows ignore it.
+   */
+  | { type: "workspace-move-adjusted"; conversationId: string; outcome: MoveOutcome }
   /** An agent's allowed move happened: `from` is archived and `to` goes on in the worktree. */
   | {
       type: "workspace-moved"; from: string; to: string; branch?: string; changed: number

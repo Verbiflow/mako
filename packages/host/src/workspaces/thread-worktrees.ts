@@ -21,7 +21,7 @@ import { CommitAnswers, WorktreeSummaryCache, type HeldPoint, type HeldSummary, 
 import { storedRefs, WorktreeSizes } from "./worktree-status.js"
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
-import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, type AdjustHooks, type MoveLedger, type MovePlan } from "./worktree-move.js"
+import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, stayedPaths, type AdjustHooks, type StayedPaths, type Adjuster, type MoveLedger, type MovePlan } from "./worktree-move.js"
 import type { MoveHaste, MoveOutcome, MoveShares } from "../contracts/workspace-moves.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { mapLimit } from "@mako/protocol/map-limit"
@@ -893,7 +893,9 @@ export class ThreadWorktreeService {
       const plan = receipt.moved && "id" in receipt.moved && receipt.moved.id ? await this.readPlan(receipt.moved.id).catch(() => undefined) : undefined
       const adjusting = plan?.adjusting
       if (!adjusting) continue
-      const finished = adjusting.kind === "bring" ? this.bringStayed(id) : this.putBack(id, adjusting.paths)
+      // An agent's own call that a restart cut short: it never heard the result, so it hears it as its next turn begins.
+      const resumed = adjusting.by === "agent" ? { by: "agent" as const, tell: true } : {}
+      const finished = adjusting.kind === "bring" ? this.bringStayed(id, { ...resumed, ...adjusting.paths && { only: adjusting.paths } }) : this.putBack(id, adjusting.paths, resumed)
       await finished.then(
         () => hostLog("worktree-move", "finished an adjustment cut short", { conversation: id, kind: adjusting.kind }),
         (error: Error) => hostLog("worktree-move", "an adjustment cut short couldn't be finished", { conversation: id, kind: adjusting.kind, error: error.message }),
@@ -2314,41 +2316,57 @@ export class ThreadWorktreeService {
   /**
    * "Bring these" after a move: what might be the Thread's and what nobody
    * can be named for follow it into the worktree, from where the move left
-   * them. Returns the move's outcome now, and the files either checkout
-   * changed since, which stayed.
+   * them. Returns the move's outcome now, the files that came, and the files
+   * either checkout changed since, which stayed. `by: "agent"`: the Thread's
+   * agent asked with worktree_bring and reads what came in its answer, so its
+   * next turn isn't told again, unless `tell` (a restart finished it).
+   * `only`: just those that stayed, project-relative (`stayed` lists them);
+   * every one when left out, as the app's button does.
    */
-  async bringStayed(conversationId: string): Promise<{ outcome: MoveOutcome; left: string[] }> {
+  async bringStayed(conversationId: string, options: { by?: Adjuster; tell?: boolean; only?: readonly string[] } = {}): Promise<{ outcome: MoveOutcome; came: string[]; left: string[] }> {
+    const by = options.by ?? "person"
     const receipt = await this.receipt(conversationId)
     const moved = receipt?.moved && "files" in receipt.moved ? receipt.moved : undefined
     if (!receipt || !moved?.outcome) throw new Error("This conversation's worktree has no move whose changes stayed behind.")
-    if (moved.outcome.brought) return { outcome: moved.outcome, left: [] }
+    if (moved.outcome.brought) return { outcome: moved.outcome, came: [], left: [] }
     const plan = moved.id ? await this.readPlan(moved.id) : undefined
     if (!plan) throw new Error("Mako no longer has what this move left behind, so nothing more can come from it.")
-    const result = await bringStayed(this.git, this.ledger(), plan, receipt.repoRoot, (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }), this.adjustHooks())
+    const result = await bringStayed(this.git, this.ledger(), plan, receipt.repoRoot, (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }), this.adjustHooks(), by, options.only)
     if (result.came.length) this.ledger()?.moved?.({ thread: plan.thread, kind: "bring", files: result.came.length, guessed: 0, offered: 0 })
     await this.keepPlan(result.plan)
-    await this.save(this.tell({ ...receipt, moved: { ...moved, files: result.plan.outcome.came.files, outcome: result.plan.outcome } }, result.came.length ? broughtSentence(result.came) : undefined))
-    return { outcome: result.plan.outcome, left: result.left }
+    const told = result.came.length > 0 && (by === "person" || options.tell) ? broughtSentence(result.came, by) : undefined
+    await this.save(this.tell({ ...receipt, moved: { ...moved, files: result.plan.outcome.came.files, outcome: result.plan.outcome } }, told))
+    return { outcome: result.plan.outcome, came: result.came, left: result.left }
+  }
+
+  /** What this conversation's move left that can still be brought, by kind (`stayedPaths`); none before a move. */
+  async stayed(conversationId: string): Promise<StayedPaths> {
+    const receipt = await this.receipt(conversationId)
+    const moved = receipt?.moved && "files" in receipt.moved ? receipt.moved : undefined
+    const plan = moved?.outcome && !moved.outcome.brought && moved.id ? await this.readPlan(moved.id).catch(() => undefined) : undefined
+    return receipt && plan ? stayedPaths(plan, receipt.repoRoot) : { uncertain: [], unattributed: [] }
   }
 
   /**
    * "Put back" after a move: `paths` (project-relative) that came go back to
    * the main checkout as it had them, and the worktree to its base. Returns
-   * the move's outcome now, and the files either checkout changed since,
-   * which stayed.
+   * the move's outcome now, the files that went back, and the files either
+   * checkout changed since, which stayed. `by` and `tell` as `bringStayed`'s.
    */
-  async putBack(conversationId: string, paths: readonly string[]): Promise<{ outcome: MoveOutcome; left: string[] }> {
+  async putBack(conversationId: string, paths: readonly string[], options: { by?: Adjuster; tell?: boolean } = {}): Promise<{ outcome: MoveOutcome; returned: string[]; left: string[] }> {
+    const by = options.by ?? "person"
     const receipt = await this.receipt(conversationId)
     const moved = receipt?.moved && "files" in receipt.moved ? receipt.moved : undefined
     if (!receipt || !moved?.outcome) throw new Error("This conversation's worktree has no move to put files back from.")
     const plan = moved.id ? await this.readPlan(moved.id) : undefined
     if (!plan) throw new Error("Mako no longer has what this move took, so its files can't be put back from here. Its backup ref still holds the main checkout as it was.")
-    const result = await putBack(this.git, this.ledger(), plan, receipt.repoRoot, paths, (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }), this.adjustHooks())
+    const result = await putBack(this.git, this.ledger(), plan, receipt.repoRoot, paths, (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }), this.adjustHooks(), by)
     const guessed = new Set(plan.outcome.likely?.paths ?? [])
     if (result.returned.length) this.ledger()?.moved?.({ thread: plan.thread, kind: "put-back", files: result.returned.length, guessed: result.returned.filter((path) => guessed.has(path)).length, offered: 0 })
     await this.keepPlan(result.plan)
-    await this.save(this.tell({ ...receipt, moved: { ...moved, files: result.plan.outcome.came.files, outcome: result.plan.outcome } }, result.returned.length ? returnedSentence(result.returned) : undefined))
-    return { outcome: result.plan.outcome, left: result.left }
+    const told = result.returned.length > 0 && (by === "person" || options.tell) ? returnedSentence(result.returned, by) : undefined
+    await this.save(this.tell({ ...receipt, moved: { ...moved, files: result.plan.outcome.came.files, outcome: result.plan.outcome } }, told))
+    return { outcome: result.plan.outcome, returned: result.returned, left: result.left }
   }
 
   /**

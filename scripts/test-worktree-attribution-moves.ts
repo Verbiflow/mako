@@ -16,8 +16,10 @@ import { partition, shares, storedView, type JournalView, type Partition, type C
 import { LaptopTracker } from "@mako/host/attribution/tracker"
 import { changeUsage } from "@mako/host/attribution/index"
 import { ThreadStore } from "@mako/host/threads/store"
-import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
+import { ThreadWorktreeService, type ThreadCheckout } from "@mako/host/workspaces/thread-worktrees"
 import { broughtSentence, outcomeSentences, returnedSentence, type MoveLedger } from "@mako/host/workspaces/worktree-move"
+import { workspaceTools } from "@mako/host/workspaces/tools"
+import { parse as parseYaml } from "yaml"
 
 /*
  * Moving a Thread into its worktree by author, on real repositories: two
@@ -283,6 +285,84 @@ test("two Threads and the person in one checkout: only T1's lines and files move
   assert.deepEqual(worktrees.notices(id), [], "and tells the agent nothing new")
   assert.deepEqual(changeUsage(f.tracker.store, 0).moves, { moves: 1, came: 6, guessed: 0, putBack: 0, offered: 3, brought: 3 }, "Settings › Usage counts the three Mako left as misses, once")
   console.log(`  move of 6 files by author: ${tookMs.toFixed(0)} ms`)
+  await f.tracker.close()
+})
+
+test("the agent brings what its move left and puts back what isn't its own with worktree_bring, as Bring these and Put back do", async () => {
+  const f = await fixture("agent-bring")
+  await edits(f)
+  // The service the app's card calls, with the calling Session placed in the worktree it made, as the Thread store places it.
+  let placed: ThreadCheckout | undefined
+  const worktrees = new (class extends ThreadWorktreeService {
+    override threadCheckout() {
+      return placed
+    }
+  })(runner, join(f.base, "worktrees"), new ThreadStore(join(f.base, "threads.sqlite")), undefined, undefined, undefined, undefined, undefined, () => f.ledger)
+  const id = randomUUID()
+  const made = await worktrees.prepare(id, f.repo, "Move T1", { kind: "head" })
+  const outcome = await worktrees.moveChanges(id, { thread: "T1" })
+  placed = { path: made.path, project: f.repo, branch: made.branch, worktrees: [] }
+  const wt = (path: string) => read(join(made.path, path))
+  // The words its next turn opens with name the tool, never the person's app.
+  const told = outcomeSentences(outcome).join(" ")
+  assert.match(told, /worktree_bring stayed: true/)
+  assert.doesNotMatch(told, /from the app|the user can bring|don't copy them yourself/i, "the agent isn't sent to the person for its own changes")
+
+  const adjusted: string[] = []
+  const tools = workspaceTools({
+    git: runner,
+    cwd: () => made.path,
+    worktrees,
+    moves: { ask: async () => "", answerFor: () => undefined },
+    changed: () => {},
+    adjusted: (conversation) => adjusted.push(conversation),
+  })
+  const status = await tools.status(id)
+  assert.deepEqual(status.afterMove?.stayedInMain?.mightBeThisThread.paths.sort(), ["fmt.md", "window.ts"], "worktree_status says what the move left")
+  assert.deepEqual(status.afterMove?.stayedInMain?.notAttributed.paths, ["pre.ts"])
+
+  // Put back first: a file it took that isn't this Thread's goes back as the main checkout had it.
+  const back = parseYaml(await tools.putBack(id, ["src/new1.ts", "nope.ts"]))
+  assert.deepEqual(back.putBack, ["src/new1.ts"])
+  assert.deepEqual(back.notFromTheMove, ["nope.ts"], "a path the move didn't take is named, not guessed at")
+  assert.equal(read(f.abs("src/new1.ts")), "export const one = 1\n", "it's back in the main checkout as it was")
+  assert.equal(wt("src/new1.ts"), null, "and the worktree has it as the branch does")
+  assert.deepEqual(adjusted, [id], "windows hear, so the card above the composer shows it")
+  assert.deepEqual(worktrees.notices(id), [], "the agent read it in its answer; its next turn isn't told again")
+
+  // stayed: true brings what might be the Thread's; the edit nobody can be named for (pre.ts, from before tracking) may
+  // be the person's, so it stays and is named.
+  const brought = parseYaml(await tools.bringStayed(id))
+  assert.deepEqual(brought.brought, ["fmt.md", "window.ts"])
+  assert.deepEqual(brought.notAttributed, ["pre.ts"], "the answer names what it left")
+  assert.match(brought.next, /may be the user's own\. .*naming them in entries\./)
+  assert.equal(wt("window.ts"), "export const w = 2\n", "the change is in the worktree")
+  assert.equal(read(f.abs("window.ts")), f.git("show", "HEAD:window.ts") + "\n", "and out of the main checkout")
+  assert.equal(read(f.abs("pre.ts")), "before tracking, edited\n", "the unattributed edit stays where the person made it")
+  assert.equal(wt("pre.ts"), "before tracking\n")
+  assert.equal(read(f.abs("person.ts")), "export const p = 2\n", "the person's own stays")
+  assert.ok(f.git("for-each-ref", "--format=%(refname)", "refs/mako/moves/").includes("-brought"), "the main checkout before it is kept as a backup ref")
+  assert.deepEqual(adjusted, [id, id])
+  assert.deepEqual((await tools.status(id)).afterMove?.stayedInMain?.notAttributed.paths, ["pre.ts"], "worktree_status still lists it")
+  assert.equal((await tools.status(id)).afterMove?.stayedInMain?.mightBeThisThread.files, 0)
+  const again = parseYaml(await tools.bringStayed(id))
+  assert.equal(again.brought, undefined, "stayed: true again brings nothing more")
+  assert.deepEqual(again.notAttributed, ["pre.ts"])
+
+  await assert.rejects(tools.bring(id, [{ path: "pre.ts", link: true }]), /comes as a change, never linked/, "a change the move left is never linked")
+  // A file a partial bring brought can go back, as one the move took can.
+  assert.deepEqual(parseYaml(await tools.putBack(id, ["window.ts"])).putBack, ["window.ts"])
+  assert.equal(read(f.abs("window.ts")), "export const w = 2\n", "back in the main checkout as it was")
+  assert.equal(wt("window.ts"), "export const w = 1\n")
+  // Named in entries after reading it, it comes, as Bring these would bring it.
+  const named = parseYaml(await tools.bring(id, [{ path: "pre.ts" }]))
+  assert.deepEqual(named.brought, ["pre.ts"])
+  assert.equal(wt("pre.ts"), "before tracking, edited\n")
+  assert.equal(read(f.abs("pre.ts")), f.git("show", "HEAD:pre.ts") + "\n")
+  assert.equal((await worktrees.moveOutcome(id))?.brought, true, "the receipt is the one the app reads")
+  assert.equal((await tools.status(id)).afterMove, undefined, "nothing left to check")
+  assert.match(parseYaml(await tools.bringStayed(id)).said, /^Nothing is left/, "a further call brings nothing")
+  assert.deepEqual(worktrees.notices(id), [])
   await f.tracker.close()
 })
 

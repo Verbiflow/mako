@@ -184,6 +184,35 @@ async function machineUser(): Promise<GitHubUser | undefined> {
   }
 }
 
+const LookupFailure = z.object({ code: z.unknown().optional(), stderr: z.string().optional(), message: z.string().optional() })
+
+/** `gh`'s own words for a login it doesn't have: exit 4, `gh auth login`, GitHub refusing the token, or a GitHub App's token, which names no user. */
+const SIGNED_OUT = /gh auth login|HTTP 401|Bad credentials|authentication required|not logged in|Resource not accessible by integration/i
+
+/**
+ * Who `gh` is signed in as; null only when `gh` says it isn't. Any other failure (a timeout, GitHub or the network
+ * down, a reply that doesn't parse) says nothing about the login, so it's a lookup to try again
+ * (`GitHubRepositoryLookupError`), never "Sign in": that sent agents to tell the person to run `gh auth login` while
+ * their next push went through.
+ */
+async function accountUser(cwd: string): Promise<GitHubUser | null> {
+  let text: string
+  try {
+    text = await gh(cwd, ["api", "user"])
+  } catch (cause) {
+    if (cause instanceof GitHubRateLimitError || cause instanceof GitHubRepositoryLookupError) throw cause
+    const failure = LookupFailure.safeParse(cause)
+    if (failure.success && (failure.data.code === 4 || SIGNED_OUT.test(`${failure.data.stderr ?? ""}\n${failure.data.message ?? ""}`))) return null
+    hostLog("github", "the account lookup failed", { error: cause instanceof Error ? cause.message.slice(0, 200) : String(cause).slice(0, 200) })
+    throw new GitHubRepositoryLookupError(Date.now() + 60_000)
+  }
+  try {
+    return parseGitHubUser(JSON.parse(text))
+  } catch {
+    throw new GitHubRepositoryLookupError(Date.now() + 60_000)
+  }
+}
+
 /** How long a `gh` that ran answers for: every status asked started one just to hear its version. */
 const INSTALLED_FOR_MS = 10 * 60_000
 // Per host, as its readings are: the executable that ran, and when.
@@ -216,11 +245,7 @@ export async function githubStatus(cwd: string): Promise<GitHubStatus> {
 
   let who: GitHubUser | null | undefined
   try {
-    who = (await machineUser()) ?? (await ghJson(
-      cwd,
-      ["api", "user"],
-      parseGitHubUser
-    ))
+    who = (await machineUser()) ?? (await accountUser(cwd))
     const login = who?.login
     if (!login) return { installed: true, authenticated: false }
 

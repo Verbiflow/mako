@@ -24,7 +24,7 @@ import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
 import { applyThreadMarks, loadThreadMarks } from "@/state/thread-marks"
 import { applyWorktreeSummaries, applyWorktreeSummaryChanges, refreshWorktrees, refreshWorktreeSummaries, worktreeSizesWereMeasured } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
-import { applyWorkspaceMoves, loadWorkspaceMoves, workspaceMoved } from "@/state/workspace-moves"
+import { applyWorkspaceMoves, loadWorkspaceMoves, moveReviews, workspaceMoved } from "@/state/workspace-moves"
 import { applyPlanBuilds, loadPlanBuilds } from "@/state/plan-builds"
 import { applyAccessChoices, loadAccessChoices } from "@/state/access-choices"
 import { applyPreferences, loadPreferences } from "@/state/account-preferences"
@@ -368,6 +368,10 @@ function apply(event: HostEvent) {
   }
   if (event.type === "workspace-moved") {
     void workspaceMoved(event)
+    return
+  }
+  if (event.type === "workspace-move-adjusted") {
+    moveReviews.adjusted(event.conversationId, event.outcome)
     return
   }
   if (event.type === "thread-group") {
