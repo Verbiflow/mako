@@ -52,7 +52,7 @@ import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } f
 import { HandoffSchema, type Handoff } from "@mako/host/contracts/thread-execution"
 import { accountEventClock, FileAccountEventCursors, memoryAccountEventCursors } from "@mako/host/usage/account-event-cursor"
 import { GrantedSecrets } from "@mako/host/base/secret-grants"
-import { memorySecrets } from "@mako/host/base/secrets"
+import { memorySecrets, secretGrantId } from "@mako/host/base/secrets"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
 import { declareCloudAccountMethods } from "@mako/host/usage/cloud-account-methods"
 import { RequestTraces } from "@mako/host/usage/request-trace"
@@ -852,6 +852,12 @@ async function inlineCursor(store: Secrets, name: string) {
   return InlineCursorSchema.parse(JSON.parse(record.value))
 }
 
+/** Whether the broker's grant for the sign-in saved under `name` stands: `GrantedSecrets.write` gives it after saving. */
+async function signInGranted(granted: GrantedSecrets, store: Secrets, name: string): Promise<boolean> {
+  const record = await store.read("mako-sign-in", name)
+  return !!record && (await granted.broker.grants()).some((grant) => grant.id === secretGrantId(record))
+}
+
 /** The last account event the sealed sign-in under `secretName` says this Mac heard. */
 async function heardUpTo(secretName: string): Promise<number | undefined> {
   const record = await secrets().read("mako-sign-in", secretName)
@@ -1020,6 +1026,68 @@ test("ordinary event checkpoints preserve grants; first checkpoint and clean shu
   assert.equal(writes, baseline + 2, "a current inline cursor needs no extra quit save")
 })
 
+/**
+ * Another host holding the borrowing lock under `folder`, the lock this host's broker takes for each change. It takes
+ * the lock as a second host does, trying again while this one holds it, and says why if it never holds it.
+ */
+async function otherHostHolding(folder: string) {
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+    import { acquireHostLock } from "@mako/host/base/host-lock"
+    const until = Date.now() + 10_000
+    let lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
+    while (lock.kind !== "held" && Date.now() < until) {
+      await new Promise((done) => setTimeout(done, 5))
+      lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
+    }
+    if (lock.kind !== "held") throw new Error("The fixture couldn't hold the borrowing lock in 10 s: " + JSON.stringify(lock))
+    process.send("held")
+    process.on("message", async () => { await lock.release(); process.exit(0) })
+  `, folder], { stdio: ["ignore", "ignore", "pipe", "ipc"] })
+  let stderr = ""
+  child.stderr?.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk })
+  const exited = once(child, "exit")
+  const end = async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    await exited
+  }
+  try {
+    await Promise.race([once(child, "spawn"), once(child, "error").then(([error]) => { throw new Error(`The lock holder didn't start: ${String(error)}`) })])
+    const [message] = await Promise.race([once(child, "message"), exited.then(([code, signal]) => {
+      throw new Error(`The lock holder exited before readiness (exit ${code ?? signal}): ${stderr.trim() || "no stderr"}`)
+    })])
+    assert.equal(message, "held")
+  } catch (error) {
+    await end()
+    throw error
+  }
+  return { holding: () => child.exitCode === null && child.signalCode === null, end }
+}
+
+test("heard events are remembered while a rollback checkpoint waits for another host's lock", { timeout: 20_000 }, async () => {
+  const cloud = await fakeCloud(), inner = memorySecrets(), cursors = memoryAccountEventCursors()
+  const folder = join(scratch, randomUUID()), secretName = "cloud/cursor-past-lock"
+  const granted = new GrantedSecrets(inner, folder)
+  const mac = await signedIn(cloud, { secretName, secrets: granted, eventCursors: cursors })
+  const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
+  await waitFor(() => cloud.subscribes.length > 0, "following")
+  const device = [...cloud.devices.values()][0]!
+  const scope = { cloud: cloud.url, account: cloud.account.id, device: device.id, createdAt: device.createdAt }
+  await waitFor(() => signInGranted(granted, inner, secretName), "sign-in granted")
+  const other = await otherHostHolding(folder)
+  try {
+    cloud.announce(joined())
+    // The first event's rollback checkpoint saves the sign-in, then waits for the other host's lock to grant it.
+    await waitFor(async () => (await inlineCursor(inner, secretName)).seen === 1, "inline checkpoint saved before its grant")
+    cloud.announce(joined())
+    await waitFor(async () => await cursors.read(scope) === 2, "sidecar checkpoint while the grant waits")
+    assert.ok(other.holding(), "the other host still holds the lock")
+  } finally {
+    await mac.accounts.close()
+    await other.end()
+    await granted.broker.close()
+  }
+})
+
 test("quit bounds the rollback checkpoint and drains its broker while another process holds the lock", { timeout: 40_000 }, async (t) => {
   for (const mode of ["seeded", "cold", "hourly"]) await t.test(mode, async (t) => {
     const cloud = await fakeCloud(), inner = memorySecrets()
@@ -1034,6 +1102,9 @@ test("quit bounds the rollback checkpoint and drains its broker while another pr
     await waitFor(() => cloud.subscribes.length > 0, "following")
     cloud.announce(joined())
     await waitFor(async () => (await inlineCursor(inner, secretName)).seen === 1, "first inline checkpoint")
+    // The sign-in is saved before its grant: the other host takes the lock only once the checkpoint's grant stands, or
+    // the checkpoint would still wait for it when the next one is due.
+    await waitFor(() => signInGranted(granted, inner, secretName), "first inline checkpoint granted")
     if (mode === "cold") {
       await mac.accounts.close()
       await granted.broker.close()
@@ -1045,31 +1116,9 @@ test("quit bounds the rollback checkpoint and drains its broker while another pr
     }
     const device = [...cloud.devices.values()][0]!
     const scope = { cloud: cloud.url, account: cloud.account.id, device: device.id, createdAt: device.createdAt }
-    // The other host. Its lock is the one this host's broker takes for each change, and the write the checkpoint above
-    // waited for still revokes and grants through it a moment later (`GrantedSecrets.write`), so it takes the lock as a
-    // second host does, trying again while this one holds it for a change, and says why if it never holds it.
-    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
-      import { acquireHostLock } from "@mako/host/base/host-lock"
-      const until = Date.now() + 10_000
-      let lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
-      while (lock.kind !== "held" && Date.now() < until) {
-        await new Promise((done) => setTimeout(done, 5))
-        lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
-      }
-      if (lock.kind !== "held") throw new Error("The fixture couldn't hold the borrowing lock in 10 s: " + JSON.stringify(lock))
-      process.send("held")
-      process.on("message", async () => { await lock.release(); process.exit(0) })
-    `, folder], { stdio: ["ignore", "ignore", "pipe", "ipc"] })
-    let stderr = ""
-    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk })
-    const exited = once(child, "exit")
+    const other = await otherHostHolding(folder)
     let deadline: ReturnType<typeof setTimeout> | undefined
     try {
-      await Promise.race([once(child, "spawn"), once(child, "error").then(([error]) => { throw new Error(`The lock holder didn't start: ${String(error)}`) })])
-      const [message] = await Promise.race([once(child, "message"), exited.then(([code, signal]) => {
-        throw new Error(`The lock holder exited before readiness (exit ${code ?? signal}): ${stderr.trim() || "no stderr"}`)
-      })])
-      assert.equal(message, "held")
       const listing = t.mock.method(granted.broker, "grants")
       if (mode === "hourly") offset = 60 * 60_000
       cloud.announce(joined())
@@ -1081,12 +1130,11 @@ test("quit bounds the rollback checkpoint and drains its broker while another pr
         new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("Quit did not drain within its checkpoint bound")), 4_000) }),
       ])
       assert.ok(logs.some(message => message.includes("quit cursor checkpoint skipped")), "the skipped checkpoint is logged")
-      assert.equal(child.exitCode, null, "quit did not require the other host to release its lock")
+      assert.ok(other.holding(), "quit did not require the other host to release its lock")
       t.diagnostic(`quit and broker drain with held lock: ${Math.round(performance.now() - started)} ms`)
     } finally {
       clearTimeout(deadline)
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
-      await exited
+      await other.end()
       await mac.accounts.close()
       await granted.broker.close()
     }
