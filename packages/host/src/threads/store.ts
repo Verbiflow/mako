@@ -1458,7 +1458,7 @@ export class ThreadStore {
    * device set it to work, a stop its device hasn't confirmed and whether the account has its record (`Placed`); a
    * member given as undefined is dropped. The edge as it stands after; undefined when there's none, or it isn't placed.
    */
-  keepPlaced(child: string, standing: Partial<Pick<Placed, "working" | "epoch" | "stop" | "said" | "recorded">>): ThreadParent | undefined {
+  keepPlaced(child: string, standing: Partial<Pick<Placed, "working" | "epoch" | "stop" | "said" | "recorded" | "heardAt">>): ThreadParent | undefined {
     return this.write(() => {
       const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(child)
       if (!kept) return undefined

@@ -4202,6 +4202,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       return { refused: "conflict", why: "A notice is notice:{child}:{reportId}, carrying that report of that child." }
     const kept = this.keepReport(edge, report.data)
     if ("refused" in kept) return kept
+    // When it was last heard of, by this device's clock: what its idle time counts from, whatever its device's clock says.
+    if (!kept.deduped) store.keepPlaced(edge.child, { heardAt: this.now() })
     // How it stands is its device's word as it sent this, never the report's: an earlier turn's report ends no later turn.
     this.standingHeard(edge.child, input.standing)
     hostLog("agents", "notice taken", { notice: input.id, child: edge.child, status: report.data.status, ownerGeneration: report.data.ownerGeneration, ...(kept.deduped && { deduped: true }), ...(from && { seq: from.seq }) })
@@ -4256,7 +4258,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const record = TreeEdgeSchema.safeParse({ op, apex: { thread: edge.parent, session: edge.parentSession }, child, place: target.kind === "device" ? { kind: "device", device: target.device } : { kind: "cloud", thread: target.thread } })
     // A start with no start's form (an edge from before starts had one) names no Session the account could hold it to.
     if (!record.success) return
-    const ask: TreeEdgeAsk = keep ? { ask: "keep", edge: record.data } : { ask: "end", op }
+    // A record ended because its Fin was stopped is one its Fin's next post never brings back; one that finished is.
+    const ask: TreeEdgeAsk = keep ? { ask: "keep", edge: record.data } : { ask: "end", op, why: edgeStopped(edge) ? "stopped" : "finished" }
     this.recordAsked.set(op, this.now())
     const asked = tree.edge(ask).then(
       (answer) => {
@@ -4293,30 +4296,38 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   /**
    * Whether a Fin this device placed elsewhere is idle past `FINISHED_CLOSE_MS`, as far as this device knows: its device
-   * said it isn't at work, and nothing of it (its start, its last report, its last opening) is newer than that. Its
+   * said it isn't at work, and nothing this device saw of it is newer than that (`placedLast`). Its
    * record ends then, whatever it still asks, since it reports again only once something sets it to work, which keeps
    * it again: its Apex's message or answer here, or its next notice (`recordHeld`, `recordLost`). So a tree keeps
    * records only for the Fins it started or heard from within that time, and those still at work.
    */
   private placedIdle(edge: ThreadParent): boolean {
     if (!edge.placed || edge.placed.working) return false
-    const last = Math.max(edge.createdAt, this.latest.get(edge.child)?.at ?? 0, edge.resumed?.at ?? 0)
-    return this.now() - last >= FINISHED_CLOSE_MS
+    return this.now() - this.placedLast(edge) >= FINISHED_CLOSE_MS
   }
 
   /**
-   * The account delivered a notice of a Fin under its record, so the account has one: it brought the record back
-   * itself from the Fin's own post, after it ended or lapsed (`TreeNotices.edgeOfNotice`), with neither device asking
-   * this one. The edge says so, and the record is kept or ended as the edge stands now (`recordPlaced`): a report opens
-   * a Fin closed as finished, which keeps it; one stopped asks the account to end it again.
+   * The last this device saw of a Fin it placed elsewhere, by its own clock alone: its start, its last report taken
+   * (`Placed.heardAt`) and its last opening. A report's own time is its device's clock and counts for nothing here.
+   */
+  private placedLast(edge: ThreadParent): number {
+    return Math.max(edge.createdAt, edge.placed?.heardAt ?? 0, edge.resumed?.at ?? 0)
+  }
+
+  /**
+   * The account delivered a notice of a Fin: it may have brought the Fin's record back itself, from the Fin's own post
+   * after the record ended as finished or lapsed (`TreeNotices.revive`), with neither device asking this one; or it
+   * may be delivering what was held under a record that's ending. Which, this device can't tell from the delivery, so
+   * it says nothing of the record and asks again as the edge stands now (`recordPlaced`): a report opens a Fin closed as
+   * finished and is news of it, which keeps the record; one this device would end has nothing kept for it, and a
+   * record brought back for it lapses in its time.
    */
   private recordHeld(child: string): void {
-    const store = this.store()
-    const edge = store?.edges().of(child)
-    if (!store || !edge?.placed || edge.placed.recorded) return
-    store.keepPlaced(child, { recorded: true })
+    const edge = this.store()?.edges().of(child)
+    if (!edge?.placed || edge.placed.recorded) return
     this.recordPlaced(child, "now")
   }
+
 
   // ── Starting ──
 
@@ -5955,7 +5966,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     for (const listed of store.edges().all) {
       // What takes no read first: most Fins aren't finished, or not for long enough.
       const latest = this.latest.get(listed.child)
-      if (listed.closedAt !== undefined || !latest || !this.finished(listed) || this.now() - latest.at < FINISHED_CLOSE_MS) continue
+      if (listed.closedAt !== undefined || !latest || !this.finished(listed) || this.now() - (listed.placed ? this.placedLast(listed) : latest.at) < FINISHED_CLOSE_MS) continue
       const heldAt = this.finishedHeld.get(listed.child)
       if (heldAt !== undefined && this.now() - heldAt < FINISHED_CLOSE_MS) continue
       // One Fin a turn of the loop: looking at one may read its every report once, and a tree has many.
@@ -6060,7 +6071,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     if (edge.placed && (edge.placed.working || edge.placed.stop || this.queuedAway(edge.op))) return "its device hasn't said it's idle"
     const latest = this.latest.get(child)
     if (!latest || !this.finished(edge)) return "not finished"
-    if (now - latest.at < FINISHED_CLOSE_MS) return "finished too recently"
+    // A placed Fin's by when this device took its report, never by its device's clock.
+    if (now - (edge.placed ? this.placedLast(edge) : latest.at) < FINISHED_CLOSE_MS) return "finished too recently"
     // Opened again by a message: its time starts over, whatever its last report's age.
     if (edge.resumed && now - edge.resumed.at < FINISHED_CLOSE_MS) return "opened again too recently"
     // Named whether or not this host reads pull requests: a host that does must find the wait open.

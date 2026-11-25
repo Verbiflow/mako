@@ -301,6 +301,8 @@ export function createFakeGateway(
    * Apex's device once kept is ever brought back.
    */
   const endedTreeEdges = new Map<string, TreeEdge>()
+  /** By start: records ending because their Fin was stopped (`TreeEdgeEndSchema`), which go and are not remembered. */
+  const stoppedTreeEdges = new Set<string>()
   /** By sender's scope: when it posted in the last minute, every post counted. */
   const noticePosts = new Map<string, number[]>()
   /** By sender's scope: the last notice admitted from it, which tells that one posted again from a new one once it's been taken. */
@@ -515,7 +517,8 @@ export function createFakeGateway(
     for (const [op, kept] of treeEdges) {
       if (!kept.ending || [...mailboxes.values()].some((box) => box.held.some((held) => held.scope === op))) continue
       treeEdges.delete(op)
-      endedTreeEdges.set(op, kept.edge)
+      // A stopped Fin's record is never brought back: only one that ended as finished, or lapsed.
+      if (!stoppedTreeEdges.delete(op)) endedTreeEdges.set(op, kept.edge)
     }
   }
   /**
@@ -1276,8 +1279,10 @@ export function createFakeGateway(
         if (kept) kept.ending = false
         else treeEdges.set(op, { edge: ask.edge, ending: false })
         endedTreeEdges.delete(op)
+        stoppedTreeEdges.delete(op)
       }
       if (decided.does === "end" && kept) {
+        if (ask.ask === "end" && ask.why !== "finished") stoppedTreeEdges.add(op)
         kept.ending = true
         endTreeEdges()
       }
@@ -1285,7 +1290,10 @@ export function createFakeGateway(
     },
     treeEdges: () => [...treeEdges.values()].map((kept) => ({ ...kept })),
     lapseTreeEdges: (session) => {
-      for (const kept of treeEdges.values()) if (kept.edge.apex.session === session) kept.ending = true
+      for (const kept of treeEdges.values()) if (kept.edge.apex.session === session) {
+        kept.ending = true
+        stoppedTreeEdges.delete(kept.edge.op)
+      }
       endTreeEdges()
     },
     async postNotice(sender, body) {

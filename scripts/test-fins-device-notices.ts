@@ -262,7 +262,7 @@ interface Placing {
   account?: Parameters<typeof accountOf>[0]
   /** Each device's build: `tree: false` is one from before the account held a device's notices. */
   mac?: { tree?: boolean; now?: () => number }
-  studio?: { tree?: boolean }
+  studio?: { tree?: boolean; now?: () => number }
   /** A record the account already has as the Fin is started. */
   seeded?: (apex: { thread: string; session: string }, studio: Device) => TreeEdge
 }
@@ -427,7 +427,8 @@ async function waysNeverCross(): Promise<void> {
     mac.offline()
     await report("three", "Step three.")
     await until("the third admitted", () => undelivered(studio).length === 0)
-    assert.deepEqual(await account.gateway.askTreeEdge(mac.id, JSON.stringify({ ask: "end", op: there.op })), { ok: true })
+    // As its Apex's device ends it once the Fin closes as finished: ended so, it's one its Fin's post brings back.
+    assert.deepEqual(await account.gateway.askTreeEdge(mac.id, JSON.stringify({ ask: "end", op: there.op, why: "finished" })), { ok: true })
     assert.deepEqual(account.gateway.treeEdges(), [{ edge, ending: true }], "it stands while that notice is held")
     await report("four", "Step four.")
     await until("the fourth admitted", () => undelivered(studio).length === 0)
@@ -873,6 +874,48 @@ async function closedReportsAlone(): Promise<void> {
   } finally { await world.close() }
 }
 
+/** A Fin's device's clock, a year ahead or behind, changes nothing of when its Apex's device closes it: that counts from its own clock alone. */
+async function finClockAside(): Promise<void> {
+  for (const skew of [365 * 24 * HOUR_MS, -365 * 24 * HOUR_MS]) {
+    const clock = { offset: 0 }
+    const world = await placed({ mac: { now: () => Date.now() + clock.offset }, studio: { now: () => Date.now() + skew } })
+    const { account, mac, studio, child, conversationOf } = world
+    try {
+      await until("the Fin's record", () => recorded(mac, child))
+      await reportAs(studio, conversationOf(child), "done", "The sidebar is fixed.")
+      studio.world.release(conversationOf(child))
+      await until("its Apex's device to hear it idle", () => mac.world.store.edges().of(child)?.placed?.working === false)
+      await mac.world.settle()
+      assert.ok(Math.abs((mac.world.store.reportsOf(child).at(-1)?.at ?? 0) - Date.now()) > 300 * 24 * HOUR_MS, "its report carries its device's clock")
+      assert.deepEqual(await mac.world.agents.closeFinished(), [], `its device's clock ${skew > 0 ? "ahead" : "behind"}: not closed before six hours of this device's`)
+      assert.equal(recorded(mac, child), true)
+      clock.offset = FINISHED_CLOSE_MS + 1_000
+      assert.deepEqual(await mac.world.agents.closeFinished(), [child], `six hours of this device's on, it closes (open: ${mac.world.agents.keptOpenBy(child)})`)
+      await until("its record's end", () => account.gateway.treeEdges().length === 0)
+    } finally { await world.close() }
+  }
+  console.log("clocks: a Fin whose device's clock was a year ahead, then a year behind, closed six hours after its Apex's device heard its result, by that device's clock")
+}
+
+/** A stopped Fin's record isn't brought back by its post: only one that ended as finished, or lapsed, is. */
+async function stoppedNotBack(): Promise<void> {
+  const world = await placed()
+  const { account, mac, studio, apex, child, report } = world
+  try {
+    await until("the Fin's record", () => recorded(mac, child))
+    const stopped = await mac.world.agents.stop(apex.caller, { child: "sidebar", reason: "not needed" })
+    assert.ok(!("refused" in stopped), JSON.stringify(stopped))
+    await until("the record's end", () => account.gateway.treeEdges().length === 0 && !recorded(mac, child))
+    assert.deepEqual(account.asks.at(-1)?.ask, { ask: "end", op: world.there.op, why: "stopped" }, "ended, saying its Fin was stopped")
+    mac.offline()
+    await report("late", "Said after the stop.")
+    await until("the account to refuse it", () => account.posts.some((post) => post.answer?.admitted === false && post.answer.reason === "forbidden"))
+    assert.deepEqual(account.gateway.treeEdges(), [], "a stopped Fin's post brings back nothing")
+    assert.equal(direct(account, studio) >= 1 || undelivered(studio).length === 1, true, "it waits for its Apex's device itself")
+    console.log("stopped: a stopped Fin's record ended saying so, and its later post brought nothing back at the account")
+  } finally { await world.close() }
+}
+
 const cases: Array<[string, () => Promise<void>]> = [
   ["never-on-at-once", neverOnAtOnce],
   ["restarts", restarts],
@@ -893,6 +936,8 @@ const cases: Array<[string, () => Promise<void>]> = [
   ["closes", placedCloses],
   ["idle", idleRecordEnds],
   ["closed-alone", closedReportsAlone],
+  ["clocks", finClockAside],
+  ["stopped", stoppedNotBack],
 ]
 
 const only = process.argv.slice(2)

@@ -352,12 +352,21 @@ export const TreeEdgeSchema = z.lazy(() => Edge.refine((edge) => apexSessionOfSt
 export type TreeEdge = z.infer<typeof TreeEdgeSchema>
 
 /**
- * What an Apex's device asks of the account's records: `keep` this one, or `end` the one under a start. Either again
- * is the same ask, so one whose answer was lost is asked again as it is.
+ * Why a record is ended: its Fin was `stopped` (by its Apex, the person or an archive), or `finished` (closed as
+ * finished, or idle past `FINISHED_CLOSE_MS` on its Apex's device). An end without one is from a build that ended a
+ * record only when its Fin was stopped, and is read so.
+ */
+export const TreeEdgeEndSchema = z.enum(["stopped", "finished"])
+export type TreeEdgeEnd = z.infer<typeof TreeEdgeEndSchema>
+
+/**
+ * What an Apex's device asks of the account's records: `keep` this one, or `end` the one under a start, saying why
+ * (`TreeEdgeEndSchema`). Either again is the same ask, so one whose answer was lost is asked again as it is. Only a
+ * record that ended as `finished`, or lapsed, is one its Fin's next post may bring back: a stopped Fin's never is.
  */
 export const TreeEdgeAskSchema = z.lazy(() => z.discriminatedUnion("ask", [
   z.object({ ask: z.literal("keep"), edge: TreeEdgeSchema }).strict(),
-  z.object({ ask: z.literal("end"), op: z.string().min(1).max(512) }).strict(),
+  z.object({ ask: z.literal("end"), op: z.string().min(1).max(512), why: TreeEdgeEndSchema.optional() }).strict(),
 ]))
 export type TreeEdgeAsk = z.infer<typeof TreeEdgeAskSchema>
 

@@ -774,7 +774,7 @@ describe("tree notices: the records of Fins off their Apexes' hosts", () => {
   const edge = edgeOf()
   const ask = (gateway, device, body) => gateway.askTreeEdge(device, JSON.stringify(body))
   const keep = (record = edge) => ({ ask: "keep", edge: record })
-  const end = (op = edge.op) => ({ ask: "end", op })
+  const end = (op = edge.op, why) => ({ ask: "end", op, ...(why && { why }) })
 
   test("a record is a start of its own Apex's Session, the Apex, the child and where it runs, and nothing else", () => {
     assert.equal(TREE_EDGES_PATH, "/v1/tree/edges")
@@ -792,6 +792,8 @@ describe("tree notices: the records of Fins off their Apexes' hosts", () => {
   test("an ask keeps a record or ends one by its start, and answers done or one of three refusals, each with its words", () => {
     assert.deepEqual(TreeEdgeAskSchema.parse(keep()), keep())
     assert.deepEqual(TreeEdgeAskSchema.parse(end()), end())
+    for (const why of ["stopped", "finished"]) assert.deepEqual(TreeEdgeAskSchema.parse(end(edge.op, why)), end(edge.op, why), `an end says why: ${why}`)
+    assert.equal(TreeEdgeAskSchema.safeParse({ ask: "end", op: edge.op, why: "bored" }).success, false)
     assert.equal(TreeEdgeAskSchema.safeParse({ ask: "keep", edge, op: edge.op }).success, false)
     assert.equal(TreeEdgeAskSchema.safeParse({ ask: "end", edge }).success, false, "an end names the start alone")
     assert.equal(TreeEdgeAskSchema.safeParse({ ask: "list" }).success, false)
@@ -956,26 +958,32 @@ describe("tree notices: the records of Fins off their Apexes' hosts", () => {
     } finally { await gateway.close() }
   })
 
-  test("a record ended with nothing held goes at once, and its own Fin's next post brings it back; with notices held it stands until they're taken", async () => {
+  test("a record ended as finished with nothing held goes at once, and its own Fin's next post brings it back; with notices held it stands until they're taken; a stopped Fin's is never brought back", async () => {
     const gateway = createFakeGateway()
     try {
       const sender = { kind: "device", device: mac }
       let apexHost = await owner(gateway, `d-${apexMac}`, { takes: false })
       assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
-      assert.deepEqual(await ask(gateway, apexMac, end()), { ok: true })
+      assert.deepEqual(await ask(gateway, apexMac, end(edge.op, "stopped")), { ok: true })
       assert.deepEqual(gateway.treeEdges(), [], "nothing held: gone")
-      assert.deepEqual(await ask(gateway, apexMac, end()), { ok: true }, "ended again is done already")
+      assert.deepEqual(await post(gateway, sender, noticeOf("0")), { admitted: false, reason: "forbidden" }, "a stopped Fin's post brings nothing back")
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
+      assert.deepEqual(await ask(gateway, apexMac, end()), { ok: true })
+      assert.deepEqual(await post(gateway, sender, noticeOf("0")), { admitted: false, reason: "forbidden" }, "nor an end from a build that ended records only for a stop")
+      assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
+      assert.deepEqual(await ask(gateway, apexMac, end(edge.op, "finished")), { ok: true })
+      assert.deepEqual(await ask(gateway, apexMac, end(edge.op, "finished")), { ok: true }, "ended again is done already")
       assert.deepEqual(await post(gateway, { kind: "device", device: apexMac }, noticeOf("1")), { admitted: false, reason: "forbidden" }, "no device it doesn't name brings it back")
       // Its own Fin's post brings it back and is admitted; kept again, it admits; ended while its notice is held, it admits still.
       assert.deepEqual(await post(gateway, sender, noticeOf("1")), { admitted: true, seq: 1 })
       assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
-      assert.deepEqual(await ask(gateway, apexMac, end()), { ok: true })
+      assert.deepEqual(await ask(gateway, apexMac, end(edge.op, "finished")), { ok: true })
       assert.deepEqual(gateway.treeEdges(), [{ edge, ending: true }])
       assert.deepEqual(await post(gateway, sender, noticeOf("2")), { admitted: true, seq: 2 }, "behind the one held, in its order")
       // Kept again while it was ending, it stands; ended once more, it goes when its owner has taken what's held.
       assert.deepEqual(await ask(gateway, apexMac, keep()), { ok: true })
       assert.deepEqual(gateway.treeEdges(), [{ edge, ending: false }])
-      assert.deepEqual(await ask(gateway, apexMac, end()), { ok: true })
+      assert.deepEqual(await ask(gateway, apexMac, end(edge.op, "finished")), { ok: true })
       apexHost.link.close()
       await settle()
       apexHost = await owner(gateway, `d-${apexMac}`)
@@ -987,7 +995,7 @@ describe("tree notices: the records of Fins off their Apexes' hosts", () => {
       }
       await settle()
       assert.deepEqual(gateway.treeEdges(), [], "taken: gone")
-      // Its Fin's next post brings it back: its Apex's device, hearing it, ends it again if its Fin is still stopped.
+      // Its Fin's next post brings it back: it ended as finished.
       assert.deepEqual(await post(gateway, sender, noticeOf("3")), { admitted: true, seq: 3 })
       assert.deepEqual(gateway.treeEdges(), [{ edge, ending: false }])
       // An archived Apex's records go with what was held for it, and a notice under one that stands is gone.

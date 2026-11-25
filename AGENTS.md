@@ -1052,7 +1052,10 @@ among the Fins holding notices there, each its equal share and always one
 device's Fin's record lapses 30 days after the account last knew its Apex's
 device was there (`TREE_EDGE_LEASE_MS`); a record that ended or lapsed is
 remembered a lease more, and the Fin's own next post brings it back, its
-Apex's device on or off (`revive` in the account, `recordHeld` here). Past
+Apex's device on or off (`revive` in the account, `recordHeld` here); one
+ended because its Fin was stopped is never brought back (the end says why,
+`TreeEdgeEndSchema`). A placed Fin's six hours count from when this device
+took its last report (`Placed.heardAt`), never from its device's clock. Past
 that its notice goes to that device itself, said as a warning, and that
 device asks for the record again (`recordLost`). A tree has at most
 `TREE_FINS_OPEN` (872) Fins on record, so a Session holds at most
