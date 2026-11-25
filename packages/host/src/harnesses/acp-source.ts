@@ -55,6 +55,8 @@ export interface AcpLaunch {
   command: string
   args: string[]
   configureEnvironment(env: NodeJS.ProcessEnv): void
+  /** The account's sign-in variables: a Thread's Setup values never replace, add or remove them for the agent. */
+  accountVariables?: readonly string[]
   /** Shown in the conversation once the session is ready, such as the provider's own permission rules. */
   notices?: TranscriptEvent[]
   /** `holdsWrites`: what this launch's `holdsWrites` answered, for a config that installs its hook to match. */

@@ -381,7 +381,10 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     delete env.CLAUDE_CODE_ENTRYPOINT
     spec.configureEnvironment(env)
     applyControlEnvironment(env, options.conversationTools?.control)
+    const accountHeld = (spec.accountVariables ?? []).map((name) => [name, env[name]] as const)
     applyThreadEnvironment(env, options.threadEnvironment)
+    // A project's own GEMINI_API_KEY is for its app; the agent keeps the account its launch was decided for.
+    for (const [name, value] of accountHeld) if (value === undefined) delete env[name]; else env[name] = value
     const executable = await dependencies.processes.executables.find(spec.command, env)
     if (!executable) throw new Error(`${harness} is not installed`)
     // Before MCP preparation: a native fork only copies the session, so it starts none of the conversation's servers.

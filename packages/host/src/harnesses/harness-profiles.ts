@@ -282,6 +282,8 @@ export class HarnessProfiles {
     // the selection is validated against; the provider itself rejects a model
     // the account has since lost. Cursor's model listing is a network call to
     // its API, and a stall there once refused every send for 30 s at a time.
+    // Signed out, the harness lists nothing; the session it opens asks for the sign-in, so the send goes ahead.
+    if (profile.available && profile.signInRequired && !profile.models.length) return tuning
     if (!profile.available || !profile.models.length) {
       const reason = profile.error ?? profile.configurationError ?? `${profile.label} model discovery is unavailable. Refresh its settings before sending.`
       hostWarn("discovery", "send refused", { harness, model: tuning.model, error: reason })

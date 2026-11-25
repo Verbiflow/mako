@@ -28,7 +28,7 @@ if (!process.versions.electron) {
     await writeFile(join(root, "recorder.mjs"), `
 import { appendFileSync } from "node:fs"
 const [name, ...args] = process.argv.slice(2)
-const values = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("MAKO_THREAD_") || ["MAKO_APP_DATA_DIR", "PORT", "API_URL", "STALE_NAME"].includes(key)))
+const values = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.startsWith("MAKO_THREAD_") || ["MAKO_APP_DATA_DIR", "PORT", "API_URL", "STALE_NAME", "GEMINI_API_KEY"].includes(key)))
 appendFileSync(${JSON.stringify(join(root, "launches.jsonl"))}, JSON.stringify({ name, args, values }) + "\\n")
 if (args.includes("--version")) { console.log("2.0.0"); process.exit(0) }
 setTimeout(() => process.exit(1), 500)
@@ -87,7 +87,7 @@ async function check() {
   )
   const cwd = join(root, "work")
   await mkdir(cwd)
-  const environment = { thread: randomUUID(), host: "fix-login.thread.localhost", port: 20_110, ports: 10, dataDir: join(root, "app-data"), threadDataDir: join(root, "thread-data"), values: { PORT: "20110", API_URL: "http://fix-login.thread.localhost:20111" } }
+  const environment = { thread: randomUUID(), host: "fix-login.thread.localhost", port: 20_110, ports: 10, dataDir: join(root, "app-data"), threadDataDir: join(root, "thread-data"), values: { PORT: "20110", API_URL: "http://fix-login.thread.localhost:20111", GEMINI_API_KEY: "the-project-app-key" } }
   const expected = {
     MAKO_THREAD_ID: environment.thread,
     MAKO_THREAD_HOST: environment.host,
@@ -96,10 +96,13 @@ async function check() {
     MAKO_THREAD_URL: "http://fix-login.thread.localhost:20110",
     MAKO_THREAD_DATA_DIR: environment.threadDataDir,
     MAKO_APP_DATA_DIR: environment.dataDir,
-    MAKO_THREAD_VALUES: "PORT,API_URL",
+    MAKO_THREAD_VALUES: "PORT,API_URL,GEMINI_API_KEY",
     PORT: "20110",
     API_URL: "http://fix-login.thread.localhost:20111",
+    GEMINI_API_KEY: "the-project-app-key",
   }
+  // Antigravity's account is decided by its launch: a project's own Gemini key, set for its app, never signs the agent in.
+  const { GEMINI_API_KEY: _projectKey, ...antigravityExpected } = expected
   const options = (provider) => {
     const conversationId = randomUUID()
     return {
@@ -150,13 +153,13 @@ async function check() {
     const agent = own.find((launch) => !launch.args.includes("--version"))
     report[name] = { start: outcomes[name], invocations: own.map((launch) => launch.args.slice(0, 3).join(" ") || "(no arguments)") }
     assert.ok(agent, `${name}'s agent process was started (${outcomes[name]})`)
-    assert.deepEqual(agent.values, expected, `${name}'s agent process started with exactly its Thread's values`)
+    assert.deepEqual(agent.values, name === "antigravity" ? antigravityExpected : expected, `${name}'s agent process started with exactly its Thread's values`)
   }
   const unplaced = launches.filter((launch) => launch.name === "codex" && !launch.args.includes("--version")).at(-1)
   assert.notEqual(unplaced, launches.find((launch) => launch.name === "codex"), "the agent without a Thread was started too")
   assert.deepEqual(unplaced.values, {}, "an agent without a Thread never inherits the values of the Mako that started it")
   assert.ok(cursorEnv, "the Cursor child was prepared")
-  assert.deepEqual(Object.fromEntries(Object.entries(cursorEnv).filter(([key]) => key.startsWith("MAKO_THREAD_") || ["MAKO_APP_DATA_DIR", "PORT", "API_URL", "STALE_NAME"].includes(key))), expected, "the Cursor child starts with exactly its Thread's values")
+  assert.deepEqual(Object.fromEntries(Object.entries(cursorEnv).filter(([key]) => key.startsWith("MAKO_THREAD_") || ["MAKO_APP_DATA_DIR", "PORT", "API_URL", "STALE_NAME", "GEMINI_API_KEY"].includes(key))), expected, "the Cursor child starts with exactly its Thread's values")
   report.cursor = { start: "child options recorded before spawn" }
   console.log(JSON.stringify(report, null, 2))
   console.log(`thread environment launch: all ${NAMES.length + 1} harnesses start their agent with the Thread's values and its recipe's names for them, and an inherited value never leaks`)
