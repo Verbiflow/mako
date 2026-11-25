@@ -467,6 +467,14 @@
 
   /* A dark sphere in daylight: the highlight is a grey sheen, the rim near black. */
   --mark-highlight: oklch(0.5 0.004 45);
+  /*
+   * The composer floats a tone up on its pane with a soft shadow beneath and the rim light along its top, never an
+   * outline; typing lifts its fill a breath (`--composer-lift`).
+   */
+  --elevation-composer:
+    0 12px 32px oklch(0.05 0.002 40 / 32%), 0 2px 8px oklch(0.05 0.002 40 / 22%),
+    0 -0.5px 0 0 var(--rim-light);
+  --composer-lift: color-mix(in oklab, var(--foreground) 3.5%, transparent);
   --mark-shade: oklch(0.08 0.002 40);
 
   /* No rim light in daylight; the ring darkens instead. */
@@ -480,6 +488,10 @@
   --elevation-overlay:
     0 16px 32px oklch(0 0 0 / 6%), 0 8px 16px oklch(0 0 0 / 8%),
     0 0 0 0.5px oklch(0.2 0.01 40 / 12%);
+  --elevation-composer:
+    0 12px 32px oklch(0 0 0 / 7%), 0 2px 8px oklch(0 0 0 / 6%),
+    0 0 0 0.5px oklch(0.2 0.01 40 / 7%);
+  --composer-lift: color-mix(in oklab, white 32%, transparent);
 
   --positive: oklch(0.53 0.095 150);
   --negative: oklch(0.545 0.15 26);
@@ -1578,24 +1590,24 @@ diffs-container {
 }
 
 /*
- * The composer: one square box on the pane's own surface, framed by a hairline, the same in a new Thread and an
- * existing one. Typing in it firms the hairline to the input's tone, and its send is an arrow alone until there is
+ * The composer: one square box a tone up from its pane, floated by a soft shadow and never outlined, the same in a
+ * new Thread and an existing one. Typing in it lifts its fill a breath, and its send is an arrow alone until there is
  * something to send, when a sea square grows in behind it. Both are an opacity (and the square's scale) on a layer of
  * their own, so the compositor runs them.
  */
 .composer-box {
   isolation: isolate;
-  box-shadow: inset 0 0 0 1px var(--hairline);
+  box-shadow: var(--elevation-composer);
 }
 .composer-box::after {
   content: "";
   position: absolute;
   inset: 0;
-  z-index: 1;
+  z-index: -1;
   pointer-events: none;
-  box-shadow: inset 0 0 0 1px var(--input);
+  background: var(--composer-lift);
   opacity: 0;
-  transition: opacity 180ms var(--ease-out);
+  transition: opacity 200ms var(--ease-out);
 }
 .composer-box:focus-within::after {
   opacity: 1;
@@ -2837,6 +2849,20 @@ button.ref-token:hover { --ref-bg: var(--ref-fill-hover); }
   from {
     opacity: 0;
   }
+}
+
+/*
+ * Of two panes side by side, the focused one is framed, over its content so the frame is whole (an inset ring on the
+ * pane itself is covered by whatever fills it and shows only in gaps, such as beside the composer). One pane alone is
+ * never framed: the pane is separated by tone, never a line.
+ */
+.workbench-pane-focused::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  pointer-events: none;
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 /* A pane opened beside the chat grows in from the side it was dropped on. */

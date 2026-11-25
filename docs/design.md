@@ -9,9 +9,10 @@ than its own. `src/index.css` holds the tokens and nothing else does. `npm run l
 - **Surfaces are tones, not boxes.** Chrome is `--shell`; a pane's body is `--surface`; anything raised above it
   (a prompt, a row's selection, a card) is `--raised` or a tint of the text colour (`--fill-hover`,
   `--fill-selected`). Sections part by tone and spacing, never a hairline, and nothing has an outline for its own
-  sake. Hairlines (`--hairline`) stay for content (a diff's file header, a table) and inputs: the composer is the one
-  input framed at rest, on the pane's own surface.
-- **Shadows only float.** Menus, the palette, dialogs and toasts (`--elevation-*`) cast one; nothing in a pane does.
+  sake. Hairlines (`--hairline`) stay for content (a diff's file header, a table) and an input's focus. One pane alone has no
+  frame; of two side by side, the focused one is framed.
+- **Shadows only float.** Menus, the palette, dialogs and toasts (`--elevation-*`) cast one, and the composer, which
+  floats over the transcript (`--elevation-composer`, a tone up and never outlined); nothing else in a pane does.
 - **The ramp is warm neutrals**, quiet in both themes. Hue appears only where it means something.
 
 ## Colour
@@ -72,7 +73,7 @@ Use these; don't redraw them.
 | A list of an Apex's Fins | the Shiver card (`viewer/shiver-card.tsx`): needs you, working, queued, failed; done and idle folded. A row's time is how long the Fin has stood as it does (`since`): a working one's current turn, never its age |
 | A row of a rail's fixed top | `RailRow` (`rail/rail-row.tsx`): the left rail's New thread and Inbox, the right rail's Changes and Files |
 | A message | `Prompt` and `FinReports` (`transcript/`), the avatar beside the message's last line |
-| The composer | the same in every view and on every client (`composer-frame.tsx`; the web app's `web-client/composer.tsx` draws the same box, its controls a finger's size on a phone or an iPad): in the transcript's column, one square box on the pane's surface with a hairline frame, the draft, then one row of plus, harness and model with its reasoning, send; under the box a quiet status line of where and how the work runs (this Mac or the cloud, the folder or branch, the access level in words, `--caution` only for full access) and the context reading at its end |
+| The composer | the same in every view and on every client (`composer-frame.tsx`; the web app's `web-client/composer.tsx` draws the same box, its controls a finger's size on a phone or an iPad): in the transcript's column, one square box a tone up from the pane (`--raised`), floated by a soft shadow and never outlined, its fill lifting a breath while typing, the draft, then one row of plus, harness and model with its reasoning, send; under the box a quiet status line of where and how the work runs (this Mac or the cloud, the folder or branch, the access level in words, `--caution` only for full access) and the context reading at its end |
 
 ## The rails and tabs
 

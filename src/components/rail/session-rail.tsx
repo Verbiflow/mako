@@ -157,7 +157,7 @@ function Checklist() {
   useEffect(() => (account ? watchAccountDetail("browsers", account) : undefined), [account])
   const done = steps.filter((step) => step.done).length
   return (
-    <section data-setup-checklist={open ? "open" : "folded"} aria-label="Finish setting up" className="mx-2 mb-2 shrink-0 border border-hairline bg-surface">
+    <section data-setup-checklist={open ? "open" : "folded"} aria-label="Finish setting up" className="mx-2 mb-2 shrink-0 bg-surface">
       <div className="group/check flex h-8 items-center">
         <button type="button" onClick={toggleSetupChecklist} aria-expanded={open} className="pressable flex h-full min-w-0 flex-1 items-center gap-2 pr-1 pl-2 text-left">
           <ListChecksIcon className="size-[15px] shrink-0 stroke-[1.75] text-faint" />
