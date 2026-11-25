@@ -173,6 +173,20 @@ async function checkDesk() {
     await until("Boolean(document.querySelector('nav[aria-label=\"Threads\"]'))", "the rail back")
     console.log("Keys: ⌘B")
 
+    // 6. Settings are the desktop's own panes (`SettingsPanes`): the grouped nav with its search and one section beside
+    //    it, holding what a browser reaches, under the desktop's ids; its switches are the desktop's `Toggle`.
+    await window.loadURL(`${new URL("scripts/web-desk.html", process.env.MAKO_DESK_URL).href}?settings&theme=dark`)
+    await until("document.querySelectorAll('[data-settings-section]').length > 0", "the browser's Settings")
+    const nav = await evaluate("[...document.querySelectorAll('[data-settings-section]')].map((node) => node.dataset.settingsSection)")
+    assert.deepEqual(nav, ["agents", "fins", "notifications", "transcript", "appearance", "setup", "pull-requests", "account", "devices", "diagnostics"], `the browser's Settings sections: ${JSON.stringify(nav)}`)
+    assert.equal(await evaluate("Boolean(document.querySelector('input[aria-label=\\'Search settings\\']'))"), true, "with the desktop's search")
+    await until("document.querySelectorAll('[data-agent-row]').length > 0", "Agents, read from the Mac")
+    await evaluate("document.querySelector('[data-settings-section=\\'transcript\\']').click(), true")
+    await until("Boolean(document.querySelector('main [role=switch]'))", "Conversation's switch")
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('main [role=switch]')).borderRadius !== '0px' && Math.round(document.querySelector('main [role=switch]').getBoundingClientRect().width)"), 28, "the desktop's own Toggle")
+    await capture("settings-1280-dark.png")
+    console.log("Settings: the desktop's panes and Toggle, with what a browser reaches")
+
     await desk("light")
     await until("Boolean(document.querySelector('[data-background-work]'))", "the busy Session, light")
     await capture("busy-1280-light.png")
