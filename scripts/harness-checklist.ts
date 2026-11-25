@@ -162,7 +162,7 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
   },
   {
     title: "Cloud sign-in",
-    what: "Where the sign-in lives on Linux, whether it rotates, which credential the cloud gets, how it is installed on a machine and who refreshes it. Not built; Wayfinder's secrets page has the plan.",
+    what: "Where the sign-in lives on Linux, whether it rotates, which credential the cloud gets, how it is installed on a machine and who refreshes it.",
     enforcedBy: "not built: a run that resumes a laptop session on a fresh Linux machine and checks the laptop is still signed in",
   },
   {

@@ -69,6 +69,8 @@ export interface HarnessProfile {
   /** Provider-resolved defaults in the requested workspace. Never saved as user choices. */
   settings?: SessionSettings
   configurationError?: string
+  /** Nothing was listed because the account must sign in first; a send opens the session, which asks for it. */
+  signInRequired?: true
   error?: string
   /** Nothing is known yet: no discovery has answered and no snapshot is held. Never set beside models. */
   pending?: boolean

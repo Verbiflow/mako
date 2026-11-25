@@ -1,3 +1,4 @@
+import { ANTIGRAVITY_VOCABULARY } from "./antigravity.js"
 import { CLAUDE_VOCABULARY } from "./claude.js"
 import { CODEX_VOCABULARY } from "./codex.js"
 import { CURSOR_VOCABULARY } from "./cursor.js"
@@ -27,7 +28,7 @@ export { planFeedbackMessage, planFeedbackOf } from "./plan-feedback.js"
 
 /** Every harness's declaration. A harness without one gets the names all of these share. */
 export const VOCABULARIES: readonly HarnessVocabulary[] = [
-  CLAUDE_VOCABULARY, CODEX_VOCABULARY, CURSOR_VOCABULARY, OPENCODE_VOCABULARY, GROK_VOCABULARY, DEVIN_VOCABULARY,
+  CLAUDE_VOCABULARY, CODEX_VOCABULARY, CURSOR_VOCABULARY, OPENCODE_VOCABULARY, GROK_VOCABULARY, DEVIN_VOCABULARY, ANTIGRAVITY_VOCABULARY,
 ]
 
 /** What `harness`'s live transport and record each hold alone (`HarnessStorage.stream`); a harness without a declaration, its setup notices. */

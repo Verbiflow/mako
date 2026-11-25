@@ -1,3 +1,4 @@
+import { apiKeyAccountName, isApiKeyAccount } from "./api-key-accounts.js"
 import { HostFailureError } from "../contracts/provider-failure.js"
 /**
  * Several accounts per harness, one machine.
@@ -190,6 +191,7 @@ export class HarnessAccounts {
           loginCommand: capability.loginCommand,
         }
         if (capability.mode === "selectable" && capability.nativeLogin) info.nativeLogin = true
+        if (capability.mode === "selectable" && capability.addApiKey) info.apiKey = true
         if (capability.readOnlyReason) info.readOnlyReason = capability.readOnlyReason
         return info
       }),
@@ -210,6 +212,20 @@ export class HarnessAccounts {
    * Sign into the other account with the CLI the ordinary way, capture, and
    * switch back — browser OAuth is a dance only the CLI itself can drive.
    */
+  async addApiKey(harness: AccountHarness, entered: string): Promise<void> {
+    const key = entered.trim()
+    if (!key || key.length > 4096 || /\s/.test(key)) throw new Error("Paste an API key without spaces or line breaks.")
+    const capability = this.selectable(harness)
+    const save = capability.addApiKey
+    if (!save) throw new Error(`${capability.label} does not accept API keys here.`)
+    const name = apiKeyAccountName()
+    await this.changing(harness, null, async () => {
+      await save(name, key)
+      try { await this.root.writeSelection(harness, name) }
+      catch (error) { await capability.removeAccount(name); throw error }
+    })
+  }
+
   async capture(harness: AccountHarness, name: string): Promise<void> {
     await this.changing(harness, name, async () => {
       const capability = this.selectable(harness)
@@ -299,6 +315,8 @@ export class HarnessAccounts {
    * sign-in per provider at a time.
    */
   async prepareLogin(harness: AccountHarness, target: AccountLoginTarget): Promise<{ launch: AccountLoginLaunch; previousEmail?: string }> {
+    if (isApiKeyAccount(target.name)) throw new Error("Add a new API key to change credentials.")
+    if (target.renew && isApiKeyAccount(target.name)) throw new Error("Add a new API key in Settings to replace this one.")
     return this.changing(harness, target.name, async () => {
       const capability = this.nativeLogin(harness)
       const root = this.root.provider(harness)
@@ -504,7 +522,8 @@ export class HarnessAccounts {
     try {
       const name = selection ?? "default"
       const before = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env, this.revisions.holder(provider))
-      const resolved = await this.routed(provider, await capability.accountEnv(selection, env))
+      const accountEnv = await capability.accountEnv(selection, env)
+      const resolved = isApiKeyAccount(name) ? accountEnv : await this.routed(provider, accountEnv)
       const revision = options.trackCredential === false ? undefined : await capability.credentialRevision(name, env, this.revisions.holder(provider))
       if (before !== revision) throw new ExecutionAccountChanged("credentials")
       const launch: AccountLaunch = { env: resolved, account: capability.selectedAccount(selection, resolved), selection: capability.mode === "selectable"

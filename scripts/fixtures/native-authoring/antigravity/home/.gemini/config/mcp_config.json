@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "museum": {
+      "disabled": true,
+      "serverUrl": "https://example.invalid/mcp"
+    }
+  }
+}

@@ -1,0 +1,158 @@
+{
+  "harness": "antigravity",
+  "source": "Official agy 1.5.15 worker responding to a local Gemini-compatible endpoint that requested a plan artifact. The scratch directory is redacted.",
+  "native": {
+    "version": "1.5.15",
+    "origin": "captured"
+  },
+  "about": "Only a completed user-facing implementation plan requesting feedback becomes a plan card.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "3df3618b-81d4-47d5-8046-4e04b12dcda5",
+          "update": {
+            "sessionUpdate": "tool_call",
+            "toolCallId": "513e9c08-3cb9-4a4e-9e35-cd9552c9dafd",
+            "name": "write_file",
+            "args": {
+              "ArtifactMetadata": {
+                "RequestFeedback": true,
+                "Summary": "Offline regression plan",
+                "UserFacing": true
+              },
+              "Content": "# Implementation plan\n\nRun the offline regression.",
+              "Path": "/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md"
+            },
+            "status": "in_progress",
+            "kind": "edit",
+            "title": "File home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md",
+            "locations": [
+              {
+                "path": "/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md"
+              }
+            ],
+            "rawInput": {
+              "ArtifactMetadata": {
+                "RequestFeedback": true,
+                "Summary": "Offline regression plan",
+                "UserFacing": true
+              },
+              "Content": "# Implementation plan\n\nRun the offline regression.",
+              "Path": "/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "513e9c08-3cb9-4a4e-9e35-cd9552c9dafd",
+            "title": "File home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md",
+            "name": "(undefined)",
+            "toolKind": "edit",
+            "status": "in_progress",
+            "input": "{\n  \"ArtifactMetadata\": {\n    \"RequestFeedback\": true,\n    \"Summary\": \"Offline regression plan\",\n    \"UserFacing\": true\n  },\n  \"Content\": \"# Implementation plan\\n\\nRun the offline regression.\",\n  \"Path\": \"/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md\"\n}",
+            "output": "(undefined)",
+            "details": [
+              {
+                "type": "location",
+                "path": "/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md",
+                "line": "(undefined)"
+              }
+            ],
+            "attachments": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "3df3618b-81d4-47d5-8046-4e04b12dcda5",
+          "update": {
+            "sessionUpdate": "tool_call_update",
+            "toolCallId": "513e9c08-3cb9-4a4e-9e35-cd9552c9dafd",
+            "name": "write_file",
+            "args": {
+              "ArtifactMetadata": {
+                "RequestFeedback": true,
+                "Summary": "Offline regression plan",
+                "UserFacing": true
+              },
+              "Content": "# Implementation plan\n\nRun the offline regression.",
+              "Path": "/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md"
+            },
+            "status": "completed",
+            "kind": "edit",
+            "title": "File home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md",
+            "locations": [
+              {
+                "path": "/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md"
+              }
+            ],
+            "rawInput": {
+              "ArtifactMetadata": {
+                "RequestFeedback": true,
+                "Summary": "Offline regression plan",
+                "UserFacing": true
+              },
+              "Content": "# Implementation plan\n\nRun the offline regression.",
+              "Path": "/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md"
+            },
+            "rawOutput": {},
+            "content": [
+              {
+                "type": "diff",
+                "path": "/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md",
+                "newText": "# Implementation plan\n\nRun the offline regression."
+              }
+            ]
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "513e9c08-3cb9-4a4e-9e35-cd9552c9dafd",
+            "title": "File home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md",
+            "status": "completed",
+            "input": "{\n  \"ArtifactMetadata\": {\n    \"RequestFeedback\": true,\n    \"Summary\": \"Offline regression plan\",\n    \"UserFacing\": true\n  },\n  \"Content\": \"# Implementation plan\\n\\nRun the offline regression.\",\n  \"Path\": \"/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md\"\n}",
+            "output": "(undefined)",
+            "details": [
+              {
+                "type": "diff",
+                "path": "/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md",
+                "oldText": null,
+                "newText": "# Implementation plan\n\nRun the offline regression."
+              },
+              {
+                "type": "location",
+                "path": "/fixture/home/.gemini/mako-key/brain/3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md",
+                "line": "(undefined)"
+              }
+            ],
+            "attachments": "(undefined)"
+          }
+        },
+        {
+          "kind": "update",
+          "update": {
+            "kind": "proposed-plan",
+            "id": "3df3618b-81d4-47d5-8046-4e04b12dcda5/implementation_plan.md",
+            "text": "# Implementation plan\n\nRun the offline regression.",
+            "status": "proposed",
+            "replace": true
+          }
+        }
+      ]
+    }
+  ]
+}

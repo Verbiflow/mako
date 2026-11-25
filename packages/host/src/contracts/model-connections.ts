@@ -34,6 +34,7 @@ export interface ModelConnectionProvider {
 }
 
 export const MODEL_CONNECTION_PROVIDERS: readonly ModelConnectionProvider[] = [
+  { id: "antigravity", name: "Antigravity", kind: "subscription", harness: "antigravity", key: "none", description: "Your Google account, through Antigravity CLI" },
   { id: "claude", name: "Claude", kind: "subscription", harness: "claude", key: "none", description: "Pro or Max, through Claude Code's own sign-in" },
   { id: "codex", name: "Codex", kind: "subscription", harness: "codex", key: "none", description: "ChatGPT Plus, Pro or Business, through the Codex CLI's sign-in" },
   { id: "cursor", name: "Cursor", kind: "subscription", harness: "cursor", key: "none", description: "Your Cursor plan, through Cursor's sign-in" },
@@ -41,6 +42,7 @@ export const MODEL_CONNECTION_PROVIDERS: readonly ModelConnectionProvider[] = [
   { id: "devin", name: "Devin", kind: "subscription", harness: "devin", key: "none", description: "Your Devin plan, through Devin's sign-in" },
   { id: "github-copilot", name: "GitHub Copilot", kind: "subscription", harness: "opencode", openCodeProvider: "github-copilot", key: "none", description: "Your Copilot plan, served through OpenCode" },
   { id: "chatgpt", name: "ChatGPT", kind: "subscription", harness: "opencode", openCodeProvider: "openai", key: "none", description: "Your ChatGPT plan, served through OpenCode" },
+  { id: "opencode-console", name: "OpenCode Console", kind: "gateway", wire: "openai-chat", baseUrl: "https://opencode.ai/inference/openai/v1", key: "required", keyUrl: "https://opencode.ai/console", description: "Pay-as-you-go models with your OpenCode API key" },
   { id: "openrouter", name: "OpenRouter", kind: "gateway", wire: "openai-chat", baseUrl: "https://openrouter.ai/api/v1", key: "required", keyUrl: "https://openrouter.ai/settings/keys", description: "Hundreds of models behind one key" },
   { id: "vercel", name: "Vercel AI Gateway", kind: "gateway", wire: "openai-chat", baseUrl: "https://ai-gateway.vercel.sh/v1", key: "required", keyUrl: "https://vercel.com/dashboard", description: "Models from every major lab, billed through Vercel" },
   { id: "cloudflare", name: "Cloudflare AI Gateway", kind: "gateway", wire: "openai-chat", urlHint: "https://gateway.ai.cloudflare.com/v1/<account>/<gateway>/compat", key: "required", keyUrl: "https://dash.cloudflare.com", description: "Your gateway's OpenAI-compatible endpoint" },

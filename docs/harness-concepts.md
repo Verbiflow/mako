@@ -12,6 +12,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 | OpenCode | 2026-11-18 | 2.3.2 | its own listing (skills, MCP) |
 | Grok | 2026-11-18 | 1.0.89 | its own listing (skills, MCP) |
 | Devin | 2026-11-18 | 3000.14.30821 | its own listing (skills, MCP) |
+| Antigravity | 2026-11-23 | 1.5.15 | the build searched only |
 
 ## Instructions
 
@@ -21,6 +22,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **OpenCode**: `AGENTS.md`; rules none; for every project `~/.config/opencode/AGENTS.md`. The global file, then every AGENTS.md from the working directory up to the project directory; watched. No CLAUDE.md fallback in 2.x.
 - **Grok**: `Agents.md`, `Claude.md`, `CLAUDE.md`, `CLAUDE.local.md`, `AGENT.md`, `AGENTS.md`, `.claude/CLAUDE.md`, `.claude/CLAUDE.local.md`; rules `.grok/rules`, `.claude/rules`, `.cursor/rules`; for every project `~/.grok/rules`, `~/.claude/rules`, `~/.cursor/rules`. Home first (Grok, Claude, Cursor), then the repo root down to the working directory, every match loaded and deeper ones winning; project files need folder trust.
 - **Devin**: `AGENTS.md`, `agents.md`, `AGENTS.local.md`, `AGENT.md`, `.windsurfrules`, `CLAUDE.md`; rules `.devin/rules`, `.windsurf/rules`, `.cursor/rules`; for every project `~/.config/devin/AGENTS.md`, `~/.devin/rules`, `~/.devin/global_rules.md`, `~/.claude/CLAUDE.md`. The workspace root down to the working directory, a subdirectory's files when the agent touches it; .devin/global_rules.md over .windsurf's; each always-on rule capped at 32 KiB. read_config_from turns off each other tool's files.
+- **Antigravity**: `GEMINI.md`; rules `.agents/rules`; for every project `~/.gemini/GEMINI.md`. The CLI loads its global and project instructions.
 
 ## Hooks
 
@@ -30,6 +32,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **OpenCode**: configured in `~/.config/opencode/plugins`, `~/.config/opencode/plugin`, `.opencode/plugins`, `.opencode/plugin`. 13 events (names built at run time): `tool.execute.before`, `tool.execute.after`, `session.prompt`, `session.title`, `session.context`, `session.compaction`, `session.generate`, `session.model.request`, `session.http.request`, `session.http.response`, `session.retry`, `permission.evaluate`, `shell.create.before`. Plugins, not shell hooks: a module exporting { id, effect | setup } that mutates the payload of tool execute.before/after, session prompt…retry, permission evaluate and shell create.before. Also the plugins config key.
 - **Grok**: configured in `~/.grok/hooks`, `.grok/hooks`, `~/.grok/config.toml`, `~/.grok/disabled-hooks`, `~/.claude/settings.json`, `~/.claude/settings.local.json`, `.claude/settings.json`, `.claude/settings.local.json`, `~/.cursor/hooks.json`, `.cursor/hooks.json`. 15 events: `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PermissionDenied`, `Stop`, `StopFailure`, `StopCancelled`, `Notification`, `SubagentStart`, `SubagentStop`, `PreCompact`, `PostCompact`, `SessionEnd`. UserPromptSubmit, PreToolUse and Stop block: decision allow|deny|ask|defer, exit 2 denies, other failures pass. Claude tool names map to Grok's in matchers. An ACP client registers its own through _x.ai/hooks.
 - **Devin**: configured in `.devin/hooks.v1.json`, `.devin/config.json`, `.devin/config.local.json`, `.claude/settings.json`, `.claude/settings.local.json`, `~/.config/devin/config.json`, `~/.claude.json`, `~/.claude/settings.json`, `~/.claude/settings.local.json`. 8 events: `PreToolUse`, `PostToolUse`, `PermissionRequest`, `UserPromptSubmit`, `Stop`, `PostCompaction`, `SessionStart`, `SessionEnd`. Exit 2 blocks; stdout decision approve|block, hookSpecificOutput additionalContext and updatedInput; a blocking Stop makes the agent continue. Handlers: command, prompt.
+- **Antigravity**: none. Mako does not install hooks for the ACP worker.
 
 ## Skills
 
@@ -39,6 +42,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **OpenCode**: `~/.config/opencode/skills`, `~/.config/opencode/skill`, `.opencode/skills`, `.opencode/skill`, `~/.claude/skills`, `.claude/skills`, `~/.agents/skills`, `.agents/skills`
 - **Grok**: `.grok/skills`, `.claude/skills`, `.cursor/skills`, `.agents/skills`, `~/.grok/skills`, `~/.agents/skills`, `~/.claude/skills`, `~/.cursor/skills`
 - **Devin**: `.agents/skills`, `.devin/skills`, `.cognition/skills`, `.windsurf/skills`, `.claude/skills`, `~/.agents/skills`, `~/.config/devin/skills`, `~/.config/cognition/skills`
+- **Antigravity**: `~/.gemini/config/skills`, `.gemini/skills`, `~/.gemini/antigravity-cli/skills`, `.agents/skills`, `.agent/skills`
 
 ## Commands
 
@@ -48,6 +52,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **OpenCode**: `~/.config/opencode/commands`, `~/.config/opencode/command`, `.opencode/commands`, `.opencode/command`. Also the commands config key; $1…$N, $ARGUMENTS and !`cmd`.
 - **Grok**: `.grok/commands`, `.agents/commands`, `.claude/commands`, `.cursor/commands`, `~/.grok/commands`, `~/.agents/commands`, `~/.claude/commands`, `~/.cursor/commands`
 - **Devin**: none. Skills are its slash commands. 3000.10.23 imported no .claude/commands file, though its docs say it does, and reads no .devin/commands.
+- **Antigravity**: `.agents/workflows`
 
 ## Subagent definitions
 
@@ -57,6 +62,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **OpenCode**: `~/.config/opencode/agents`, `~/.config/opencode/agent`, `.opencode/agents`, `.opencode/agent`
 - **Grok**: `.grok/agents`, `.claude/agents`, `~/.grok/agents`, `~/.claude/agents`
 - **Devin**: `.devin/agents`, `.agents/agents`, `~/.config/devin/agents`
+- **Antigravity**: none
 
 ## MCP configuration
 
@@ -66,6 +72,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **OpenCode**: `~/.config/opencode/opencode.json`, `~/.config/opencode/opencode.jsonc`, `opencode.json`, `opencode.jsonc`, `.opencode/opencode.json`, `.opencode/opencode.jsonc`
 - **Grok**: `~/.grok/config.toml`, `.grok/config.toml`, `~/.claude.json`, `~/.cursor/mcp.json`, `.cursor/mcp.json`, `.mcp.json`
 - **Devin**: `~/.config/devin/mcp_config.json`, `.devin/mcp_config.json`, `.devin/mcp_config.local.json`
+- **Antigravity**: `~/.gemini/config/mcp_config.json`
 
 ## Output
 
@@ -75,6 +82,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **OpenCode**: live: opencode serve HTTP API under /api with SSE /api/event, through @opencode/client; one-shot: `run --format json`
 - **Grok**: live: ACP over stdio, with _x.ai extensions; one-shot: `plain`, `json`, `streaming-json`, `streaming-messages-json`
 - **Devin**: live: ACP over stdio, with cognition.ai extensions; one-shot: `print (plain text)`, `export (ATIF)`
+- **Antigravity**: live: ACP over stdio; one-shot: `text`, `json`, `stream-json`
 
 ## Session records
 
@@ -84,6 +92,7 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **OpenCode**: ~/.local/share/opencode/opencode.db (SQLite: session_v2 and session_message; a store migrated from v1 keeps session, message and part beside them). Encodings: `plain`. holds-undo: session_v2.revert (session.revert in v1): messages from its messageID on, from its partID on in v1, until the next prompt commits it; copies: session_v2.fork_session_id; a v1 fork only by its "(fork #n)" title; generations: session (v1) beside session_v2: OpenCode 2 writes only session_v2. Checked against 2.0.27 on 2026-10-13.
 - **Grok**: ~/.grok/sessions/<encoded working directory>/<id>/updates.jsonl, one ACP update per line, with summary.json and plan.md. Encodings: `plain`. rewinds: rewind_marker: back to before its target-th counted turn; copies: summary.json parent_session_id and forked_at. Checked against 1.0.46 on 2026-10-13.
 - **Devin**: ~/.local/share/devin/cli/sessions.db (SQLite: sessions, messages, message_nodes, tool_call_state). Encodings: `plain`. branches: sessions.main_chain_id: the node the conversation ends at, by parent_node_id; a node past it is a call cut off before its result, which Devin resumes without; continues: a compaction's summary row's summarized_from: the node the earlier chain ends at. Checked against 3000.10.23 on 2026-10-13.
+- **Antigravity**: A SQLite file per conversation under the agent's data directory, and one row in conversation_summaries.db.. Encodings: `plain`. history in order. Checked against 1.5.15 on 2026-11-23.
 
 ## Models
 
@@ -93,30 +102,31 @@ What each harness reads, emits and does on its own, as its concepts declare. `np
 - **OpenCode**: GET /api/model (opencode models)
 - **Grok**: grok models; the ACP initialize model list
 - **Devin**: devin models list --format json
+- **Antigravity**: The model and thinking-level config options in ACP session/new.
 
 ## Shared features
 
 One name in Mako for what the harnesses call differently, from each definition's `features`. Bold is the harness's own, shown in Mako; "Mako's" is Mako's own running for every harness, with the harness's own form in parentheses; "none here" means nothing Mako can drive, with the nearest thing the harness has.
 
-| Feature | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
-| --- | --- | --- | --- | --- | --- | --- |
-| Goals | **/goal** | **/goal** | Mako's (its own: goals) | Mako's | **/goal** | Mako's |
-| Code review | **/code-review, /security-review, /ultrareview** | **/review** | Mako's | **/review** | Mako's | Mako's (its own: /loop) |
-| Side questions | **/btw** | **/side, /btw** | Mako's | **session.generate** | **/btw** | **/btw** |
-| Scheduled prompts | /loop: Mako gap | none | none | none | /loop: Mako gap | none |
-| Cloud runs | --cloud, /schedule: Mako gap | codex cloud: Mako gap | cloud agents: Mako gap | none | none | /handoff: Mako gap |
-| Background sessions | Mako's (its own: claude --bg) | Mako's | Mako's | Mako's | Mako's | Mako's |
-| File rewind | Mako's (its own: /rewind) | Mako's (its own: thread/revert) | Mako's | Mako's (its own: /undo, /redo) | Mako's (its own: /rewind) | Mako's (its own: /revert) |
-| Worktrees | Mako's (its own: --worktree) | Mako's (its own: /worktree) | Mako's | Mako's (its own: worktrees) | Mako's (its own: -w) | Mako's |
-| Computer use | Mako's (its own: computer use) | Mako's (its own: computer use) | Mako's | Mako's | Mako's | Mako's |
-| Notifications | Mako's (its own: PushNotification) | Mako's (its own: notify) | Mako's | Mako's | Mako's | Mako's |
-| Folder trust | trust dialog: Mako gap | trust_level: Mako gap | none | **external_directory** | **folder trust** | workspace trust: Mako gap |
-| Edit before approving | updatedInput: Mako gap | none | none | none | none | editable commands: Mako gap |
-| Plugins | plugins, by default | plugins, by default | plugins: Mako gap | plugins, by default | plugins, by default | plugins, by default |
-| Response style | output styles, by default | none here (personality) | none | none | none here (/personas) | none |
-| Web search | **WebSearch** | **web_search, web__run** | none here (webSearch) | **websearch** | **web_search** | **web_search** |
-| Image generation | none | **image generation** | **generateImage** | **experimental_image_generate** | **image_gen, image_edit** | none |
-| Code mode | none | **exec** | none | **execute** | none | none |
+| Feature | Claude Code | Codex | Cursor | OpenCode | Grok | Devin | Antigravity |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Goals | **/goal** | **/goal** | Mako's (its own: goals) | Mako's | **/goal** | Mako's | Mako's |
+| Code review | **/code-review, /security-review, /ultrareview** | **/review** | Mako's | **/review** | Mako's | Mako's (its own: /loop) | Mako's |
+| Side questions | **/btw** | **/side, /btw** | Mako's | **session.generate** | **/btw** | **/btw** | Mako gap |
+| Scheduled prompts | /loop: Mako gap | none | none | none | /loop: Mako gap | none | Mako gap |
+| Cloud runs | --cloud, /schedule: Mako gap | codex cloud: Mako gap | cloud agents: Mako gap | none | none | /handoff: Mako gap | Mako gap |
+| Background sessions | Mako's (its own: claude --bg) | Mako's | Mako's | Mako's | Mako's | Mako's | Mako's |
+| File rewind | Mako's (its own: /rewind) | Mako's (its own: thread/revert) | Mako's | Mako's (its own: /undo, /redo) | Mako's (its own: /rewind) | Mako's (its own: /revert) | Mako's |
+| Worktrees | Mako's (its own: --worktree) | Mako's (its own: /worktree) | Mako's | Mako's (its own: worktrees) | Mako's (its own: -w) | Mako's | Mako's |
+| Computer use | Mako's (its own: computer use) | Mako's (its own: computer use) | Mako's | Mako's | Mako's | Mako's | Mako's |
+| Notifications | Mako's (its own: PushNotification) | Mako's (its own: notify) | Mako's | Mako's | Mako's | Mako's | Mako's |
+| Folder trust | trust dialog: Mako gap | trust_level: Mako gap | none | **external_directory** | **folder trust** | workspace trust: Mako gap | its own, by default |
+| Edit before approving | updatedInput: Mako gap | none | none | none | none | editable commands: Mako gap | Mako gap |
+| Plugins | plugins, by default | plugins, by default | plugins: Mako gap | plugins, by default | plugins, by default | plugins, by default | its own, by default |
+| Response style | output styles, by default | none here (personality) | none | none | none here (/personas) | none | Mako gap |
+| Web search | **WebSearch** | **web_search, web__run** | none here (webSearch) | **websearch** | **web_search** | **web_search** | **search_web** |
+| Image generation | none | **image generation** | **generateImage** | **experimental_image_generate** | **image_gen, image_edit** | none | its own, by default |
+| Code mode | none | **exec** | none | **execute** | none | none | Mako gap |
 
 ## Only this harness
 
@@ -141,6 +151,7 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 | OpenCode | 2.3.2 | 2026-11-18 | 14 | 8 | 3 | the tools in the model request of OpenCode's native API as Mako starts it (startOpenCodeApi), per agent Mako's modes use, on an Anthropic and an OpenAI model, and as a lead (configureOpenCodeRouting) |
 | Grok | 1.0.89 | 2026-11-18 | 27 | 8 | 2 | the tools in the model request of grok agent stdio as Mako's ACP source launches it, once per Mako mode, and as a lead (nativeSpawnsOff) |
 | Devin | 3000.14.30821 | 2026-11-18 | 25 | 10 | 3 | the tools in Devin's GetChatMessage request to a stand-in Windsurf API, devin acp launched as Mako's ACP source launches it, once per Mako mode and as a lead (nativeSpawnsOff) |
+| Antigravity | 1.5.15 | 2026-11-23 | 14 | 1 | 0 | The official agy ACP worker's Gemini functionDeclarations, collected at a local Gemini-compatible test endpoint. |
 
 ## Plan, questions and subagents
 
@@ -152,23 +163,24 @@ Each harness's tools as it defines them, recorded per version by `npm run harnes
 | OpenCode | mode `plan` | none | `question` | `subagent` |
 | Grok | mode `plan` | `exit_plan_mode` | `ask_user_question` | `spawn_subagent`, `workflow` |
 | Devin | mode `plan` | `exit_plan_mode` | `ask_user_question` | `run_subagent` |
+| Antigravity | mode `plan` | none | `ask_question` | `invoke_subagent` |
 
 ## Capabilities
 
 Projected from each live driver (`packages/host/src/harnesses/live-capabilities.ts`); `npm run harness:doctor -- <harness>` prints the reasons.
 
-| Capability | Claude Code | Codex | Cursor | OpenCode | Grok | Devin |
-| --- | --- | --- | --- | --- | --- | --- |
-| Resume | implemented | implemented | implemented | implemented | implemented | implemented |
-| Idle process | implemented | implemented | implemented | implemented | implemented | implemented |
-| Process death mid-turn | implemented | implemented | implemented | implemented | implemented | implemented |
-| Fork | implemented | implemented | implemented | implemented | implemented | implemented |
-| Steering | implemented | implemented | implemented | implemented | implemented | implemented |
-| Compaction | implemented | implemented | default | implemented | implemented | implemented |
-| Planning | implemented | implemented | implemented | implemented | implemented | implemented |
-| Approvals | implemented | implemented | harness has none | implemented | implemented | implemented |
-| Questions | implemented | implemented | harness has none | implemented | implemented | implemented |
-| Modes | implemented | implemented | no-op | implemented | implemented | implemented |
-| Subagents | implemented | implemented | implemented | implemented | implemented | implemented |
-| Background work on Stop | implemented | implemented | default | implemented | implemented | implemented |
-| Context breakdown | implemented | harness has none | implemented | harness has none | harness has none | harness has none |
+| Capability | Claude Code | Codex | Cursor | OpenCode | Grok | Devin | Antigravity |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Resume | implemented | implemented | implemented | implemented | implemented | implemented | implemented |
+| Idle process | implemented | implemented | implemented | implemented | implemented | implemented | implemented |
+| Process death mid-turn | implemented | implemented | implemented | implemented | implemented | implemented | implemented |
+| Fork | implemented | implemented | implemented | implemented | implemented | implemented | implemented |
+| Steering | implemented | implemented | implemented | implemented | implemented | implemented | harness has none |
+| Compaction | implemented | implemented | default | implemented | implemented | implemented | harness has none |
+| Planning | implemented | implemented | implemented | implemented | implemented | implemented | implemented |
+| Approvals | implemented | implemented | harness has none | implemented | implemented | implemented | implemented |
+| Questions | implemented | implemented | harness has none | implemented | implemented | implemented | implemented |
+| Modes | implemented | implemented | no-op | implemented | implemented | implemented | implemented |
+| Subagents | implemented | implemented | implemented | implemented | implemented | implemented | Mako gap |
+| Background work on Stop | implemented | implemented | default | implemented | implemented | implemented | Mako gap |
+| Context breakdown | implemented | harness has none | implemented | harness has none | harness has none | harness has none | harness has none |

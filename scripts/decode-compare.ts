@@ -1,3 +1,4 @@
+import { AntigravityProvider } from "@mako/sessions"
 import { readFile } from "node:fs/promises"
 import { join } from "node:path"
 import { z } from "zod"
@@ -46,7 +47,7 @@ const nativeStores = new NativeStores(false)
 export const DEVIN_APP_USER = join("Library", "Application Support", "Devin", "User")
 
 /** The names `storeReader` knows. */
-export const STORE_READERS: readonly string[] = ["claude", "codex", "cursor", "devin", "devin-ide", "grok", "opencode"]
+export const STORE_READERS: readonly string[] = ["claude", "codex", "cursor", "devin", "devin-ide", "grok", "opencode", "antigravity"]
 
 /**
  * A store reader, reading under `home` instead of the person's own: each
@@ -55,6 +56,7 @@ export const STORE_READERS: readonly string[] = ["claude", "codex", "cursor", "d
  */
 export function storeReader(reader: string, home: string): SessionProvider {
   switch (reader) {
+    case "antigravity": return new AntigravityProvider(nativeStores, join(home, ".gemini"))
     case "claude": return new ClaudeProvider(home)
     case "codex": return new CodexProvider(nativeStores, home)
     case "cursor": return new CursorProvider(nativeStores, home)

@@ -78,6 +78,7 @@ const builds = new Map<string, () => Promise<Build>>([
   ["cursor", cursorSdk],
   // The OpenCode Mako runs (`OPENCODE_BIN_PATH`, else its candidates), which a PATH lookup can miss.
   ["opencode", async () => executableBuild((await resolveOpenCodeInstallation(process.env)).command)],
+  ["antigravity", () => executableBuild(resolveExecutable("agy", process.env))],
   ["grok", () => executableBuild(resolveExecutable("grok", process.env))],
   ["devin", () => executableBuild(devinExecutable())],
 ])

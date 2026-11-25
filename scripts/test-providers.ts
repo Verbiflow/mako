@@ -1,3 +1,5 @@
+import { antigravityAcp } from "@mako/host/harnesses/antigravity/acp"
+import { antigravityCatalog } from "@mako/host/harnesses/antigravity/profile"
 import { claudeRuntime } from "@mako/host/harnesses/claude/runtime"
 import { OPENCODE_OLDEST } from "@mako/host/harnesses/opencode/version"
 import {
@@ -16,6 +18,7 @@ import {
   writeFile,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
+import { DatabaseSync } from "node:sqlite"
 import { join } from "node:path"
 import type { SessionConfigOption } from "@agentclientprotocol/sdk"
 import { z } from "zod"
@@ -583,8 +586,39 @@ assert.deepEqual(
 )
 assert.deepEqual(
   providerHost.acpSources.list().map((source) => source.provider),
-  ["grok", "devin"]
+  ["grok", "devin", "antigravity"]
 )
+const antigravityPicker = {
+  id: "model", name: "Model", category: "model", type: "select", currentValue: "gemini-3.1-pro",
+  options: [{ value: "gemini-3.1-pro", name: "Gemini 3.1 Pro" }],
+} as const
+const catalogWith = (options: Array<{ value: string; name: string }>) =>
+  antigravityCatalog({ configOptions: [{ ...antigravityPicker, options }] })
+assert.equal(catalogWith([...antigravityPicker.options]).settings?.model, "gemini-3.1-pro")
+assert.equal(catalogWith([...antigravityPicker.options, { value: "gemini-nano", name: "Gemini Nano" }]).settings?.model, "gemini-nano")
+{
+  // A prompt fails when the conversation's database gained an executor error (step 17) after it was sent; a missing,
+  // unreadable or unchanged database says nothing, and never throws into the turn.
+  const watch = antigravityAcp.watchPromptFailure!
+  const folder = await mkdtemp(join(tmpdir(), "mako-agy-steps-"))
+  const path = join(folder, "conversation.db")
+  assert.equal(watch(() => undefined)(), undefined, "no conversation yet")
+  assert.equal(watch(() => path)(), undefined, "a database that isn't there")
+  const db = new DatabaseSync(path)
+  db.exec("CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer NOT NULL)")
+  db.exec("INSERT INTO steps VALUES (0, 14), (1, 17)")
+  const earlier = watch(() => path)
+  assert.equal(earlier(), undefined, "an error from an earlier prompt isn't this one's")
+  db.exec("INSERT INTO steps VALUES (2, 14), (3, 15)")
+  assert.equal(earlier(), undefined, "a reply")
+  const failing = watch(() => path)
+  db.exec("INSERT INTO steps VALUES (4, 17)")
+  assert.match(failing() ?? "", /executor error/)
+  db.close()
+  await writeFile(path, "not a database")
+  assert.equal(watch(() => path)(), undefined, "an unreadable database")
+  await rm(folder, { recursive: true, force: true })
+}
 assert.equal(providerHost.liveDrivers.get("opencode")?.resume.kind, "native")
 assert.equal(providerHost.liveDrivers.get("opencode")?.nativeAgents.kind, "observed")
 assert.deepEqual(
@@ -633,6 +667,7 @@ assert.deepEqual(
     ["opencode", "observed"],
     ["grok", "selectable"],
     ["devin", "selectable"],
+    ["antigravity", "selectable"],
   ]
 )
 assert.equal(

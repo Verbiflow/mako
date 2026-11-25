@@ -55,7 +55,7 @@ const alive = (pid) => {
     return false
   }
 }
-/** A hang guard, not a limit: a stand-in is a whole Electron process, and six start at once below. `says` is what the timeout saw. */
+/** A hang guard, not a limit: a stand-in is a whole Electron process, and one per harness starts at once below. `says` is what the timeout saw. */
 async function until(label, check, says = () => "") {
   const deadline = performance.now() + HANG_MS
   for (;;) {
@@ -132,6 +132,7 @@ async function main() {
   }
   const { createGrokAcpSource } = await load("grok/acp.js")
   const { createDevinAcpSource } = await load("devin/acp.js")
+  const { antigravityAcp } = await load("antigravity/acp.js")
 
   const standIns = {
     codex: (() => {
@@ -151,6 +152,7 @@ async function main() {
     })(),
     grok: acpStandIn("grok", createGrokAcpSource()),
     devin: acpStandIn("devin", createDevinAcpSource(nativeStores), "0.0.0-dev"),
+    antigravity: acpStandIn("antigravity", antigravityAcp),
     claude: await (async () => {
       const { createClaudeSdkDriver } = await load("claude/sdk-driver.js")
       const { query } = await import(join(repo, "node_modules/@anthropic-ai/claude-agent-sdk/sdk.mjs"))
@@ -303,6 +305,8 @@ async function main() {
       for (const pid of leftovers) if (pid && alive(pid)) process.kill(pid, "SIGKILL")
     }
   }
+  // Before the runs below, which open every registered harness's stand-in.
+  assert.deepEqual(missing, [], `Every registered harness needs a failure stand-in in ${fileURLToPath(import.meta.url)}`)
   // A process its signals can't reach: every close waits out its graces, so they run side by side.
   const outliving = await Promise.all(providerHost.liveDrivers.list().map(({ provider }) => open(provider, "stay")))
   const signal = ChildProcess.prototype.kill
@@ -327,7 +331,6 @@ async function main() {
   }))
   trace("outliving closes passed")
   for (const result of results) console.log(JSON.stringify(result))
-  assert.deepEqual(missing, [], `Every registered harness needs a failure stand-in in ${fileURLToPath(import.meta.url)}`)
   const proven = results.filter((result) => result.exitAfterHandoff !== "unproven").map((result) => result.provider)
   console.log(`Native failures: ${results.map((result) => result.provider).join(", ")} cancel during setup; ${proven.join(", ")} report a death after hand-off while a child holds the pipes; a close that can't end a process rejects and the next one ends it, end what it left in its group, and record the runtime version`)
 }

@@ -1,0 +1,357 @@
+{
+  "harness": "antigravity",
+  "source": "Standard ACP client protocol examples for the shared decoder.",
+  "native": {
+    "version": null,
+    "sdk": {
+      "name": "@agentclientprotocol/sdk",
+      "version": "1.3.0"
+    },
+    "origin": "written"
+  },
+  "about": "Authored examples of permission, plan, tool, mode, and text updates.",
+  "session": {},
+  "steps": [
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "example-session",
+          "update": {
+            "sessionUpdate": "user_message_chunk",
+            "content": {
+              "type": "text",
+              "text": "Add a retry budget"
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "user",
+            "text": "Add a retry budget"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "example-session",
+          "update": {
+            "sessionUpdate": "agent_thought_chunk",
+            "content": {
+              "type": "text",
+              "text": "The worker retries forever."
+            }
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "thinking",
+            "text": "The worker retries forever."
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "example-session",
+          "update": {
+            "sessionUpdate": "plan",
+            "entries": [
+              {
+                "content": "Add the budget",
+                "priority": "high",
+                "status": "completed"
+              },
+              {
+                "content": "Test the cap",
+                "priority": "medium",
+                "status": "in_progress"
+              }
+            ]
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "plan",
+            "entries": [
+              {
+                "content": "Add the budget",
+                "status": "completed"
+              },
+              {
+                "content": "Test the cap",
+                "status": "in_progress"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "example-session",
+          "update": {
+            "sessionUpdate": "current_mode_update",
+            "currentModeId": "accept-edits"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "currentMode": "accept-edits"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "example-session",
+          "update": {
+            "sessionUpdate": "config_option_update",
+            "configOptions": [
+              {
+                "id": "model",
+                "name": "Model",
+                "category": "model",
+                "type": "select",
+                "currentValue": "adaptive",
+                "options": [
+                  {
+                    "value": "adaptive",
+                    "name": "adaptive"
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "configOptions": [
+              {
+                "kind": "select",
+                "id": "model",
+                "wireId": "model",
+                "label": "Model",
+                "role": "(undefined)",
+                "current": "adaptive",
+                "values": [
+                  {
+                    "value": "adaptive",
+                    "label": "adaptive"
+                  }
+                ]
+              }
+            ],
+            "settings": {
+              "model": "adaptive",
+              "options": {}
+            }
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "example-session",
+          "update": {
+            "sessionUpdate": "session_info_update",
+            "title": "Retry budget"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "state",
+          "patch": {
+            "title": "Retry budget"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "example-session",
+          "update": {
+            "toolCallId": "call_2",
+            "title": "write",
+            "rawInput": {
+              "file_path": "/Users/me/app/plan.md",
+              "content": "# Plan: Add a greeting\n\nFrom the file.\n"
+            },
+            "sessionUpdate": "tool_call"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool",
+            "id": "call_2",
+            "title": "write",
+            "name": "(undefined)",
+            "toolKind": "(undefined)",
+            "status": "pending",
+            "input": "{\n  \"file_path\": \"/Users/me/app/plan.md\",\n  \"content\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\"\n}",
+            "output": "(undefined)",
+            "details": "(undefined)",
+            "attachments": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "method": "session/update",
+        "params": {
+          "sessionId": "example-session",
+          "update": {
+            "toolCallId": "call_2",
+            "kind": "edit",
+            "title": "Write `/Users/me/app/plan.md`",
+            "content": [
+              {
+                "path": "/Users/me/app/plan.md",
+                "oldText": "",
+                "newText": "# Plan: Add a greeting\n\nFrom the file.\n",
+                "type": "diff"
+              }
+            ],
+            "locations": [
+              {
+                "path": "/Users/me/app/plan.md"
+              }
+            ],
+            "rawInput": {
+              "variant": "Write",
+              "file_path": "/Users/me/app/plan.md",
+              "content": "# Plan: Add a greeting\n\nFrom the file.\n"
+            },
+            "sessionUpdate": "tool_call_update"
+          }
+        }
+      },
+      "decoded": [
+        {
+          "kind": "update",
+          "update": {
+            "kind": "tool-update",
+            "id": "call_2",
+            "title": "Write `/Users/me/app/plan.md`",
+            "status": "(undefined)",
+            "input": "{\n  \"variant\": \"Write\",\n  \"file_path\": \"/Users/me/app/plan.md\",\n  \"content\": \"# Plan: Add a greeting\\n\\nFrom the file.\\n\"\n}",
+            "output": "(undefined)",
+            "details": [
+              {
+                "type": "diff",
+                "path": "/Users/me/app/plan.md",
+                "oldText": "",
+                "newText": "# Plan: Add a greeting\n\nFrom the file.\n"
+              },
+              {
+                "type": "location",
+                "path": "/Users/me/app/plan.md",
+                "line": "(undefined)"
+              }
+            ],
+            "attachments": "(undefined)"
+          }
+        }
+      ]
+    },
+    {
+      "message": {
+        "request": "session/request_permission",
+        "params": {
+          "sessionId": "example-session",
+          "toolCall": {
+            "toolCallId": "call_2",
+            "kind": "edit",
+            "title": "Write `/Users/me/app/plan.md`",
+            "rawInput": {
+              "variant": "Write",
+              "file_path": "/Users/me/app/plan.md",
+              "content": "# Plan: Add a greeting\n\nFrom the file.\n"
+            }
+          },
+          "options": [
+            {
+              "optionId": "allow-edits-session",
+              "name": "Yes, allow all edits during this session",
+              "kind": "allow_always"
+            },
+            {
+              "optionId": "allow-once",
+              "name": "Yes",
+              "kind": "allow_once"
+            },
+            {
+              "optionId": "reject-once",
+              "name": "No, and tell Antigravity what to do differently",
+              "kind": "reject_once"
+            }
+          ]
+        }
+      },
+      "decoded": [
+        {
+          "kind": "effect",
+          "effect": {
+            "type": "ask",
+            "ask": {
+              "request": {
+                "title": "Write `/Users/me/app/plan.md`",
+                "kind": "edit",
+                "options": [
+                  {
+                    "optionId": "allow-edits-session",
+                    "name": "Yes, allow all edits during this session",
+                    "kind": "allow_always"
+                  },
+                  {
+                    "optionId": "allow-once",
+                    "name": "Yes",
+                    "kind": "allow_once"
+                  },
+                  {
+                    "optionId": "reject-once",
+                    "name": "No, and tell Antigravity what to do differently",
+                    "kind": "reject_once"
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+  ]
+}

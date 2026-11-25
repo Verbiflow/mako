@@ -51,7 +51,7 @@ export function MarkTile({ children }: { children: React.ReactNode }) {
 function useSubscription(provider: ModelConnectionProvider) {
   const info = useAccounts((state) => state.providers.find((entry) => entry.provider === provider.harness))
   const signedIn = useAccounts((state) => state.accounts.filter((account) =>
-    account.harness === provider.harness && !account.missing && !account.signedOut &&
+    account.harness === provider.harness && account.authType !== "api" && !account.missing && !account.signedOut &&
     (provider.openCodeProvider ? account.providerId === provider.openCodeProvider && account.authType === "oauth" : true)
   ).length)
   const addable = info?.mode === "selectable" && info.nativeLogin === true && !provider.openCodeProvider

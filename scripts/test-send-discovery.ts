@@ -372,6 +372,14 @@ try {
   account = "unavailable-model-catalogue"
   await assert.rejects(profiles.resolveLaunch(profile.id, workspace("unavailable"), { model: "model-family", options: { effort: "high" } }), /not signed in/)
   await quiet()
+  // Signed out, a harness that asks for its sign-in when a session opens lists nothing; the send still goes ahead
+  // so the session can ask, instead of sending the person to Settings and back.
+  const signedOut = { ...profile, models: [], signInRequired: true as const, configurationError: "Send a message to sign in" }
+  loader.loadForSend = async () => signedOut
+  account = "signed-out-catalogue"
+  const signedOutSend = { model: "model-family", options: { effort: "high" } }
+  assert.deepEqual(await profiles.resolveLaunch(profile.id, workspace("signed-out"), signedOutSend), signedOutSend, "a signed-out send opens the session to sign in")
+  await quiet()
   delete loader.loadForSend
 
   // A discovery that fails after it has succeeded keeps the account's models

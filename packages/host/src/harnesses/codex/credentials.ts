@@ -62,10 +62,12 @@ export async function codexModelProvider(home: string): Promise<string> {
 }
 
 /** Captured credentials belong to this home, irrespective of the original storage backend. */
-export async function managedCodexConfig(sourceHome: string, home: string, oauth: boolean): Promise<void> {
+export async function managedCodexConfig(sourceHome: string, home: string, oauth: boolean | "openai-key"): Promise<void> {
   const contents = await optionalFile(join(sourceHome, "config.toml"))
   const config = contents === null ? {} : parse(contents)
-  if (oauth && config.model_provider !== undefined && config.model_provider !== "openai")
+  if (oauth === "openai-key" && (config.openai_base_url !== undefined || (config.model_provider !== undefined && config.model_provider !== "openai")))
+    throw new Error("This Codex configuration points to a different API provider. Choose the terminal account for that configuration.")
+  if (oauth === true && config.model_provider !== undefined && config.model_provider !== "openai")
     throw new Error("The shared Codex config selects another model provider. Use the CLI profile for that provider instead of routing a saved ChatGPT account to it.")
   const serialized = stringify({ ...config, cli_auth_credentials_store: "file" })
   const destination = join(home, "config.toml")

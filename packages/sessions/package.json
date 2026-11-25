@@ -80,6 +80,7 @@
     "test:matrix": "npm run -s build && node test/resume-matrix.mjs"
   },
   "dependencies": {
+    "@bufbuild/protobuf": "1.10.0",
     "@mako/lazy": "0.1.0",
     "@mako/protocol": "0.1.0",
     "zod": "4.6.7"

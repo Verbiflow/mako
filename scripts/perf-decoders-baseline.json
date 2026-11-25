@@ -292,5 +292,41 @@
     "count": 40202,
     "unit": "entry",
     "at": "dfe1e1cf604f24a7ba46383d0da3f1ded2a0bd00"
+  },
+  "antigravity/decode": {
+    "units": 0.01216,
+    "ms": 0.1716,
+    "count": 21,
+    "unit": "message"
+  },
+  "antigravity/host": {
+    "units": 0.002418,
+    "ms": 0.03251,
+    "count": 5,
+    "unit": "message"
+  },
+  "antigravity/projection": {
+    "units": 0.0005675,
+    "ms": 0.007517,
+    "count": 2,
+    "unit": "update"
+  },
+  "antigravity/recorder": {
+    "units": 0.03387,
+    "ms": 0.4535,
+    "count": 5,
+    "unit": "message"
+  },
+  "antigravity/merge": {
+    "units": 0.0001029,
+    "ms": 0.001408,
+    "count": 4,
+    "unit": "entry"
+  },
+  "antigravity/saved open": {
+    "units": 0.062,
+    "ms": 0.8312,
+    "count": 1,
+    "unit": "open"
   }
 }

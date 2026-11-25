@@ -66,7 +66,7 @@ export function ProviderAccounts({
           heading={false}
           actions={(account) =>
             selectable && account.source === "mako" && !account.missing && !account.removing ? (
-              <AccountActions account={account} renewable={addable} />
+              <AccountActions account={account} renewable={addable && account.authType !== "api"} />
             ) : null
           }
         />
@@ -102,6 +102,7 @@ export function ProviderAccounts({
           </ListCard>
         )
       ) : null}
+      {provider.apiKey && <ApiKeyForm harness={providerId} label={provider.label} />}
       {selectable && several ? (
         <p className="text-label leading-relaxed text-faint">
           Sessions switch to the selected account with their next message,
@@ -148,6 +149,33 @@ function AccountActions({ account, renewable }: { account: ProviderAccount; rene
       )}
     </>
   )
+}
+
+function ApiKeyForm({ harness, label }: { harness: string; label: string }) {
+  const [open, setOpen] = useState(false)
+  const [key, setKey] = useState("")
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState("")
+  if (!open) return <Action size="xs" className="self-start" onClick={() => setOpen(true)}>Use an API key</Action>
+  return <form className="flex flex-col gap-2" onSubmit={async (event) => {
+    event.preventDefault()
+    if (busy || !key.trim()) return
+    setBusy(true)
+    setError("")
+    try { await accountActions.addKey(harness, key); setKey(""); setOpen(false) }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Couldn’t save the key.") }
+    finally { setBusy(false) }
+  }}>
+    <label className="flex flex-col gap-1 text-label">{label} API key
+      <input type="password" autoComplete="off" spellCheck={false} className={FIELD} value={key}
+        onChange={(event) => setKey(event.target.value)} disabled={busy} autoFocus />
+    </label>
+    {error && <span role="alert" className="text-label text-negative">{error}</span>}
+    <div className="flex gap-2">
+      <Action size="xs" type="submit" tone="solid" disabled={busy || !key.trim()}>{busy ? "Saving…" : "Save and use key"}</Action>
+      <Action size="xs" type="button" disabled={busy} onClick={() => { setOpen(false); setKey(""); setError("") }}>Cancel</Action>
+    </div>
+  </form>
 }
 
 const CARD =

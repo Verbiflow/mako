@@ -1,7 +1,7 @@
 import { hostCommand } from "../base/host-command.js"
 import { lock } from "proper-lockfile"
 import { z } from "zod"
-import { createHmac, randomBytes } from "node:crypto"
+import { createHmac, randomBytes, randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import {
   mkdir,
@@ -29,9 +29,26 @@ const CredentialJsonSchema = z.string().transform((text, context) => {
     return z.NEVER
   }
 })
-/** Host-only equality token; neither credentials nor an offline token hash crosses IPC. */
+/** Host-only equality token; neither credentials nor an offline token hash crosses IPC. Never given a key: see `KeyTokens`. */
 export function credentialFingerprint(values: readonly (string | null)[]): string {
   return createHmac("sha256", credentialSalt).update(JSON.stringify(values)).digest("hex")
+}
+
+/**
+ * Equality tokens for API keys Mako holds no saved version of, such as one in
+ * the person's environment: the same key gets the same random token for as
+ * long as this lives, and a key is never hashed or handed on. A key Mako saved
+ * is compared by its secret's version instead.
+ */
+export class KeyTokens {
+  readonly #tokens = new Map<string, string>()
+
+  of(key: string | undefined): string | null {
+    if (!key) return null
+    let token = this.#tokens.get(key)
+    if (!token) this.#tokens.set(key, token = randomUUID())
+    return token
+  }
 }
 
 /**

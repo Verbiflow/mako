@@ -25,6 +25,7 @@ export function accountIdentity(account: ProviderAccount): string {
   if (account.email) return account.email
   if (account.source === "model-provider")
     return `${providerName(account.providerId ?? account.name)} ${authName(account.authType)}`
+  if (account.authType === "api") return `API key · ${account.name.slice(-6)}`
   if (account.name === "default") return account.route ? "Your terminal’s login" : "Signed in"
   return account.source === "mako" ? "Account added in Mako" : account.name
 }

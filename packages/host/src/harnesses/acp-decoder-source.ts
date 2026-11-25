@@ -31,7 +31,7 @@ const OPENINGS = ["session/new", "session/load"] as const
 const RecordedSchema = z.union([
   z.object({ method: z.string(), params: RecordedObjectSchema }),
   z.object({ request: z.string(), params: RecordedObjectSchema }),
-  z.object({ response: z.enum(OPENINGS), result: RecordedObjectSchema }),
+  z.object({ response: z.enum([...OPENINGS, "session/prompt"]), result: RecordedObjectSchema }),
 ])
 const NotificationSchema = z.looseObject({ sessionId: z.string(), update: z.looseObject({ sessionUpdate: z.string() }) })
 const PermissionSchema = z.looseObject({
@@ -63,7 +63,7 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
   }
   return {
     provider: source.provider,
-    decoded: new Set([...DECODED_UPDATES.map((update) => `session/update/${update}`), PERMISSION, ...(source.requests?.methods ?? []), ...source.modelWindow ? OPENINGS : []]),
+    decoded: new Set([...DECODED_UPDATES.map((update) => `session/update/${update}`), PERMISSION, ...source.promptUsage ? ["session/prompt"] : [], ...(source.requests?.methods ?? []), ...source.modelWindow ? OPENINGS : []]),
     silent: new Set([...SILENT_UPDATES.map((update) => `session/update/${update}`), ...source.modelWindow ? [] : OPENINGS]),
     kind(message) {
       const recorded = RecordedSchema.safeParse(message)
@@ -106,6 +106,7 @@ export function acpDecoderSource(source: ProviderAcpSource): ProviderDecoderSour
           const recorded = RecordedSchema.safeParse(message)
           if (!recorded.success) return [decoded.unknown("(unreadable)", message, "unreadable")]
           if ("response" in recorded.data) {
+            if (recorded.data.response === "session/prompt") return metered(source.promptUsage?.(recorded.data.result) ?? [])
             opening = false
             return metered(models.opened(recorded.data.result))
           }

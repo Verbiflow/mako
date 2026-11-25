@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import { createHash } from "node:crypto"
+import { existsSync } from "node:fs"
 import { lstat, mkdtemp, mkdir, readdir, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises"
 import { syncBuiltinESMExports } from "node:module"
 import os from "node:os"
@@ -631,6 +632,34 @@ setInterval(() => {}, 1000);
     await assert.rejects(readCodexCredentials(nativeCodex), /backend yet/)
   }
   console.log("PASS: in-app sign-in (cancel, failure, code entry, status check, duplicate), signing in again (in place, failed, as someone else), Cursor per-account keys, Grok per-account auth files, Devin's terminal code sign-in, hidden unfinished profiles, the ordinary login as default whatever the shell exported, saved profiles, exact-environment revisions across six adapters, native refresh preservation, and Codex native/managed storage isolation")
+
+  const keyContext = detachedHarnessContext(nativeStores, join(root, "key-data"), join(root, "key-accounts"))
+  const keySecrets = memorySecrets()
+  const keyHost = createHarnessHost({ ...keyContext, secrets: { ...keyContext.secrets, secrets: keySecrets } })
+  // Each key account's variable, and one the shell might export that the harness would read before it.
+  const keyed = { antigravity: ["GEMINI_API_KEY", "GOOGLE_API_KEY"], claude: ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN"], grok: ["XAI_API_KEY", "GROK_CODE_XAI_API_KEY"] }
+  for (const [provider, [variable, competing]] of Object.entries(keyed)) {
+    const key = "fixture-key-" + provider
+    await keyHost.accounts.addApiKey(provider, key)
+    const launch = await keyHost.accounts.launch(provider, { HOME: root, GOOGLE_GEMINI_BASE_URL: "https://example.invalid", [competing!]: "fixture-shell-credential" })
+    assert.equal(launch.env[variable!], key)
+    assert.equal(launch.env[competing!], undefined, `${provider}: the shell's ${competing} can't win over the saved key`)
+    const folder = keyHost.accounts.root.dir(provider, launch.account.name)
+    const adapter = keyHost.accountCapabilities.get(provider)!
+    const listed = await adapter.listAccounts(launch.account.name)
+    assert.equal(listed.find(account => account.active)?.authType, "api")
+    assert.ok(!JSON.stringify(listed).includes(key))
+    if (provider === "antigravity") {
+      assert.equal(launch.env.GOOGLE_GEMINI_BASE_URL, undefined)
+      assert.equal(launch.env.MAKO_AGY_DATA_DIRECTORY, "mako-antigravity-" + launch.account.name)
+    }
+    await keyHost.accounts.select(provider, null)
+    await keyHost.accounts.remove(provider, launch.account.name)
+    assert.ok(!(await adapter.listAccounts(null)).some(account => account.name === launch.account.name))
+    assert.deepEqual((await keySecrets.list("saved-key")).map((record) => record.name), [], `${provider}: removing the account removes its key`)
+    assert.ok(!existsSync(folder), `${provider}: and what the harness kept in its folder`)
+  }
+  console.log("PASS: API key accounts for Antigravity, Claude Code and Grok: the key in the launch alone, over what the shell exported, never listed, and gone with its folder when the account is removed")
 } finally {
   for (const key of Object.keys(process.env)) if (!(key in original)) delete process.env[key]
   Object.assign(process.env, original)

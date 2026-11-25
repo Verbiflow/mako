@@ -174,6 +174,7 @@ export interface AccountProviderInfo {
   loginCommand: string
   /** Accounts can be added and signed in again inside Mako. */
   nativeLogin?: true
+  apiKey?: true
   /** Why accounts can't be added in Mako, said once beside the provider's login. */
   readOnlyReason?: string
 }

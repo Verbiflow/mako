@@ -17,7 +17,7 @@ import { othersRunning, sharedDaemon, startHost, until } from "./host-process.mj
  * Item 1.1's proof, inside the Linux image (`runtime/host/Dockerfile`): the
  * host as installed there, with `electron` unresolvable, answers /health,
  * serves the first look's calls (wayfinder/audits/2026-10-01/
- * track-c1-headless-runtime), and starts each of its six harnesses to ready
+ * track-c1-headless-runtime), and starts each of its harnesses to ready
  * or signed out. The image's user has no account anywhere, so signed out is
  * what most can reach: the host asking how to sign in, or a start it
  * classifies as signed out. Any other end fails the proof, as does a host
@@ -155,7 +155,8 @@ try {
   // Each harness, started as a window starts one, to ready or signed out.
   const installed = JSON.parse(await readFile(join(homedir(), "harnesses.json"), "utf8"))
   const harnesses = await host.call("mako:harness-descriptors")
-  assert.equal(harnesses.length, 6, `six harnesses, not ${harnesses.map((harness) => harness.provider).join(", ")}`)
+  // The image installs every harness the host has (install-harnesses.mjs), so the record names each one the host lists.
+  assert.deepEqual(harnesses.map((harness) => harness.provider).sort(), Object.keys(installed).sort(), `the image's harnesses, not ${harnesses.map((harness) => harness.provider).join(", ")}`)
   assert.deepEqual(harnesses.filter((harness) => !harness.live).map((harness) => harness.provider), [], "every harness can start a conversation")
   for (const { provider } of harnesses) {
     const conversation = randomUUID()

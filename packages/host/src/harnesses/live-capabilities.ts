@@ -68,7 +68,7 @@ export function liveCapabilities(driver: ProviderLiveDriver): LiveCapabilities {
     questions: questions.kind === "request" || questions.kind === "session" ? { state: "implemented", via: questions.via, asks: questions.kind } : absent(questions),
     modes: modeSwitching.kind === "native" ? implemented(modeSwitching.via) : noOp(modeSwitching.reason),
     nativeAgents: nativeAgents.kind === "observed" ? implemented(nativeAgents.via) : absent(nativeAgents),
-    backgroundStop: background.kind === "ends-on-stop" ? implemented(background.how) : byDefault(background.evidence),
+    backgroundStop: background.kind === "ends-on-stop" ? implemented(background.how) : background.kind === "ends-with-turn" ? byDefault(background.evidence) : makoLacks(background.reason),
     contextBreakdown: contextBreakdown.kind === "itemized" ? implemented(contextBreakdown.via) : absent(contextBreakdown),
   }
 }

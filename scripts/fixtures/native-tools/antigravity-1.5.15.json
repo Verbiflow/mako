@@ -1,0 +1,383 @@
+{
+  "harness": "antigravity",
+  "version": "1.5.15",
+  "on": "2026-11-23",
+  "source": "The official agy ACP worker's Gemini functionDeclarations, collected at a local Gemini-compatible test endpoint.",
+  "configurations": [
+    {
+      "name": "default",
+      "tools": {
+        "read_file": {
+          "form": "function",
+          "description": {
+            "chars": 114,
+            "sha": "06a525febb4c"
+          },
+          "parameters": {
+            "ByteOffset": {
+              "type": "integer",
+              "required": false
+            },
+            "EndLine": {
+              "type": "integer",
+              "required": false
+            },
+            "Path": {
+              "type": "string",
+              "required": true
+            },
+            "StartLine": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "run_command": {
+          "form": "function",
+          "description": {
+            "chars": 397,
+            "sha": "5306b2c272bd"
+          },
+          "parameters": {
+            "CommandLine": {
+              "type": "string",
+              "required": true
+            },
+            "IsDaemon": {
+              "type": "boolean",
+              "required": false
+            },
+            "WaitMsBeforeAsync": {
+              "type": "integer",
+              "required": true
+            },
+            "toolSummary": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "manage_task": {
+          "form": "function",
+          "description": {
+            "chars": 281,
+            "sha": "f063bd077bb1"
+          },
+          "parameters": {
+            "Action": {
+              "type": "string",
+              "required": true
+            },
+            "Input": {
+              "type": "string",
+              "required": false
+            },
+            "TaskId": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "send_message": {
+          "form": "function",
+          "description": {
+            "chars": 89,
+            "sha": "a29df3a99ff3"
+          },
+          "parameters": {
+            "Message": {
+              "type": "string",
+              "required": true
+            },
+            "Recipient": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "schedule": {
+          "form": "function",
+          "description": {
+            "chars": 617,
+            "sha": "5cff75ef0808"
+          },
+          "parameters": {
+            "CronExpression": {
+              "type": "string",
+              "required": false
+            },
+            "DurationSeconds": {
+              "type": "integer",
+              "required": false
+            },
+            "ExactTiming": {
+              "type": "boolean",
+              "required": false
+            },
+            "IsDaemon": {
+              "type": "boolean",
+              "required": false
+            },
+            "MaxIterations": {
+              "type": "integer",
+              "required": false
+            },
+            "Prompt": {
+              "type": "string",
+              "required": true
+            },
+            "TimerCondition": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "invoke_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 454,
+            "sha": "d9463baefbe3"
+          },
+          "parameters": {
+            "Model": {
+              "type": "string",
+              "required": false
+            },
+            "Prompt": {
+              "type": "string",
+              "required": true
+            },
+            "Role": {
+              "type": "string",
+              "required": true
+            },
+            "TypeName": {
+              "type": "string",
+              "required": true
+            },
+            "Workspace": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "define_subagent": {
+          "form": "function",
+          "description": {
+            "chars": 154,
+            "sha": "3993a60cadd1"
+          },
+          "parameters": {
+            "Description": {
+              "type": "string",
+              "required": true
+            },
+            "EnableMCPTools": {
+              "type": "boolean",
+              "required": false
+            },
+            "EnableSubagentTools": {
+              "type": "boolean",
+              "required": false
+            },
+            "EnableWriteTools": {
+              "type": "boolean",
+              "required": false
+            },
+            "Name": {
+              "type": "string",
+              "required": true
+            },
+            "SystemPrompt": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "manage_subagents": {
+          "form": "function",
+          "description": {
+            "chars": 261,
+            "sha": "42aee0c44f57"
+          },
+          "parameters": {
+            "Action": {
+              "type": "string",
+              "required": true
+            },
+            "ConversationIds": {
+              "type": "array",
+              "required": false
+            }
+          }
+        },
+        "write_file": {
+          "form": "function",
+          "description": {
+            "chars": 321,
+            "sha": "01a4d5ddf957"
+          },
+          "parameters": {
+            "Append": {
+              "type": "boolean",
+              "required": false
+            },
+            "ArtifactMetadata": {
+              "type": "object",
+              "required": false
+            },
+            "Content": {
+              "type": "string",
+              "required": true
+            },
+            "Overwrite": {
+              "type": "boolean",
+              "required": false
+            },
+            "Path": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "edit_file": {
+          "form": "function",
+          "description": {
+            "chars": 393,
+            "sha": "077ef5fc68e4"
+          },
+          "parameters": {
+            "ArtifactMetadata": {
+              "type": "object",
+              "required": false
+            },
+            "Path": {
+              "type": "string",
+              "required": true
+            },
+            "Replacement": {
+              "type": "string",
+              "required": true
+            },
+            "Target": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "search_web": {
+          "form": "function",
+          "description": {
+            "chars": 108,
+            "sha": "e49a882cd58f"
+          },
+          "parameters": {
+            "domain": {
+              "type": "string",
+              "required": false
+            },
+            "query": {
+              "type": "string",
+              "required": true
+            }
+          }
+        },
+        "run_workflow": {
+          "form": "function",
+          "description": {
+            "chars": 626,
+            "sha": "c07b9c9bba19"
+          },
+          "parameters": {
+            "Args": {
+              "type": "object",
+              "required": false
+            },
+            "Cwd": {
+              "type": "string",
+              "required": false
+            },
+            "Description": {
+              "type": "string",
+              "required": false
+            },
+            "Script": {
+              "type": "string",
+              "required": false
+            },
+            "ScriptPath": {
+              "type": "string",
+              "required": false
+            },
+            "WaitMsBeforeAsync": {
+              "type": "integer",
+              "required": false
+            }
+          }
+        },
+        "swarm": {
+          "form": "function",
+          "description": {
+            "chars": 2847,
+            "sha": "33de37214999"
+          },
+          "parameters": {
+            "action": {
+              "type": "string",
+              "required": true
+            },
+            "all": {
+              "type": "boolean",
+              "required": false
+            },
+            "brief": {
+              "type": "string",
+              "required": false
+            },
+            "fork": {
+              "type": "string",
+              "required": false
+            },
+            "model": {
+              "type": "string",
+              "required": false
+            },
+            "n": {
+              "type": "integer",
+              "required": false
+            },
+            "name": {
+              "type": "string",
+              "required": false
+            },
+            "tasks": {
+              "type": "array",
+              "required": false
+            },
+            "title": {
+              "type": "string",
+              "required": false
+            },
+            "workspace": {
+              "type": "string",
+              "required": false
+            }
+          }
+        },
+        "ask_question": {
+          "form": "function",
+          "description": {
+            "chars": 175,
+            "sha": "6ef4574942f1"
+          },
+          "parameters": {
+            "questions": {
+              "type": "array",
+              "required": true
+            }
+          }
+        }
+      }
+    }
+  ]
+}

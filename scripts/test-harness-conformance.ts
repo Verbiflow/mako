@@ -126,7 +126,8 @@ async function peer(provider: string, behavior: string): Promise<{ dir: string; 
     MAKO_STANDIN_BEHAVIOR: behavior,
     MAKO_STANDIN_PIDS: pids,
     MAKO_STANDIN_VERSION: "9.9.9",
-    MAKO_STANDIN_PROTOCOL: provider === "grok" || provider === "devin" ? "acp" : provider,
+    // A harness whose live driver runs on its ACP agent speaks ACP; the rest speak their own wire, named after them.
+    MAKO_STANDIN_PROTOCOL: providerHost.acpSources.get(provider) ? "acp" : provider,
   }
   return { dir, env, pids }
 }
@@ -200,6 +201,12 @@ const CONFORMANCE = new Map<string, Conformance>([
     standIn: async (dir, env) => {
       await shell(join(dir, "devin"), { ...env, MAKO_STANDIN_HANDSHAKE_VERSION: "0.0.0-dev" })
       return { DEVIN_CLI_PATH: join(dir, "devin") }
+    },
+  }],
+  ["antigravity", {
+    standIn: async (dir, env) => {
+      await shell(join(dir, "agy"), env)
+      return { PATH: onPath(dir) }
     },
   }],
 ])

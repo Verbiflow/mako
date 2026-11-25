@@ -22,6 +22,7 @@ const profileSchema = z.object({
   configuredModel: z.string().optional(),
   settings: SessionSettingsSchema.optional(),
   configurationError: z.string().optional(),
+  signInRequired: z.literal(true).optional(),
   error: z.string().optional(),
 })
 // Entries, folders and the file itself are loose: what a newer Mako adds to one is written back as it was found.

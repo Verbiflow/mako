@@ -265,6 +265,7 @@ try {
     opencode: "accepts openai-chat (gateway,local,custom)",
     grok: "absent",
     devin: "absent",
+    antigravity: "absent",
   })
 
   for (const line of logged) {

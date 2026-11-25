@@ -176,6 +176,8 @@ export interface HarnessModelCatalog {
   configuredModel?: string
   settings?: SessionSettings
   configurationError?: string
+  /** Nothing was listed because the account must sign in first; the harness asks for that when a session opens. */
+  signInRequired?: true
 }
 
 export function harnessModelByIdentity(

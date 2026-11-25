@@ -48,11 +48,15 @@ export interface AcpLaunchOptions {
 }
 
 export interface AcpLaunch {
+  /** Explicit credential method to authenticate before opening even a cached session. */
+  authenticateWith?: string
   /** Asked of the executable only when initialize names no build: it omits agentInfo.version, or reports one that names none (`namesBuild`). */
   versionArgs?: string[]
   command: string
   args: string[]
   configureEnvironment(env: NodeJS.ProcessEnv): void
+  /** The account's sign-in variables: a Thread's Setup values never replace, add or remove them for the agent. */
+  accountVariables?: readonly string[]
   /** Shown in the conversation once the session is ready, such as the provider's own permission rules. */
   notices?: TranscriptEvent[]
   /** `holdsWrites`: what this launch's `holdsWrites` answered, for a config that installs its hook to match. */
@@ -200,6 +204,10 @@ export type AcpSideQuestions =
   | DriverAbsent
 
 export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<AcpPlanDecoder>, Pick<ProviderLiveDriver, "nativeSource" | "approvalEvidence" | "planning" | "approvalAnswerDigest" | "backgroundStop" | "nativePromptIdentity" | "questions" | "goals" | "review"> {
+  /** Reads spend on the prompt reply for agents that report it there. */
+  promptUsage?(result: PromptResponse | JsonObject): UsageObservation[]
+  /** Checks the native store for a terminal executor failure added by this prompt. */
+  watchPromptFailure?(locate: () => string | undefined): () => string | undefined
   fork: AcpFork
   sideQuestions: AcpSideQuestions
   agents: AcpAgents

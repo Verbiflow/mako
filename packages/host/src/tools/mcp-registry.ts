@@ -33,6 +33,7 @@ const RawTransportSchema = z
     command: OptionalStringSchema,
     args: z.array(z.string()).catch([]),
     url: OptionalStringSchema,
+    serverUrl: OptionalStringSchema,
     env: StringMapSchema,
     headers: StringMapSchema,
     http_headers: StringMapSchema,
@@ -145,7 +146,7 @@ export function parseMcpDefinition(
   const root = parsed.data
   const source = root.transport ?? root
   const command = source.command
-  const rawUrl = source.url
+  const rawUrl = source.url ?? source.serverUrl
   if (!command && !rawUrl) return null
   let redactNextArgument = false
   const args = source.args.map((argument) => {

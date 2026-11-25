@@ -21,7 +21,7 @@ export interface AcpRequestRecord {
 
 /** The agent's reply to a request that opens a session (`session/new`, `session/load`), as captured for the decoder. */
 export interface AcpResponseRecord {
-  response: "session/new" | "session/load"
+  response: "session/new" | "session/load" | "session/prompt"
   result: object
 }
 

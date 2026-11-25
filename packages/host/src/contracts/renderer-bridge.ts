@@ -659,6 +659,7 @@ export function createMakoBridge(transport: BridgeTransport) {
       invokeTrustedHost<void>("mako:account-login-code", id, code),
     cancelAccountLogin: (id: string) =>
       invokeTrustedHost<void>("mako:account-login-cancel", id),
+    addAccountKey: (harness: AccountHarness, key: string) => invokeTrustedHost<void>("mako:account-add-key", harness, key),
     captureAccount: (harness: AccountHarness, name: string) =>
       invokeTrustedHost<void>("mako:account-capture", harness, name),
     selectAccount: (harness: AccountHarness, name: string | null) =>

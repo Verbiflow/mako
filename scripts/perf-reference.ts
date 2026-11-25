@@ -229,12 +229,18 @@ export type Measurer = (tree: string, keys: string[]) => Promise<Record<string, 
  * How `perf-decoders.ts` measures `keys` in either tree, with the arguments the
  * reference understands, on the checkout's recordings. A reference whose
  * script takes `--rows` measures them all in one run; an older one measures
- * each harness's family, with whatever rows share it.
+ * each harness's family, with whatever rows share it. A row of a harness the
+ * reference doesn't have, one this checkout adds, isn't asked of either: the
+ * reference's script fails its whole run on a row it has no harness for.
  */
-export async function decoderRows(reference: string, keys: string[], fixtures: string, scratch: string): Promise<Measurer> {
+export async function decoderRows(reference: string, wanted: string[], fixtures: string, scratch: string): Promise<Measurer> {
   const text = await readFile(join(reference, "scripts/perf-decoders.ts"), "utf8")
+  const keys = wanted.filter((key) => {
+    const harness = key.slice(0, key.indexOf("/"))
+    return harness === "merge" || existsSync(join(reference, "packages/host/src/harnesses", harness))
+  })
   const groups = new Map<string, string[]>()
-  if (/\brows: \{ type: "string"/.test(text)) groups.set(["--rows", keys.join(",")].join("\0"), keys)
+  if (keys.length && /\brows: \{ type: "string"/.test(text)) groups.set(["--rows", keys.join(",")].join("\0"), keys)
   else for (const key of keys) {
     const [harness, measure] = [key.slice(0, key.indexOf("/")), key.slice(key.indexOf("/") + 1)]
     const family = measure.replace(/ \(.*\)$/, "")
