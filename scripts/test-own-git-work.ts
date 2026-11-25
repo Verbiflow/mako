@@ -13,8 +13,8 @@ import { makoToolList } from "./lib/mako-tool-list.ts"
 /*
  * An agent does its own Git work with Mako's tools and isn't sent to the person for it.
  *
- * - Which of Mako's own asks an agent's Git work meets under each access tier: a move onto its own branch asks below
- *   full access (unless the project always allows it) and goes at once on it; opening, pushing and re-running the
+ * - Which of Mako's own asks an agent's Git work meets under each access tier: a move onto its own branch goes without
+ *   a card on every tier that may write and is refused with why on a read-only one; opening, pushing and re-running the
  *   checks of its own pull request are its work at every tier; merging stays the person's call below full access.
  * - No agent-facing text (the mako server's instructions and tools at every role and tier, the primer, what a move
  *   tells the agent) tells it to leave to the person what a tool does, as the words that sent an agent to the Changes
@@ -32,48 +32,44 @@ const outcome: MoveOutcome = {
   unstaged: [],
 }
 
-// 1. A move onto the Thread's own branch, under each tier.
+// 1. A move onto the Thread's own branch, under each tier: the agent's own work, so no card where it may write, and a
+// refusal with why where it may not. The harness's own approval of the call, where its tier asks, is the person's say.
 const root = mkdtempSync(join(tmpdir(), "mako-own-git-"))
 try {
   const tiers = new Map<string, AccessTier | undefined>()
   const project = join(root, "project")
-  const moves = (file = join(root, "moves.json")) => new WorkspaceMoves({
+  const moves = (file: string, tiered = true) => new WorkspaceMoves({
     file,
-    source: (id) => ({ cwd: project, harness: "claude", busy: true, ...id.startsWith("t-") && { title: id } }),
+    source: (id) => ({ cwd: project, harness: "claude", busy: true, title: id }),
     companions: () => [],
     place: async () => ({ project, changed: 1, shares: { thread: share(["a.ts"]), others: none, person: none, uncertain: share(["e.ts"]), unattributed: none, split: [] } }),
     move: async (id) => id,
     follow: async () => {},
     announce: () => {},
     failed: () => {},
-    fullAccess: (id) => tiers.get(id) === "full",
+    ...tiered && { tier: (id: string) => tiers.get(id) },
   })
-  const each = moves()
+  const each = moves(join(root, "moves.json"))
+  const readOnly = new Set<AccessTier>(["plan", "chat", "deny"])
   for (const tier of [...ACCESS_TIER_NAMES, undefined]) {
     const id = `t-${tier ?? "none"}`
     tiers.set(id, tier)
-    const said = await each.ask(id)
-    if (tier === "full") {
-      assert.equal(each.answerFor(id), "allowed", "full access is the person's grant: the move goes without a card")
-      assert.match(said, /^Allowed: this Thread is on full access\./)
-    } else {
-      assert.equal(each.answerFor(id), "asking", `${tier ?? "a harness without tiers"} asks the person in the composer`)
-      assert.match(said, /^Asked the user\./)
+    if (tier && readOnly.has(tier)) {
+      await assert.rejects(each.ask(id), /where an agent changes no files, so it doesn't move onto a branch of its own\./, `${tier} refuses, saying why`)
+      assert.equal(each.answerFor(id), undefined, `${tier} leaves no card for the person`)
+      continue
     }
-    assert.match(said, /worktree_bring stayed: true brings them/, "what stays says how the agent brings it, not that the person must")
+    const said = await each.ask(id)
+    assert.equal(each.answerFor(id), "allowed", `${tier ?? "a harness without tiers"} moves without a card`)
+    assert.match(said, /^Allowed: a move onto this Thread's own branch is your own work\./)
+    assert.match(said, /worktree_bring brings those that are this Thread's/, "what stays says how the agent brings it, not that the person must")
   }
-  // Allowed once by the person, the reason is theirs, not full access's.
-  const once = moves(join(root, "once.json"))
-  tiers.set("t-ask-once", "ask")
-  await once.ask("t-ask-once")
-  once.answer(once.state().requests[0]!.id, "allow")
-  assert.match(await once.ask("t-ask-once"), /^Allowed: the user allowed it\./)
-  // A project that always allows it still does, at any tier.
-  const always = moves(join(root, "always.json"))
-  await always.ask("t-ask")
-  always.answer(always.state().requests[0]!.id, "always")
-  const later = moves(join(root, "always.json"))
-  assert.match(await later.ask("t-edits"), /^Allowed: this project lets agents move without asking\./)
+  assert.deepEqual(each.state().requests.filter((request) => request.state === "asking"), [], "nothing waits on the person")
+  // A host that doesn't say a tier still asks, and a project that always allows it moves.
+  const untiered = moves(join(root, "untiered.json"), false)
+  assert.match(await untiered.ask("t-old"), /^Asked the user\./)
+  untiered.answer(untiered.state().requests[0]!.id, "always")
+  assert.match(await moves(join(root, "untiered.json"), false).ask("t-again"), /^Allowed: this project lets agents move without asking\./)
 } finally {
   rmSync(root, { recursive: true, force: true })
 }
@@ -94,7 +90,7 @@ assert.match(describe("below", "pull_request_merge"), /^Call only when the user 
 assert.match(describe("full", "pull_request_merge"), /next step of the work/, "on full access a Thread merges as the next step of its work")
 assert.match(describe("below", "worktree_bring"), /stayed: true/, "worktree_bring says it brings what a move left")
 assert.match(describe("below", "worktree_bring"), /putBack/)
-assert.match(describe("below", "worktree_move"), /On full access, or in a project that always allows it, it goes without asking/)
+assert.match(describe("below", "worktree_move"), /It goes without asking, as your own work, except on a read-only access, where it's refused\./)
 
 // 3. No agent-facing words leave the agent's own Git work to the person.
 const HANDS_BACK = [
@@ -118,5 +114,6 @@ for (const [where, text] of texts)
 assert.match(POLICY, /Never ask the person to do in the app what a tool does/)
 assert.match(outcomeSentences(outcome).join(" "), /worktree_bring putBack/, "what came on timing alone can be put back by the agent")
 assert.match(outcomeSentences(outcome).join(" "), /worktree_bring stayed: true/, "what stayed can be brought by the agent")
+assert.match(outcomeSentences(outcome).join(" "), /may be the user's own\. Bring only those you've read and found are this Thread's work, each named in worktree_bring entries\./, "what nobody is named for comes only by name")
 
-console.log("own Git work: a move asks below full access and goes on it; open, push and re-run are the Thread's own at every tier, merging the person's below full; no agent-facing words hand that work to the person")
+console.log("own Git work: a move goes without a card where the Thread may write and is refused where it may not; open, push and re-run are the Thread's own at every tier, merging the person's below full; no agent-facing words hand that work to the person")

@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto"
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { z } from "zod"
+import { accessTierInfo, type AccessTier } from "../contracts/access.js"
 import type { MoveHaste, MoveShares, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveRequest, WorkspaceMoves as WorkspaceMovesState } from "../contracts/workspace-moves.js"
 
 export interface MoveSource {
@@ -41,12 +42,16 @@ interface Deps {
   /** How long the person's move waits for what its Sessions are finishing; 15 s unless a test says otherwise. */
   settleMs?: number
   /**
-   * Whether this conversation runs on full access, which is the person's grant for an agent's own work: its move onto
-   * its own branch goes without asking, as `thread_move` and the other tools that act for the person do. Below it the
-   * person answers in the composer unless the project always allows it.
+   * The access tier this conversation runs on. A move onto the Thread's own branch is the agent's own work: on a tier
+   * that may write it goes without a card (the harness's approval of the call, where its tier asks, is the person's
+   * say), and on a read-only one it's refused with why. Undefined for a harness with no tiers, which may write. A host
+   * that doesn't say (`tier` absent) asks the person, unless the project always allows it.
    */
-  fullAccess?(conversationId: string): boolean
+  tier?(conversationId: string): AccessTier | undefined
 }
+
+/** Tiers on which an agent changes no files, so it doesn't move onto a branch either. */
+const READS_ONLY: ReadonlySet<AccessTier> = new Set(["plan", "chat", "deny"])
 
 const SETTLE_MS = 15_000
 
@@ -102,6 +107,9 @@ export class WorkspaceMoves {
     const source = this.deps.source(conversationId)
     if (!source) throw new Error("Mako isn't running this conversation, so it can't move it.")
     if (this.moving.has(conversationId)) return "Mako is moving this Session into this Thread's worktree now."
+    const tier = this.deps.tier?.(conversationId)
+    if (tier && READS_ONLY.has(tier))
+      throw new Error(`This Thread is on ${accessTierInfo(tier).label}, where an agent changes no files, so it doesn't move onto a branch of its own. Keep to reading here; a branch comes with access that edits, which is the person's to choose.`)
     let request = this.requests.get(conversationId)
     if (!request) {
       const place = await this.deps.place(conversationId, source.cwd)
@@ -113,7 +121,7 @@ export class WorkspaceMoves {
         harness: source.harness,
         project: place.project,
         changed: place.changed,
-        state: this.alwaysAllowed.includes(place.project) || this.deps.fullAccess?.(conversationId) ? "allowed" : "asking",
+        state: this.deps.tier || this.alwaysAllowed.includes(place.project) ? "allowed" : "asking",
       }
       if (source.title) request.title = source.title
       if (place.joins) request.joins = place.joins
@@ -128,8 +136,8 @@ export class WorkspaceMoves {
     const others = request.companions ?? 0
     const when = others ? `When this turn and those of this Thread's ${others === 1 ? "other Session" : `${others} other Sessions`} here end, Mako moves them all` : "When this turn ends, Mako moves the Session"
     const then = `${when} ${where}${carried}, and sends you a message there to carry on. Finish this turn now: make no further edits here, and tell the user you'll continue in the worktree.`
-    const why = this.alwaysAllowed.includes(request.project) ? "this project lets agents move without asking"
-      : this.deps.fullAccess?.(conversationId) ? "this Thread is on full access" : "the user allowed it"
+    const why = this.deps.tier ? "a move onto this Thread's own branch is your own work"
+      : this.alwaysAllowed.includes(request.project) ? "this project lets agents move without asking" : "the user allowed it"
     return request.state === "allowed"
       ? `Allowed: ${why}. ${then}`
       : `Asked the user. Their answer is in a card above the composer; worktree_status shows it. If they allow it: ${then} If they don't, keep working here.`
@@ -340,6 +348,6 @@ function carriedText(request: WorkspaceMoveRequest): string {
   if (others) parts.push(`; other Threads' and the user's changes (${count(others)}) stay in the main checkout`)
   if (unsure) parts.push(request.bring
     ? `; the user chose to bring the ${count(unsure)} whose changes might be this Thread's or nobody can be named for`
-    : `; ${count(unsure)} whose changes might be this Thread's or nobody can be named for stay, and worktree_bring stayed: true brings them once you've read them`)
+    : `; ${count(unsure)} whose changes might be this Thread's or nobody can be named for stay, and once you've read them worktree_bring brings those that are this Thread's`)
   return parts.join("")
 }

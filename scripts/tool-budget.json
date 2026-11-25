@@ -3,8 +3,8 @@
   "roles": {
     "thread": {
       "total": {
-        "tokens": 14956,
-        "bytes": 65509
+        "tokens": 14978,
+        "bytes": 65589
       },
       "instructions": {
         "tokens": 726,
@@ -12,16 +12,16 @@
       },
       "tools": {
         "worktree_status": {
-          "tokens": 327,
-          "bytes": 1585
+          "tokens": 339,
+          "bytes": 1632
         },
         "worktree_bring": {
-          "tokens": 387,
-          "bytes": 1762
+          "tokens": 406,
+          "bytes": 1841
         },
         "worktree_move": {
-          "tokens": 521,
-          "bytes": 2321
+          "tokens": 512,
+          "bytes": 2275
         },
         "worktree_update": {
           "tokens": 233,
@@ -175,8 +175,8 @@
     },
     "apex": {
       "total": {
-        "tokens": 14956,
-        "bytes": 65509
+        "tokens": 14978,
+        "bytes": 65589
       },
       "instructions": {
         "tokens": 726,
@@ -184,16 +184,16 @@
       },
       "tools": {
         "worktree_status": {
-          "tokens": 327,
-          "bytes": 1585
+          "tokens": 339,
+          "bytes": 1632
         },
         "worktree_bring": {
-          "tokens": 387,
-          "bytes": 1762
+          "tokens": 406,
+          "bytes": 1841
         },
         "worktree_move": {
-          "tokens": 521,
-          "bytes": 2321
+          "tokens": 512,
+          "bytes": 2275
         },
         "worktree_update": {
           "tokens": 233,
@@ -347,8 +347,8 @@
     },
     "fin": {
       "total": {
-        "tokens": 15952,
-        "bytes": 69869
+        "tokens": 15974,
+        "bytes": 69949
       },
       "instructions": {
         "tokens": 726,
@@ -356,16 +356,16 @@
       },
       "tools": {
         "worktree_status": {
-          "tokens": 327,
-          "bytes": 1585
+          "tokens": 339,
+          "bytes": 1632
         },
         "worktree_bring": {
-          "tokens": 387,
-          "bytes": 1762
+          "tokens": 406,
+          "bytes": 1841
         },
         "worktree_move": {
-          "tokens": 521,
-          "bytes": 2321
+          "tokens": 512,
+          "bytes": 2275
         },
         "worktree_update": {
           "tokens": 233,
@@ -523,8 +523,8 @@
     },
     "fin-apex": {
       "total": {
-        "tokens": 15952,
-        "bytes": 69869
+        "tokens": 15974,
+        "bytes": 69949
       },
       "instructions": {
         "tokens": 726,
@@ -532,16 +532,16 @@
       },
       "tools": {
         "worktree_status": {
-          "tokens": 327,
-          "bytes": 1585
+          "tokens": 339,
+          "bytes": 1632
         },
         "worktree_bring": {
-          "tokens": 387,
-          "bytes": 1762
+          "tokens": 406,
+          "bytes": 1841
         },
         "worktree_move": {
-          "tokens": 521,
-          "bytes": 2321
+          "tokens": 512,
+          "bytes": 2275
         },
         "worktree_update": {
           "tokens": 233,

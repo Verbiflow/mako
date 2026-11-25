@@ -534,7 +534,7 @@ export function openWorkspaceMovers(deps: WorkspaceMoversDeps): WorkspaceMovers 
     move: async (id, bring) => (await worktreeMove().carry(id, { lead: true, tell: true, bring, waitTurn: true })).session.id,
     follow: async (id, told, lead, haste) => { await worktreeMove().carry(id, { lead: false, tell: told, after: lead, ...haste && { haste } }) },
     announce: (state) => emit({ type: "workspace-moves", moves: state }),
-    fullAccess: (id) => sessionAccessTier(live.session(id)) === "full",
+    tier: (id) => sessionAccessTier(live.session(id)),
     failed: (id, message) => {
       hostWarn("moves", "a workspace move failed", { conversation: id, error: message })
       emit({ type: "notice", level: "error", message: "The agent didn't move to its own branch; it goes on where it was." })

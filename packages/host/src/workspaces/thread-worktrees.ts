@@ -21,7 +21,7 @@ import { CommitAnswers, WorktreeSummaryCache, type HeldPoint, type HeldSummary, 
 import { storedRefs, WorktreeSizes } from "./worktree-status.js"
 import { WorktreeSpares, type Spare } from "./worktree-spares.js"
 import { fetchQuietly, WorktreeStarts } from "./worktree-start.js"
-import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, type AdjustHooks, type Adjuster, type MoveLedger, type MovePlan } from "./worktree-move.js"
+import { bringStayed, broughtSentence, MovePlanSchema, MoveOutcomeSchema, moveByAuthor, previewShares, pruneBackups, putBack, resumeMove, returnedSentence, stayedPaths, type AdjustHooks, type StayedPaths, type Adjuster, type MoveLedger, type MovePlan } from "./worktree-move.js"
 import type { MoveHaste, MoveOutcome, MoveShares } from "../contracts/workspace-moves.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { mapLimit } from "@mako/protocol/map-limit"
@@ -895,7 +895,7 @@ export class ThreadWorktreeService {
       if (!adjusting) continue
       // An agent's own call that a restart cut short: it never heard the result, so it hears it as its next turn begins.
       const resumed = adjusting.by === "agent" ? { by: "agent" as const, tell: true } : {}
-      const finished = adjusting.kind === "bring" ? this.bringStayed(id, resumed) : this.putBack(id, adjusting.paths, resumed)
+      const finished = adjusting.kind === "bring" ? this.bringStayed(id, { ...resumed, ...adjusting.paths && { only: adjusting.paths } }) : this.putBack(id, adjusting.paths, resumed)
       await finished.then(
         () => hostLog("worktree-move", "finished an adjustment cut short", { conversation: id, kind: adjusting.kind }),
         (error: Error) => hostLog("worktree-move", "an adjustment cut short couldn't be finished", { conversation: id, kind: adjusting.kind, error: error.message }),
@@ -2320,8 +2320,10 @@ export class ThreadWorktreeService {
    * either checkout changed since, which stayed. `by: "agent"`: the Thread's
    * agent asked with worktree_bring and reads what came in its answer, so its
    * next turn isn't told again, unless `tell` (a restart finished it).
+   * `only`: just those that stayed, project-relative (`stayed` lists them);
+   * every one when left out, as the app's button does.
    */
-  async bringStayed(conversationId: string, options: { by?: Adjuster; tell?: boolean } = {}): Promise<{ outcome: MoveOutcome; came: string[]; left: string[] }> {
+  async bringStayed(conversationId: string, options: { by?: Adjuster; tell?: boolean; only?: readonly string[] } = {}): Promise<{ outcome: MoveOutcome; came: string[]; left: string[] }> {
     const by = options.by ?? "person"
     const receipt = await this.receipt(conversationId)
     const moved = receipt?.moved && "files" in receipt.moved ? receipt.moved : undefined
@@ -2329,12 +2331,20 @@ export class ThreadWorktreeService {
     if (moved.outcome.brought) return { outcome: moved.outcome, came: [], left: [] }
     const plan = moved.id ? await this.readPlan(moved.id) : undefined
     if (!plan) throw new Error("Mako no longer has what this move left behind, so nothing more can come from it.")
-    const result = await bringStayed(this.git, this.ledger(), plan, receipt.repoRoot, (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }), this.adjustHooks(), by)
+    const result = await bringStayed(this.git, this.ledger(), plan, receipt.repoRoot, (message, facts) => hostLog("worktree-move", message, { conversation: conversationId, ...facts }), this.adjustHooks(), by, options.only)
     if (result.came.length) this.ledger()?.moved?.({ thread: plan.thread, kind: "bring", files: result.came.length, guessed: 0, offered: 0 })
     await this.keepPlan(result.plan)
     const told = result.came.length > 0 && (by === "person" || options.tell) ? broughtSentence(result.came, by) : undefined
     await this.save(this.tell({ ...receipt, moved: { ...moved, files: result.plan.outcome.came.files, outcome: result.plan.outcome } }, told))
     return { outcome: result.plan.outcome, came: result.came, left: result.left }
+  }
+
+  /** What this conversation's move left that can still be brought, by kind (`stayedPaths`); none before a move. */
+  async stayed(conversationId: string): Promise<StayedPaths> {
+    const receipt = await this.receipt(conversationId)
+    const moved = receipt?.moved && "files" in receipt.moved ? receipt.moved : undefined
+    const plan = moved?.outcome && !moved.outcome.brought && moved.id ? await this.readPlan(moved.id).catch(() => undefined) : undefined
+    return receipt && plan ? stayedPaths(plan, receipt.repoRoot) : { uncertain: [], unattributed: [] }
   }
 
   /**
