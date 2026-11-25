@@ -1,4 +1,5 @@
 import type { MoveSent } from "@mako/host/contracts/cloud-threads"
+import { cloudStepWords, MOVE_WORDS, moveAway, returnStepWords } from "@/lib/move-words"
 import { continueStepWords } from "@mako/host/contracts/cloud-continues"
 
 /**
@@ -85,42 +86,10 @@ export function sentWords(sent: MoveSent): string {
   return `${mb(sent.bytes)} of ${mb(sent.of)} MB`
 }
 
-/** A step in words, as the desk says it, with where it goes. */
+/** A step in words, as the desk says it (`move-words.ts`), naming the Mac it goes from or back to. */
 export function stepWords(way: MoveWay, step: string, mac: string, handOff: boolean): string {
-  if (way === "cloud")
-    switch (step) {
-      case "asking":
-        return `Asking ${mac}…`
-      case "own-branch":
-        return "Onto its own branch"
-      case "packing":
-        return handOff ? "Sending ahead while it works" : "Sending its work ahead"
-      case "pausing":
-        return "Pausing the turn"
-      case "handing-over":
-      case "moving":
-        return "Handing over"
-      case "resuming":
-        return handOff ? "Continuing in the cloud" : "Resuming in the cloud"
-      case "making":
-      case "arriving":
-        return continueStepWords(step)
-      case "unsettled":
-        return "Waiting for the cloud's answer"
-      default:
-        return "Moving"
-    }
-  switch (step) {
-    case "asking":
-      return `Asking ${mac}…`
-    case "packing":
-      return "Packing in the cloud"
-    case "bringing":
-    case "moving":
-      return `Bringing it to ${mac}`
-    case "unsettled":
-      return "Waiting for the cloud's answer"
-    default:
-      return "Coming back"
-  }
+  if (step === "asking") return `Asking ${mac}…`
+  if (step === "unsettled") return MOVE_WORDS.cloudAnswer
+  if (way === "cloud") return step === "making" || step === "arriving" ? continueStepWords(step) : cloudStepWords(step, handOff)
+  return returnStepWords(step, moveAway(mac))
 }

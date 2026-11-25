@@ -741,25 +741,6 @@
     @apply absolute top-1 right-1 flex size-5 items-center justify-center bg-black/65 text-white;
   }
 
-  .web-switch {
-    @apply relative h-[30px] w-[50px] shrink-0 rounded-full bg-fill-selected ring-1 ring-hairline;
-    transition: background-color 160ms var(--ease-out);
-  }
-  .web-switch > span {
-    @apply absolute top-[3px] left-[3px] size-6 rounded-full bg-foreground/80 shadow-sm;
-    transition: transform 200ms var(--ease-out), background-color 160ms ease;
-  }
-  .web-switch-on {
-    @apply bg-positive;
-  }
-  .web-switch-on > span {
-    @apply bg-white;
-    transform: translateX(20px);
-  }
-  .web-switch:disabled {
-    @apply opacity-40;
-  }
-
   .web-waiting {
     animation: web-rise 240ms var(--ease-out) both;
   }

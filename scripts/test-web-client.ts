@@ -1154,7 +1154,7 @@ test("a move's bar only goes forward: each step its own span, an upload by its b
   assert.equal(percentWords(0.4, true), "100% done")
   assert.equal(sentWords({ bytes: 3_200_000, of: 14_400_000 }), "3.2 of 14 MB")
   assert.equal(stepWords("device", "bringing", "Studio", false), "Bringing it to Studio")
-  assert.equal(stepWords("cloud", "packing", "Studio", true), "Sending ahead while it works")
+  assert.equal(stepWords("cloud", "packing", "Studio", true), "Sending ahead")
 })
 
 test("a move is followed from its steps, said by the list from its first step, and ends once", () => {
