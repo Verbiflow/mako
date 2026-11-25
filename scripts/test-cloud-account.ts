@@ -43,14 +43,16 @@ import {
   serveRuntime,
   PROBE_ANSWER_MS,
   SILENT_WHILE_WORKING_MS,
+  TREE_NOTICES_LINK_VERSION,
 } from "@mako/protocol"
 import { createFakeGateway } from "@mako/protocol/fake-gateway"
+import { TREE_EDGES_PATH, TREE_NOTICES_PATH, noticeIdOf, type TreeEdge } from "@mako/protocol/tree-notices"
 import { QuietNoteSchema, type QuietNote } from "@mako/protocol/handoff"
 import { MOVE_REASON_MAX, MoveHandOverRequestSchema, MoveRefuseRequestSchema } from "@mako/protocol/moves"
 import { HandoffSchema, type Handoff } from "@mako/host/contracts/thread-execution"
 import { accountEventClock, FileAccountEventCursors, memoryAccountEventCursors } from "@mako/host/usage/account-event-cursor"
 import { GrantedSecrets } from "@mako/host/base/secret-grants"
-import { memorySecrets } from "@mako/host/base/secrets"
+import { memorySecrets, secretGrantId } from "@mako/host/base/secrets"
 import { CloudAccounts, type CloudAccountOptions, type CloudRuntime } from "@mako/host/usage/cloud-account"
 import { declareCloudAccountMethods } from "@mako/host/usage/cloud-account-methods"
 import { RequestTraces } from "@mako/host/usage/request-trace"
@@ -89,7 +91,7 @@ const recordPath = (name: string) => join(vault, "mako-sign-in", ...`${name}.jso
 type FakeDevice = CloudDevice & { credential: string; removed: boolean; successor?: string | undefined; retired: string[] }
 
 /** The gateway's identity API, in memory. */
-async function fakeCloud({ runtimeEnrolled, finLimits }: { runtimeEnrolled?: Promise<void>; finLimits?: () => CloudFinStatus | null | Promise<CloudFinStatus | null> } = {}) {
+async function fakeCloud({ runtimeEnrolled, finLimits, tree = true }: { runtimeEnrolled?: Promise<void>; finLimits?: () => CloudFinStatus | null | Promise<CloudFinStatus | null>; tree?: boolean } = {}) {
   const codes = new Map<string, { challenge: string; device: Pick<CloudDevice, "name" | "platform" | "appVersion"> }>()
   const devices = new Map<string, FakeDevice>()
   /** Every live socket: whose device, and whether it's the account's connection or the device's runtime's link. */
@@ -201,6 +203,20 @@ async function fakeCloud({ runtimeEnrolled, finLimits }: { runtimeEnrolled?: Pro
     if (request.method === "POST" && ["/v1/cloud/fins/reserve", "/v1/cloud/fins/cancel"].includes(url.pathname)) {
       const limits = await finLimits?.()
       return limits ? send(200, JSON.stringify({ ok: false, reason: "slots", limits })) : send(404)
+    }
+    // A tree's two paths as the account answers a device: the sender is the token's device, a notice admitted is 202,
+    // a refusal 200 (`rate` with `retry-after`), and a cloud from before either path has neither.
+    if (tree && request.method === "POST" && url.pathname === TREE_NOTICES_PATH) {
+      let text = ""
+      for await (const chunk of request) text += chunk
+      const answer = await gateway.postNotice({ kind: "device", device: caller.id }, text)
+      response.writeHead(answer.admitted ? 202 : 200, { "content-type": "application/json", ...(!answer.admitted && answer.reason === "rate" && { "retry-after": "2" }) }).end(JSON.stringify(answer))
+      return
+    }
+    if (tree && request.method === "POST" && url.pathname === TREE_EDGES_PATH) {
+      let text = ""
+      for await (const chunk of request) text += chunk
+      return send(200, JSON.stringify(await gateway.askTreeEdge(caller.id, text)))
     }
     if (request.method === "GET" && url.pathname === "/v1/cloud/fins") {
       const limits = await finLimits?.()
@@ -836,6 +852,12 @@ async function inlineCursor(store: Secrets, name: string) {
   return InlineCursorSchema.parse(JSON.parse(record.value))
 }
 
+/** Whether the broker's grant for the sign-in saved under `name` stands: `GrantedSecrets.write` gives it after saving. */
+async function signInGranted(granted: GrantedSecrets, store: Secrets, name: string): Promise<boolean> {
+  const record = await store.read("mako-sign-in", name)
+  return !!record && (await granted.broker.grants()).some((grant) => grant.id === secretGrantId(record))
+}
+
 /** The last account event the sealed sign-in under `secretName` says this Mac heard. */
 async function heardUpTo(secretName: string): Promise<number | undefined> {
   const record = await secrets().read("mako-sign-in", secretName)
@@ -1004,6 +1026,68 @@ test("ordinary event checkpoints preserve grants; first checkpoint and clean shu
   assert.equal(writes, baseline + 2, "a current inline cursor needs no extra quit save")
 })
 
+/**
+ * Another host holding the borrowing lock under `folder`, the lock this host's broker takes for each change. It takes
+ * the lock as a second host does, trying again while this one holds it, and says why if it never holds it.
+ */
+async function otherHostHolding(folder: string) {
+  const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
+    import { acquireHostLock } from "@mako/host/base/host-lock"
+    const until = Date.now() + 10_000
+    let lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
+    while (lock.kind !== "held" && Date.now() < until) {
+      await new Promise((done) => setTimeout(done, 5))
+      lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
+    }
+    if (lock.kind !== "held") throw new Error("The fixture couldn't hold the borrowing lock in 10 s: " + JSON.stringify(lock))
+    process.send("held")
+    process.on("message", async () => { await lock.release(); process.exit(0) })
+  `, folder], { stdio: ["ignore", "ignore", "pipe", "ipc"] })
+  let stderr = ""
+  child.stderr?.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk })
+  const exited = once(child, "exit")
+  const end = async () => {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    await exited
+  }
+  try {
+    await Promise.race([once(child, "spawn"), once(child, "error").then(([error]) => { throw new Error(`The lock holder didn't start: ${String(error)}`) })])
+    const [message] = await Promise.race([once(child, "message"), exited.then(([code, signal]) => {
+      throw new Error(`The lock holder exited before readiness (exit ${code ?? signal}): ${stderr.trim() || "no stderr"}`)
+    })])
+    assert.equal(message, "held")
+  } catch (error) {
+    await end()
+    throw error
+  }
+  return { holding: () => child.exitCode === null && child.signalCode === null, end }
+}
+
+test("heard events are remembered while a rollback checkpoint waits for another host's lock", { timeout: 20_000 }, async () => {
+  const cloud = await fakeCloud(), inner = memorySecrets(), cursors = memoryAccountEventCursors()
+  const folder = join(scratch, randomUUID()), secretName = "cloud/cursor-past-lock"
+  const granted = new GrantedSecrets(inner, folder)
+  const mac = await signedIn(cloud, { secretName, secrets: granted, eventCursors: cursors })
+  const joined = () => ({ type: "device-joined", device: { id: randomUUID(), kind: "cli", name: "build-box", platform: "Linux", enrolledBy: "device-code", from: { city: "Frankfurt", region: null, country: "DE" } } })
+  await waitFor(() => cloud.subscribes.length > 0, "following")
+  const device = [...cloud.devices.values()][0]!
+  const scope = { cloud: cloud.url, account: cloud.account.id, device: device.id, createdAt: device.createdAt }
+  await waitFor(() => signInGranted(granted, inner, secretName), "sign-in granted")
+  const other = await otherHostHolding(folder)
+  try {
+    cloud.announce(joined())
+    // The first event's rollback checkpoint saves the sign-in, then waits for the other host's lock to grant it.
+    await waitFor(async () => (await inlineCursor(inner, secretName)).seen === 1, "inline checkpoint saved before its grant")
+    cloud.announce(joined())
+    await waitFor(async () => await cursors.read(scope) === 2, "sidecar checkpoint while the grant waits")
+    assert.ok(other.holding(), "the other host still holds the lock")
+  } finally {
+    await mac.accounts.close()
+    await other.end()
+    await granted.broker.close()
+  }
+})
+
 test("quit bounds the rollback checkpoint and drains its broker while another process holds the lock", { timeout: 40_000 }, async (t) => {
   for (const mode of ["seeded", "cold", "hourly"]) await t.test(mode, async (t) => {
     const cloud = await fakeCloud(), inner = memorySecrets()
@@ -1018,6 +1102,9 @@ test("quit bounds the rollback checkpoint and drains its broker while another pr
     await waitFor(() => cloud.subscribes.length > 0, "following")
     cloud.announce(joined())
     await waitFor(async () => (await inlineCursor(inner, secretName)).seen === 1, "first inline checkpoint")
+    // The sign-in is saved before its grant: the other host takes the lock only once the checkpoint's grant stands, or
+    // the checkpoint would still wait for it when the next one is due.
+    await waitFor(() => signInGranted(granted, inner, secretName), "first inline checkpoint granted")
     if (mode === "cold") {
       await mac.accounts.close()
       await granted.broker.close()
@@ -1029,31 +1116,9 @@ test("quit bounds the rollback checkpoint and drains its broker while another pr
     }
     const device = [...cloud.devices.values()][0]!
     const scope = { cloud: cloud.url, account: cloud.account.id, device: device.id, createdAt: device.createdAt }
-    // The other host. Its lock is the one this host's broker takes for each change, and the write the checkpoint above
-    // waited for still revokes and grants through it a moment later (`GrantedSecrets.write`), so it takes the lock as a
-    // second host does, trying again while this one holds it for a change, and says why if it never holds it.
-    const child = spawn(process.execPath, ["--import", "tsx", "--input-type=module", "-e", `
-      import { acquireHostLock } from "@mako/host/base/host-lock"
-      const until = Date.now() + 10_000
-      let lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
-      while (lock.kind !== "held" && Date.now() < until) {
-        await new Promise((done) => setTimeout(done, 5))
-        lock = await acquireHostLock(process.argv[1], { purpose: "borrowing", waitMs: 0 })
-      }
-      if (lock.kind !== "held") throw new Error("The fixture couldn't hold the borrowing lock in 10 s: " + JSON.stringify(lock))
-      process.send("held")
-      process.on("message", async () => { await lock.release(); process.exit(0) })
-    `, folder], { stdio: ["ignore", "ignore", "pipe", "ipc"] })
-    let stderr = ""
-    child.stderr?.setEncoding("utf8").on("data", (chunk: string) => { stderr += chunk })
-    const exited = once(child, "exit")
+    const other = await otherHostHolding(folder)
     let deadline: ReturnType<typeof setTimeout> | undefined
     try {
-      await Promise.race([once(child, "spawn"), once(child, "error").then(([error]) => { throw new Error(`The lock holder didn't start: ${String(error)}`) })])
-      const [message] = await Promise.race([once(child, "message"), exited.then(([code, signal]) => {
-        throw new Error(`The lock holder exited before readiness (exit ${code ?? signal}): ${stderr.trim() || "no stderr"}`)
-      })])
-      assert.equal(message, "held")
       const listing = t.mock.method(granted.broker, "grants")
       if (mode === "hourly") offset = 60 * 60_000
       cloud.announce(joined())
@@ -1065,12 +1130,11 @@ test("quit bounds the rollback checkpoint and drains its broker while another pr
         new Promise<never>((_, reject) => { deadline = setTimeout(() => reject(new Error("Quit did not drain within its checkpoint bound")), 4_000) }),
       ])
       assert.ok(logs.some(message => message.includes("quit cursor checkpoint skipped")), "the skipped checkpoint is logged")
-      assert.equal(child.exitCode, null, "quit did not require the other host to release its lock")
+      assert.ok(other.holding(), "quit did not require the other host to release its lock")
       t.diagnostic(`quit and broker drain with held lock: ${Math.round(performance.now() - started)} ms`)
     } finally {
       clearTimeout(deadline)
-      if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
-      await exited
+      await other.end()
       await mac.accounts.close()
       await granted.broker.close()
     }
@@ -1937,4 +2001,46 @@ test("a failed cloud Fin refresh keeps the last reading and throttles failures; 
     await mac.accounts.cloudFinLimits()
     assert.equal(cloud.calls.filter((call) => call === "GET /v1/cloud/fins").length, before + 1)
   }
+})
+
+test("a device posts its Fin's notice and keeps a Fin's record on its own sign-in, only once its link agreed the account holds notices, and a cloud with neither path says so", async () => {
+  const apex = { thread: randomUUID(), session: randomUUID() }
+  const child = randomUUID()
+  const report = (key: string) => ({ id: `report:${child}:${key}`, child, status: "done", summary: `Step ${key}.` })
+  const notice = (key: string) => ({ id: noticeIdOf(child, report(key).id), parent: apex, child, report: report(key) })
+  const cloud = await fakeCloud()
+  const unlinked = await signedIn(cloud)
+  assert.equal(unlinked.accounts.holdsTreeNotices(), false, "before any runtime link agreed a version, nothing says the account holds notices")
+  await unlinked.accounts.close()
+  const before: CloudRuntime = {
+    serve: (link, { runtimeId, credential, threads }) =>
+      serveRuntime(link, { runtimeId, build: "test", credential, threads, versions: { min: 1, max: TREE_NOTICES_LINK_VERSION - 1 }, handle: async (operation) => ({ v: PROTOCOL_VERSION, id: operation.id, ok: true }) }),
+  }
+  let older = 0
+  const old = await signedIn(cloud, { runtime: before, onRuntimeLinked: () => { older += 1 } })
+  await waitFor(() => older === 1, "the older link enrolled")
+  assert.equal(old.accounts.holdsTreeNotices(), false, "nor a link that agreed the version before")
+  await old.accounts.close()
+  let linked = 0
+  const mac = await signedIn(cloud, { runtime: laptop, onRuntimeLinked: () => { linked += 1 } })
+  await waitFor(() => linked === 1, "the link enrolled")
+  assert.equal(mac.accounts.holdsTreeNotices(), true)
+  const device = (await mac.accounts.deviceId())!
+  const edge: TreeEdge = { op: `start:${apex.session}:k1`, apex, child, place: { kind: "device", device } }
+  // This device owns no such Session as the account lists them, and the account has no record of the Fin: both refused, as answers.
+  assert.deepEqual(await mac.accounts.treeEdge({ ask: "keep", edge }), { ok: false, reason: "forbidden" })
+  assert.deepEqual(await mac.accounts.postTreeNotice(notice("one")), { answer: { admitted: false, reason: "forbidden" } })
+  cloud.gateway.treeEdge(edge)
+  assert.deepEqual(await mac.accounts.postTreeNotice(notice("one")), { answer: { admitted: true, seq: 1 } }, "on record as this device's, it's admitted, by the token's device")
+  assert.deepEqual(cloud.gateway.heldNotices(apex.session).map((held) => held.from.place), [{ kind: "device", device }])
+  assert.deepEqual(await mac.accounts.postTreeNotice(notice("one")), { answer: { admitted: true, seq: 1 } }, "again, the number it had")
+  for (let more = 0; more < 18; more += 1) await mac.accounts.postTreeNotice(notice("one"))
+  assert.deepEqual(await mac.accounts.postTreeNotice(notice("two")), { answer: { admitted: false, reason: "rate" }, retryAfterMs: 2_000 }, "a rate refusal says how long to wait")
+  assert.equal(cloud.calls.filter((call) => call === `POST ${TREE_NOTICES_PATH}`).length, 22)
+  await mac.accounts.close()
+  // A cloud from before either path: unserved, which is no failure.
+  const pathless = await fakeCloud({ tree: false })
+  const there = await signedIn(pathless)
+  assert.equal(await there.accounts.treeEdge({ ask: "end", op: edge.op }), "unserved")
+  assert.equal(await there.accounts.postTreeNotice(notice("one")), "unserved")
 })

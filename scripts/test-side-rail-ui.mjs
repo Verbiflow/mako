@@ -293,8 +293,11 @@ async function check() {
 
   // A laptop's browser's Settings draws, Devices and each project's Setup in it, and Setup opens in the pane.
   await load("/scripts/web-desk.html?settings&theme=dark")
-  await until("document.querySelectorAll('[data-setup-project]').length > 0", "Settings in the laptop browser, with Setup")
-  assert.ok(await evaluate("document.querySelector('main').innerText.includes('Devices')"), "and Devices")
+  // Settings there are the desktop's panes: a nav of sections, one drawn at a time.
+  await until("Boolean(document.querySelector('[data-settings-section=setup]'))", "Settings in the laptop browser, with Setup in its nav")
+  assert.ok(await evaluate("Boolean(document.querySelector('[data-settings-section=devices]'))"), "and Devices")
+  await press("[data-settings-section=setup]")
+  await until("document.querySelectorAll('[data-setup-project]').length > 0", "Setup's projects")
   await press("[data-setup-project]")
   await until("Boolean(document.querySelector('[data-setup-page], [data-setup-failed]'))", "a project's Setup in the pane")
 

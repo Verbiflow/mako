@@ -11,24 +11,17 @@ import { activeAcp, useAcp } from "@/state/acp"
 import { application } from "@/state/application"
 import { askReturnAgain, bringBack, bringBackFromChosenProject, checkHarnesses, checkMoveAgain, dismissCheckoutStayed, dismissFailedMove, dismissFollowStopped, loadAwayHeld, runHereAnyway, dismissHarnessUpdate, dismissMissingProject, dismissOutdatedReturn, moveToCloud, retryFailedMove, updateThen, useCloudMoves, whileAwaySentence, type HarnessUpdating } from "@/state/cloud-moves"
 import { localWords } from "@mako/protocol/computer-words"
+import { cloudStepWords, comingBackWords, MOVE_WORDS, moveHere, returnStepWords, stillOnWords } from "@/lib/move-words"
 
-/** A move's steps in the order they're taken, each in the words its step says. */
-const STEPS = [
-  { kind: "packing", words: "Sending its work ahead" },
-  { kind: "handing-over", words: "Handing over" },
-  { kind: "resuming", words: "Resuming in the cloud" },
-] as const
+/** A move's steps in the order they're taken, each in the words every client says it in (`move-words.ts`). */
+const stepsOf = (kinds: readonly string[], handOff: boolean) => kinds.map((kind) => ({ kind, words: cloudStepWords(kind, handOff) }))
+const STEPS = stepsOf(["packing", "handing-over", "resuming"], false)
 
 /** A Thread in the main checkout goes onto its own branch first, then the move's own steps. */
-const OWN_BRANCH_STEPS = [{ kind: "own-branch", words: "Onto its own branch" }, ...STEPS] as const
+const OWN_BRANCH_STEPS = stepsOf(["own-branch", "packing", "handing-over", "resuming"], false)
 
 /** A handoff's steps: its running turn is paused between sending ahead and the hand-over, and goes on in the cloud. */
-const HANDOFF_STEPS = [
-  { kind: "packing", words: "Sending ahead" },
-  { kind: "pausing", words: "Pausing the turn" },
-  { kind: "handing-over", words: "Handing over" },
-  { kind: "resuming", words: "Continuing there" },
-] as const
+const HANDOFF_STEPS = stepsOf(["packing", "pausing", "handing-over", "resuming"], true)
 
 /** What each step means for the person, under the title. */
 function detail(step: ThreadMoveStep, handOff: boolean): string {
@@ -51,10 +44,7 @@ function detail(step: ThreadMoveStep, handOff: boolean): string {
 }
 
 /** The way back's steps, in the order they're taken. */
-const RETURN_STEPS = [
-  { kind: "packing", words: "Packing in the cloud" },
-  { kind: "bringing", words: "Bringing it here" },
-] as const
+const RETURN_STEPS = ["packing", "bringing"].map((kind) => ({ kind, words: returnStepWords(kind, moveHere()) }))
 
 function returnDetail(step: ThreadReturnStep): string {
   switch (step.kind) {
@@ -117,7 +107,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
     return {
       id: "thread-move",
       tone: unsettled ? "caution" : "progress",
-      title: unsettled ? "Move not confirmed" : handOff ? "Handing off to the cloud" : "Moving to the cloud",
+      title: unsettled ? MOVE_WORDS.unconfirmed : handOff ? MOVE_WORDS.handingOff : MOVE_WORDS.moving,
       description: unsettled ? undefined : steps[at]?.words,
       detail: (
         <>
@@ -126,7 +116,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
           {!unsettled && <Steps steps={steps} at={at} />}
         </>
       ),
-      actions: unsettled ? [{ label: moving.checking ? "Checking status…" : "Check status", disabled: moving.checking, primary: true, onClick: () => void checkMoveAgain(key) }] : undefined,
+      actions: unsettled ? [{ label: moving.checking ? MOVE_WORDS.checking : MOVE_WORDS.checkStatus, disabled: moving.checking, primary: true, onClick: () => void checkMoveAgain(key) }] : undefined,
       data: { "data-thread-move": moving.step.kind, "data-thread-handoff": handOff || undefined },
     }
   }
@@ -136,10 +126,10 @@ export function useThreadMoveNotice(): ComposerNotice | null {
     if (failed) return {
       id: "thread-move",
       tone: "caution",
-      title: localWords("Still on this Mac"),
+      title: stillOnWords(moveHere()),
       description: failed.reason,
       detail: <p>{failed.continued ? localWords("Its turn continues here. Keep this Mac awake while it works.") : localWords("Its work and sessions remain here. Keep this Mac awake while its agents are running.")}</p>,
-      actions: [{ label: "Retry move", primary: true, onClick: () => void retryFailedMove(key, failed.move) }],
+      actions: [{ label: MOVE_WORDS.retry, primary: true, onClick: () => void retryFailedMove(key, failed.move) }],
       onDismiss: () => dismissFailedMove(key, failed.move),
       dismissLabel: "Dismiss move failure",
       data: { "data-thread-move": "kept-here", "data-thread-move-failed": true },
@@ -154,7 +144,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
     return {
       id: "thread-move",
       tone: "caution",
-      title: here ? "Couldn't finish coming back" : "Waiting for the cloud's answer",
+      title: here ? "Couldn't finish coming back" : MOVE_WORDS.cloudAnswer,
       description: "Nothing runs it yet",
       detail: <p>{step.reason}</p>,
       actions: [{ label: "Ask again", primary: true, onClick: () => void askReturnAgain(key) }],
@@ -165,7 +155,7 @@ export function useThreadMoveNotice(): ComposerNotice | null {
   return {
     id: "thread-move",
     tone: "progress",
-    title: localWords("Coming back to this Mac"),
+    title: comingBackWords(moveHere()),
     description: RETURN_STEPS[at]?.words,
     detail: (
       <>
@@ -263,7 +253,7 @@ function missingProject(conversationId: string, entry: { missing: ReturnProjectM
 function updateSteps(updating: HarnessUpdating) {
   return [
     ...updating.harnesses.map((harness) => ({ kind: harness, words: `Updating ${harnessLabel(harness)}` })),
-    updating.after === "move" ? { kind: "move", words: updating.handOff ? "Handing off to the cloud" : "Moving to the cloud" } : { kind: "back", words: "Bringing it back" },
+    updating.after === "move" ? { kind: "move", words: updating.handOff ? MOVE_WORDS.handingOff : MOVE_WORDS.moving } : { kind: "back", words: "Bringing it back" },
   ]
 }
 

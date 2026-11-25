@@ -42,6 +42,10 @@ import { useProviders } from "@/state/providers"
 import { useSession } from "@/state/session"
 import { skills, useSkills } from "@/state/skills"
 import { useThreads } from "@/state/threads"
+import { rowThread, useThreadGroups } from "@/state/thread-groups"
+import { useWorktrees } from "@/state/worktrees"
+import { codeOfThread, handleOfThread, handleProject, handleSearchKey } from "@/lib/thread-handle"
+import { handleCode } from "@mako/host/contracts/thread-handles"
 import { addressableFins, finPick, useThreadChildren } from "@/state/apex-fins"
 import { FIN_WORD } from "@mako/host/contracts/agents"
 import type { LiveSessionCommand } from "@/lib/types"
@@ -152,6 +156,9 @@ export function MentionMenu({
   }, [capabilities, workspaceCwd])
 
   const threads = useThreads((state) => state.threads)
+  const threadOf = useThreadGroups((state) => state.threadOf)
+  const folderMap = useWorktrees((state) => state.folderMap)
+  const typed = handleCode(query)
   const appView = useComposerAppView()
   const { files } = useWorkspaceFiles(kind === "@")
   // Folders are every directory a listed file sits in; `@src/lib/` reads
@@ -210,15 +217,22 @@ export function MentionMenu({
         icon: <GitPullRequestIcon className="size-3.5" />,
         key: `pull request pr #${pull.number} ${pull.number} ${pull.title} ${pull.head} github checks review`,
       }] : []),
-      ...threads.map((thread) => ({
-        value: threadToken(thread.harness, threadReferenceId(thread)),
-        title: thread.title ?? "Untitled conversation",
-        hint: [harnessTitle(thread.harness), thread.cwd ? workspaceName(thread.cwd) : null]
-          .filter(Boolean)
-          .join(" · "),
-        icon: <HarnessIcon harness={thread.harness} className="size-3.5" />,
-        key: `${thread.title ?? ""} ${thread.cwd ?? ""} ${thread.harness} ${thread.model ?? ""}`,
-      })),
+      ...threads.map((thread) => {
+        // A typed handle finds its Thread by its word and code, last in the key, and the row then says the handle
+        // where its folder's name stood: the pick writes the token any mention of it does.
+        const id = rowThread(thread, threadOf)
+        const project = handleProject(thread, folderMap)
+        const named = id !== undefined && typed !== undefined && codeOfThread(id).startsWith(typed)
+        return {
+          value: threadToken(thread.harness, threadReferenceId(thread)),
+          title: thread.title ?? "Untitled conversation",
+          hint: [harnessTitle(thread.harness), named ? handleOfThread(id, project) : thread.cwd ? workspaceName(thread.cwd) : null]
+            .filter(Boolean)
+            .join(" · "),
+          icon: <HarnessIcon harness={thread.harness} className="size-3.5" />,
+          key: `${thread.title ?? ""} ${thread.cwd ?? ""} ${thread.harness} ${thread.model ?? ""}${id === undefined ? "" : ` ${handleSearchKey(id, project)}`}`,
+        }
+      }),
       ...files.map((file) => ({
         value: `@${file.path}`,
         title: fileName(file.path),
@@ -247,7 +261,7 @@ export function MentionMenu({
     if (kind === "#") return []
     const rows = rankReferences(candidates, query)
     return rows.length ? [{ label: "Context", rows }] : []
-  }, [appView, blockedPull, capabilities, files, folders, git, kind, pull, query, threads])
+  }, [appView, blockedPull, capabilities, files, folderMap, folders, git, kind, pull, query, threadOf, threads, typed])
 
   // `#` names a pull request, any of the repository's, open, closed or merged.
   const pullSearch = usePullRequestSearch(kind === "#" ? query : null)

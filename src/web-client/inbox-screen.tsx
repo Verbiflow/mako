@@ -46,7 +46,9 @@ export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefin
         <h1 className="flex-1 text-ui font-semibold">Inbox</h1>
         {count ? <span data-inbox-summary className="pr-3 text-label text-attention">{count} {count === 1 ? "needs" : "need"} you</span> : null}
       </header>
+      {/* The desk's Inbox keeps to a centred column; so does a tablet's, the phone's width being narrower than it. */}
       <div className="web-scroll min-h-0 flex-1 overflow-y-auto pb-[calc(env(safe-area-inset-bottom)+24px)]">
+        <div className="mx-auto w-full max-w-content">
         {empty ? (
           <div className="web-enter mx-auto flex max-w-[300px] flex-col items-center px-6 pt-28 text-center">
             <MakoMark className="size-8 opacity-35" />
@@ -87,6 +89,7 @@ export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefin
             </ul>
           </section>
         ) : null}
+        </div>
       </div>
     </div>
   )

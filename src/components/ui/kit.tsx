@@ -183,17 +183,19 @@ export function Toggle({
       disabled={disabled}
       onClick={onChange}
       className={cn(
-        "pressable flex h-4 w-7 shrink-0 items-center rounded-full p-[2px]",
+        "pressable relative flex h-4 w-7 shrink-0 items-center rounded-full p-[2px]",
         "[transition:background-color_150ms_ease]",
         "disabled:pointer-events-none disabled:opacity-40",
+        // Under a finger the same switch a size up, its touch reaching 44 px past its edges.
+        "pointer-coarse:h-6 pointer-coarse:w-10 pointer-coarse:after:absolute pointer-coarse:after:-inset-x-1 pointer-coarse:after:-inset-y-2.5 pointer-coarse:after:content-['']",
         on ? "bg-foreground/80" : "bg-foreground/15"
       )}
     >
       <span
         className={cn(
-          "block size-3 rounded-full bg-background",
+          "block size-3 rounded-full bg-background pointer-coarse:size-5",
           "[transition:transform_180ms_var(--ease-out)]",
-          on ? "translate-x-3" : "translate-x-0"
+          on ? "translate-x-3 pointer-coarse:translate-x-4" : "translate-x-0"
         )}
       />
     </button>

@@ -227,6 +227,7 @@ const ShiverLineRow = memo(function ShiverLineRow({
   const live = (state.kind === "working" && !quiet) || state.kind === "starting"
   const lead = openAsk(state)?.on === "lead"
   const moved = finMoved(agent)
+  const sharing = agent.child?.sharing
   // `childState()` keeps a reason for a failed Fin but drops it for one that succeeded (`agents.ts`, not this
   // card's own), so the glyph only ever has a failure's line to read on real data today.
   const pr =
@@ -279,6 +280,12 @@ const ShiverLineRow = memo(function ShiverLineRow({
           ) : null}
           {pr ? (
             <GitPullRequestIcon className="size-3 shrink-0" aria-hidden />
+          ) : null}
+          {sharing ? (
+            <span data-fin-sharing title={sharing} className="max-w-[45%] min-w-0 shrink-0 truncate">
+              {sharing}
+              {line ? " ·" : null}
+            </span>
           ) : null}
           {live && line ? (
             <Shimmer text={line} className="min-w-0 truncate" />

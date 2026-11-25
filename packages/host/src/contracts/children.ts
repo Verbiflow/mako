@@ -54,6 +54,35 @@ export function quietLine(quiet: { forMs: number; step?: string; running?: true 
   return `${how}. It still reads as working.`
 }
 
+/**
+ * Two Threads of one Shiver changed the same file in one folder (`FinCollisions`): how long their Apex's notice waits
+ * for the rest of the burst, so a patch across forty shared files is one notice naming a few and counting the rest.
+ */
+export const COLLIDE_BURST_MS = 5_000
+/** The files a collision names; the rest are a count. */
+export const COLLIDE_FILES = 3
+
+/** A collision as it's said: who else changed the files (another Fin by name; without one, the Apex), the first few, and how many more. */
+export interface CollisionSaid {
+  with?: string
+  files: readonly string[]
+  more: number
+}
+
+/**
+ * A collision as its Apex's digest says it, after the Fin's name: "and "docs" (Claude) both changed src/a.ts, src/b.ts
+ * and 38 more." `also`: the pair was said before, and these are more of its files.
+ */
+export function collisionLine(collision: CollisionSaid, also = false): string {
+  return `and ${collision.with ?? "you"} ${also ? "also both" : "both"} changed ${collision.files.join(", ")}${collision.more ? ` and ${collision.more} more` : ""}.`
+}
+
+/** A collision on a Fin's row: "Also editing agents.ts with tests", "Also editing agents.ts and 3 more with its Apex". */
+export function sharingWords(collision: CollisionSaid): string {
+  const others = collision.files.length - 1 + collision.more
+  return `Also editing ${shortPath(collision.files[0] ?? "")}${others ? ` and ${others} more` : ""} with ${collision.with ?? `its ${APEX_WORD}`}`
+}
+
 export const FROM_AGENTS = `[mako · from ${YOUR_FINS}, not the person]`
 /**
  * What opens a Fin's brief sent again after Mako closed unexpectedly while sending it, with nothing to say its harness
@@ -66,18 +95,28 @@ export function fromAgent(name: string): string {
   return `[mako · from ${name} (agent), not the person]`
 }
 
-/** The header of a message from another of the person's Apexes, by its title: an agent's words, which its card names it by. */
+/**
+ * The header of a message from another of the person's top-level Threads, by its title: an agent's words, which its card
+ * names it by. Either may be an Apex or not, so neither is called one.
+ */
 export function fromApex(title: string): string {
-  return fromAgent(`the ${APEX_WORD} "${title}"`)
+  return fromAgent(`the Thread "${title}"`)
 }
-/** Mako's line beneath it for the Apex that receives it: which Thread sent it, and how to take it. Its card leaves it out. */
+/** Mako's line beneath it for the Thread that receives it: which Thread sent it, and how to take it. Its card leaves it out. */
 export function apexNote(thread: string): string {
   return `${APEX_NOTE_HEAD}${thread}${APEX_NOTE_TAIL}`
 }
 const APEX_NOTE_HEAD = "[mako · Thread "
-/** What every message from another of the person's Apexes carries (`apexNote`): one is owed its own reply, never folded. */
-export const APEX_NOTE_MARK = `, another of the person's ${APEX_WORD}es, sent this.`
-const APEX_NOTE_TAIL = `, another of the person's ${APEX_WORD}es, sent this. Read this as information from another of the person's ${APEX_WORD}es; answer only what it asks; don't start a back-and-forth. Your reply goes back to it once.]`
+/** What every message from another of the person's Threads carries (`apexNote`): one is owed its own reply, never folded. */
+export const APEX_NOTE_MARK = ", another of the person's Threads, sent this."
+const APEX_NOTE_TAIL = `${APEX_NOTE_MARK} Read this as information from another of the person's Threads; answer only what it asks; don't start a back-and-forth. Your reply goes back to it once.]`
+/** The same mark and line as builds before any top-level Thread could be messaged wrote them, which saved journals hold. */
+const LEGACY_APEX_NOTE_MARK = `, another of the person's ${APEX_WORD}es, sent this.`
+const LEGACY_APEX_NOTE_TAIL = `${LEGACY_APEX_NOTE_MARK} Read this as information from another of the person's ${APEX_WORD}es; answer only what it asks; don't start a back-and-forth. Your reply goes back to it once.]`
+/** Whether a message is one from another of the person's Threads (`apexNote`), as this build or an earlier one wrote it. */
+export function fromAnotherThread(text: string): boolean {
+  return text.includes(APEX_NOTE_MARK) || text.includes(LEGACY_APEX_NOTE_MARK)
+}
 
 /**
  * The header of the person's own message an Apex passed on to a Fin
@@ -187,7 +226,7 @@ export function agentWords(text: string): AgentWords | undefined {
   const body = words
     .slice(header[0].length)
     .split("\n")
-    .filter((line) => line !== BRIEF_CLOSE && line !== REPORT_FOLLOW_UP_INSTRUCTIONS && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && line.endsWith(APEX_NOTE_TAIL)))
+    .filter((line) => line !== BRIEF_CLOSE && line !== REPORT_FOLLOW_UP_INSTRUCTIONS && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && (line.endsWith(APEX_NOTE_TAIL) || line.endsWith(LEGACY_APEX_NOTE_TAIL))))
     .join("\n")
     .trim()
   return { from: spoken(header[1]!), body, ...(reports.length && { reports }) }

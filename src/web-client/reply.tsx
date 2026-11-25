@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { CheckIcon, CopyIcon, GitBranchIcon } from "lucide-react"
+import { CheckIcon, CopyIcon, GitForkIcon } from "lucide-react"
 import { toast } from "sonner"
 import type { CompactReply } from "@/components/transcript/compact-presentation"
 import { Spinner } from "@/components/ui/spinner"
@@ -8,9 +8,10 @@ import { branchReply, copyText, offerReply } from "./replies"
 import { Sheet } from "./sheet"
 
 /**
- * Under the newest reply on a phone: Copy and Branch, a thumb's size, so the two things done most with an answer are
- * one tap. Every other reply keeps them under a long press (`useReplyHold`). Branch is offered only where the host can
- * fork after this answer; Copy whenever there are words to copy.
+ * Under the newest reply on a phone or an iPad: the desk's Copy answer and Fork, in its words and glyphs, at a thumb's
+ * height, so the two things done most with an answer are one tap. Every other reply keeps them under a long press
+ * (`useReplyHold`), since nothing shows on hover under a finger. Fork is offered only where the host can fork after
+ * this answer; Copy answer whenever there are words to copy.
  */
 export function PhoneReply({ reply }: { reply: CompactReply }) {
   useEffect(() => offerReply(reply), [reply])
@@ -33,8 +34,8 @@ function CopyReply({ text }: { text: string }) {
   }, [copied])
   return (
     <button type="button" data-reply-action="copy" className="web-reply-action pressable" onClick={() => void copyText(text).then(() => setCopied(true), () => undefined)}>
-      {copied ? <CheckIcon aria-hidden className="size-4 text-positive" /> : <CopyIcon aria-hidden className="size-4" />}
-      <span role="status">{copied ? "Copied" : "Copy"}</span>
+      {copied ? <CheckIcon aria-hidden className="size-3 text-positive" /> : <CopyIcon aria-hidden className="size-3" />}
+      <span role="status">{copied ? "Copied answer" : "Copy answer"}</span>
     </button>
   )
 }
@@ -44,7 +45,7 @@ function BranchReply({ branch }: { branch: NonNullable<CompactReply["branch"]> }
   return (
     <button
       type="button"
-      data-reply-action="branch"
+      data-reply-action="fork"
       disabled={busy}
       className="web-reply-action pressable"
       onClick={() => {
@@ -52,8 +53,8 @@ function BranchReply({ branch }: { branch: NonNullable<CompactReply["branch"]> }
         void branchReply(branch).finally(() => setBusy(false))
       }}
     >
-      {busy ? <Spinner aria-hidden className="size-4" /> : <GitBranchIcon aria-hidden className="size-4" />}
-      <span>{busy ? "Branching…" : "Branch"}</span>
+      {busy ? <Spinner aria-hidden className="size-3" /> : <GitForkIcon aria-hidden className="size-3" />}
+      <span>{busy ? "Forking…" : "Fork"}</span>
     </button>
   )
 }
@@ -70,12 +71,12 @@ export function ReplySheet({ reply, onDismiss }: { reply: CompactReply | undefin
             className="web-choice"
             onClick={() => {
               onDismiss()
-              void copyText(reply.text).then(() => toast.success("Copied the reply"), () => undefined)
+              void copyText(reply.text).then(() => toast.success("Copied answer"), () => undefined)
             }}
           >
             <CopyIcon aria-hidden className="size-[18px] text-muted-foreground" />
             <span className="flex min-w-0 flex-col">
-              <span>Copy</span>
+              <span>Copy answer</span>
               <span className="text-label text-faint">The whole reply, as it was written</span>
             </span>
           </button>
@@ -83,7 +84,7 @@ export function ReplySheet({ reply, onDismiss }: { reply: CompactReply | undefin
         {reply?.branch ? (
           <button
             type="button"
-            data-reply-menu="branch"
+            data-reply-menu="fork"
             className="web-choice"
             onClick={() => {
               const branch = reply.branch!
@@ -91,9 +92,9 @@ export function ReplySheet({ reply, onDismiss }: { reply: CompactReply | undefin
               void branchReply(branch)
             }}
           >
-            <GitBranchIcon aria-hidden className="size-[18px] text-muted-foreground" />
+            <GitForkIcon aria-hidden className="size-[18px] text-muted-foreground" />
             <span className="flex min-w-0 flex-col">
-              <span>Branch from here</span>
+              <span>Fork from here</span>
               <span className="text-label text-faint">A new Session in this Thread, from after this reply</span>
             </span>
           </button>

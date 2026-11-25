@@ -1,10 +1,15 @@
+import { z } from "zod"
 import { TreeNoticeAnswerSchema, machineNoticesPath, type TreeNoticeAnswer } from "@mako/protocol/tree-notices"
 import { errorMessage } from "../base/error-message.js"
 import { hostStopping, untilStopped } from "../base/host-stopping.js"
-import type { NoticePost, NoticePosted } from "./agent-places.js"
+import type { CloudAccount } from "../usage/index.js"
+import type { NoticePost, NoticePosted, TreeAccount } from "./agent-places.js"
 
 /** Where a cloud machine reaches the account, and as whom: its machine's link. */
 export type NoticeLink = { gatewayUrl: string; machine: string; credential: string }
+
+/** A notice's JSON text, read back as the JSON value the account's call sends. */
+const NoticeJsonSchema = z.json()
 
 /** How long one post waits for the account's answer, which it gives at once: admitted or refused, never delivered first. */
 const POST_MS = 30_000
@@ -42,6 +47,30 @@ export function accountNotices(link: () => NoticeLink | null, fetching: typeof f
         controller.abort()
       }
     },
+  }
+}
+
+/**
+ * A device's `TreeAccount` through the Mako account this host is signed in to, on the device's own sign-in: its posts
+ * of its Fins' notices (`TREE_NOTICES_PATH`) and its asks of the account's records (`TREE_EDGES_PATH`). Open only
+ * while its runtime's link last agreed that the account holds notices; signed out, or in a build with no cloud, it
+ * isn't, and nothing is posted or asked.
+ */
+export function deviceTree(account: () => Pick<CloudAccount, "holdsTreeNotices" | "postTreeNotice" | "treeEdge"> | undefined): TreeAccount {
+  return {
+    open: () => account()?.holdsTreeNotices?.() === true,
+    post: async (body): Promise<NoticePosted> => {
+      const cloud = account()
+      if (!cloud?.postTreeNotice) return { kind: "failed", why: "this device isn't signed in to Mako" }
+      try {
+        const posted = await cloud.postTreeNotice(NoticeJsonSchema.parse(JSON.parse(body)))
+        return posted === "unserved" ? { kind: "unserved" } : { kind: "answered", ...posted }
+      } catch (error) {
+        // The failure's own words, which name the network, the deadline or the account's refusal and never what was sent.
+        return { kind: "failed", why: errorMessage({ error }) }
+      }
+    },
+    edge: async (ask) => (await account()?.treeEdge?.(ask)) ?? "unserved",
   }
 }
 

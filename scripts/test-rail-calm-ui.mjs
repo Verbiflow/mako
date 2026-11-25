@@ -6,6 +6,7 @@ import { fileURLToPath } from "node:url"
 import { manualDevUpdates } from "../electron/dev-updates.mjs"
 import { electronExit, guardElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
+import { HANDLE_ALPHABET, HANDLE_LENGTH, threadCode } from "@mako/host/contracts/thread-handles"
 
 /**
  * The calm rail against the production components and the fixture desk: quiet top rows with the Inbox's one count and
@@ -14,8 +15,9 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * Thread menu's Mark as unread and Status kept in the Thread store, a Done Thread folding into "N done", ⌘ held
  * showing ⌘1–9 and ⌘2 opening the second row, ⌘/⇧-click picking rows with the selection bar's Archive and Esc,
  * dragging a project (the others still ordering as worked in), a project with no row waiting behind "N more folders",
- * Customize sidebar, "N to resolve" with its lines, Finish setting up, and an Apex's Fins folded
- * and open with ←/→. Screenshots stay in the printed directory; `--port` serves the page on that port.
+ * Customize sidebar, "N to resolve" with its lines, Finish setting up, an Apex's Fins folded
+ * and open with ←/→, and a Thread's handle: in its row's tip, its menu's Copy handle, a Session tab's tooltip, and typed
+ * after `@`. Screenshots stay in the printed directory; `--port` serves the page on that port.
  */
 
 if (process.versions.electron) {
@@ -185,6 +187,47 @@ async function checkWindow() {
   assert.equal(await evaluate(`${row(3)}.querySelector('[data-live-mark]').dataset.liveMark`), "unread", "it wears the unread sphere")
   console.log("PASS: Status and Mark as unread from the Thread menu")
 
+  // 4b. A Thread's handle: never drawn on its row, last but for its worktree in the row's tip, and copied from its menu.
+  await until(`document.querySelector('[role="menu"]') === null`, "the menu closed")
+  const handled = await evaluate(`(() => { const row = ${row(1)}; return { thread: row.dataset.threadId, handle: row.dataset.threadHandle, tip: row.dataset.tip.split('\\n'), drawn: row.textContent } })()`)
+  assert.match(handled.handle ?? "", new RegExp(`^[a-z0-9]+(?:-[a-z0-9]+)*-[${HANDLE_ALPHABET}]{${HANDLE_LENGTH}}$`), `a word, a hyphen and four characters: ${handled.handle}`)
+  assert.equal(handled.handle.slice(-HANDLE_LENGTH), threadCode(handled.thread).slice(0, HANDLE_LENGTH), "the start of its Thread's code, as the host works it out")
+  assert.ok(handled.tip.includes(handled.handle), `its tip says it on a line of its own: ${JSON.stringify(handled.tip)}`)
+  assert.ok(!handled.drawn.includes(handled.handle), "the row itself draws no handle")
+  await move(900, 500)
+  await pause(350)
+  await hover(row(1))
+  await until(`document.querySelector('[data-rail-tip]')?.textContent.includes(${JSON.stringify(handled.handle)})`, "the handle in the row's tip")
+  await capture("calm-handle-tip.png")
+  // What the menu copies is kept from the person's own clipboard.
+  await evaluate(`(() => { window.__copied = []; navigator.clipboard.writeText = async (text) => { window.__copied.push(text) }; return true })()`)
+  await click(`(${row(1)}.querySelector('[aria-label^="Actions for"]'))`)
+  await until(`document.querySelector('[data-thread-action="copy-handle"]') !== null`, "the menu's Copy handle")
+  assert.equal(await evaluate(`document.querySelector('[data-thread-action="copy-handle"]').textContent`), `Copy handle${handled.handle}`, "it names what it copies")
+  await capture("calm-copy-handle.png")
+  await click('[data-thread-action="copy-handle"]')
+  await until(`window.__copied.length === 1`, "the handle copied")
+  assert.deepEqual(await evaluate("window.__copied"), [handled.handle])
+  await until(`[...document.querySelectorAll('[data-sonner-toast]')].some((toast) => toast.textContent.includes('Handle copied'))`, "the toast that says so")
+  console.log("PASS: a Thread's handle in its row's tip and Copy handle in its menu")
+
+  // 4c. Typed after `@` in the composer, a handle finds its Thread, and picking it writes the token any mention of it does.
+  const title = await evaluate(`${row(1)}.querySelector('[data-row-title]').textContent`)
+  await click("main textarea")
+  await page.debugger.sendCommand("Input.insertText", { text: `@${handled.handle}` })
+  await until(`document.querySelector('[data-mention-menu="@"] [role=option]') !== null`, "the @ menu")
+  const offered = await evaluate(`(() => { const first = document.querySelector('[data-mention-menu="@"] [role=option]'); return { title: first.querySelector('span').textContent, hint: first.title } })()`)
+  assert.equal(offered.title, title, `the Thread its handle names leads: ${JSON.stringify(offered)}`)
+  assert.ok(offered.hint.endsWith(handled.handle), `and its row says the handle that was typed: ${offered.hint}`)
+  await press("Enter", "Enter", 13)
+  await until(`document.querySelector('[data-mention-menu]') === null`, "the pick")
+  // The composer shows a mention's token as its Thread's title (`draftView`): the handle typed is gone, the mention stands.
+  const draft = await evaluate(`document.querySelector('main textarea').value`)
+  assert.ok(draft.startsWith(`@${title.slice(0, 12)}`) && !draft.includes(handled.handle), `the draft holds the Thread's mention, not the handle: ${draft}`)
+  await press("a", "KeyA", 65, 4)
+  await press("Backspace", "Backspace", 8)
+  console.log("PASS: a typed handle picks its Thread's mention")
+
   // 5. A Thread Done for three days folds into its project's "N done".
   const doneThread = await evaluate(`${row(2)}.dataset.threadId`)
   await evaluate(`import('/src/state/thread-marks.ts').then(({applyThreadMarks}) => applyThreadMarks([{ thread: ${JSON.stringify(doneThread)}, status: 'done', statusAt: Date.now() - 4 * 24 * 3600_000, by: 'person', unreadAt: null }]))`)
@@ -351,6 +394,12 @@ async function checkWindow() {
   await press("ArrowLeft", "ArrowLeft", 37)
   await until(`document.querySelectorAll('[data-fin-row]').length === ${folded.fins}`, "← folds it again")
   console.log("PASS: an Apex's Fins folded, opened with →, folded with ←")
+
+  // 15. The open Thread's Session tab: its tooltip ends on the Thread's handle, which the tab never draws.
+  const tabs = await evaluate(`[...document.querySelectorAll('[data-session-tab]')].map((tab) => ({ handle: tab.dataset.threadHandle, last: tab.title.split('\\n').at(-1), drawn: tab.textContent }))`)
+  assert.match(tabs[0]?.handle ?? "", new RegExp(`^[a-z0-9]+(?:-[a-z0-9]+)*-[${HANDLE_ALPHABET}]{${HANDLE_LENGTH}}$`), `a Session's tab knows its Thread's handle: ${JSON.stringify(tabs)}`)
+  assert.ok(tabs.every((tab) => tab.handle === tabs[0].handle && tab.last === tab.handle && !tab.drawn.includes(tab.handle)), `every tab says the one handle, last in its tooltip alone: ${JSON.stringify(tabs)}`)
+  console.log("PASS: a Session tab's tooltip ends on its Thread's handle")
 
   console.log(`Calm rail UI checks clean. Screenshots: ${root}`)
   app.exit(0)

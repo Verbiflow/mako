@@ -1,9 +1,9 @@
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { errorMessage } from "../base/error-message.js"
-import { APEX_WORD, decisionWords, FIN_WORD, reportAsk, reportPhase, reportWord, UNFINISHED_WORDS, waitingWords, type Notice, type Report } from "../contracts/agents.js"
+import { decisionWords, FIN_WORD, reportAsk, reportPhase, reportWord, UNFINISHED_WORDS, waitingWords, type Notice, type Report } from "../contracts/agents.js"
 import { appendFinReports, FIN_REPORTS_MAX, type FinReportCard } from "../contracts/fin-reports.js"
 import { FROM_AGENTS } from "../contracts/children.js"
-import { FOCUS_MS, HOLD_RESULTS_MS, quietLine, WAKE_COALESCE_MS } from "../contracts/children.js"
+import { collisionLine, FOCUS_MS, HOLD_RESULTS_MS, quietLine, WAKE_COALESCE_MS } from "../contracts/children.js"
 import { SessionIdSchema, type Actor } from "../contracts/thread-identity.js"
 import { namedUuid } from "./cloud-moves.js"
 
@@ -99,12 +99,12 @@ function asksApex(notice: Notice): boolean {
 /**
  * A result that asks its Apex nothing: a done report with no question and no decision, which no `wait` start waited
  * for (`settledOnly`). A failure, an end without a result, a question, a handoff, a wait on someone, another Apex's
- * reply and Mako's own notices (a quiet Fin, an unanswered message) are none of them. What starts `after` it Mako
- * starts itself.
+ * reply and Mako's own notices (a quiet Fin, an unanswered message, two changing one file) are none of them. What
+ * starts `after` it Mako starts itself.
  */
 function asksNothing(notice: Notice): boolean {
   const { report } = notice
-  return report.status === "done" && !report.question?.trim() && !notice.decision && !notice.settledOnly && !notice.reply && !notice.quiet && !notice.unanswered
+  return report.status === "done" && !report.question?.trim() && !notice.decision && !notice.settledOnly && !notice.reply && !notice.quiet && !notice.unanswered && !notice.collision
 }
 
 /**
@@ -480,9 +480,10 @@ const DECIDES = new Set<Report["status"]>(["blocked", "needs-input"])
 export function digest(notices: readonly Notice[], counts: string): string {
   const results = notices.filter((notice) => notice.settledOnly)
   const replies = notices.filter((notice) => notice.reply)
-  const fins = notices.filter((notice) => !notice.settledOnly && !notice.reply && !notice.quiet && !notice.unanswered)
+  const fins = notices.filter((notice) => !notice.settledOnly && !notice.reply && !notice.quiet && !notice.unanswered && !notice.collision)
   const quiets = notices.filter((notice) => notice.quiet && !notice.settledOnly && !notice.reply)
   const unanswered = notices.filter((notice) => notice.unanswered && !notice.settledOnly && !notice.reply)
+  const collisions = notices.filter((notice) => notice.collision && !notice.settledOnly && !notice.reply)
   const asks = fins.filter((notice) => DECIDES.has(notice.report.status))
   const decided = fins.filter((notice) => notice.decision)
   const decisions = [...asks.filter((notice) => notice.report.for !== "person"), ...decided.filter((notice) => notice.decision === "lead")]
@@ -511,7 +512,7 @@ export function digest(notices: readonly Notice[], counts: string): string {
     }
   }
   if (replies.length) {
-    lines.push(replies.length === 1 ? `Another ${APEX_WORD}'s reply to your message:` : `${replies.length} other ${APEX_WORD}es' replies to your messages:`)
+    lines.push(replies.length === 1 ? "Another Thread's reply to your message:" : `${replies.length} other Threads' replies to your messages:`)
     for (const notice of replies) {
       const { label, report } = notice
       cards.push(card(notice, opening(report.summary)))
@@ -633,8 +634,17 @@ export function digest(notices: readonly Notice[], counts: string): string {
     }
     lines.push(`  agents_read shows what each is doing. A long command may be fine; otherwise agents_send asks it (deliver: steer reaches the turn it runs, interrupt cuts it), or agents_stop stops it.`)
   }
+  if (collisions.length) {
+    lines.push(`${collisions.length} ${collisions.length === 1 ? "pair" : "pairs"} changed the same files in one folder:`)
+    for (const notice of collisions) {
+      const words = collisionLine(notice.collision!)
+      lines.push(`  • ${notice.label} ${words}`)
+      cards.push(card(notice, words))
+    }
+    lines.push(`  Neither was told. Keep them apart (a new ${FIN_WORD}'s workspace, or agents_send one to worktree_move) or have one wait for the other; nothing to do if you meant it.`)
+  }
   lines.push(counts)
-  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length && !handoffs.length && !awaiting.length && !answering.length && !unanswered.length && !quiets.length
+  lines.push((results.length || replies.length) && !decisions.length && !persons.length && !finished.length && !handoffs.length && !awaiting.length && !answering.length && !unanswered.length && !quiets.length && !collisions.length
     ? "Go on with it: reply to the person, start more work, or end your turn."
     : "agents_read gives a report in full. Reply to the person, start more work, or end your turn.")
   return appendFinReports(lines.join("\n"), cards)

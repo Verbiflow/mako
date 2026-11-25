@@ -4,6 +4,7 @@ import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, I
 import { askWords, childLine, childStateOf, childWord, finsAsChildren, rollup, rollupLabel } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { WORK_STATUS_WORDS } from "@mako/host/contracts/thread-marks"
+import { RailRow } from "@/components/rail/rail-row"
 import { WorkGlyph } from "@/components/rail/work-status"
 import { finMarkState, motionOf } from "@/lib/live-mark-state"
 import { avatarHue, monogram } from "@/lib/rail-marks"
@@ -68,9 +69,9 @@ function toggleFold(which: keyof ListFolds, key: string): void {
  * The account's Threads under a finger, in the desk's rail's anatomy: grouped by project under each project's tile, an
  * Apex's Fins hung under it on a 1 px line, where its work stands and when beside each title. On a phone, the first
  * screen: its bar says where you are and holds your account, Finish setting up heads the rows while there's something
- * to do, and New floats at the bottom right in thumb's reach, a small round button that steps aside while the list is
- * scrolled down and comes back on the way up. On a tablet, the rail beside what's open, the one open lit, New at its
- * head and your account at its foot. A row swipes left to Archive and offers its menu when held.
+ * to do, and New floats at the bottom right in thumb's reach, a square that steps aside while the list is scrolled
+ * down and comes back on the way up. On a tablet, the rail beside what's open, the one open lit, the desk's New thread
+ * and Inbox rows at its head and your account at its foot. A row swipes left to Archive and offers its menu when held.
  */
 export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide, starting = false, settings = false, inbox = false }: { selected?: string; onOpen: (thread: WebThread) => void; onNew: () => void; onSettings: () => void; onInbox?: () => void; wide: boolean; starting?: boolean; settings?: boolean; inbox?: boolean }) {
   const client = useWebClient()
@@ -146,30 +147,27 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
   useRowFlip(scroller, showArchived ? "archived" : "threads", {})
   return (
     <div data-list={wide ? "rail" : "screen"} className={cn("web-list relative flex min-h-0 flex-1 flex-col", wide ? "bg-shell" : "bg-surface")}>
-      <header className="web-bar flex shrink-0 items-center gap-0.5 pr-1.5 pl-4">
-        <h1 className="min-w-0 flex-1 truncate text-title font-semibold">Threads</h1>
-        {wide ? (
-          <>
-            <ListPhase list={list} />
-            <button type="button" aria-label="New thread" aria-pressed={starting} onClick={onNew} className={cn("web-icon-button", starting && "bg-fill-selected text-foreground")}>
-              <SquarePenIcon className="size-[19px]" />
-            </button>
-          </>
-        ) : (
-          <>
-            <ListPhase list={list} />
-            <button type="button" aria-label="Settings" onClick={onSettings} className="web-icon-button">
-              <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} />
-            </button>
-          </>
-        )}
-      </header>
+      {/* A phone's screen says where you are and holds your account; an iPad's rail, as the desk's, has no title of its
+          own: only the notch's room, and where the list stands while it isn't simply live. */}
+      {wide ? (
+        <header data-rail-head className="flex min-h-[calc(env(safe-area-inset-top)+12px)] shrink-0 items-end justify-end px-4 pt-[env(safe-area-inset-top)]">
+          <ListPhase list={list} />
+        </header>
+      ) : (
+        <header className="web-bar flex shrink-0 items-center gap-0.5 pr-1.5 pl-4">
+          <h1 className="min-w-0 flex-1 truncate text-title font-semibold">Threads</h1>
+          <ListPhase list={list} />
+          <button type="button" aria-label="Settings" onClick={onSettings} className="web-icon-button">
+            <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} />
+          </button>
+        </header>
+      )}
       <div ref={scroller} className="web-scroll relative min-h-0 flex-1 overflow-y-auto">
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
         <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
           <ListTrouble />
           {wide || list.phase === "starting" ? null : <SetupCard onNew={onNew} onSettings={onSettings} />}
-          {onInbox && (threads.length > 0 || archived.length > 0) ? <TopChips count={webInboxCount(threads, fins, placed)} open={inbox} onInbox={onInbox} /> : null}
+          <ListTop wide={wide} starting={starting} onNew={onNew} inbox={onInbox && (threads.length > 0 || archived.length > 0) ? { count: webInboxCount(threads, fins, placed), open: inbox, onOpen: onInbox } : undefined} />
           {threads.length === 0 && archived.length === 0 ? (
             <EmptyList answered={list.phase === "live" || list.asOf !== undefined} onNew={onNew} />
           ) : groups.length ? (
@@ -221,6 +219,8 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
         onDismiss={() => setMenu((shown) => (shown ? { ...shown, open: false } : shown))}
         onArchive={(thread) => archiveWithUndo(client, thread)}
       />
+      {/* Finish setting up, at the rail's foot on an iPad as on the desk; at the head of a phone's list. */}
+      {wide && list.phase !== "starting" ? <SetupCard onNew={onNew} onSettings={onSettings} /> : null}
       {wide ? (
         <footer className="shrink-0 p-2">
           <button type="button" aria-label="Settings" aria-current={settings ? "page" : undefined} onClick={onSettings} className="web-account">
@@ -709,30 +709,34 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, marks
 }
 
 /**
- * What the desk's rail has at its top, as chips: the Inbox with how many wait on the person. Pull requests and
- * automations live on a Mac, which this browser doesn't reach for them, so they have no chip here.
+ * The rail's fixed top, the desk's own rows (`RailRow`, as `rail-top.tsx` draws them) at a finger's height: on a
+ * tablet New thread and the Inbox, on a phone the Inbox alone, since New floats at the foot in thumb's reach. The
+ * Inbox's count is the desk's, a number in the attention hue. Search, Pull requests and Automations need a Mac's
+ * palette, checkouts and schedules, which this browser doesn't reach, so they have no row here.
  */
-function TopChips({ count, open, onInbox }: { count: number; open: boolean; onInbox: () => void }) {
+function ListTop({ wide, starting, onNew, inbox }: { wide: boolean; starting: boolean; onNew: () => void; inbox: { count: number; open: boolean; onOpen: () => void } | undefined }) {
+  if (!wide && !inbox) return null
+  // A finger's 44 px, its icon in the column the projects' tiles stand in: inset on the tablet's rail as on the desk's.
+  const row = cn("h-11 gap-3", wide ? "px-2" : "px-4")
   return (
-    <nav aria-label="Go to" data-list-chips className="web-scroll flex gap-1.5 overflow-x-auto px-4 pt-2 pb-1">
-      <button
-        type="button"
-        data-list-chip="inbox"
-        aria-current={open ? "page" : undefined}
-        aria-label={count ? `Inbox, ${count} ${count === 1 ? "needs" : "need"} you` : "Inbox"}
-        onClick={onInbox}
-        className={cn("pressable flex h-9 shrink-0 items-center gap-2 pr-2 pl-3 text-ui font-medium text-foreground", open ? "bg-fill-selected" : "bg-raised")}
-      >
-        <InboxIcon aria-hidden className="size-4 text-muted-foreground" />
-        Inbox
-        {count ? (
-          <span data-inbox-count={count} className="tabular flex h-5 min-w-5 items-center justify-center bg-attention/15 px-1.5 text-label font-medium text-attention">
-            {count}
-          </span>
-        ) : (
-          <span className="pr-1" />
-        )}
-      </button>
+    <nav aria-label="Go to" data-rail-top className={cn("flex shrink-0 flex-col gap-px pt-2", wide && "px-2")}>
+      {wide ? <RailRow data-rail-top-row="session.new" icon={<SquarePenIcon />} label="New thread" open={starting} onClick={onNew} className={row} /> : null}
+      {inbox ? (
+        <RailRow
+          data-rail-top-row="inbox"
+          icon={<InboxIcon />}
+          label="Inbox"
+          spoken={inbox.count ? `Inbox, ${inbox.count} ${inbox.count === 1 ? "needs" : "need"} you` : "Inbox"}
+          open={inbox.open}
+          onClick={inbox.onOpen}
+          className={row}
+          end={inbox.count ? (
+            <span data-inbox-count={inbox.count} className="tabular shrink-0 pr-1 text-label font-medium text-attention">
+              {inbox.count}
+            </span>
+          ) : null}
+        />
+      ) : null}
     </nav>
   )
 }

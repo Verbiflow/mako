@@ -75,7 +75,7 @@ export function accessInEffect(harness: string, choices: AccessChoices | undefin
   const only = ladder?.modes.length === 1 ? ladder.modes[0] : undefined
   if (only?.access) return { tier: only.access, label: tierLabel(only.access) }
   // No choice made: the harness runs as its own configuration says, which the chip calls by the plain word.
-  return { label: "Default", detail: "As the agent's own settings say. Choose a level to set it for every device." }
+  return { label: "Default access", detail: "As the agent's own settings say. Choose a level to set it for every device." }
 }
 
 /** The plan toggle names plan mode on the desk; the chip says what it allows. */

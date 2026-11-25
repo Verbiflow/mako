@@ -6,7 +6,7 @@ import { ExecutionAccountChanged, ExecutionIdentityMismatch, HandoffRefused, hel
 import { digestAsks } from "../contracts/agents.js"
 import { FRONT_DOOR_GUIDANCE } from "../contracts/agent-tools.js"
 import { foldedSeparator, JOINED_CHARS, JOINED_MAX, type FoldedBy, type LiveRequest, type LiveSnapshot } from "../contracts/live-conversations.js"
-import { APEX_NOTE_MARK } from "../contracts/children.js"
+import { fromAnotherThread } from "../contracts/children.js"
 import { promptFingerprint } from "./live-assets.js"
 import { quietSwitch } from "../contracts/conversation-control.js"
 import { retireQuestionsForInput } from "../contracts/live-questions.js"
@@ -88,7 +88,7 @@ function plain(request: LiveRequest): boolean {
     !request.accountSwitch && !request.review && !request.verbatim && !request.ownerCheck && !request.goal && request.displayText === undefined &&
     !request.joinedInto && !request.interruption &&
     // Folded once already, it carries what it carries; and another Apex's message is owed its own reply.
-    !request.joined?.length && !request.text.includes(APEX_NOTE_MARK)
+    !request.joined?.length && !fromAnotherThread(request.text)
 }
 
 /** A digest held only for its burst's window (`DIGEST_WAITS`): a turn that goes now takes it along. */

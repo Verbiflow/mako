@@ -29,6 +29,7 @@ import { setPref, usePrefs } from "@/state/prefs"
 import { Group, Row, Switch } from "./settings-rows"
 import { Fins } from "./fins"
 import { WebDevices } from "./devices"
+import { AgentsSettings } from "./agents-settings"
 
 const DEFAULT_QUIET: QuietHours = { start: "22:00", end: "07:00" }
 /** The device's latest readings Diagnostics lists; Copy takes every one kept. */
@@ -36,7 +37,6 @@ const READINGS_SHOWN = 8
 
 /** Settings: a screen of its own on a phone, Back to the list; wide, the pane beside the rail, opened from its foot. */
 export function Settings({ onBack, onSetup }: { onBack: (() => void) | undefined; onSetup?: (project: string) => void }) {
-  const client = useWebClient()
   return (
     <div className="flex min-h-0 flex-1 flex-col bg-shell">
       <header className={cn("web-bar flex shrink-0 items-center gap-1", onBack ? "px-1.5" : "px-5")}>
@@ -49,15 +49,8 @@ export function Settings({ onBack, onSetup }: { onBack: (() => void) | undefined
       </header>
       <div className="web-scroll min-h-0 flex-1 overflow-y-auto px-4 pb-[calc(env(safe-area-inset-bottom)+24px)]">
         <div className="mx-auto flex max-w-[560px] flex-col gap-7 pt-3">
-          <Group>
-            <div className="flex items-center gap-3 px-4 py-3.5">
-              <Avatar name={client.account.name} src={client.account.image ?? undefined} size={8} />
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-ui font-medium">{client.account.name}</p>
-                <p className="truncate text-label text-faint">{client.account.email}</p>
-              </div>
-            </div>
-          </Group>
+          <AccountGroup />
+          <AgentsSettings />
           {onSetup ? <Setups onOpen={onSetup} /> : null}
           <Notifications />
           <Conversation />
@@ -73,8 +66,24 @@ export function Settings({ onBack, onSetup }: { onBack: (() => void) | undefined
   )
 }
 
+/** Who's signed in to Mako here: their face, name and address. */
+export function AccountGroup() {
+  const client = useWebClient()
+  return (
+    <Group>
+      <div className="flex items-center gap-3 px-4 py-3.5">
+        <Avatar name={client.account.name} src={client.account.image ?? undefined} size={8} />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-ui font-medium">{client.account.name}</p>
+          <p className="truncate text-label text-faint">{client.account.email}</p>
+        </div>
+      </div>
+    </Group>
+  )
+}
+
 /** Each project's Setup, one row a project: what each place has for it, and where agents' asks wait. */
-function Setups({ onOpen }: { onOpen: (project: string) => void }) {
+export function Setups({ onOpen }: { onOpen: (project: string) => void }) {
   const rows = useAccountList((state) => state.rows)
   const projects = useMemo(() => [...new Set(rows.map((row) => projectOf(row.folder)).filter((name): name is string => Boolean(name)))].sort(), [rows])
   if (!projects.length) return null
@@ -93,7 +102,7 @@ function Setups({ onOpen }: { onOpen: (project: string) => void }) {
  * What Send does while an agent works: steer it, or queue the message for after the turn. The desk's own choice
  * (Settings › Conversation, "Enter steers a running turn"), the same preference, read by this browser's composers.
  */
-function Conversation() {
+export function Conversation() {
   const steer = usePrefs((prefs) => prefs.steerOnEnter)
   return (
     <Group title="Conversation" footer={steer ? "Hold Send to queue a message for after the turn instead. Agents that can't take a message mid-turn always queue." : "Hold Send to steer the running turn instead, where its agent can take a message mid-turn."}>
@@ -111,7 +120,7 @@ function Conversation() {
  * desktop's own Settings group (`PullRequestsAsMe`); on a phone or tablet, the same settings in the touch layout here.
  * Both read and change the account's, never keep the token.
  */
-function PullRequests() {
+export function PullRequests() {
   const client = useWebClient()
   const tokens = useMemo(() => webGitHubTokens(client.gateway, client.account.id), [client])
   const authorships = useMemo(() => webGitHubAuthorships(client.gateway, client.account.id), [client])
@@ -280,7 +289,7 @@ export function TouchPullRequests({ tokens, authorships }: { tokens: GitHubToken
 }
 
 /** This browser as a device: on the Home Screen or not, and signing it out, confirmed in place. */
-function ThisBrowser() {
+export function ThisBrowser() {
   const client = useWebClient()
   const way = useInstallWay()
   const [steps, setSteps] = useState(false)
@@ -322,7 +331,7 @@ const STANDING_WORDS = {
   install: "On iPhone and iPad, add Mako to your Home Screen first: Share, then Add to Home Screen.",
 } satisfies Record<PushStanding, string>
 
-function Notifications() {
+export function Notifications() {
   const client = useWebClient()
   const [standing, setStanding] = useState<PushStanding | undefined>(undefined)
   const [quiet, setQuiet] = useState<QuietHours | null>(null)
@@ -392,7 +401,7 @@ const THEMES: Array<{ value: WebTheme; label: string }> = [
   { value: "dark", label: "Dark" },
 ]
 
-function Appearance() {
+export function Appearance() {
   const client = useWebClient()
   const [theme, setTheme] = useTheme(client.preferences)
   return (
@@ -416,7 +425,7 @@ function Appearance() {
 }
 
 /** What someone debugging the web reads first: who this browser is, where the list stands, and the last failure to quote. */
-function Diagnostics() {
+export function Diagnostics() {
   const client = useWebClient()
   const list = useAccountList((state) => state)
   const readings = useReadings((state) => state.readings)

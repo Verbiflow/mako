@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
-import { CheckIcon, ChevronDownIcon, CloudIcon, FolderIcon, LaptopIcon, ShieldIcon, TriangleAlertIcon, XIcon } from "lucide-react"
-import { MakoMark } from "@/components/ui/mako-mark"
+import { CheckIcon, ChevronDownIcon, CloudIcon, FolderIcon, LaptopIcon, ShieldAlertIcon, ShieldIcon, XIcon } from "lucide-react"
+import { OceanScene } from "@/components/ui/ocean-scene"
+import { Welcome } from "@/components/transcript/transcript"
 import { modelByIdentity } from "@mako/sessions/settings"
 import { startFailure } from "@mako/host/contracts/cloud-threads"
 import { errorMessage } from "@mako/host/contracts/error-message"
@@ -59,7 +60,11 @@ export function StartSheet({ open, onDismiss, onStarted, adding }: { open: boole
   )
 }
 
-/** New on a wide screen: the pane beside the list, as the desk's new tab, its composer waiting in the middle. */
+/**
+ * New on a tablet: the pane beside the list, as the desk's new Thread is (`DeskStart`): the opening screen's headline
+ * over the engraving, and the composer at the pane's foot, which the keyboard lifts. Its bar keeps Close, a finger's
+ * way out where the desk has Escape.
+ */
 export function StartPane({ onDismiss, onStarted }: { onDismiss: () => void; onStarted: (started: Started, where: string) => void }) {
   return (
     <section aria-label="New thread" className="web-start-pane flex min-h-0 flex-1 flex-col bg-surface">
@@ -69,8 +74,11 @@ export function StartPane({ onDismiss, onStarted }: { onDismiss: () => void; onS
           <XIcon className="size-[18px]" />
         </button>
       </header>
-      <div className="web-start-pane-body web-enter">
-        <MakoMark className="mx-auto mb-7 size-8 opacity-30" />
+      <div className="agent-surface relative isolate flex min-h-0 flex-1 flex-col overflow-hidden">
+        <OceanScene />
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Welcome />
+        </div>
         <StartForm onStarted={onStarted} />
       </div>
     </section>
@@ -220,32 +228,30 @@ export function StartForm({ onStarted, adding, startIn, desk = false }: { onStar
     }
   }
 
-  // Where, above the field: the place and its project, fixed when adding to a Thread.
+  // Where and how it runs, on the status line under the box as the desktop's new Thread says them: the place, its
+  // project (both fixed when adding to a Thread) and the access level in words, full access in the caution hue.
   const where = (
-    <div className="web-where" role="group" aria-label="Where it starts">
-      <Chip label="Where it runs" disabled={Boolean(adding)} onClick={pick("place")}>
-        {place?.kind === "cloud" ? <CloudIcon className="size-3.5" /> : <LaptopIcon className="size-3.5" />}
-        <span>{adding ? adding.where : place ? (place.kind === "cloud" ? "Cloud" : place.name) : "Choose"}</span>
-      </Chip>
-      <span aria-hidden className="text-label text-faint/60">/</span>
-      <Chip label="Project" disabled={Boolean(adding)} onClick={pick("project")}>
-        <FolderIcon className="size-3.5" />
-        {projectName ? <span>{projectName}</span> : projects === undefined && place && startable(place) ? <span className="skeleton h-3 w-12" /> : <span>Choose</span>}
-      </Chip>
-    </div>
-  )
-  // With what, in the bar under it: the model gives way first; the access a start runs with is always in view.
-  const how = (
     <>
-      <Chip label="Harness and model" onClick={pick("loadout")} shrinks>
-        {preferred ? <WebHarnessIcon harness={preferred.harness} className="size-3.5" /> : null}
-        {chosenHarness ? <span>{modelLabel ?? webHarnessLabel(chosenHarness.harness)}</span> : preferred?.pending || !catalog ? <span className="skeleton h-3 w-16" /> : <span>Choose</span>}
+      <Chip label="Where it runs" disabled={Boolean(adding)} onClick={pick("place")} quiet>
+        {place?.kind === "cloud" ? <CloudIcon className="size-3" /> : <LaptopIcon className="size-3" />}
+        <span>{adding ? adding.where : place ? (place.kind === "cloud" ? "Cloud" : place.name) : "Choose where"}</span>
       </Chip>
-      <Chip label={access ? `Access: ${access.label}` : "Access"} disabled={!harness} onClick={pick("access")}>
-        {access?.tier === "full" ? <TriangleAlertIcon className="size-3.5 text-caution" /> : <ShieldIcon className="size-3.5" />}
+      <Chip label="Project" disabled={Boolean(adding)} onClick={pick("project")} quiet>
+        <FolderIcon className="size-3" />
+        {projectName ? <span>{projectName}</span> : projects === undefined && place && startable(place) ? <span className="skeleton h-3 w-12" /> : <span>Choose a project</span>}
+      </Chip>
+      <Chip label={access ? `Access: ${access.label}` : "Access"} disabled={!harness} onClick={pick("access")} quiet access={access?.tier ?? (access ? "default" : undefined)}>
+        {access?.tier === "full" ? <ShieldAlertIcon className="size-3" /> : <ShieldIcon className="size-3" />}
         {access ? <span>{access.label}</span> : <span className="skeleton h-3 w-14" />}
       </Chip>
     </>
+  )
+  // With what, in the control row: the harness's mark, the model by name, as a Thread's composer reads it.
+  const how = (
+    <Chip label="Harness and model" onClick={pick("loadout")} shrinks>
+      {preferred ? <WebHarnessIcon harness={preferred.harness} className="size-3.5" /> : null}
+      {chosenHarness ? <span className="font-semibold text-foreground">{modelLabel ?? webHarnessLabel(chosenHarness.harness)}</span> : preferred?.pending || !catalog ? <span className="skeleton h-3 w-16" /> : <span>Choose a model</span>}
+    </Chip>
   )
 
   return (
@@ -259,7 +265,7 @@ export function StartForm({ onStarted, adding, startIn, desk = false }: { onStar
       ) : failure ? (
         <StartFailed message={failure} />
       ) : null}
-      <Composer autoFocus placeholder="What should it work on?" header={where} tools={how} sendable={ready} onSend={start} sendLabel="Start" desk={desk} draftKey={newDraftKey(client.account.id, adding ? `add:${adding.thread}` : "thread")} />
+      <Composer autoFocus placeholder="Ask anything" tools={how} status={where} sendable={ready} onSend={start} sendLabel="Start" desk={desk} draftKey={newDraftKey(client.account.id, adding ? `add:${adding.thread}` : "thread")} />
       <PlaceSheet anchor={chip} open={picking === "place"} onDismiss={() => setPicking(undefined)} all={all} chosen={chosenPlace} onPick={(next) => {
         if (next !== chosenPlace) {
           setProjects(undefined)
@@ -320,11 +326,15 @@ function StartFailed({ message }: { message: string }) {
 }
 
 /** A choice a start is made with, as the desk's composer shows one: its glyph, its value, and a chevron while it can change. */
-function Chip({ label, disabled, onClick, children, shrinks }: { label: string; disabled?: boolean; onClick: (chip: HTMLElement) => void; children: React.ReactNode; shrinks?: boolean }) {
+/**
+ * A choice in the composer. In the control row it ends in a chevron, as the desktop's model chip does; on the status
+ * line (`quiet`) it is a fact in words with its glyph, as the desktop's place and access are.
+ */
+function Chip({ label, disabled, onClick, children, shrinks, quiet, access }: { label: string; disabled?: boolean; onClick: (chip: HTMLElement) => void; children: React.ReactNode; shrinks?: boolean; quiet?: boolean; access?: string }) {
   return (
-    <button type="button" aria-label={label} disabled={disabled} onClick={(event) => onClick(event.currentTarget)} className={cn("web-chip", shrinks && "web-chip-shrinks")}>
+    <button type="button" aria-label={label} disabled={disabled} onClick={(event) => onClick(event.currentTarget)} data-access={access} className={cn("web-chip", shrinks && "web-chip-shrinks")}>
       <span className="flex min-w-0 items-center gap-1.5 [&>span:last-child]:truncate">{children}</span>
-      {disabled ? null : <ChevronDownIcon aria-hidden className="size-3 shrink-0 opacity-50" />}
+      {disabled || quiet ? null : <ChevronDownIcon aria-hidden className="size-3 shrink-0 opacity-50" />}
     </button>
   )
 }
@@ -454,7 +464,7 @@ function AccessSheet({ anchor, open, onDismiss, harness, ladder, access, onPick 
         {ladder ? (
           orderedModes(ladder.modes).map((mode) => (
             <Choice key={mode.id} chosen={access?.mode === mode.id} onClick={() => onPick(mode)} detail={mode.access && mode.name !== accessTierInfo(mode.access).label ? mode.name : undefined}>
-              {mode.access === "full" ? <TriangleAlertIcon className="size-[18px] shrink-0 text-caution" /> : <ShieldIcon className="size-[18px] shrink-0 text-muted-foreground" />}
+              {mode.access === "full" ? <ShieldAlertIcon className="size-[18px] shrink-0 text-caution" /> : <ShieldIcon className="size-[18px] shrink-0 text-muted-foreground" />}
               <span className="flex min-w-0 flex-col">
                 <span className="truncate">{mode.access ? (mode.access === "plan" ? "Read-only" : accessTierInfo(mode.access).label) : mode.name}</span>
                 {mode.access ? <span className="truncate text-label text-faint">{accessTierInfo(mode.access).summary}</span> : null}

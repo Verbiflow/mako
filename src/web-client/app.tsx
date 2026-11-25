@@ -26,6 +26,7 @@ import { LazyBoundary } from "@/components/ui/lazy-boundary"
 import { ScreenFailed, ScreenLoading } from "./code-unavailable"
 import { Sheet } from "./sheet"
 import { ThreadShell } from "./thread-shell"
+import { askSettingsSection } from "./settings-asked"
 
 /**
  * What the list paints without, each a chunk of its own (`chunk`): a Thread (its screen, then its transcript, the
@@ -81,7 +82,11 @@ export function WebApp() {
   useKeyboardInset()
   // What the desk's own pieces ask for by `mako:settings` (a transcript notice's "Update token"): the web's one Settings.
   useEffect(() => {
-    const open = () => navigate({ kind: "settings" })
+    const open = (event: Event) => {
+      // The section it names ("git#pull-requests"), for the desk's Settings to open at.
+      if (event instanceof CustomEvent && event.detail) askSettingsSection(String(event.detail))
+      navigate({ kind: "settings" })
+    }
     window.addEventListener("mako:settings", open)
     return () => window.removeEventListener("mako:settings", open)
   }, [navigate])

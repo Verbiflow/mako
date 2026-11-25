@@ -32,9 +32,6 @@ import { TranscriptLoading } from "./transcript-loading"
 
 const NO_RECORDS: never[] = []
 
-/** The desk's composer at rest (an empty draft and its chips), the room held for it while its code arrives. */
-const DESK_COMPOSER_HEIGHT = 104
-
 /**
  * A Session live: opened on its owner through the gateway, drawn by the renderer's own conversation (`AcpPanel`: the
  * transcript, exactly as on a Mac), and under it on a laptop's browser (`desk`) the desktop's own composer, its routing
@@ -138,9 +135,9 @@ export default function LiveSession({ session, desk = false, thread, openedBy = 
             deskComposer ? (
               <deskComposer.Composer />
             ) : (
-              // The composer's room while its code arrives, so the transcript above doesn't move when it does; a line
-              // saying so with Retry if it can't.
-              <div data-composer-pending="" aria-busy={!composerFailed} aria-label="Loading the composer" className="flex shrink-0 items-center bg-surface" style={{ height: DESK_COMPOSER_HEIGHT }}>
+              // The composer's room while its code arrives (`--composer-rest`, the height the composer is at rest), so
+              // the transcript above doesn't move when it does; a line saying so with Retry if it can't.
+              <div data-composer-pending="" aria-busy={!composerFailed} aria-label="Loading the composer" className="flex h-(--composer-rest) shrink-0 items-center bg-surface">
                 {composerFailed ? <CodeLine what="The composer" retry={readComposer} className="w-full" /> : <CodeSlowLine what="the composer" slow={composerSlow} className="px-4" />}
               </div>
             )

@@ -383,6 +383,11 @@ export class ScopedUploads {
     return status
   }
 
+  /** The Session's push under way, settling once it has gone or failed; undefined when none is. */
+  pushing(harness: string, nativeId: string): Promise<void> | undefined {
+    return this.#flights.get(keyOf({ harness, nativeId }))?.done
+  }
+
   /** Once the pushes due now have settled, the ones they let start included. */
   async settled(): Promise<void> {
     while (this.#flights.size) await Promise.all([...this.#flights.values()].map((flight) => flight.done))

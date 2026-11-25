@@ -9,6 +9,7 @@ import { AGENT_TOOLS, LEGACY_SHIVER_SCOPE, ORCHESTRATION_INSTRUCTIONS, type Agen
 import type { AgentCaller, Report } from "@mako/host/contracts/agents"
 import { agentWords, apexNote, FROM_AGENTS, fromAgent, fromApex, YOUR_APEX } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { threadHandle } from "@mako/host/contracts/thread-handles"
 import { agentToolSchema, agentToolText } from "@mako/host/conversations/agent-tools"
 import { AgentWakes, digest, finishedLine, type Notice } from "@mako/host/conversations/agent-wakes"
 import { FIN_REPORTS_MAX, readFinReports } from "@mako/host/contracts/fin-reports"
@@ -209,7 +210,7 @@ async function apexes(): Promise<void> {
     root: join(root, "apexes"),
     script: async (turn) => {
       if (turn.text.includes("hold")) await turn.world.hold(turn.conversation)
-      if (turn.text.includes("another of the person's Apexes")) return "Yes: billing-db edits src/billing/rates.ts until PR #12 merges.\n\nChange it after that."
+      if (turn.text.includes("another of the person's Threads")) return "Yes: billing-db edits src/billing/rates.ts until PR #12 merges.\n\nChange it after that."
       if (turn.text.includes("plan billing")) return `Billing is split between a schema Fin and a UI Fin.\n\n${"Details. ".repeat(80)}`
       return "ok"
     },
@@ -237,9 +238,13 @@ async function apexes(): Promise<void> {
     const seen = await world.agents.list(app.caller, { scope: "apexes" })
     if (!("apexes" in seen)) throw new Error(`no apexes: ${JSON.stringify(seen)}`)
     const view: AgentsApexes = seen
-    assert.deepEqual(view.apexes.map((other) => other.title), ["claude apex"], "only the other Apex: not itself, its own Fins, or a Thread with none")
+    assert.deepEqual(view.apexes.map((other) => other.title), ["claude apex"], "whole, only the other Apex: not itself or its own Fins")
+    assert.deepEqual(view.others?.map((other) => other.title), ["cursor apex"], "and a Thread with none in a line")
+    assert.equal(view.more, undefined)
     const other = view.apexes[0]!
     assert.equal(other.thread, world.store.journalPlacement(billing.conversation)!.thread)
+    const handle = threadHandle(other.thread, world.root)
+    assert.equal(other.handle, handle, "its handle beside its title: its folder's word and four characters of its Thread's code")
     assert.equal(other.harness, "Claude")
     assert.equal(other.working, false)
     assert.equal(other.folder, world.root)
@@ -251,12 +256,18 @@ async function apexes(): Promise<void> {
     const below = await world.agents.list(world.caller(lead), { scope: "apexes" })
     assert.ok("apexes" in below && below.apexes.length === 1 && below.apexes[0]!.title === "claude apex", "a lead Fin reads the same, never its own tree")
     const alone = await world.agents.list(plain.caller, { scope: "apexes" })
-    assert.ok("apexes" in alone && alone.apexes.map((each) => each.title).sort().join() === "claude apex,codex apex", "a Thread with no tree reads every Apex")
+    assert.ok("apexes" in alone && alone.apexes.map((each) => each.title).sort().join() === "claude apex,codex apex" && !alone.others, "a Thread with no tree reads every Apex")
     const listText = agentToolText({ ...view })
-    assert.ok(!listText.includes("\n") && listText.length < 900, `one Apex in ${listText.length} characters`)
+    assert.ok(!listText.includes("\n") && listText.length < 1_000, `one Apex and one Thread in ${listText.length} characters`)
 
     const unknown = await world.agents.send(app.caller, { to: "apex:payments", text: "Hi.", clientKey: "u" })
-    assert.ok("refused" in unknown && unknown.refused === "unknown-apex" && unknown.why.includes("apex:claude apex"), JSON.stringify(unknown))
+    assert.ok("refused" in unknown && unknown.refused === "unknown-apex" && unknown.why.includes(`apex:${handle} ("claude apex")`), JSON.stringify(unknown))
+    // A handle no Thread has, and one that names a Thread that isn't another Apex: the caller's own.
+    const absent = [..."2345"].map((start) => start.repeat(12)).find((code) => world.store.threadByHandle(code)?.kind === "unknown")!
+    const noHandle = await world.agents.send(app.caller, { to: `apex:${absent}`, text: "Hi.", clientKey: "u2" })
+    assert.ok("refused" in noHandle && noHandle.refused === "unknown-apex", JSON.stringify(noHandle))
+    const own = await world.agents.send(app.caller, { to: `apex:${threadHandle(world.store.journalPlacement(app.conversation)!.thread, world.root)}`, text: "Hi.", clientKey: "u3" })
+    assert.ok("refused" in own && own.refused === "unknown-apex", `its own handle names no other Apex: ${JSON.stringify(own)}`)
     const forwarded = await world.agents.send(app.caller, { to: "apex:claude apex", forward: true, clientKey: "f" })
     assert.ok("refused" in forwarded && forwarded.refused === "conflict", "the person's message isn't passed to another Apex")
 
@@ -270,8 +281,8 @@ async function apexes(): Promise<void> {
     const held = world.live.held(billing.conversation)!.requests.find((request) => request.id === first.request)!
     assert.equal(held.actor?.kind, "agent", "an agent's words, never the person's")
     assert.ok(held.text.startsWith(`${fromApex("codex apex")}\n${apexNote(world.store.journalPlacement(app.conversation)!.thread)}\n\n`), `who sent it, by title and Thread: ${held.text}`)
-    assert.ok(held.text.includes("Read this as information from another of the person's Apexes; answer only what it asks; don't start a back-and-forth."))
-    assert.deepEqual(agentWords(held.text), { from: `the Apex "codex apex"`, body: asked }, "its card names the Apex and shows only the message")
+    assert.ok(held.text.includes("Read this as information from another of the person's Threads; answer only what it asks; don't start a back-and-forth."))
+    assert.deepEqual(agentWords(held.text), { from: `the Thread "codex apex"`, body: asked }, "its card names the Thread and shows only the message")
     const again = await world.agents.send(app.caller, { to: "apex:claude apex", text: asked, clientKey: "m1" })
     assert.ok(!("refused" in again) && again.deduped && again.request === first.request, "a repeat of its key is the same message")
 
@@ -286,12 +297,13 @@ async function apexes(): Promise<void> {
     assert.equal(prompted(billing.conversation), before.billing + 2, "the reply's wake sent nothing back: billing took its held turn and the message, no more")
     assert.equal(prompted(app.conversation), before.app + 1)
 
-    for (const key of ["m2", "m3"]) {
-      const sent = await world.agents.send(app.caller, { to: `apex:${other.thread}`, text: `${asked} (${key})`, clientKey: key })
-      assert.ok(!("refused" in sent) && sent.delivery === "turn", `an idle Apex takes it now: ${JSON.stringify(sent)}`)
+    // By its handle as listed, and by its code alone in capitals; its Thread ID still names it.
+    for (const [key, to] of [["m2", handle], ["m3", handle.slice(handle.lastIndexOf("-") + 1).toUpperCase()]] as const) {
+      const sent = await world.agents.send(app.caller, { to: `apex:${to}`, text: `${asked} (${key})`, clientKey: key })
+      assert.ok(!("refused" in sent) && sent.delivery === "turn" && sent.child === other.thread, `an idle Apex takes it now, named by ${to}: ${JSON.stringify(sent)}`)
       await world.settle()
     }
-    const fourth = await world.agents.send(app.caller, { to: "apex:claude apex", text: "One more thing.", clientKey: "m4" })
+    const fourth = await world.agents.send(app.caller, { to: `apex:${other.thread}`, text: "One more thing.", clientKey: "m4" })
     assert.ok("refused" in fourth && fourth.refused === "rate-limited" && /3 messages .* in the last hour/.test(fourth.why), JSON.stringify(fourth))
     const repeat = await world.agents.send(app.caller, { to: "apex:claude apex", text: asked, clientKey: "m1" })
     assert.ok(!("refused" in repeat) && repeat.deduped, "a repeat past the limit still answers the first")
@@ -317,7 +329,7 @@ async function apexesKept(): Promise<void> {
     now: () => Date.now() + later,
     script: async (turn) => {
       if (holding.turn && turn.text.includes("hold")) await turn.world.hold(turn.conversation)
-      if (turn.text.includes("another of the person's Apexes")) {
+      if (turn.text.includes("another of the person's Threads")) {
         if (holding.answer) await turn.world.hold(turn.conversation)
         return "It's billing's until PR #12 merges."
       }
@@ -341,7 +353,6 @@ async function apexesKept(): Promise<void> {
     const pair = [threadOf(app.conversation).thread, threadOf(billing.conversation).thread] as const
     const heard = (conversation: string, words: string) => world.prompts.filter((prompt) => prompt.conversation === conversation && prompt.text.includes(words)).length
     const replies = () => heard(app.conversation, "reply to your message")
-    // Only an Apex whose conversation is in memory is listed and messaged, and a host starting reads in none it has nothing for.
     const opened = () => world.live.snapshot(billing.conversation)!
     /** A message as the store keeps one this Apex sent that one, for a point a host stopped at that no restart here reaches. */
     const keep = (at = Date.now()) => world.store.keepApexMessage({ request: randomUUID(), sender: threadOf(app.conversation), thread: pair[1], conversation: billing.conversation, label: `"claude apex" (Claude)`, fin: { name: "claude apex", harness: "claude" }, at }).message.request
@@ -351,7 +362,7 @@ async function apexesKept(): Promise<void> {
       assert.ok("refused" in refused && refused.refused === "access" && refused.why.includes("agents_report") && refused.why.includes("Nothing was sent"), `a Fin, a lead too, asks through its Apex: ${JSON.stringify(refused)}`)
     }
     await world.settle()
-    assert.equal(heard(billing.conversation, "another of the person's Apexes"), 0, "and nothing reached the other Apex")
+    assert.equal(heard(billing.conversation, "another of the person's Threads"), 0, "and nothing reached the other Apex")
     assert.deepEqual(world.store.apexSends(...pair, 0), [], "nor counted for anyone")
 
     // The host is killed while the message waits behind the other's turn.
@@ -436,6 +447,135 @@ async function apexesKept(): Promise<void> {
   }
 }
 
+/**
+ * Any top-level Thread of the person's here, not only one that leads Fins: addressed by its handle, title or Thread
+ * ID; one this host hasn't read in is read in on send; `scope: apexes` lists the few the person wrote in last; its
+ * reply wakes the sender once across a restart; a turn of its that answers and is cut goes on with the person's own
+ * left for Continue; and a Fin is still refused, as a sender and as a target.
+ */
+async function plainThreads(): Promise<void> {
+  const holding = { answer: false }
+  // Three messages an hour go from one Thread to another: each part below starts an hour on.
+  let later = 0
+  const hourOn = () => { later += 3_600_001 }
+  const world = new AgentsWorld({
+    root: join(root, "plain"),
+    now: () => Date.now() + later,
+    script: async (turn) => {
+      if (turn.text.includes("hold")) await turn.world.hold(turn.conversation)
+      if (turn.text.includes("another of the person's Threads")) {
+        if (holding.answer) await turn.world.hold(turn.conversation)
+        return `Answered: ${/\(([a-z]+)\)\s*$/.exec(turn.text)?.[1] ?? "?"}.`
+      }
+      return "ok"
+    },
+  })
+  try {
+    const app = await world.apex("codex")
+    const started = await world.agents.start(app.caller, { brief: { objective: "Port the handlers." }, harness: "claude", name: "api", clientKey: "api", cwd: world.root })
+    assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+    const notes = await world.apex("claude", "auto", undefined, "Release notes for 4.2")
+    const extra = []
+    for (const at of [1, 2, 3, 4, 5, 6, 7]) extra.push(await world.apex("cursor", "auto", undefined, `Side thread ${at}`))
+    await world.settle()
+    const thread = (conversation: string) => world.store.journalPlacement(conversation)!.thread
+    const replies = () => world.prompts.filter((prompt) => prompt.conversation === app.conversation && prompt.text.includes("reply to your message")).length
+    const heard = (words: string) => world.prompts.filter((prompt) => prompt.conversation === notes.conversation && prompt.text.includes(words)).length
+    const handle = threadHandle(thread(notes.conversation), world.root)
+
+    // Listed: the person's Threads that worked last, a line each, and a count of the rest.
+    for (const conversation of [...extra.slice(4), notes].map((each) => each.conversation)) world.say(conversation, "Note this.")
+    await world.settle()
+    const seen = await world.agents.list(app.caller, { scope: "apexes" })
+    if (!("apexes" in seen)) throw new Error(JSON.stringify(seen))
+    assert.deepEqual(seen.apexes, [], "no other Thread leads a Fin")
+    assert.equal(seen.others?.length, 5, "five Threads in a line each")
+    assert.equal(seen.more, 3, "the other three counted")
+    assert.ok(seen.others.slice(0, 4).every((each) => ["Release notes for 4.2", "Side thread 5", "Side thread 6", "Side thread 7"].includes(each.title ?? "")), `those the person wrote in last first: ${JSON.stringify(seen.others)}`)
+    const listed = seen.others.find((each) => each.title === "Release notes for 4.2")!
+    assert.deepEqual(listed, { handle, title: "Release notes for 4.2", harness: "Claude", working: false, folder: world.root }, "its handle, title, harness, folder, and whether it works")
+    const text = agentToolText({ ...seen })
+    assert.ok(text.length < 1_000, `${text.length} characters for five Threads, each with this test's long folder, and the count of the rest`)
+    console.log(`test:orch-comms: scope apexes with five plain Threads listed and three counted is ${text.length} characters`)
+
+    // By its handle, its title and its Thread ID; an idle one takes it now, as an Apex does.
+    for (const [key, to] of [["h", handle], ["t", "release notes for 4.2"], ["i", thread(notes.conversation)]] as const) {
+      const sent = await world.agents.send(app.caller, { to: `apex:${to}`, text: `Is the changelog frozen? (${key === "h" ? "handle" : key === "t" ? "title" : "id"})`, clientKey: `plain-${key}` })
+      assert.ok(!("refused" in sent) && sent.child === thread(notes.conversation) && sent.delivery === "turn", `named by ${to}: ${JSON.stringify(sent)}`)
+      await world.settle()
+    }
+    assert.equal(replies(), 3, "each answered once")
+    const card = world.live.snapshot(notes.conversation)!.requests.find((request) => request.text.includes("(handle)"))!
+    assert.deepEqual(agentWords(card.text), { from: `the Thread "codex apex"`, body: "Is the changelog frozen? (handle)" }, "its transcript draws it as a card from the Thread that sent it, as an Apex's does")
+    assert.equal(card.actor?.kind, "agent")
+
+    // A Fin is refused as a target too, pointed at its Apex; and as a sender.
+    const fin = await world.agents.send(app.caller, { to: `apex:${threadHandle(thread(started.conversation!), world.root)}`, text: "Hi.", clientKey: "to-fin" })
+    assert.ok("refused" in fin && fin.refused === "unknown-apex" && fin.why.includes(`is a Fin of ${thread(app.conversation)}`), JSON.stringify(fin))
+    const from = await world.agents.send(world.caller(started.conversation!), { to: `apex:${handle}`, text: "Hi.", clientKey: "from-fin" })
+    assert.ok("refused" in from && from.refused === "access", JSON.stringify(from))
+
+    // A host that starts reads in nothing it has nothing for: the target isn't in memory, and is read in on send.
+    await world.restart()
+    await world.settle()
+    assert.equal(world.live.loaded(notes.conversation), false, "not in memory after a restart")
+    const other = await world.apex("grok", "auto", undefined, "Another sender")
+    const cold = await world.agents.send(other.caller, { to: `apex:${handle}`, text: "Ship it? (cold)", clientKey: "cold" })
+    assert.ok(!("refused" in cold) && cold.delivery === "turn", `read in on send: ${JSON.stringify(cold)}`)
+    await world.settle()
+    assert.equal(heard("(cold)"), 1)
+    assert.equal(world.prompts.filter((prompt) => prompt.conversation === other.conversation && prompt.text.includes("Answered: cold.")).length, 1, "and its reply woke the sender")
+    // Its key repeated by a later host, the target out of memory again: read in, its message is found there, and sent once.
+    await world.restart()
+    await world.settle()
+    assert.equal(world.live.loaded(notes.conversation), false)
+    const repeat = await world.agents.send(other.caller, { to: `apex:${handle}`, text: "Ship it? (cold)", clientKey: "cold" })
+    assert.ok(!("refused" in repeat) && repeat.deduped && repeat.request === cold.request, `a repeat of its key is the same message: ${JSON.stringify(repeat)}`)
+    await world.settle()
+    assert.equal(heard("(cold)"), 1, "heard once")
+
+    // A restart between send and reply: the next host's turn answers, and wakes the sender once.
+    hourOn()
+    world.say(notes.conversation, "hold while it writes")
+    await until("the notes' turn to run", async () => world.live.session(notes.conversation)?.status === "running")
+    const queued = await world.agents.send(app.caller, { to: `apex:${handle}`, text: "Who signs off? (queued)", clientKey: "queued" })
+    assert.ok(!("refused" in queued) && queued.delivery === "queued", JSON.stringify(queued))
+    await world.crashed()
+    await world.settle()
+    assert.equal(heard("(queued)"), 1, "heard once by the next host")
+    assert.equal(replies(), 4, "its reply woke the sender once")
+    await world.restart()
+    await world.settle()
+    assert.equal(replies(), 4, "and no later host sends it again")
+    assert.deepEqual(world.store.owedApexMessages(), [])
+
+    // Cut by Mako's exit, with the person's own turns left for Continue: the turn that answers goes on, and replies once.
+    world.live.setConversationSettings({ continueAfterRestart: false })
+    hourOn()
+    holding.answer = true
+    const cut = await world.agents.send(app.caller, { to: `apex:${handle}`, text: "Freeze it? (cut)", clientKey: "cut" })
+    if ("refused" in cut) throw new Error(cut.why)
+    await until("the answering turn to run", async () => world.live.session(notes.conversation)?.status === "running")
+    holding.answer = false
+    await world.restart()
+    await world.settle()
+    const requests = world.live.snapshot(notes.conversation)!.requests
+    assert.equal(requests.find((request) => request.id === cut.request)?.interruption?.reason, "host-quit", "the exit cut the turn that answers")
+    assert.ok(requests.some((request) => request.continues?.requestId === cut.request && request.status === "completed"), `and Mako continued it: ${JSON.stringify(requests.slice(-2).map((request) => [request.status, request.continues]))}`)
+    assert.equal(replies(), 5, "whose end replied once")
+    assert.deepEqual(world.store.owedApexMessages(), [])
+    // The person's own cut turn still waits for Continue, as they chose.
+    world.say(notes.conversation, "hold for the person")
+    await until("the person's turn to run", async () => world.live.session(notes.conversation)?.status === "running")
+    const before = world.prompts.filter((prompt) => prompt.conversation === notes.conversation).length
+    await world.restart()
+    await world.settle()
+    assert.equal(world.prompts.filter((prompt) => prompt.conversation === notes.conversation).length, before, "the person's own cut turn waits for Continue")
+  } finally {
+    await world.close()
+  }
+}
+
 function doors(): void {
   const list = AGENT_TOOLS.find((tool) => tool.verb === "list")!
   assert.deepEqual(agentToolSchema(list).parse({ scope: "shiver" }), { scope: "shiver" }, "the MCP door takes scope shiver")
@@ -451,7 +591,7 @@ function doors(): void {
 function replyDigest(): void {
   const reply: Notice = { id: "notice:reply", report: report("Yes, it's mine until PR #12 merges."), label: `"billing" (Claude)`, fin: { name: "billing", harness: "claude" }, from: "s", reply: true }
   const text = digest([reply, notice("Opened the PR.")], "0 working, 1 ended.")
-  assert.match(text, /Another Apex's reply to your message:\n {2}• "billing" \(Claude\) replied:\n {4}Yes, it's mine until PR #12 merges\.\n {2}Don't reply to a reply unless it asks you something\.\n1 finished:\n/, text)
+  assert.match(text, /Another Thread's reply to your message:\n {2}• "billing" \(Claude\) replied:\n {4}Yes, it's mine until PR #12 merges\.\n {2}Don't reply to a reply unless it asks you something\.\n1 finished:\n/, text)
   assert.ok(!digest([reply], "0 working.").includes("finished:"), "a reply isn't a Fin's report")
   assert.ok(readFinReports(digest([reply], "0 working.")).text.endsWith("Go on with it: reply to the person, start more work, or end your turn."))
 }
@@ -542,7 +682,8 @@ try {
   await shiver()
   await apexes()
   await apexesKept()
-  console.log("test:orch-comms: compact answers, finished lines, every digest entry's structured twin, bursts past one wake's cards, the Shiver view and its brief line, other Apexes read and messaged, and their messages kept across hosts pass")
+  await plainThreads()
+  console.log("test:orch-comms: compact answers, finished lines, every digest entry's structured twin, bursts past one wake's cards, the Shiver view and its brief line, other Apexes read and messaged, their messages kept across hosts, and plain top-level Threads listed, messaged and continued pass")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

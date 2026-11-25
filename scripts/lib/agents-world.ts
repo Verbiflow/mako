@@ -198,6 +198,8 @@ export interface WorldOptions {
   holdMs?: number
   /** How long a working Fin may show no activity before its Apex hears it (`AgentsDeps.quietMs`). */
   quietMs?: number
+  /** How long a collision's notice waits for the rest of its burst (`AgentsDeps.collideMs`). */
+  collideMs?: number
   /** The engine's timers for those waits (`AgentsDeps.later`): a fake clock a test advances itself. */
   later?: AgentsDeps["later"]
   /** The pull requests the host last read for a worktree's branch (`AgentsDeps.heldPulls`). */
@@ -250,6 +252,8 @@ export interface WorldOptions {
   away?: AgentsDeps["away"]
   /** On a cloud machine: where a Fin's notices go, the account (`AgentsDeps.post`); without it they go to its Apex's device. */
   post?: AgentsDeps["post"]
+  /** On a device: the account, for its trees (`AgentsDeps.tree`); without it every notice goes from device to device. */
+  tree?: AgentsDeps["tree"]
   /** The Git remote a folder is a checkout of (`AgentsDeps.remoteOf`). */
   remoteOf?: AgentsDeps["remoteOf"]
   /** This host's checkout of a remote, for a Fin placed here (`AgentsDeps.checkoutOf`). */
@@ -437,6 +441,7 @@ export class AgentsWorld {
       ...(this.options.focusMs !== undefined && { focusMs: this.options.focusMs }),
       ...(this.options.holdMs !== undefined && { holdMs: this.options.holdMs }),
       ...(this.options.quietMs !== undefined && { quietMs: this.options.quietMs }),
+      ...(this.options.collideMs !== undefined && { collideMs: this.options.collideMs }),
       ...(this.options.later && { later: this.options.later }),
       ...(this.options.heldPulls && { heldPulls: this.options.heldPulls }),
       ...(this.options.restoreWorktree && { restoreWorktree: (conversation: string) => {
@@ -448,6 +453,7 @@ export class AgentsWorld {
       ...(this.options.now && { now: this.options.now }),
       ...(this.options.away && { away: this.options.away }),
       ...(this.options.post && { post: this.options.post }),
+      ...(this.options.tree && { tree: this.options.tree }),
       ...(this.options.remoteOf && { remoteOf: this.options.remoteOf }),
       ...(this.options.checkoutOf && { checkoutOf: this.options.checkoutOf }),
       ...(this.options.cloudFins && { cloudFins: this.options.cloudFins }),
@@ -529,12 +535,12 @@ export class AgentsWorld {
     await this.resumed
   }
 
-  /** A top-level conversation on `harness` at `access`, on `tuning`'s model: an Apex once it starts a child. */
-  async apex(harness: string, access: AccessTier = "auto", tuning?: SessionSettings): Promise<{ conversation: string; caller: AgentCaller }> {
+  /** A top-level conversation on `harness` at `access`, on `tuning`'s model, titled `title`: an Apex once it starts a child. */
+  async apex(harness: string, access: AccessTier = "auto", tuning?: SessionSettings, title = `${harness} apex`): Promise<{ conversation: string; caller: AgentCaller }> {
     await this.resumed
     const conversation = randomUUID()
     const modeId = this.options.ladders?.[harness]?.find((mode) => mode.access === access)?.id ?? accessModeId(access)
-    await this.live.start(harness, this.root, { conversationId: conversation, title: `${harness} apex`, modeId, ...(tuning && { tuning }) })
+    await this.live.start(harness, this.root, { conversationId: conversation, title, modeId, ...(tuning && { tuning }) })
     return { conversation, caller: this.caller(conversation) }
   }
 
@@ -782,7 +788,7 @@ export function noConversations(shown: (conversation: string) => void): AgentsDe
   return {
     session: () => undefined, held: () => undefined, atWork: () => false, resumeHeld: none, stopHolds: () => 0, rewriteWaiting: () => false, wakeDue: () => [], snapshot: () => null, editQueued: none, switchSettled: none, stopMark: () => 0, pinnedAccount: () => undefined, submit: none,
     act: async () => none(), switching: () => false, cancel: async () => {}, continueTurn: none, leftUnsettled: () => false, leftSignInHold: () => false, turnCut: () => false, waitingOn: () => undefined, workOf: () => undefined, pendingAsk: () => undefined, permission: async () => none(), steersAtStep: () => false, steering: () => undefined, interrupt: none,
-    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {}, readIn: async () => true,
+    turnReply: () => undefined, connectedSession: () => null, nativeIds: () => [], childrenChanged: shown, recordDirect: () => false, recordNote: () => false, rewordWaiting: () => false, adoptPin: () => {}, readIn: async () => true, listed: () => [],
   }
 }
 

@@ -1,15 +1,34 @@
 import assert from "node:assert/strict"
 import { mkdtemp, writeFile, rm } from "node:fs/promises"
 import { tmpdir } from "node:os"
+import { createServer } from "node:net"
 import { join } from "node:path"
 import { CursorSdkClient, CursorSdkError } from "@mako/host/harnesses/cursor/sdk/client"
 import { CURSOR_SDK_WIRE_VERSION } from "@mako/host/harnesses/cursor/sdk/wire"
+
+/**
+ * Listens at `socket` for a fixture to connect, which it does once it reads its requests: `started` settles then. A step's silence counts from the
+ * request, and the runtime's own start counts in it: on a loaded runner a child took longer than this test's 200 ms
+ * to start, and a case failed as silent before the fixture could say anything.
+ */
+async function startedAt(socket: string): Promise<{ started: Promise<void>; close(): void }> {
+  const server = createServer()
+  const started = new Promise<void>((resolve) => server.once("connection", (connection) => {
+    connection.destroy()
+    resolve()
+  }))
+  await new Promise<void>((resolve, reject) => server.once("error", reject).listen(socket, resolve))
+  return { started, close: () => server.close() }
+}
 
 const root = await mkdtemp(join(tmpdir(), "cursor-startup-"))
 try {
   for (const mode of ["progress", "silence", "chatter", "exit", "auth-refusal", "network-refusal"] as const) {
     const entry = join(root, `${mode}.mjs`)
+    const socket = join(root, `${mode}.sock`)
+    const listening = await startedAt(socket)
     await writeFile(entry, `
+      import { connect } from 'node:net';
       import { createInterface } from 'node:readline';
       createInterface({input:process.stdin}).on('line', line => {
         const req=JSON.parse(line);
@@ -29,6 +48,7 @@ try {
           process.stdout.write(JSON.stringify({id:req.id,ok:true,result:{wire:${CURSOR_SDK_WIRE_VERSION},sdkVersion:'fixture',node:process.versions.node}})+'\\n');
         },250);
       });
+      connect(${JSON.stringify(socket)}).on('error', () => {}).end();
     `)
     const client = new CursorSdkClient({
       owner: "startup-fixture", cwd: root, env: {}, entry,
@@ -37,6 +57,7 @@ try {
       startupTimeouts: { silenceMs: 200, totalMs: 900 },
     })
     try {
+      await Promise.race([listening.started, client.exited])
       if (mode === "progress") {
         await client.hello()
         assert.equal(client.alive, true, "startup progress outlives the old request deadline")
@@ -53,6 +74,7 @@ try {
       }
       console.log(`Cursor shared startup: ${mode} passed`)
     } finally {
+      listening.close()
       client.kill()
       await client.exited
     }

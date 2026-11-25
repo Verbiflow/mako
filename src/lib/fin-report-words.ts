@@ -29,7 +29,7 @@ export function said(card: FinReportCard): Said {
 
 /**
  * A report a turn's fold never hides: one that waits on the person, a failure or an end without a result, another
- * Apex that didn't reply, and a done Fin's decision while the roster still holds it open (`open`), whoever's it is.
+ * Thread that didn't reply, and a done Fin's decision while the roster still holds it open (`open`), whoever's it is.
  */
 export function reportStays(card: FinReportCard, open: boolean): boolean {
   return said(card).tone === "text-attention" || card.status === "failed" || (card.apex === true && card.status !== "done") || open
@@ -40,7 +40,7 @@ export function reportsPhrase(cards: readonly FinReportCard[]): string {
   const replies = cards.every((card) => card.apex)
   const verb = replies ? "replied" : cards.every((card) => card.status === "done" || card.status === "failed") ? "finished" : "reported"
   if (cards.length === 1) return `${cards[0]!.name} ${verb}`
-  return `${replies ? `${cards.length} Apexes` : finsWord(cards.length)} ${verb}`
+  return `${replies ? `${cards.length} Threads` : finsWord(cards.length)} ${verb}`
 }
 
 /** Whether a report is a question for the person, as its word says it (`said`). */
@@ -97,7 +97,7 @@ export function runPhrase(cards: readonly FinReportCard[], waits: (card: FinRepo
     const count = fins.get(word)?.size
     if (!count) continue
     const verb = count === 1 ? one : many
-    if (word === "replied" || word === "silent") phrases.push(`${count} ${count === 1 ? "Apex" : "Apexes"} ${verb}`)
+    if (word === "replied" || word === "silent") phrases.push(`${count} ${count === 1 ? "Thread" : "Threads"} ${verb}`)
     else {
       phrases.push(named ? `${count} ${verb}` : `${finsWord(count)} ${verb}`)
       named = true

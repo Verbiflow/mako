@@ -1,6 +1,8 @@
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
 import { ComposerAdditions } from "@/components/composer/composer-additions"
-import { ComposerRouting } from "@/components/composer/composer-routing"
+import { ComposerPlace, ComposerRouting } from "@/components/composer/composer-routing"
+import { COMPOSER_BOX, COMPOSER_COLUMN, COMPOSER_CONTROLS, COMPOSER_INPUT, COMPOSER_ROUTING, ComposerStatus } from "@/components/composer/composer-frame"
+import { cn } from "@/lib/utils"
 import { harnessTitle } from "@/components/composer/harness-title"
 import { ROUTING_COMPACT_LEVELS, useCompactRow } from "@/components/composer/use-compact-row"
 import { useAcp } from "@/state/acp"
@@ -59,9 +61,10 @@ export function PaneComposer() {
       data-composer
       data-pane-reply
       onPointerDown={(event) => event.preventDefault()}
-      className="flex max-h-[55dvh] min-h-0 shrink-0 cursor-text flex-col bg-surface"
+      className="flex max-h-[55dvh] min-h-(--composer-rest) shrink-0 cursor-text flex-col"
     >
-      <div className="composer-box relative mx-3 mb-3 flex min-h-0 flex-col bg-raised">
+      <div className={COMPOSER_COLUMN}>
+      <div className={COMPOSER_BOX}>
         <div className="relative min-h-0 max-h-[min(320px,35dvh)] overflow-hidden">
           <textarea
             readOnly
@@ -71,15 +74,12 @@ export function PaneComposer() {
             placeholder={placeholder}
             spellCheck={false}
             aria-label={`Reply to ${title}`}
-            className="composer-input pointer-events-none relative block min-h-12 w-full resize-none overflow-hidden bg-transparent px-4 pt-3.5 pb-1.5 font-sans text-prose leading-[1.6] text-foreground placeholder:text-faint focus:outline-none"
+            className={cn(COMPOSER_INPUT, "pointer-events-none text-foreground")}
           />
         </div>
-        <div className="flex min-h-11 shrink-0 items-center gap-0.5 px-2 pb-2 [&_button]:pointer-events-none">
+        <div className={cn(COMPOSER_CONTROLS, "[&_button]:pointer-events-none")}>
           <ComposerAdditions meta={meta} disabled={false} attachFiles={async () => {}} onAttach={noop} onReference={noop} />
-          <div
-            ref={routingRow}
-            className="composer-routing flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
-          >
+          <div ref={routingRow} className={COMPOSER_ROUTING}>
             <ComposerRouting />
           </div>
           <div title={running ? (draft.trim() ? "Queue" : "Stop") : "Send"} className="ml-2 flex shrink-0 items-center gap-1">
@@ -92,6 +92,10 @@ export function PaneComposer() {
             />
           </div>
         </div>
+      </div>
+      <ComposerStatus still>
+        <ComposerPlace />
+      </ComposerStatus>
       </div>
     </div>
   )

@@ -149,7 +149,12 @@ async function checkRail() {
       }
       const heights = await evaluate("[...new Set([...document.querySelectorAll('.web-row')].map((node) => Math.round(node.getBoundingClientRect().height)))]")
       assert.deepEqual(heights, [52], `${where}: a phone's rows are 52px: ${heights}`)
-      const corners = await evaluate("[...document.querySelectorAll('.web-row, .web-fin-row, .web-project-row, [data-project-avatar], [data-setup-card]')].map((node) => getComputedStyle(node).borderRadius).filter((radius) => radius !== '0px')")
+      // The rail's top is the desk's own rows (`RailRow`, the left rail's New thread and Inbox) at a finger's 44 px, the
+      // Inbox's count a bare number in the attention hue as on the desk. A phone has no New thread row: New floats.
+      const top = await evaluate("[...document.querySelectorAll('[data-rail-top] [data-rail-top-row]')].map((node) => ({ row: node.dataset.railTopRow, desk: node.classList.contains('group/top'), height: Math.round(node.getBoundingClientRect().height), count: node.querySelector('[data-inbox-count]') ? getComputedStyle(node.querySelector('[data-inbox-count]')).backgroundColor : null }))")
+      assert.deepEqual(top, [{ row: "inbox", desk: true, height: 44, count: "rgba(0, 0, 0, 0)" }], `${where}: the desk's Inbox row at the list's top: ${JSON.stringify(top)}`)
+      assert.ok(await evaluate("Boolean(document.querySelector('button.web-fab[aria-label=\\'New thread\\']'))"), `${where}: New floats at the foot`)
+      const corners = await evaluate("[...document.querySelectorAll('.web-row, .web-fin-row, .web-project-row, [data-project-avatar], [data-setup-card], [data-rail-top-row], .web-fab')].map((node) => getComputedStyle(node).borderRadius).filter((radius) => radius !== '0px')")
       assert.deepEqual(corners, [], `${where}: every corner square`)
 
       // The Apex: its fin, its line, and folded only the Fins that need the person, each with its ask.
@@ -255,18 +260,24 @@ async function checkRail() {
       console.log(`Phone, ${theme}: projects ${groups.map((group) => group.name).join(", ")}; the Apex ${folded.fins} Fins folded, ${open.fins} + ${open.finished} finished open; 2 done folded; Status and Mark as unread sent; read once on open; setup card 2 of 4, put away`)
 
       // The tablet: the rail beside the open Apex, rows 44px, the open one lit.
+      // Put away on the phone above; an iPad that never put it away has it.
+      await evaluate("localStorage.removeItem('mako:web:setup-card:account-rail-check'), true")
       await load(`theme=${theme}&form=ipad`, IPAD)
       await until(`document.querySelector('[data-list="rail"] ${row("apex")}')?.getAttribute('aria-current') === 'page'`, `iPad, ${theme}: the open Apex lit`)
       const rail = await evaluate("({ heights: [...new Set([...document.querySelectorAll('[data-list=\"rail\"] .web-row')].map((node) => Math.round(node.getBoundingClientRect().height)))], card: Boolean(document.querySelector('[data-setup-card]')), groups: document.querySelectorAll('[data-list=\"rail\"] [data-project-group]').length })")
       assert.deepEqual(rail.heights, [44], `iPad, ${theme}: rows are 44px: ${rail.heights}`)
       assert.equal(rail.groups, 4, `iPad, ${theme}: the same projects`)
-      assert.equal(rail.card, false, `iPad, ${theme}: Finish setting up is the phone's`)
+      assert.equal(rail.card, true, `iPad, ${theme}: Finish setting up, at the rail's foot as on the desk`)
+      assert.equal(await evaluate("(() => { const card = document.querySelector('[data-list=\"rail\"] [data-setup-card]'); const rows = document.querySelector('[data-list=\"rail\"] .web-scroll'); return Boolean(card && rows && card.getBoundingClientRect().top >= rows.getBoundingClientRect().bottom - 1) })()"), true, `iPad, ${theme}: the card under the rail's rows`)
+      assert.equal(await evaluate("document.querySelector('[data-list=\"rail\"] h1')"), null, `iPad, ${theme}: the rail has no title of its own, as the desk's`)
+      const railTop = await evaluate("[...document.querySelectorAll('[data-rail-top] [data-rail-top-row]')].map((node) => ({ row: node.dataset.railTopRow, desk: node.classList.contains('group/top'), height: Math.round(node.getBoundingClientRect().height), count: node.querySelector('[data-inbox-count]') ? getComputedStyle(node.querySelector('[data-inbox-count]')).backgroundColor : null }))")
+      assert.deepEqual(railTop.map((each) => [each.row, each.desk, each.height]), [["session.new", true, 44], ["inbox", true, 44]], `iPad, ${theme}: the desk's New thread and Inbox rows head the rail: ${JSON.stringify(railTop)}`)
       await press(`${row("apex")} [data-row-fold]`)
       await until(`document.querySelector('${row("apex")}').dataset.apexOpen === 'true'`, `iPad, ${theme}: the Apex unfolds`)
       await wait(600)
       await capture(`20-ipad-${theme}.png`)
       await press(`${row("apex")} [data-row-fold]`)
-      console.log(`iPad, ${theme}: rows 44px, the open Apex lit, 4 groups, no setup card`)
+      console.log(`iPad, ${theme}: rows 44px, the open Apex lit, 4 groups, the setup card at the foot, no title`)
     }
   } finally {
     clearTimeout(watchdog)

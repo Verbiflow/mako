@@ -31,7 +31,8 @@ export function FinTypedAnswer({ title, options, disabled, onAnswer, className }
         disabled={disabled}
         aria-label={`Answer ${title} in your own words`}
         placeholder={options ? "Or your own words" : "Your answer"}
-        className="h-7 w-full border border-hairline bg-transparent px-2 text-label text-foreground placeholder:text-faint focus:border-foreground/30 focus:outline-none"
+        // Under a finger a thumb's height, and the 16 px under which iOS zooms into a field it focuses.
+        className="h-7 w-full border border-hairline bg-transparent px-2 text-label text-foreground placeholder:text-faint focus:border-foreground/30 focus:outline-none pointer-coarse:h-11 pointer-coarse:text-prose"
       />
     </form>
   )

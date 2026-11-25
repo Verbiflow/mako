@@ -51,6 +51,7 @@ function routes(thread: PrimerThread): string {
 }
 
 export const POLICY = [
+  "Do this Thread's own Git work yourself with Mako's tools: moving onto its branch, bringing or putting back what a move left, committing, pushing, updating from main, and opening or updating its pull request. Never ask the person to do in the app what a tool does; ask them only for a decision that is theirs, with your question tool, or agents_report if you're a Fin.",
   "Merge a pull request or a branch only when the person asks, or when this Thread is on full access and merging is the next step of its work.",
   "Never put a token, key, password or other secret in your output, a commit, or a report.",
   "Report only what you ran and saw. Say what wasn't run or verified.",

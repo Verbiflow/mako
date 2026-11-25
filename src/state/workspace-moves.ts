@@ -165,6 +165,10 @@ export const moveReviews = {
   dismiss(conversationId: string): void {
     updateReview(conversationId, () => null)
   },
+  /** The move was adjusted elsewhere (another window, or the agent with worktree_bring): the card shows it as it is, and goes once nothing's left to check. */
+  adjusted(conversationId: string, outcome: MoveOutcome): void {
+    updateReview(conversationId, (review) => (needsReview(outcome) || review.returned.length ? { ...review, outcome } : null))
+  },
   /** "Put back": files that came go back to the project folder as it had them, and out of the worktree. */
   async putBack(conversationId: string, paths: string[]): Promise<void> {
     if (!paths.length) return

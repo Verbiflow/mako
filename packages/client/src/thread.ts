@@ -13,6 +13,7 @@ export const THREAD_HELP = localWords(`  mako thread move cloud|back [--conversa
                     as thread_move does; from your own shell, name the conversation, and it waits for the move's end.
   mako thread rename <title> | archive | restore [--conversation <id>] [--key <k>]
                     Rename, Archive and Restore on the Thread's menu, as the thread tool does.
+                    --conversation takes a conversation's ID, or its Thread's ID or handle (mako-7f3k, or 7f3k).
   mako settings read | set <setting> <value>
                     What the settings tool reads and changes: hand-off-on-sleep, continue-after-restart, harness-order
                     (harnesses first to last, comma-separated), commit-model, keep-awake and keep-awake-lid-closed.

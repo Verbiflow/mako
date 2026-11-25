@@ -116,6 +116,11 @@ async function checkDesk() {
     assert.equal(await evaluate(`Boolean(${held}.querySelector('[data-live-mark="open"][aria-label^="Open in Devin"]'))`), true, "a session Devin's own app holds wears the Mac's hollow ring")
     await capture("list-1280-dark.png")
     console.log("Rail: checkouts, earlier agents, background work and another app's ring from the Mac's list")
+    // The rail's top is the desk's own rows (`RailRow`), the ones a phone's and an iPad's list head with too
+    // (`test-phone-rail-ui`): here at the desk's 28 px, with Search, which a touch list has no palette for.
+    const top = await evaluate("[...document.querySelectorAll('[data-rail-top] [data-rail-top-row]')].map((node) => [node.dataset.railTopRow, node.classList.contains('group/top'), Math.round(node.getBoundingClientRect().height)])")
+    assert.deepEqual(top.map(([row]) => row), ["session.new", "view.command-palette", "inbox"], `the browser's rail top: ${JSON.stringify(top)}`)
+    assert.ok(top.every(([, desk, height]) => desk && height === 28), `the desk's RailRow at its own size: ${JSON.stringify(top)}`)
 
     await desk("dark")
     assert.equal(await evaluate("matchMedia('(pointer: fine) and (hover: hover)').matches"), true, "the page reads as under a mouse")
@@ -167,6 +172,20 @@ async function checkDesk() {
     await chord("b", "KeyB", 4)
     await until("Boolean(document.querySelector('nav[aria-label=\"Threads\"]'))", "the rail back")
     console.log("Keys: ⌘B")
+
+    // 6. Settings are the desktop's own panes (`SettingsPanes`): the grouped nav with its search and one section beside
+    //    it, holding what a browser reaches, under the desktop's ids; its switches are the desktop's `Toggle`.
+    await window.loadURL(`${new URL("scripts/web-desk.html", process.env.MAKO_DESK_URL).href}?settings&theme=dark`)
+    await until("document.querySelectorAll('[data-settings-section]').length > 0", "the browser's Settings")
+    const nav = await evaluate("[...document.querySelectorAll('[data-settings-section]')].map((node) => node.dataset.settingsSection)")
+    assert.deepEqual(nav, ["agents", "fins", "notifications", "transcript", "appearance", "setup", "pull-requests", "account", "devices", "diagnostics"], `the browser's Settings sections: ${JSON.stringify(nav)}`)
+    assert.equal(await evaluate("Boolean(document.querySelector('input[aria-label=\\'Search settings\\']'))"), true, "with the desktop's search")
+    await until("document.querySelectorAll('[data-agent-row]').length > 0", "Agents, read from the Mac")
+    await evaluate("document.querySelector('[data-settings-section=\\'transcript\\']').click(), true")
+    await until("Boolean(document.querySelector('main [role=switch]'))", "Conversation's switch")
+    assert.equal(await evaluate("getComputedStyle(document.querySelector('main [role=switch]')).borderRadius !== '0px' && Math.round(document.querySelector('main [role=switch]').getBoundingClientRect().width)"), 28, "the desktop's own Toggle")
+    await capture("settings-1280-dark.png")
+    console.log("Settings: the desktop's panes and Toggle, with what a browser reaches")
 
     await desk("light")
     await until("Boolean(document.querySelector('[data-background-work]'))", "the busy Session, light")

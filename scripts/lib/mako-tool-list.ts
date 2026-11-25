@@ -17,9 +17,10 @@ import { registerWorkspaceTools } from "@mako/host/workspaces/tools"
  * server, every registrar the host hands it): tools/list and the server instructions, for a Thread of each role. The
  * registrars' services are never called by a listing, so each is a stub that answers nothing; the grant's conversation
  * is named after the role it plays, and the agents registrar reads its role from that name. Simulator tools are left
- * out: they're offered only on a Mac whose iOS simulators are set up.
+ * out: they're offered only on a Mac whose iOS simulators are set up. `fullAccess`: the Thread runs on full access, which
+ * some descriptions say; below it otherwise.
  */
-export async function makoToolList(role: AgentToolRole): Promise<{ instructions: string; tools: Tool[] }> {
+export async function makoToolList(role: AgentToolRole, options: { fullAccess?: boolean } = {}): Promise<{ instructions: string; tools: Tool[] }> {
   const never = (): never => { throw new Error("A listing calls no tool") }
   // SAFETY: a listing only registers tools; nothing reads a service until a tool is called, and this stub throws if one is.
   const stub: never = new Proxy(never, { get: (_target, key) => (key === "then" ? undefined : stub), apply: never }) as never
@@ -27,7 +28,7 @@ export async function makoToolList(role: AgentToolRole): Promise<{ instructions:
   const registrars: MakoTools[] = [
     (server, conversationId) => registerWorkspaceTools(server, stub, conversationId),
     (server, conversationId) => registerEnvironmentTools(server, stub, conversationId),
-    (server, conversationId) => registerPullRequestTools(server, stub, conversationId, () => false),
+    (server, conversationId) => registerPullRequestTools(server, stub, conversationId, () => options.fullAccess === true),
     (server, conversationId) => registerThreadHistoryTools(server, stub, conversationId),
     (server, conversationId) => registerShowTool(server, stub, conversationId),
     (server, _conversationId, conversation) => registerAgentTools(server, stub, roleOf(conversation)),

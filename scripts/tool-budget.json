@@ -3,33 +3,33 @@
   "roles": {
     "thread": {
       "total": {
-        "tokens": 14774,
-        "bytes": 64737
+        "tokens": 14978,
+        "bytes": 65589
       },
       "instructions": {
-        "tokens": 727,
+        "tokens": 726,
         "bytes": 3096
       },
       "tools": {
         "worktree_status": {
-          "tokens": 327,
-          "bytes": 1585
+          "tokens": 339,
+          "bytes": 1632
         },
         "worktree_bring": {
-          "tokens": 293,
-          "bytes": 1396
+          "tokens": 406,
+          "bytes": 1841
         },
         "worktree_move": {
-          "tokens": 493,
-          "bytes": 2206
+          "tokens": 512,
+          "bytes": 2275
         },
         "worktree_update": {
-          "tokens": 224,
-          "bytes": 1055
+          "tokens": 233,
+          "bytes": 1095
         },
         "worktree_merge": {
-          "tokens": 182,
-          "bytes": 873
+          "tokens": 196,
+          "bytes": 934
         },
         "worktree_remove": {
           "tokens": 144,
@@ -88,16 +88,16 @@
           "bytes": 2884
         },
         "pull_request_open": {
-          "tokens": 698,
-          "bytes": 3177
+          "tokens": 718,
+          "bytes": 3269
         },
         "pull_request_merge": {
           "tokens": 415,
           "bytes": 1857
         },
         "pull_request_rerun": {
-          "tokens": 228,
-          "bytes": 1030
+          "tokens": 254,
+          "bytes": 1144
         },
         "thread_history": {
           "tokens": 580,
@@ -116,8 +116,8 @@
           "bytes": 1027
         },
         "agents_list": {
-          "tokens": 621,
-          "bytes": 2772
+          "tokens": 618,
+          "bytes": 2765
         },
         "agents_move": {
           "tokens": 356,
@@ -136,8 +136,8 @@
           "bytes": 1505
         },
         "agents_send": {
-          "tokens": 615,
-          "bytes": 2705
+          "tokens": 610,
+          "bytes": 2696
         },
         "agents_stop": {
           "tokens": 183,
@@ -175,33 +175,33 @@
     },
     "apex": {
       "total": {
-        "tokens": 14774,
-        "bytes": 64737
+        "tokens": 14978,
+        "bytes": 65589
       },
       "instructions": {
-        "tokens": 727,
+        "tokens": 726,
         "bytes": 3096
       },
       "tools": {
         "worktree_status": {
-          "tokens": 327,
-          "bytes": 1585
+          "tokens": 339,
+          "bytes": 1632
         },
         "worktree_bring": {
-          "tokens": 293,
-          "bytes": 1396
+          "tokens": 406,
+          "bytes": 1841
         },
         "worktree_move": {
-          "tokens": 493,
-          "bytes": 2206
+          "tokens": 512,
+          "bytes": 2275
         },
         "worktree_update": {
-          "tokens": 224,
-          "bytes": 1055
+          "tokens": 233,
+          "bytes": 1095
         },
         "worktree_merge": {
-          "tokens": 182,
-          "bytes": 873
+          "tokens": 196,
+          "bytes": 934
         },
         "worktree_remove": {
           "tokens": 144,
@@ -260,16 +260,16 @@
           "bytes": 2884
         },
         "pull_request_open": {
-          "tokens": 698,
-          "bytes": 3177
+          "tokens": 718,
+          "bytes": 3269
         },
         "pull_request_merge": {
           "tokens": 415,
           "bytes": 1857
         },
         "pull_request_rerun": {
-          "tokens": 228,
-          "bytes": 1030
+          "tokens": 254,
+          "bytes": 1144
         },
         "thread_history": {
           "tokens": 580,
@@ -288,8 +288,8 @@
           "bytes": 1027
         },
         "agents_list": {
-          "tokens": 621,
-          "bytes": 2772
+          "tokens": 618,
+          "bytes": 2765
         },
         "agents_move": {
           "tokens": 356,
@@ -308,8 +308,8 @@
           "bytes": 1505
         },
         "agents_send": {
-          "tokens": 615,
-          "bytes": 2705
+          "tokens": 610,
+          "bytes": 2696
         },
         "agents_stop": {
           "tokens": 183,
@@ -347,33 +347,33 @@
     },
     "fin": {
       "total": {
-        "tokens": 15770,
-        "bytes": 69097
+        "tokens": 15974,
+        "bytes": 69949
       },
       "instructions": {
-        "tokens": 727,
+        "tokens": 726,
         "bytes": 3096
       },
       "tools": {
         "worktree_status": {
-          "tokens": 327,
-          "bytes": 1585
+          "tokens": 339,
+          "bytes": 1632
         },
         "worktree_bring": {
-          "tokens": 293,
-          "bytes": 1396
+          "tokens": 406,
+          "bytes": 1841
         },
         "worktree_move": {
-          "tokens": 493,
-          "bytes": 2206
+          "tokens": 512,
+          "bytes": 2275
         },
         "worktree_update": {
-          "tokens": 224,
-          "bytes": 1055
+          "tokens": 233,
+          "bytes": 1095
         },
         "worktree_merge": {
-          "tokens": 182,
-          "bytes": 873
+          "tokens": 196,
+          "bytes": 934
         },
         "worktree_remove": {
           "tokens": 144,
@@ -432,16 +432,16 @@
           "bytes": 2884
         },
         "pull_request_open": {
-          "tokens": 698,
-          "bytes": 3177
+          "tokens": 718,
+          "bytes": 3269
         },
         "pull_request_merge": {
           "tokens": 415,
           "bytes": 1857
         },
         "pull_request_rerun": {
-          "tokens": 228,
-          "bytes": 1030
+          "tokens": 254,
+          "bytes": 1144
         },
         "thread_history": {
           "tokens": 580,
@@ -460,8 +460,8 @@
           "bytes": 1027
         },
         "agents_list": {
-          "tokens": 621,
-          "bytes": 2772
+          "tokens": 618,
+          "bytes": 2765
         },
         "agents_move": {
           "tokens": 356,
@@ -484,8 +484,8 @@
           "bytes": 1505
         },
         "agents_send": {
-          "tokens": 615,
-          "bytes": 2705
+          "tokens": 610,
+          "bytes": 2696
         },
         "agents_stop": {
           "tokens": 183,
@@ -523,33 +523,33 @@
     },
     "fin-apex": {
       "total": {
-        "tokens": 15770,
-        "bytes": 69097
+        "tokens": 15974,
+        "bytes": 69949
       },
       "instructions": {
-        "tokens": 727,
+        "tokens": 726,
         "bytes": 3096
       },
       "tools": {
         "worktree_status": {
-          "tokens": 327,
-          "bytes": 1585
+          "tokens": 339,
+          "bytes": 1632
         },
         "worktree_bring": {
-          "tokens": 293,
-          "bytes": 1396
+          "tokens": 406,
+          "bytes": 1841
         },
         "worktree_move": {
-          "tokens": 493,
-          "bytes": 2206
+          "tokens": 512,
+          "bytes": 2275
         },
         "worktree_update": {
-          "tokens": 224,
-          "bytes": 1055
+          "tokens": 233,
+          "bytes": 1095
         },
         "worktree_merge": {
-          "tokens": 182,
-          "bytes": 873
+          "tokens": 196,
+          "bytes": 934
         },
         "worktree_remove": {
           "tokens": 144,
@@ -608,16 +608,16 @@
           "bytes": 2884
         },
         "pull_request_open": {
-          "tokens": 698,
-          "bytes": 3177
+          "tokens": 718,
+          "bytes": 3269
         },
         "pull_request_merge": {
           "tokens": 415,
           "bytes": 1857
         },
         "pull_request_rerun": {
-          "tokens": 228,
-          "bytes": 1030
+          "tokens": 254,
+          "bytes": 1144
         },
         "thread_history": {
           "tokens": 580,
@@ -636,8 +636,8 @@
           "bytes": 1027
         },
         "agents_list": {
-          "tokens": 621,
-          "bytes": 2772
+          "tokens": 618,
+          "bytes": 2765
         },
         "agents_move": {
           "tokens": 356,
@@ -660,8 +660,8 @@
           "bytes": 1505
         },
         "agents_send": {
-          "tokens": 615,
-          "bytes": 2705
+          "tokens": 610,
+          "bytes": 2696
         },
         "agents_stop": {
           "tokens": 183,

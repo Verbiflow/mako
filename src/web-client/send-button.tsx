@@ -14,9 +14,10 @@ const MOVE_PX = 10
 const WORDS = { queue: "Queue", steer: "Steer" } as const
 
 /**
- * The composer's one action, changing with the situation (`sendPresentation`): a circle with the arrow to send, the
- * square to stop, ✓ to save a queued message being edited; while the agent works and the field has words, a pill that
- * says what a tap does, Queue or Steer. Held, it offers both, each with what it does in a line, the default checked.
+ * The composer's one action, changing with the situation (`sendPresentation`), drawn as the desktop's
+ * (`ComposerActionButton`, `.composer-send`): the arrow alone until there is something to send, when a sea square grows
+ * in behind it; the square to stop, ✓ to save a queued message being edited. While the agent works and the field has
+ * words it is a pill that says what a tap does, Queue or Steer, since a finger has no tooltip to read. Held, it offers both, each with what it does in a line, the default checked.
  * While a model or access switch is on its way (`waiting`), it turns and can't be pressed, so the message goes after it.
  */
 export function SendButton({
@@ -72,7 +73,7 @@ export function SendButton({
 
   if (kind === "stop")
     return (
-      <button type="button" onClick={onStop} disabled={stopping} data-send-action="stop" className="web-send web-stop" aria-label={stopping ? "Stopping…" : "Stop the turn"}>
+      <button type="button" onClick={onStop} disabled={stopping} data-send-action="stop" className="web-send web-stop composer-send" aria-label={stopping ? "Stopping…" : "Stop the turn"}>
         {stopping ? <Spinner className="size-4" /> : <SquareIcon className="size-3 fill-current" />}
       </button>
     )
@@ -87,7 +88,7 @@ export function SendButton({
         aria-label={waiting ?? (wide && alternate ? `${presentation.label}. Hold for ${WORDS[alternate]}` : presentation.label)}
         aria-haspopup={offersChoice ? "menu" : undefined}
         data-send-action={kind}
-        className={cn("web-send", wide && "web-send-pill")}
+        className={cn("web-send composer-send", wide && "web-send-pill")}
         onPointerDown={pressed}
         onPointerMove={moved}
         onPointerUp={release}

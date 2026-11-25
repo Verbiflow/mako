@@ -99,4 +99,15 @@ await moveReviews.bring(elsewhere)
 assert.equal(moveReviewsStore.get().reviews[elsewhere], undefined)
 assert.equal(latest()?.title, "The rest came along", "the card closes, so a toast says it worked")
 assert.equal(latest()?.description, "They're in the worktree now. The agent hears on its next turn.")
-console.log("Workspace moved UI: a window follows its Session onto the branch, and the lead's window names the Sessions that came along; a move's best guesses wait on a card, file by file")
+
+// The agent brought what stayed with worktree_bring, or another window did: the card shows the move as it is now, and closes once nothing's left.
+const byAgent = auditId(12)
+moveReviews.open(byAgent, "mako/y", outcome)
+const stillGuessed: MoveOutcome = { ...outcome, brought: true, stayed: { ...outcome.stayed, uncertain: share([]) } }
+moveReviews.adjusted(byAgent, stillGuessed)
+assert.equal(moveReviewsStore.get().reviews[byAgent]?.outcome, stillGuessed, "what came on a best guess still waits on the card")
+moveReviews.adjusted(byAgent, { ...stillGuessed, likely: undefined })
+assert.equal(moveReviewsStore.get().reviews[byAgent], undefined, "nothing left to check: the card goes")
+moveReviews.adjusted(auditId(13), outcome)
+assert.equal(moveReviewsStore.get().reviews[auditId(13)], undefined, "a conversation with no card gets none")
+console.log("Workspace moved UI: a window follows its Session onto the branch, and the lead's window names the Sessions that came along; a move's best guesses wait on a card, file by file, and follow the agent's own adjustments")

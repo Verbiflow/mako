@@ -21,7 +21,7 @@ interface ComposerActionButtonProps {
 /**
  * The primary action.
  *
- * A square of the text colour once there is something to send, the arrow
+ * A square of the brand's sea once there is something to send, the arrow
  * alone before: an empty composer has no grey slab saying "not yet", and the
  * one solid shape in the box is the one thing to press. An empty running composer owns
  * the stop action; typing turns that same primary position into queue. An
@@ -55,7 +55,7 @@ export function ComposerActionButton({
         title={resumeLabel}
         data-composer-resume
         className={cn(
-          "composer-send pressable relative flex h-8 shrink-0 items-center gap-1.5 rounded-none bg-foreground pr-3 pl-2.5 text-ui font-medium text-background hover:opacity-90 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-ring",
+          "composer-send pressable relative flex h-8 shrink-0 items-center gap-1.5 rounded-none bg-sea pr-3 pl-2.5 text-ui font-medium text-on-sea hover:opacity-90 focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-ring",
           "animate-in fade-in-0 duration-200 ease-[var(--ease-out)] [transition:transform_var(--duration-press)_var(--ease-out),opacity_160ms_ease]"
         )}
       >
@@ -86,7 +86,7 @@ export function ComposerActionButton({
       className={cn(
         "composer-send pressable relative flex size-8 shrink-0 items-center justify-center rounded-none focus-visible:outline focus-visible:outline-offset-2 focus-visible:outline-ring",
         "[transition:transform_var(--duration-press)_var(--ease-out),color_160ms_ease,opacity_160ms_ease]",
-        enabled ? "text-background hover:opacity-90" : "text-faint"
+        enabled ? "text-on-sea hover:opacity-90" : "text-faint"
       )}
     >
       {stop ? (

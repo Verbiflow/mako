@@ -74,6 +74,12 @@ export const RemoteParentSchema = z.lazy(() => z.object({
   access: z.enum(ACCESS_TIER_NAMES),
   /** The newest of its Apex's messages that reached it, by the count its Apex's device keeps of them (`Placed.epoch`). */
   heard: z.number().int().positive().optional(),
+  /**
+   * Its Apex's device keeps a record of each Fin it places with the account, as its start said
+   * (`AgentsPlaceInput.parent.records`): this Fin's notices are posted to the account, which holds them while that
+   * device is off, and go to the device itself only when the account says it has no record of the Fin.
+   */
+  account: z.literal(true).optional(),
 }))
 export type RemoteParent = z.infer<typeof RemoteParentSchema>
 
@@ -112,6 +118,16 @@ export const PlacedSchema = z.lazy(() => z.object({
    * together, so an older word, a notice replayed or one that was on its way, changes nothing, after a restart too.
    */
   said: z.object({ owner: z.number(), seq: z.number() }).optional(),
+  /**
+   * The account has this device's record of it (`TreeEdgeSchema`), under which it takes the Fin's notices from its
+   * place: set once the account answered, and dropped once it answered the record's end.
+   */
+  recorded: z.literal(true).optional(),
+  /**
+   * When this device last took a report of it, by this device's own clock: what its closing and its record's idle
+   * time count from (`Agents.placedIdle`), never the report's own time, which is its device's clock.
+   */
+  heardAt: z.number().int().nonnegative().optional(),
 }))
 export type Placed = z.infer<typeof PlacedSchema>
 
@@ -642,6 +658,12 @@ export const NoticeSchema = z.lazy(() => z.object({
    * turns ended, a reminder among them (`Agents.owedOf`). Its report is the digest's words alone, kept nowhere.
    */
   unanswered: z.object({ request: z.string(), at: z.number(), turns: z.number(), line: z.string().max(400) }).optional(),
+  /**
+   * Not a report: this Fin and another Thread of its Shiver (`mate`: a Fin of the same Apex, named as `with`, or with
+   * none its Apex) each changed `files` in one folder while both were open (`FinCollisions`), `more` files besides.
+   * Said once a pair. Its report is the digest's words alone, kept nowhere, and changes how the Fin reads in nothing.
+   */
+  collision: z.object({ mate: z.string(), with: z.string().max(400).optional(), files: z.array(z.string().max(4096)).max(8), more: z.number().int().nonnegative() }).optional(),
 }))
 export type Notice = z.infer<typeof NoticeSchema>
 
@@ -688,6 +710,8 @@ export interface ChildThread {
   step?: string
   /** It reads as working and nothing came of it past `QUIET_MS` (`QuietWatch`): since when, its last step, whether it ran. */
   quiet?: { since: number; step?: string; running?: true }
+  /** Another open Thread of its Shiver changed a file it changed, in one folder (`FinCollisions`), as its row says it (`sharingWords`). */
+  sharing?: string
   /** Its work waits for its own Fins, a move or provider recovery: pending, but holding no execution room. */
   awaiting?: string
   /** When its work now began: its turn's start, or with `awaiting`, when that turn ended. Absent when nothing says. */
@@ -895,7 +919,7 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
     provider: thread.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown",
     observedAt: thread.updatedAt ?? edge.createdAt,
     startedAt: thread.startedAt ?? edge.createdAt,
-    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(edge.placed && edge.asked.place && { place: edge.asked.place }), ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }) },
+    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(edge.placed && edge.asked.place && { place: edge.asked.place }), ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }), ...(thread.sharing && { sharing: thread.sharing }) },
   }
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
@@ -1153,6 +1177,8 @@ export interface ApexCaller {
   forwards?: string
   /** With a message or an answer for a Fin: the count its Apex's device will keep once it reaches it (`Placed.epoch`). */
   epoch?: number
+  /** With a start: its device keeps a record of the Fin with the account (`AgentsPlaceInput.parent.records`). */
+  records?: true
 }
 
 /**
@@ -1184,13 +1210,15 @@ export interface PlaceWorkspace {
 /**
  * A Fin started here for an Apex on another device (`mako:agents-place`), settled by `op`
  * (`start:{apexSession}:{clientKey}`): a repeat answers the same Fin. `access` is at most the Apex's own; this device
- * caps it by its own ceiling too.
+ * caps it by its own ceiling too. `parent.records`: the Apex's device keeps a record of each Fin it places with the
+ * account (`TreeEdgeSchema`), so this Fin's notices go to the account; a device from before that says nothing, and
+ * is sent them itself.
  */
 export interface AgentsPlaceInput {
   version: number
   op: string
   clientKey: string
-  parent: { device: string; thread: string; session: string; conversation?: string; access: AccessTier }
+  parent: { device: string; thread: string; session: string; conversation?: string; access: AccessTier; records?: true }
   brief: Brief
   name: string
   title?: string
