@@ -43,6 +43,16 @@ test("reading copies go up as Mako draws each Session, the ones at work first an
     }
     let now = 1_000_000
     const remote = new MemoryRemote("gateway/d-1")
+    // The first push of the one at work as slow as a loaded runner made it: the one at rest still goes after it.
+    const pushWith = remote.pushWith.bind(remote)
+    let slowed = false
+    remote.pushWith = async (bundle, pack) => {
+      if (!slowed && bundle.nativeId === "busy") {
+        slowed = true
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      return pushWith(bundle, pack)
+    }
     const open = () => new ReadingCopies(folder, views, () => {}, { now: () => now, remote: () => remote })
     const scope = (paused = false) => ({
       sessions: [
