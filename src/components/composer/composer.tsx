@@ -46,14 +46,14 @@ import {
 import { recordLabel, writeDraft } from "@/lib/context/draft"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
 import { useComposerResume } from "@/components/composer/use-composer-resume"
-import { ComposerRouting } from "@/components/composer/composer-routing"
+import { ComposerPlace, ComposerRouting } from "@/components/composer/composer-routing"
 import { ContextMeter } from "@/components/composer/context-meter"
 import type { PlanHandle } from "@/components/composer/plan-toggle"
 import { keepPlanning, planTakesFeedback, recordSentPlanBuilds, usePlanDecision } from "@/state/plan-mode"
 import { steeringTitle } from "@/components/composer/steering"
 import { ROUTING_COMPACT_LEVELS, useCompactRow } from "@/components/composer/use-compact-row"
+import { COMPOSER_BOX, COMPOSER_COLUMN, COMPOSER_CONTROLS, COMPOSER_INPUT, COMPOSER_ROUTING, ComposerStatus } from "@/components/composer/composer-frame"
 
-/** Access to its glyph, then the harness to its glyph; see the routing row. */
 import { usePrefs } from "@/state/prefs"
 import { takeComposerFocus } from "@/state/session-panes"
 import { ComposerAdditions } from "@/components/composer/composer-additions"
@@ -1196,18 +1196,18 @@ export function Composer() {
               ? `Reply — Mako restores this session and ${harnessTitle(routedHarness)} resumes it`
               : viewingRunning
                 ? `Queue for ${harnessTitle(routedHarness)}`
-                : `Reply — ${harnessTitle(routedHarness)} answers`
+                : finsHere ? `Ask anything, or @ a ${FIN_WORD}` : "Ask anything"
         : newSessionKey
           ? `Start a ${harnessTitle(newHarness)} session in this Thread`
-          : `Ask ${harnessTitle(newHarness)} for a change`
+          : "Ask anything"
 
   // The composer has no line over it. What waits on the person (asks, the
   // queue, notices) sits flat on the conversation's surface, and the input
-  // with its routing row is one raised box inset from the pane's edges, so
-  // where you type reads at a glance without a divider.
+  // with its control row is one framed box in the transcript's column, with
+  // where the work runs on the line under it (`composer-frame.tsx`).
   return (
-    <div data-composer inert={!draftReady} aria-busy={!draftReady} className={cn("flex min-h-0 shrink-0 flex-col bg-surface", expanded ? "max-h-[80dvh]" : "max-h-[55dvh]")}>
-      <div className="flex min-h-0 w-full flex-col">
+    <div data-composer inert={!draftReady} aria-busy={!draftReady} className={cn("flex min-h-(--composer-rest) shrink-0 flex-col", expanded ? "max-h-[80dvh]" : "max-h-[55dvh]")}>
+      <div className={COMPOSER_COLUMN}>
         <div data-composer-row className="mx-3">
           <GoalBar />
         </div>
@@ -1265,7 +1265,7 @@ export function Composer() {
             void attach([...event.dataTransfer.files])
           }}
           className={cn(
-            "composer-box relative mx-3 mb-3 flex min-h-0 flex-col bg-raised",
+            COMPOSER_BOX,
             (dragging || referencing) && "ring-1 ring-foreground/40 ring-inset"
           )}
         >
@@ -1389,8 +1389,7 @@ export function Composer() {
               className={cn(
                 // No max-height and no scrolling of its own — the wrapper owns
                 // both, so the painted layer behind it stays in register.
-                "composer-input relative block min-h-12 w-full resize-none overflow-hidden bg-transparent px-4 pt-3.5 pb-1.5",
-                "font-sans text-prose leading-[1.6] placeholder:text-faint focus:outline-none",
+                COMPOSER_INPUT,
                 // Transparent glyphs let the overlay show through; the caret
                 // and selection stay native and visible.
                 "text-transparent caret-sea selection:bg-fill-selected selection:text-transparent"
@@ -1398,7 +1397,7 @@ export function Composer() {
             />
           </div>
 
-          <div className="flex min-h-11 shrink-0 items-center gap-0.5 px-2 pb-2">
+          <div className={COMPOSER_CONTROLS}>
             {wordsOnly ? null : (
               <ComposerAdditions
                 meta={meta}
@@ -1416,18 +1415,12 @@ export function Composer() {
               />
             )}
             {/*
-             * The row gives way in a fixed order as the pane narrows, found
-             * by measuring rather than by a width breakpoint: access drops
-             * to its glyph first (level 1), then the harness (level 2). The
-             * model and its reasoning are what people read here, so they
-             * are never shortened; whatever still does not fit scrolls
-             * behind a faded edge instead of being cut off with no sign
-             * that anything is missing.
+             * The model and its reasoning are what people read here, so they
+             * are never shortened; whatever does not fit scrolls behind a
+             * faded edge instead of being cut off with no sign that anything
+             * is missing.
              */}
-            <div
-              ref={routingRow}
-              className="composer-routing flex min-w-0 flex-1 items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden [&>*]:shrink-0"
-            >
+            <div ref={routingRow} className={COMPOSER_ROUTING}>
               {wordsOnly ? null : <ComposerRouting plan={plan} onPlanning={setPlanning} />}
             </div>
 
@@ -1438,7 +1431,6 @@ export function Composer() {
                 disabled={busy}
                 attachFiles={attach}
               />
-              {liveOwnsComposer && !wordsOnly ? <ContextMeter /> : null}
               {draft.length > 0 || expanded ? <IconAction label={expanded ? "Collapse draft" : "Expand draft"} size="xs" side="top" onClick={() => { setExpanded((value) => !value); textarea.current?.focus({ preventScroll: true }) }}>
                 {expanded ? <Minimize2Icon /> : <Maximize2Icon />}
               </IconAction> : null}
@@ -1466,6 +1458,7 @@ export function Composer() {
             </div>
           </div>
         </div>
+        <ComposerStatus trailing={liveOwnsComposer && !wordsOnly ? <ContextMeter /> : null}>{wordsOnly ? null : <ComposerPlace />}</ComposerStatus>
       </div>
     </div>
   )

@@ -46,6 +46,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -144,6 +145,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -184,6 +186,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -228,6 +231,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -373,6 +377,7 @@ const inputs = {
             z.literal("edits"),
             z.literal("chat"),
           ]),
+          records: z.literal(true).optional(),
         }),
         brief: z.object({
           objective: z.string(),
@@ -455,6 +460,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -505,6 +511,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -602,6 +609,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -643,6 +651,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -700,6 +709,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -781,6 +791,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({ child: z.string(), reason: z.string().optional() }),
@@ -807,6 +818,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -894,6 +906,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -1333,6 +1346,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -1894,6 +1908,7 @@ const inputs = {
                 ]),
                 conversation: z.string().optional(),
                 heard: z.number().optional(),
+                account: z.literal(true).optional(),
               })
               .optional(),
             source: z
@@ -1975,6 +1990,8 @@ const inputs = {
                 said: z
                   .object({ owner: z.number(), seq: z.number() })
                   .optional(),
+                recorded: z.literal(true).optional(),
+                heardAt: z.number().optional(),
               })
               .optional(),
           })
@@ -2764,6 +2781,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -3431,6 +3449,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -3466,6 +3485,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({
@@ -3504,6 +3524,7 @@ const inputs = {
           ]),
           forwards: z.string().optional(),
           epoch: z.number().optional(),
+          records: z.literal(true).optional(),
         }),
       ]),
       z.object({

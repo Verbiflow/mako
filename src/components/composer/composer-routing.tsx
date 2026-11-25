@@ -11,8 +11,11 @@ import { useThreads } from "@/state/threads"
 import { settingsTargetKey } from "@/state/composer-settings"
 import { setPendingPlan, usePlanChoice } from "@/state/plan-choice"
 
-
-/** The selected provider answers the next turn in the current conversation. */
+/**
+ * The composer's control row: who answers the next message (harness, model and its reasoning) and whether it plans
+ * first. Only what a person touches message to message; where and how the work runs is the status line under the box
+ * (`ComposerPlace`).
+ */
 export function ComposerRouting({
   plan,
   onPlanning,
@@ -20,6 +23,20 @@ export function ComposerRouting({
   plan?: Ref<PlanHandle>
   onPlanning?: (planning: boolean) => void
 }) {
+  const settings = useComposerSettings()
+  return (
+    <>
+      <AgentModelPicker view={settings} />
+      <PlanToggle view={settings} handle={plan} onPlanning={onPlanning} />
+    </>
+  )
+}
+
+/**
+ * Where and how the next turn runs, for the status line under the composer: this Mac or the cloud, the project folder
+ * or its own branch, the access it runs under, and the Thread's Fins and relations. Each is still the control it was.
+ */
+export function ComposerPlace() {
   const scope = useConversationScope()
   const globalViewing = useThreads(
     (state) => state.opening?.ref ?? state.viewing?.ref
@@ -43,8 +60,12 @@ export function ComposerRouting({
 
   return (
     <>
-      <AgentModelPicker view={settings} />
-      <PlanToggle view={settings} handle={plan} onPlanning={onPlanning} />
+      {scope ? null : (
+        <>
+          <RunPlaceChoice />
+          <WorkspaceChoice />
+        </>
+      )}
       {liveOwnsComposer && !moving ? (
         <LiveComposerControls />
       ) : (
@@ -52,12 +73,6 @@ export function ComposerRouting({
           planned={plannedMode}
           onChoose={() => setPendingPlan(settings.target, null)}
         />
-      )}
-      {scope ? null : (
-        <>
-          <RunPlaceChoice />
-          <WorkspaceChoice />
-        </>
       )}
     </>
   )

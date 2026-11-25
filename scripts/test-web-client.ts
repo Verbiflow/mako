@@ -361,8 +361,8 @@ test("a start runs in the access the person chose for its harness, the one their
   // No Mac to list the ladder (a phone, the cloud): the choice stands as the account keeps it.
   assert.deepEqual(accessInEffect("claude", choices, undefined), { mode: "bypassPermissions", tier: "full", label: "Full access" })
   // A mode the harness no longer offers names nothing, so the harness's own configuration decides, as on the desk.
-  assert.equal(accessInEffect("claude", { claude: { mode: "gone" } }, claude).label, "Default")
-  assert.equal(accessInEffect("codex", choices, undefined).label, "Default")
+  assert.equal(accessInEffect("claude", { claude: { mode: "gone" } }, claude).label, "Default access")
+  assert.equal(accessInEffect("codex", choices, undefined).label, "Default access")
   // A one-mode harness runs in its one level; plan reads as what it allows.
   assert.deepEqual(accessInEffect("cursor", {}, cursor), { tier: "full", label: "Full access" })
   assert.equal(accessInEffect("claude", { claude: { mode: "plan" } }, claude).label, "Read-only")
@@ -1154,7 +1154,7 @@ test("a move's bar only goes forward: each step its own span, an upload by its b
   assert.equal(percentWords(0.4, true), "100% done")
   assert.equal(sentWords({ bytes: 3_200_000, of: 14_400_000 }), "3.2 of 14 MB")
   assert.equal(stepWords("device", "bringing", "Studio", false), "Bringing it to Studio")
-  assert.equal(stepWords("cloud", "packing", "Studio", true), "Sending ahead while it works")
+  assert.equal(stepWords("cloud", "packing", "Studio", true), "Sending ahead")
 })
 
 test("a move is followed from its steps, said by the list from its first step, and ends once", () => {

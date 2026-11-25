@@ -28,7 +28,8 @@ import { LinkCredential } from "./link-credential.js"
  * its capture (`changed`; at most every second, a large one less often, its size permitting), an older one a minute
  * after it last went, in the scope's order (`SyncScope`), the ones at work first. Each is captured into a record
  * store of its own, so content-defined chunks carry only what changed, and pushed to the account in the same order
- * (`ScopedUploads`), which keeps in that store what the account holds.
+ * (`ScopedUploads`), which keeps in that store what the account holds. A copy at rest is written only once the
+ * pushes of the copies at work before it have ended, so theirs reach the account first.
  */
 export { COPY_FORMAT, CopyHeaderSchema, CopyPageSchema, parseCopy, type CopyHeader, type CopyPage, type ReadCopy } from "./copy-reader.js"
 
@@ -269,6 +270,9 @@ export class ReadingCopies {
   async #lookOnce(only?: readonly Wanted[]): Promise<void> {
     const scope = this.#scope
     if (!scope) return
+    // The pushes of the copies at work this look wrote. One at rest is written once they've ended: the uploads run two
+    // pushes at once, and a small copy at rest pushed beside a large one at work reached the account first.
+    const atWork: Promise<void>[] = []
     for (const session of only ?? scope.sessions) {
       if (this.#stopped || !this.#uploads || this.#scope !== scope) return
       if (scope.paused && !session.busy) continue
@@ -289,7 +293,13 @@ export class ReadingCopies {
         continue
       }
       this.#waiting.delete(key)
+      if (!session.busy && atWork.length) {
+        await Promise.all(atWork.splice(0))
+        if (this.#stopped || !this.#uploads || this.#scope !== scope) return
+      }
       await namedWork(this.#work, `copy ${session.harness} ${session.nativeId.slice(0, 8)}`, () => this.#copy(session, key, file, stamp))
+      const push = session.busy ? this.#uploads?.pushing(session.harness, session.nativeId) : undefined
+      if (push) atWork.push(push)
     }
     this.#arm()
   }

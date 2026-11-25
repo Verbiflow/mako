@@ -12,11 +12,12 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * - The mic held stops listening when the finger lifts; tapped, it listens on.
  * - Listening redraws nothing while no words arrive: the meter's samples don't render the composer.
  * - The Queue/Steer choice closes when it's no longer offered, and a later working turn doesn't open it again.
- * - An answer's words can be selected; a long press beside them still offers Copy and Branch.
+ * - An answer's words can be selected; a long press beside them still offers Copy answer and Fork, the desk's words.
  * - "Switched to" lines come from the Session's record, so a reload draws the same ones.
  * - The queue's actions, the steps line and the edit's Cancel are 44 px targets.
  * - The queue's count is said once, by the queue; a phone's transcript keeps no rail of turns, nor a gutter for one.
- * - The model, its effort and the access are one chip ("GPT-5.6 Sol · High", a caution mark under Full access) opening
+ * - The model and its effort are one chip in the control row ("GPT-5.6 Sol High"), the access in words under the box
+ *   (Full access in the caution hue), both opening
  *   one sheet: the harness's models, the chosen one's effort levels and nothing for a model without, the access as its
  *   last row. A choice made there goes with the next message; an access change the owner refuses says why. A flick
  *   down closes it.
@@ -119,11 +120,15 @@ async function checkPhone() {
   }
 
   const sheet = '[role="dialog"][aria-label="Model and access"]'
-  /** The chip as it reads: the model, its effort suffix, and whether it carries the caution mark. */
+  /**
+   * The chip as it reads: the model and its effort, as the desktop's composer reads them, and whether the access on the
+   * status line under the box is the caution-coloured full access.
+   */
   const chip = () => evaluate(`(() => {
     const chip = document.querySelector('[data-thread-chip="settings"]')
     const words = chip.querySelector('.truncate')
-    return { model: words.textContent, effort: chip.querySelector('.web-settings-chip-effort')?.textContent ?? null, risky: Boolean(chip.querySelector('[data-risky-mark]')), cut: words.scrollWidth > words.clientWidth, spoken: chip.getAttribute('aria-label') }
+    const access = document.querySelector('[data-composer-status] [data-thread-chip="access"]')
+    return { model: words.textContent, effort: chip.querySelector('.web-settings-chip-effort')?.textContent ?? null, risky: access?.dataset.access === 'full' && Boolean(access.querySelector('[data-risky-mark]')), cut: words.scrollWidth > words.clientWidth, spoken: chip.getAttribute('aria-label'), access: access?.textContent ?? null }
   })()`)
   /** The effort levels the sheet offers, and the one chosen. */
   const efforts = () => evaluate(`(() => {
@@ -154,6 +159,33 @@ async function checkPhone() {
     await until(`!document.querySelector('${sheet}')`, "the sheet closing on a flick")
   }
 
+  /**
+   * A Thread's status line while the field has the on-screen keyboard up: folded away, the transcript keeping its 44 px,
+   * and back as the field lets go. The page says the keyboard is up as `useKeyboardInset` does (`data-keyboard`); a
+   * test's window has no on-screen keyboard to raise.
+   */
+  const checkFold = async () => {
+    await phone("dark")
+    const status = "document.querySelector('.web-composer > [data-composer-status]')"
+    const height = () => evaluate(`Math.round(${status}.getBoundingClientRect().height)`)
+    assert.equal(await height(), 44, "the status line at rest")
+    // A hidden test window holds its focus events until it's shown: the field's focus is said as the browser says it.
+    await evaluate(`(() => { document.documentElement.setAttribute('data-keyboard', ''); const field = document.querySelector('.web-composer-input'); field.focus({ preventScroll: true }); field.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); return true })()`)
+    await until(`Math.round(${status}.getBoundingClientRect().height) === 0 && getComputedStyle(${status}).opacity === '0'`, "the status line folded under the keyboard")
+    await capture("composer-keyboard-iphone-dark.png")
+    await evaluate("(() => { const field = document.querySelector('.web-composer-input'); field.blur(); field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); document.documentElement.removeAttribute('data-keyboard'); return true })()")
+    await until(`Math.round(${status}.getBoundingClientRect().height) === 44`, "the status line back as the field lets go")
+    assert.notEqual(await evaluate(`getComputedStyle(${status}).transitionDuration`), "0s", "it folds and comes back on a short transition")
+    // Under reduced motion it goes and comes at once.
+    await page.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [{ name: "prefers-reduced-motion", value: "reduce" }] })
+    assert.ok((await evaluate(`getComputedStyle(${status}).transitionDuration`)).split(",").every((each) => each.trim() === "0s"), "no transition under reduced motion")
+    await evaluate(`(() => { document.documentElement.setAttribute('data-keyboard', ''); const field = document.querySelector('.web-composer-input'); field.focus({ preventScroll: true }); field.dispatchEvent(new FocusEvent('focusin', { bubbles: true })); return true })()`)
+    assert.equal(await height(), 0, "folded at once under reduced motion")
+    await evaluate("(() => { const field = document.querySelector('.web-composer-input'); field.blur(); field.dispatchEvent(new FocusEvent('focusout', { bubbles: true })); document.documentElement.removeAttribute('data-keyboard'); return true })()")
+    await page.debugger.sendCommand("Emulation.setEmulatedMedia", { features: [] })
+    console.log("Fold: a Thread's status line folds while the keyboard is up and comes back on blur; at once under reduced motion")
+  }
+
   /** The one chip and its sheet, on Codex (every model with effort) and on Grok (ending on a model without). */
   const checkSettings = async () => {
     // The bar keeps what a thumb needs: add, the one chip, the mic and send.
@@ -161,7 +193,18 @@ async function checkPhone() {
     const bar = await evaluate("[...document.querySelector('.web-composer-bar').querySelectorAll('button')].filter(node => node.offsetParent).map(node => node.dataset.threadChip ? 'chip' : node.dataset.sendAction ? 'send' : node.getAttribute('aria-label'))")
     assert.deepEqual(bar, ["Add photos or files", "chip", "Dictate", "send"], `the composer's bar: ${JSON.stringify(bar)}`)
     let read = await chip()
-    assert.deepEqual([read.model, read.effort, read.risky, read.cut], ["GPT-5.6 Sol", "· High", false, false], `the chip reads the model and its effort, whole: ${JSON.stringify(read)}`)
+    assert.deepEqual([read.model, read.effort, read.risky, read.cut], ["GPT-5.6 Sol", "High", false, false], `the chip reads the model and its effort, whole: ${JSON.stringify(read)}`)
+    assert.equal(read.access, "Ask before acting", "the access in words on the status line under the box")
+    // The desktop's composer (`composer-frame.tsx`): one framed box holding the field and one control row, then the
+    // status line under it, the send the desktop's own sea square.
+    const frame = await evaluate(`(() => {
+      const box = document.querySelector('.web-composer .composer-box')
+      const status = document.querySelector('.web-composer [data-composer-status]')
+      return { box: Boolean(box), field: Boolean(box?.querySelector('.web-composer-input')), controls: Boolean(box?.querySelector('[data-composer-controls] [data-send-action]')), statusUnder: Boolean(status) && box.compareDocumentPosition(status) === Node.DOCUMENT_POSITION_FOLLOWING && !box.contains(status), send: Boolean(document.querySelector('[data-send-action].composer-send')), corners: getComputedStyle(box).borderRadius }
+    })()`)
+    assert.deepEqual(frame, { box: true, field: true, controls: true, statusUnder: true, send: true, corners: "0px" }, `the desktop's composer frame: ${JSON.stringify(frame)}`)
+    const accessReach = await evaluate(`(() => { const node = document.querySelector('[data-thread-chip="access"]'); const r = node.getBoundingClientRect(); const x = r.left + r.width / 2; return r.height >= 44 && [r.top + 1, r.bottom - 1].every(y => node.contains(document.elementFromPoint(x, y))) })()`)
+    assert.ok(accessReach, "the access takes a touch 44 px tall")
     assert.equal(read.spoken, "Model and access: GPT-5.6 Sol, High reasoning, Ask before acting")
     const reach = await evaluate(`(() => { const chip = document.querySelector('[data-thread-chip="settings"]'); const r = chip.getBoundingClientRect(); const x = r.left + r.width / 2; return [r.top - 3, r.bottom + 3].every(y => chip.contains(document.elementFromPoint(x, y))) })()`)
     assert.ok(reach, "the chip takes a touch 44 px tall")
@@ -170,7 +213,12 @@ async function checkPhone() {
 
     await phone("dark")
     read = await chip()
-    assert.deepEqual([read.model, read.effort, read.risky], ["GPT-5.6 Sol", "· High", true], `under Full access the chip carries the caution mark: ${JSON.stringify(read)}`)
+    assert.deepEqual([read.model, read.effort, read.risky, read.access], ["GPT-5.6 Sol", "High", true, "Full access"], `under Full access the status line says so in the caution hue: ${JSON.stringify(read)}`)
+    assert.equal(await evaluate(`document.querySelector('[data-thread-chip="access"]').dataset.access`), "full", "full access is the one the status line colours")
+    // Pressed, the access opens the one sheet with its row already open.
+    await tap('[data-thread-chip="access"]')
+    await until(`document.querySelector('${sheet} [data-access-row]')?.getAttribute('aria-expanded') === 'true'`, "the sheet opened at the access")
+    await flickDown()
     await evaluate("document.activeElement?.blur(), true")
     await capture("composer-full-access-iphone-dark.png")
 
@@ -194,7 +242,7 @@ async function checkPhone() {
     await tap(`${sheet} [data-effort] [data-value="medium"]`)
     await until(`document.querySelector('${sheet} [data-effort] [aria-checked="true"]')?.dataset.value === 'medium'`, "Medium chosen")
     read = await chip()
-    assert.deepEqual([read.model, read.effort], ["GPT-5.6 Luna", "· Medium"], `the chip follows the sheet: ${JSON.stringify(read)}`)
+    assert.deepEqual([read.model, read.effort], ["GPT-5.6 Luna", "Medium"], `the chip follows the sheet: ${JSON.stringify(read)}`)
 
     // The access: one row saying what it allows; tapped, the other levels open under it.
     assert.match(await evaluate(`document.querySelector('${sheet} [data-access-row]').textContent`), /Full access.*Nothing waits for approval/)
@@ -203,7 +251,7 @@ async function checkPhone() {
     assert.deepEqual(await evaluate(`[...document.querySelectorAll('${sheet} [data-access-mode]')].map(node => node.dataset.accessMode)`), ["read-only", "auto"])
     await capture("sheet-access-iphone-dark.png")
     await tap(`${sheet} [data-access-mode="auto"]`)
-    await until("!document.querySelector('[data-thread-chip=\"settings\"] [data-risky-mark]')", "the caution mark gone with Full access")
+    await until("document.querySelector('[data-thread-chip=\"access\"]')?.dataset.access !== 'full'", "the status line's caution gone with Full access")
     assert.match(await evaluate(`document.querySelector('${sheet} [data-access-row]').textContent`), /^Ask before acting/)
 
     // Refused by the owner, the access stays where the Session is and says why.
@@ -270,7 +318,7 @@ async function checkPhone() {
     assert.ok(drawn.some((words) => words.startsWith("Switched to") && /GPT-5.6 Sol/.test(words)), `the model switch is drawn: ${JSON.stringify(drawn)}`)
     console.log(`Switch lines from the record: ${drawn.join(", ")}`)
 
-    // 2. An answer's words are the platform's to select; beside them, a long press offers Copy and Branch.
+    // 2. An answer's words are the platform's to select; beside them, a long press offers Copy answer and Fork.
     assert.notEqual(await evaluate(`getComputedStyle([...document.querySelectorAll('[data-answer]')].at(-1)).userSelect`), "none", "an answer's words can be selected")
     const word = await evaluate(`(() => {
       const host = [...document.querySelectorAll('[data-answer]')].at(-1)
@@ -315,7 +363,10 @@ async function checkPhone() {
     assert.match(await evaluate("getSelection().toString()"), /^The backoff now doubles/)
     await capture("answer-selected-iphone-dark.png")
     await evaluate("getSelection().removeAllRanges(), true")
-    console.log("Answers: words selectable, Copy and Branch beside them")
+    // Under the newest answer, the desk's footer words (`exchange.tsx`): Copy answer and Fork, never words of its own.
+    const said = await evaluate("[...document.querySelectorAll('[data-reply-actions] [data-reply-action]')].map((node) => [node.dataset.replyAction, node.innerText.trim()])")
+    assert.ok(said.length > 0 && said.every(([action, words]) => (action === "copy" && words === "Copy answer") || (action === "fork" && words === "Fork")), `the answer's actions in the desk's words: ${JSON.stringify(said)}`)
+    console.log(`Answers: words selectable, ${said.map(([, words]) => words).join(" and ")} beside them`)
 
     // 3. The mic: held, it stops when the finger lifts; tapped, it listens on.
     const mic = '[aria-label="Dictate"]'
@@ -413,6 +464,7 @@ async function checkPhone() {
     await capture("answer-iphone-light.png")
 
     await checkSettings()
+    await checkFold()
   } finally {
     clearTimeout(watchdog)
   }

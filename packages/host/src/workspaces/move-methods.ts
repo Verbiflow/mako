@@ -3,7 +3,7 @@ import type { WorkspaceMoves } from "./moves.js"
 import type { ThreadWorktreeService } from "./thread-worktrees.js"
 import type { MoveOutcome, PutBackPaths, WorkspaceMoveAnswer, WorkspaceMoveHold, WorkspaceMoveTarget, WorkspaceMoves as WorkspaceMovesState } from "../contracts/workspace-moves.js"
 
-export function declareMoveMethods(methods: MethodTable, moves: WorkspaceMoves, hold: (target: WorkspaceMoveTarget) => WorkspaceMoveHold, worktrees: Pick<ThreadWorktreeService, "bringStayed" | "putBack" | "moveOutcome" | "threadShares"> | null) {
+export function declareMoveMethods(methods: MethodTable, moves: WorkspaceMoves, hold: (target: WorkspaceMoveTarget) => WorkspaceMoveHold, worktrees: Pick<ThreadWorktreeService, "bringStayed" | "putBack" | "moveOutcome" | "threadShares"> | null, adjusted: (conversationId: string, outcome: MoveOutcome) => void = () => {}) {
   methods.handle("mako:workspace-moves", (): WorkspaceMovesState => moves.state())
   methods.handle("mako:workspace-move-hold", async (target: WorkspaceMoveTarget): Promise<WorkspaceMoveHold> => {
     const held = hold(target)
@@ -14,11 +14,17 @@ export function declareMoveMethods(methods: MethodTable, moves: WorkspaceMoves, 
   methods.handle("mako:workspace-move-bring", (id: string, bring: boolean) => moves.bring(id, bring))
   methods.handle("mako:workspace-move-bring-stayed", (conversationId: string): Promise<{ outcome: MoveOutcome; left: string[] }> => {
     if (!worktrees) throw new Error("Worktrees need the Thread store, which didn't open.")
-    return worktrees.bringStayed(conversationId)
+    return worktrees.bringStayed(conversationId).then(({ outcome, came, left }) => {
+      if (came.length) adjusted(conversationId, outcome)
+      return { outcome, left }
+    })
   })
   methods.handle("mako:workspace-move-put-back", (conversationId: string, paths: PutBackPaths): Promise<{ outcome: MoveOutcome; left: string[] }> => {
     if (!worktrees) throw new Error("Worktrees need the Thread store, which didn't open.")
-    return worktrees.putBack(conversationId, paths)
+    return worktrees.putBack(conversationId, paths).then(({ outcome, returned, left }) => {
+      if (returned.length) adjusted(conversationId, outcome)
+      return { outcome, left }
+    })
   })
   methods.handle("mako:workspace-move-outcome", async (conversationId: string): Promise<MoveOutcome | null> => (await worktrees?.moveOutcome(conversationId)) ?? null)
   methods.handle("mako:workspace-move-forget", (project: string) => moves.forget(project))

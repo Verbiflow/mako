@@ -2,6 +2,8 @@ import { join } from "node:path"
 import type { AutomationCloudApi } from "../workspaces/index.js"
 import type { CloudFinAnswer, CloudFinPlace, CloudFinPlaced, CloudFinStart, CloudFinStatus } from "@mako/protocol/cloud-fins"
 import type { SourceProjectCommand, SourceProjectReceipt } from "@mako/protocol/source-project"
+import type { TreeEdgeAnswer, TreeEdgeAsk, TreeNoticeAnswer } from "@mako/protocol/tree-notices"
+import type { JsonValue } from "../contracts/json.js"
 import type { Advertisement, ClientSessionOverSockets } from "@mako/protocol"
 import { cloudUrl, runtimeBuild } from "../base/build-identity.js"
 import { attendable, CloudAttention, macIdleSeconds } from "./cloud-attention.js"
@@ -158,6 +160,12 @@ export interface CloudAccount {
   reserveCloudFin?(input: CloudFinStart): Promise<CloudFinAnswer>
   cancelCloudFin?(input: CloudFinStart): Promise<CloudFinAnswer>
   startCloudFin?(input: CloudFinPlace): Promise<CloudFinPlaced>
+  /** Whether the account holds Fins' notices, as this Mac's runtime link last agreed (`CloudAccounts.holdsTreeNotices`). */
+  holdsTreeNotices?(): boolean
+  /** A notice of a Fin this Mac runs, posted to the account for its Apex's Session (`CloudAccounts.postTreeNotice`); `unserved` from a gateway with no path for it. */
+  postTreeNotice?(notice: JsonValue): Promise<{ answer: TreeNoticeAnswer; retryAfterMs?: number } | "unserved">
+  /** The account's record of a Fin this Mac placed elsewhere, kept or ended (`CloudAccounts.treeEdge`); `unserved` from a gateway that keeps none. */
+  treeEdge?(ask: TreeEdgeAsk): Promise<TreeEdgeAnswer | "unserved">
   /** The person's access choices as the account keeps them, or null from a cloud that doesn't keep them yet. */
   accessChoices?(): Promise<AccessChoicesAnswer | null>
   /** Makes `choices` the account's (with `fill`, only where it has none); all of them after, or null as above. */
@@ -494,6 +502,9 @@ export function declareCloudAccountMethods(methods: MethodTable & Pick<HostMetho
     reserveCloudFin: (input) => cloud.reserveCloudFin(input),
     cancelCloudFin: (input) => cloud.cancelCloudFin(input),
     startCloudFin: (input) => cloud.startCloudFin(input),
+    holdsTreeNotices: () => cloud.holdsTreeNotices(),
+    postTreeNotice: (notice) => cloud.postTreeNotice(notice),
+    treeEdge: (ask) => cloud.treeEdge(ask),
     accessChoices: () => cloud.accessChoices(),
     chooseAccess: (choices, fill) => cloud.chooseAccess(choices, fill),
     preferences: () => cloud.preferences(),

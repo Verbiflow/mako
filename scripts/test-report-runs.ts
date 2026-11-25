@@ -137,7 +137,7 @@ const afternoon: LiveUpdate[] = [
   assert.equal(runPhrase([card("A", "progress"), card("B", "failed", { unfinished: true })]), "1 Fin ended without a result · 1 reported")
   assert.equal(runPhrase([decision, card("B", "done")], (each) => each.report === decision.report), "1 Fin needs you · 1 finished")
   assert.equal(runPhrase([decision, card("B", "done")]), "2 Fins finished")
-  assert.equal(runPhrase([card("Docs", "done", { apex: true }), card("B", "needs-input")]), "1 Fin asked · 1 Apex replied")
+  assert.equal(runPhrase([card("Docs", "done", { apex: true }), card("B", "needs-input")]), "1 Fin asked · 1 Thread replied")
 }
 
 console.log("report runs: a run of wakes is one row, the person's turns, real answers and the newest turn stand, and its words count what needs them first")

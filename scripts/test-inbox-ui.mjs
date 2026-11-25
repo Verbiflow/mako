@@ -14,7 +14,7 @@ import { checkInboxNavigation } from "./lib/inbox-navigation-ui.mjs"
  * polish" and its twelve Fins): the rows in order with no view switch under them, the Inbox's count equal to the
  * needs-you facts the marks read (each Fin blocked on the person, each Thread whose status needs the person), an
  * answer in the Inbox reaching the Apex's host and moving that Fin to working in the Inbox and the rail at once,
- * Cmd+Shift+U opening it, and the phone's list with its Inbox chip, its sections, the asking Fins as rows of their
+ * Cmd+Shift+U opening it, and the phone's list with the desk's Inbox row, its sections, the asking Fins as rows of their
  * own and its Inbox screen answering in place. Screenshots stay in the printed directory.
  */
 
@@ -224,6 +224,10 @@ async function checkWindow() {
   assert.deepEqual(items.filter((item) => item.kind === "fin").map((item) => item.fin).sort(), [...facts.fins].sort(), "one item per asking Fin")
   assert.ok(items.filter((item) => item.kind === "fin").every((item) => item.text.includes("Mobile polish")), "each Fin's item says where it is")
   await capture("desktop-inbox.png")
+  // Each ask's anatomy, which the phone's and the iPad's cards share (`web-client/fin-ask.tsx`): where it is, the
+  // question, the answers in a row.
+  const deskAnatomy = await evaluate(`[...document.querySelectorAll(${JSON.stringify('[data-inbox-section="needs"] [data-inbox-item][data-inbox-kind="fin"]')})].map((card) => ({ head: Boolean(card.querySelector('[data-ask-head]')), question: card.querySelector('[data-ask-question]')?.innerText.trim() ?? null, answers: Boolean(card.querySelector('[data-ask-answers] [data-fin-typed], [data-ask-answers] button')), order: [...card.querySelectorAll('[data-ask-head], [data-ask-question], [data-ask-answers]')].map((node) => Object.keys(node.dataset).find((key) => key.startsWith('ask'))) }))`)
+  assert.ok(deskAnatomy.length > 0 && deskAnatomy.every((card) => card.head && card.question && card.answers), `the desk's Inbox asks: ${JSON.stringify(deskAnatomy)}`)
   // Every Fin's question (a Thread's approval answers with its harness's own options) offers words of the person's own beside its options, or as its only answer: no ask is a dead end.
   const deskTyped = await evaluate(`[...document.querySelectorAll('[data-inbox-section="needs"] [data-inbox-item][data-inbox-kind="fin"]')].filter((node) => !node.querySelector('[data-inbox-answer="allow"]')).map((node) => Boolean(node.querySelector('[data-fin-typed]')))`)
   assert.ok(deskTyped.length > 0 && deskTyped.every(Boolean), `every question in the Inbox takes typed words: ${JSON.stringify(deskTyped)}`)
@@ -255,29 +259,32 @@ async function checkWindow() {
 
   await checkInboxNavigation({ window, page, base, evaluate, until, frames, click, capture })
 
-  // 5. The phone: the Inbox chip with its count; projects with their Threads, an Apex's asking Fins hung under it.
+  // 5. The phone: the desk's Inbox row with its count; projects with their Threads, an Apex's asking Fins hung under it.
   window.setContentSize(390, 844)
   await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
-  await until(`document.querySelector('[data-list-chips]') !== null && document.querySelectorAll('[data-asking-fin]').length > 0`, "the phone's chips and asking Fins")
-  const phone = await evaluate(`({ chips: [...document.querySelectorAll('[data-list-chip]')].map((node) => node.dataset.listChip), count: Number(document.querySelector('[data-list-chip="inbox"] [data-inbox-count]')?.textContent ?? 0), groups: document.querySelectorAll('[data-project-group]').length, fins: [...document.querySelectorAll('[data-asking-fin]')].map((node) => ({ fin: node.dataset.finRow, text: node.innerText.replace(/\\s+/g, ' '), under: node.closest('[data-hung-fins]')?.dataset.hungFins })) })`)
+  await until(`document.querySelector('[data-rail-top]') !== null && document.querySelectorAll('[data-asking-fin]').length > 0`, "the phone's top rows and asking Fins")
+  const phone = await evaluate(`({ chips: [...document.querySelectorAll('[data-rail-top] [data-rail-top-row]')].map((node) => node.dataset.railTopRow), count: Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0), groups: document.querySelectorAll('[data-project-group]').length, fins: [...document.querySelectorAll('[data-asking-fin]')].map((node) => ({ fin: node.dataset.finRow, text: node.innerText.replace(/\\s+/g, ' '), under: node.closest('[data-hung-fins]')?.dataset.hungFins })) })`)
   console.log("PHONE", JSON.stringify(phone))
-  assert.deepEqual(phone.chips, ["inbox"], "the phone's chips: the Inbox (pull requests and automations live on a Mac)")
+  assert.deepEqual(phone.chips, ["inbox"], "the phone's top rows: the Inbox (pull requests and automations live on a Mac, and New floats)")
   assert.ok(phone.groups > 0, "Threads stand under their projects")
   assert.ok(phone.fins.length >= 2, "each asking Fin is a row")
   assert.ok(phone.fins.every((fin) => fin.under), "hung under its Apex")
   assert.equal(phone.count, phone.fins.length + (await evaluate(`document.querySelectorAll('[data-thread][data-standing="waiting"]').length`)), "the chip counts what needs you")
   await capture("phone-list.png")
-  console.log("PASS: the phone's chips, projects and asking Fins")
+  console.log("PASS: the phone's top rows, projects and asking Fins")
 
   // 6. The phone's Inbox screen: the asks answered in place.
-  await click('[data-list-chip="inbox"]')
+  await click('[data-rail-top-row="inbox"]')
   await until(`document.querySelector('[data-inbox] [data-ask=fin]') !== null`, "the phone's Inbox")
   const cards = await evaluate(`document.querySelectorAll('[data-inbox] [data-ask=fin]').length`)
   assert.equal(cards, phone.fins.length, "one card per asking Fin")
   await capture("phone-inbox.png")
   const phoneCards = await evaluate(`[...document.querySelectorAll('[data-inbox] [data-ask=fin]')].map((card) => ({ approval: card.dataset.finAsk === 'approval', typed: Boolean(card.querySelector('[data-fin-typed]')), open: card.querySelector('[data-fin-open]')?.textContent ?? null }))`)
   assert.ok(phoneCards.filter((card) => !card.approval).every((card) => card.typed), `a phone Inbox question takes typed words: ${JSON.stringify(phoneCards)}`)
-  assert.ok(phoneCards.every((card) => card.open?.startsWith("Open Mobile polish")), `every phone Inbox ask opens its Apex: ${JSON.stringify(phoneCards)}`)
+  assert.ok(phoneCards.every((card) => card.open === "Open"), `every phone Inbox ask opens its Apex, in the desk's word: ${JSON.stringify(phoneCards)}`)
+  const phoneAnatomy = await evaluate(`[...document.querySelectorAll(${JSON.stringify('[data-inbox] [data-ask=fin]')})].map((card) => ({ head: Boolean(card.querySelector('[data-ask-head]')), question: card.querySelector('[data-ask-question]')?.innerText.trim() ?? null, answers: Boolean(card.querySelector('[data-ask-answers] [data-fin-typed], [data-ask-answers] button')), order: [...card.querySelectorAll('[data-ask-head], [data-ask-question], [data-ask-answers]')].map((node) => Object.keys(node.dataset).find((key) => key.startsWith('ask'))) }))`)
+  assert.deepEqual(phoneAnatomy.map((card) => card.order), deskAnatomy.slice(0, phoneAnatomy.length).map((card) => card.order), `the phone's asks in the desk's anatomy: ${JSON.stringify(phoneAnatomy)}`)
+  assert.deepEqual(phoneAnatomy.map((card) => card.question).sort(), deskAnatomy.map((card) => card.question).filter((question) => phoneAnatomy.some((card) => card.question === question)).sort(), "and the same questions")
   console.log("PASS: the phone's Inbox asks take typed words and open their Apex")
   const phoneTarget = await evaluate(`(() => { const card = document.querySelector('[data-inbox] [data-ask=fin]'); const button = card.querySelector('[data-fin-answer="allow"], [data-fin-answer="0"]'); button.setAttribute('data-inbox-test', 'answer'); return card.dataset.fin })()`)
   await click('[data-inbox-test="answer"]')
@@ -285,7 +292,7 @@ async function checkWindow() {
   assert.equal((await evaluate("window.apexScene.responds()[0]")).fin, phoneTarget)
   await until(`document.querySelectorAll('[data-inbox] [data-ask=fin]').length === ${cards - 1}`, "the answered Fin leaves the phone's Inbox")
   await click('[aria-label="Back to threads"]')
-  await until(`document.querySelectorAll('[data-asking-fin]').length === ${phone.fins.length - 1} && Number(document.querySelector('[data-list-chip="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${phone.count - 1}`, "the list and its chip say it too")
+  await until(`document.querySelectorAll('[data-asking-fin]').length === ${phone.fins.length - 1} && Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${phone.count - 1}`, "the list and its chip say it too")
   console.log("PASS: the phone's Inbox answers in place")
 
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])

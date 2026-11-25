@@ -1,4 +1,5 @@
 import { compactionRecovering } from "../contracts/conversation-control.js"
+import { answersAnotherThread } from "./thread-replies.js"
 import { z } from "zod"
 import type { PromptVersions, PromptVersionsByRequest } from "../contracts/live-conversations.js"
 import { randomBytes, randomUUID } from "node:crypto"
@@ -231,7 +232,8 @@ export class LiveConversations {
         const cut = snapshot.requests.find((request) => (request.status === "uncertain" || request.status === "interrupted") && request.pause !== "stop" && request.interruption?.reason === "host-crashed" && previous.requests.some((old) => old.id === request.id && old.status === "dispatching"))
         if (!cut) return
         const waiting = previous.requests.flatMap((request) => request.status === "queued" && request.inputDigest ? [{ id: request.id, inputDigest: request.inputDigest }] : [])
-        this.restarts.leave([{ conversationId: snapshot.session.id, requestId: cut.id, waiting, ...(this.inTree(snapshot.session.id) && { always: true as const }) }])
+        const always = this.inTree(snapshot.session.id) || answersAnotherThread(dependencies.threads, snapshot.session.id, snapshot.requests, cut.id)
+        this.restarts.leave([{ conversationId: snapshot.session.id, requestId: cut.id, waiting, ...(always && { always: true as const }) }])
       },
       busy: (resident) => {
         const id = resident.snapshot.session.id
@@ -1817,7 +1819,7 @@ export class LiveConversations {
     const stopped = this.stopMark(id)
     const owned = () => this.records.get(id) === resident && resident.generation === generation &&
       this.stopMark(id) === stopped && !resident.closing && !this.admission.closed &&
-      (this.restarts.settings().continueAfterRestart || this.inTree(id)) &&
+      (this.restarts.settings().continueAfterRestart || this.inTree(id) || answersAnotherThread(this.dependencies.threads, id, resident.snapshot.requests, source.id)) &&
       activeBinding(resident) === binding && this.moves.executes(resident) &&
       this.dependencies.signInAllowed?.(id) !== false &&
       resident.snapshot.requests.some((request) => request.id === source.id && request.pause !== "stop" &&

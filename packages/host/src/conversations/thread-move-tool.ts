@@ -31,6 +31,8 @@ export interface HostMoves {
 export interface ThreadMoveToolDeps {
   /** The conversation a Session's agent runs in here. */
   conversationOf(session: string): string | undefined
+  /** The conversation the person's own call names, by its ID or its Thread's handle or ID (`conversationNamed`); as named without it. */
+  named?(conversation: string): { conversation: string } | { why: string }
   place(conversationId: string): ThreadPlace | undefined
   tier(conversationId: string): AccessTier | undefined
   /** In a turn, or holding prompts that will start one. */
@@ -73,7 +75,9 @@ export class ThreadMoveTool {
       return refused("no-thread", "No conversation here has that Session. Call it from a Thread's mako tools, or its shell, where MAKO_SESSION_ID names it.")
     }
     if (own && input.conversation && input.conversation !== own) return refused("not-yours", "An agent moves its own Thread only: leave conversation out.")
-    const conversationId = own ?? input.conversation
+    const named = own || !input.conversation ? undefined : (this.#deps.named?.(input.conversation) ?? { conversation: input.conversation })
+    if (named && "why" in named) return refused("no-thread", named.why)
+    const conversationId = own ?? named?.conversation
     if (!conversationId) return refused("no-thread", "Name the conversation whose Thread moves (--conversation), or call it from a Thread's shell.")
     if (this.#deps.machine) return this.#fromTheMac(input, own)
     const moves = this.#deps.moves()

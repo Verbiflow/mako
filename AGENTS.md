@@ -539,8 +539,12 @@ no message queued, held or being sent, nothing asked, no work its harness
 left running, no cut turn, no armed wait). `keptOpen` and
 `conversationHolds` read all of it in the same step as the write; a
 conversation not in memory is read in first, a slice at a time, and one
-this host can't read stays open. A Fin placed on another device, or whose
-Apex is, is left alone. Closing is bookkeeping: its reason is
+this host can't read stays open. A Fin this device placed on another closes
+the same way by its device's last word (idle, no stop or start of it owed
+there), and its record with the account ends with it; one idle six hours
+that still asks keeps its edge and loses its record, which the next thing
+that sets it to work keeps again (`placedIdle`). One whose Apex is on
+another device is its Apex's device's to close. Closing is bookkeeping: its reason is
 `FINISHED_CLOSE`, a stop's reason on the wire, so an older build shows it
 as any closed edge and opens it as it opens a stopped one; this build reads
 it as done or failed (`childState`), never stopped. Nothing is cancelled,
@@ -752,7 +756,26 @@ notice kept nowhere, never a state, which leaves an unsent digest once the Fin
 moves again (`AgentWakes.current`), and only under the default `wake`. A long
 command counts as quiet; the line names it and the Apex decides. A Fin whose
 turn ended leaves the watch, and an idle one is never named
-(`test:fin-quiet`). A pull request is its
+(`test:fin-quiet`). Fins share their Apex's folder unless it gives one a
+`workspace`, and two that change the same file there are named to it
+(`FinCollisions`, `conversations/fin-collisions.ts`): each finished call's
+report of what it did (`mako:tool-effects`, what the journal takes as that
+call's evidence) stamps the files the tool states it wrote, never one its
+harness only saw change (`seen`) nor a command's, for its Thread
+(`Agents.wrote`, `statedWrites`), a map write and nothing read or watched. A
+file a second open Thread of the Shiver stamps (a Fin of the same Apex, or
+the Apex itself) is a collision when the other's last write there is no older
+than the later of their starts. Files are absolute paths, so a Fin in its own
+worktree collides with nobody until a merge. The Apex hears a pair once,
+`COLLIDE_BURST_MS` after its first file so a patch across forty is one
+notice ("1 pair changed the same files in one folder", three files and a
+count, `collisionLine`): Mako's own notice, never held, under the pair's ID,
+whose receipt in the Apex's queue (`carried`) keeps it once across a restart;
+the pair's later files ride its next digest and wake nobody, and only under
+the default `wake`. Neither Fin is told. Both rows say "Also editing
+agents.ts with tests" (`child.sharing`, `sharingWords`) while both are open,
+from what this host saw (`test:fin-collisions`). What a shell command wrote
+names no file and isn't counted. A pull request is its
 repository's (`owner/name`, from its URL) and number (`pullRef`, `pullKey`),
 never its number alone, since a Thread can hold several repositories; a bare
 `#12` is the Fin's one repository's, or stays unqualified when it has several,
@@ -1015,13 +1038,28 @@ again after 5 s, doubling to 5 minutes, on a job that runs only while one
 waits; it never expires, so a device away for weeks takes them when it's
 back. The Apex's device tells its places it's back when its runtime's link
 opens and when its host starts (`knock`), and a place that hears from it
-sends at once. A Fin on a cloud machine has no device's sign-in to call its
+sends at once; it asks each how its Fins stand then too, which no notice
+says of a Fin with nothing to report. A Fin on a cloud machine has no device's sign-in to call its
 Apex's device with, so its host posts each report to the account instead
 (`accountNotices`, `machineNoticesPath`, on the machine's credential): the
 account holds it for the Apex's Session and delivers it as the same
 `mako:agents-notice`, saying who sent it (`from`, `tree-notices.ts`).
 Admitted there is taken here, as is `gone`; `rate` and `full` are waited
-out; `conflict`, `invalid`, `forbidden` and `too-large` end that report
+out by that Fin alone, its later reports behind it and every other Fin's
+going on (`Waits.fin`): the account's room for an Apex's Session is shared
+among the Fins holding notices there, each its equal share and always one
+(`treeNoticeFinRoom`), so no Fin's flood refuses a sibling's report. A
+device's Fin's record lapses 30 days after the account last knew its Apex's
+device was there (`TREE_EDGE_LEASE_MS`); a record that ended or lapsed is
+remembered a lease more, and the Fin's own next post brings it back, its
+Apex's device on or off (`revive` in the account, `recordHeld` here); one
+ended because its Fin was stopped is never brought back (the end says why,
+`TreeEdgeEndSchema`). A placed Fin's six hours count from when this device
+took its last report (`Placed.heardAt`), never from its device's clock. Past
+that its notice goes to that device itself, said as a warning, and that
+device asks for the record again (`recordLost`). A tree has at most
+`TREE_FINS_OPEN` (872) Fins on record, so a Session holds at most
+`TREE_NOTICES_SESSION_BYTES` (278 MiB). `conflict`, `invalid`, `forbidden` and `too-large` end that report
 unheard (`agent_notice_refusals`, said in the log alone) and the Fin's later
 reports go on; a 401 waits for the machine's renewed credential. A post
 under way is the machine's work (`Agents.posting`), so it isn't paused with
@@ -1033,7 +1071,31 @@ can post another Fin's child under its own start, and only this device knows
 which start made which. Its link says it takes them in every advertisement
 (`linkAdvertisement`), and its `knock` leaves a cloud machine asleep.
 `scripts/test-fins-notices.ts` holds both ends against the protocol's
-gateway. `agents_list`, `agents_read`, `agents_send`,
+gateway. A Fin on a device posts to the account too, so the two devices
+needn't be on at once, once its Apex's device keeps a record of it there
+(`TreeEdgeSchema`, `TREE_EDGES_PATH`: the start, the Apex, the child and
+the place, kept by the device that owns the Apex's Session and by no
+other). A device's sign-in names no Fin, so the account admits a device's
+notice only under a record naming that device, that child and that Apex,
+and stamps it with the record's start (`from.op`). The Apex's device keeps
+the record as it writes the Fin's edge and says so on the edge once the
+account answered (`Placed.recorded`, `Agents.recordPlaced`); it ends it
+when the Fin is stopped and keeps it again when the Fin is sent on, and an
+ask not done is made again when the device is back and when the Fin is
+next heard of. The start tells the Fin's device its Apex's device keeps
+records (`AgentsPlaceInput.parent.records`, `RemoteParent.account`): such
+a Fin's notices are posted (`AgentPlaces.way`, `deviceTree`) while the
+device's link agreed version 30, and every other goes from device to
+device as before, so a device or an account from before this changes
+nothing. One Fin's notices never travel both ways at once: the outbox
+sends one at a time, and a notice goes to the Apex's device after a post
+only when the account said it has no record of the Fin (`forbidden`, or an
+account with no path), which it says only while it holds nothing of that
+Fin's, since a record ended with notices held stands until they're taken
+(`decideTreeEdge`). `scripts/test-fins-device-notices.ts` holds it: the
+two devices never on at once, each host restarted at each point, the two
+ways, each older build, a device posting for a child that isn't its own,
+and a record kept once and ended with its edge. `agents_list`, `agents_read`, `agents_send`,
 `agents_answer`, `agents_stop` and `agents_move` on a placed Fin are the
 same host calls on its device with the Apex as their caller (`ApexCaller`);
 a device that can't be reached is said, and list and read fall back to what
@@ -1177,25 +1239,43 @@ its name or Thread is progress, and stays quiet. So is progress whose
 someone else to act", since only the Apex or the person can bring that
 about, and the same wait narrated again stays quiet (`test:orch-comms`). `npm run test:orch-comms` covers all three, and `test:orch-deliver` the
 refusal.
-An Apex reads the person's other Apexes with `agents_list` `scope: apexes`
-(`AgentsApexes`): every tree's top Apex but its own whose conversation is
-open here, each with its title, harness, whether it works and its last step,
-folder and branch, its Fins' `rollup`, and a digest of its open Fins' last
-reports and its own last reply's first paragraph. Reading wakes no one.
-`agents_send` `to: apex:<title or Thread>` messages one: Mako's words
-(`fromApex`, `apexNote`), never the person's, after its turn unless steered;
-the transcript draws it as a card from that Apex. Only a top-level Thread
-sends one: a Fin, a lead too, reads the list and is refused the send
-(`access`), since whether to ask is its own Apex's call. The turn that
-answers it sends its reply back once, as the sender's wake (`Notice.reply`),
-and that wake sends nothing on. At most three go from one Apex to another an
-hour (`rate-limited`). The store keeps each message before it's sent and its
-reply before that wake (`apex_messages`, `ApexMessage`), settled once the
-wake is in the sender's queue, so a host that stops anywhere between still
-sends one reply and counts the hour's three; a turn its stop cut replies as
-its continuation ends. Rows go once answered and an hour old, with an
+A top-level Thread reads the person's other top-level Threads on this host with `agents_list` `scope: apexes`
+(`AgentsApexes`, `topThreads`): those outside its own tree with a conversation here, not archived and not run from
+another device, read from the listing and the store, so one this host hasn't read in since it started counts too.
+Each that leads a Fin still open is listed whole (`apexes`): its handle, title, harness, whether it works and its last
+step, folder and branch, its Fins' `rollup`, and a digest of its open Fins' last reports and its own last reply's first
+paragraph (that last only while it's in memory). Of the rest, the five the person wrote in last are a line each
+(`others`: handle, title, harness, working, folder, branch, about 50 tokens) and the others counted (`more`): listed
+whole, one Mac's 241 were about 11,600 tokens. Reading wakes no one. `agents_send` `to: apex:<handle, title or Thread>`
+messages any of them, listed or not, an Apex or not, and a Fin is refused as a target, pointed at its Apex: Mako's
+words (`fromApex`, `apexNote`, "the Thread "…""), never the person's, after its turn unless steered, and one idle takes
+it as its next turn; the transcript draws it as a card from the Thread that sent it. The target's conversation is read
+in first, so a repeat of the key after a restart finds the message it sent. Only a top-level Thread sends one: a Fin,
+a lead too, reads the list and is refused the send (`access`), since whether to ask is its own Apex's call. The turn
+that answers it sends its reply back once, as the sender's wake (`Notice.reply`), and that wake sends nothing on. At
+most three go from one Thread to another an hour (`rate-limited`). The store keeps each message before it's sent and
+its reply before that wake (`apex_messages`, `ApexMessage`), settled once the wake is in the sender's queue, so a host
+that stops anywhere between still sends one reply and counts the hour's three; a turn its stop or a crash cut replies
+as its continuation ends. That turn goes on even when the person turned off continuing their own after a restart
+(`answersAnotherThread`): nobody watches it, and left for Continue its reply could wait out the week a message is kept. Rows go once answered and an hour old, with an
 archived Thread, or after a week unanswered. The rule for when to message is
 in `ORCHESTRATION_INSTRUCTIONS`; `test:orch-comms` covers it too.
+
+A Thread has a handle, `mako-7f3k`, to say and type where its title is too long or changes
+(`contracts/thread-handles.ts`). It's worked out from the Thread's ID and never kept, so every device, the cloud and
+a saved transcript say the same one with nothing to sync: twelve characters of a 31-letter alphabet (no 0/o or
+1/l/i) from the ID's SHA-256 are its code, and the handle shows the first four after its project's folder name. The
+word is only read: a lookup drops it, so a renamed project or a bare `7f3k` finds the same Thread. Four characters
+are 923,521 handles, so one of 5,300 Threads shares its four with another 0.6% of the time; as with a short commit
+hash, a lookup that finds several names each a character or more longer, and that finds one. The Thread store holds
+the one resolver (`ThreadStore.threadByHandle`, `ThreadHandles`): codes filed by their first three characters, the
+fewest a lookup takes, each Thread hashed once and the Threads made since read at the next lookup after a commit
+(5,300 Threads build in 25 ms; a lookup is under 20 µs). A person finds it in a rail row's tip and its menu's Copy
+handle, a Session tab's tooltip, and the `@` menu, where a typed handle finds its Thread and picks the token any
+mention writes; a row never draws it. An agent reads it beside each title in `scope: apexes`, at as many characters
+as name the Thread alone here, and writes it as `apex:<handle>`, in `context` and as `scope: threads`' query;
+`mako thread … --conversation` takes it too. `test-thread-handles.ts` (in `test:orch-comms`) holds the rule and the
+resolver, and `test-rail-calm-ui.mjs` the tip and the menu.
 
 The person's message in an Apex's conversation goes to the Apex, which
 passes it on (`agents_send`, drawn as a routing line). Nothing goes where
@@ -3573,7 +3653,7 @@ panel and viewer over a folder's index, and `scripts/files-ui-shots.mjs` draws t
 
 Every Git process Mako starts goes through `@mako/git` (`packages/git`, no Electron imports). Its `Git` class is the one spawner, and the package holds no state outside it: each host makes one in `createHost` (`hostGit`) and hands it to everything that runs Git, and a test makes its own. `run` strips repository variables (`REPOSITORY_VARIABLES`) and sets `GIT_TERMINAL_PROMPT=0` and `LC_MESSAGES=C`, and it applies timeouts, byte caps and allowed exit codes. A read (`read: true`) adds `--no-optional-locks` and takes one of the instance's six read slots; an idle one (`idle: true`) leaves two of them to reads someone waits on, and after `IDLE_READ_WAIT_MS` may take one of those two, one at a time and never ahead of a waiting read, so it can't starve. A `status` is always a read. `git diff` of the working tree rewrites the index whatever `--no-optional-locks` says, so one that only counts lines takes `NO_INDEX_REFRESH`. What sits in Git's own files (HEAD, a ref, the repository's `config`) is read from them (`files.ts`: `storedRef`, `parseGitConfig`), not asked of a process, and a folder Git said is in no repository isn't asked about again until a `.git` is above it (`Repositories`). `background: true` runs below agents through the `background` hook `hostGit` gives the instance. Stopping the host closes it (`git.close()`), which closes every repository it opened. A failure is a `GitError` whose `kind` (`not_repository`, `local_changes`, `conflicts`, `rejected`, `auth`, `moved`, …) is what callers branch on, never stderr text. Don't spawn `git` anywhere else; add the operation to the package. Worktree orchestration (`thread-worktrees.ts`, spares, `worktree-carry.ts` with APFS clonefile) is Mako's product logic in `packages/host/src/workspaces/`, on the package's runner. A Thread's checkout is of its project: started in a folder that holds several repositories without being one, it's a folder mirroring that project with a worktree of each repository inside, on one branch (`createProject`). The store keeps one `thread_worktrees` row per Thread and the repositories in `thread_worktree_repositories`; review, update, merge and the Git panels stay per repository, while removal and moving changes take the checkout whole. Which repositories a project folder holds is `projectRepositories` (folders with a `.git`, never one inside another repository, a second checkout of one already listed left out, at most 12); a Thread's start, its spares and the Changes panel all use that walk, so don't find repositories another way. A project's spare is one folder mirroring it with a locked worktree of each repository, claimed only when it holds exactly the repositories the folder has now, and placed by renaming the folder and `git worktree repair` in each repository. Settings › Worktrees lists checkouts (`worktreeCheckouts`), not repositories' worktrees.
 
-A move into a Thread's worktree takes only the Thread's own uncommitted changes (`workspaces/worktree-move.ts`), never a stash of the whole checkout. The attribution journal (`attribution/`, `partition`) names each changed line's last writer: the worktree gets the base plus the Thread's lines and the files it created, deleted or renamed; the main checkout keeps everyone else's. Lines that might be the Thread's (`window`, `ambiguous`, and a `window` found only after lost events, `entrySide`) and changes nobody can be named for (there before tracking, `unattributed`) stay unless the person chooses Bring these, on the move card before or on the toast after. A hunk that can't be split by line goes whole to whoever wrote most of it and is named. Without the journal nothing is attributed, so nothing moves unless brought. The move is all-or-nothing: it reads each file, checks it is what the journal holds and that the two sides add back up to it line for line, stores every version in the repository's objects, keeps the main checkout's whole state (files and index) as a commit under `refs/mako/moves/<id>` for 14 days, saves its plan (`<worktrees>/moves/<id>.json`, the receipt's `moving`), writes each file by a rename after checking it is still what it read, then reads both sides back. Anything off rolls back. A host that dies mid-move finishes it on the next start (`tidy`) when every file is as it was or as planned, and otherwise rolls back around whatever changed since. Each step is logged under `worktree-move`. `worktree_status` reports whose the main checkout's changes are; the move's result and the agent's message in the worktree say what came and what stayed. `npm run test:attribution` ends with `test-worktree-attribution-moves.ts`: three writers in one file, renames, deletes, binary and untracked files, staging, two repositories, and a process killed at each step.
+A move into a Thread's worktree takes only the Thread's own uncommitted changes (`workspaces/worktree-move.ts`), never a stash of the whole checkout. The attribution journal (`attribution/`, `partition`) names each changed line's last writer: the worktree gets the base plus the Thread's lines and the files it created, deleted or renamed; the main checkout keeps everyone else's. Lines that might be the Thread's (`window`, `ambiguous`, and a `window` found only after lost events, `entrySide`) and changes nobody can be named for (there before tracking, `unattributed`) stay unless the person chooses Bring these, on the move card before or on the toast after, or the Thread's agent reads them and brings them itself through the same `bringStayed`: `worktree_bring` `stayed: true` brings only the files that might be the Thread's, and a file nobody can be named for (which may be the person's own edit) comes only when the agent names it in `entries` (the plan marks each, `MovePath.unattributed`, and what came, `brought`). Put back is the agent's too (`worktree_bring` `putBack`). Every bring keeps the main checkout before it as a backup ref. An agent's adjustment is answered in its tool result, not told again on its next turn, and windows hear it (`workspace-move-adjusted`) so the card shows the move as it is. `worktree_status` in the worktree lists what's left to check (`afterMove`). An agent's move onto its own branch is its own work: it goes without a card on every tier that may write (the harness's approval of the call, where its tier asks, is the person's say) and is refused, with why, on plan, chat and deny (`WorkspaceMoves.tier`). A hunk that can't be split by line goes whole to whoever wrote most of it and is named. Without the journal nothing is attributed, so nothing moves unless brought. The move is all-or-nothing: it reads each file, checks it is what the journal holds and that the two sides add back up to it line for line, stores every version in the repository's objects, keeps the main checkout's whole state (files and index) as a commit under `refs/mako/moves/<id>` for 14 days, saves its plan (`<worktrees>/moves/<id>.json`, the receipt's `moving`), writes each file by a rename after checking it is still what it read, then reads both sides back. Anything off rolls back. A host that dies mid-move finishes it on the next start (`tidy`) when every file is as it was or as planned, and otherwise rolls back around whatever changed since. Each step is logged under `worktree-move`. `worktree_status` reports whose the main checkout's changes are; the move's result and the agent's message in the worktree say what came and what stayed. `npm run test:attribution` ends with `test-worktree-attribution-moves.ts`: three writers in one file, renames, deletes, binary and untracked files, staging, two repositories, and a process killed at each step.
 
 What a turn changed has one source: the attribution journal, keyed by the request the turn answers (`LiveRequest.id` is the `turn` on every activity mark and entry; the harness's own run id rides along as `run`, metadata only). When a request's turn ends, `LiveTurnChanges` marks it `pending`, counts it from the journal once every change heard is in (`settling`), and again once the journal settles them (`settled`), into `LiveRequest.changes` (`contracts/turn-changes.ts`, `queries.ts` `turnChanges`: per file, first entry's before to last entry's after, each line counted for its last writer, the Thread's own apart from what only might be its). A count reads the journal a step at a time (`countingTurn`, run in slices, one count at a time), through the newest entry when it began: read at once it held the host's loop over a second (`test:attribution-holds`). Which roots are idle is read from what the journal keeps as it writes, a row a root and a row a folder by triggers (`JournalStore.recency`); a journal from before those is read once, in slices, and the same test holds that reading. The journal keeps 14 days, the window stored content already had: the hourly collection also drops, a short transaction at a time, the entries, calls, turn counts, footprints, commits' line writers and gaps past it (`LaptopTracker.prune`), keeping every entry an uncommitted line or file needs and everything of a Thread worked in since, and notes a Thread whose records went (`pruned_threads`), so a window reads "no longer kept" rather than "changed nothing" (`test-attribution-retention.ts`). The same record is kept beside the entries (`turn_changes`). The line under an answer, its file links' "Changed in this answer" and "Changes made by the thread" (the sum of those records) all read it, so they agree, and a reopened conversation reads the stored record instead of counting again. A turn from before the record falls back to its checkpoints. The work summary counts steps ("made 2 edits"), never files. What Git put back (a checkout, pull, rebase, reset or stash no call named the file for) is journaled with `git` set, or not at all when a file holds exactly the new commit's content; no turn, "changes made", others' count, rewind writer, move or `worktree_status` share counts it, and a version Git puts back keeps the writers it had (a whole file's, too: `lastEntry`). A change a rescan finds after lost events is placed by its file's modification time: content older than the gap names nobody, and a file the journal holds as created though HEAD has it as it is (a commit took it before the journal read it) is settled as clean on the next start or rescan (`settleCommitted`). A Fin's roster entry on its Apex is no background work of the Apex's: the Fin is a Thread of its own, and its Sessions mark their own work. A call's exact bounds from a harness's hooks (`harnesses/call-bounds.ts`) go through `LiveActivity.bounds`, under the same request-keyed turn as the call's marks, so the journal has one record of each call.
 
@@ -3757,10 +3837,16 @@ deliberate action and never rides along with a commit.
   chrome.** The title strip, the rail and each pane's tab strip sit on the
   shell; a pane's body is the surface; panes side by side are parted by a 6px
   gutter of the shell (`Divider`, whose bar shows only under the pointer), and
-  a pane's sections by tone and spacing, never a hairline. The composer's
-  input is one raised box inset from its pane. Hairlines stay for content
-  (a diff's file headers, a table) and controls (an input's or a button's
-  outline). **Every corner is square**, as the fin is: the radius tokens
+  a pane's sections by tone and spacing, never a hairline. The composer is
+  one box in the transcript's column, framed by a hairline on the pane's own
+  surface, the same in a new Thread, an existing one, a resting pane and the
+  web app's on every form (`composer-frame.tsx`, which `web-client/composer.tsx`
+  draws too: a phone's and an iPad's take a finger's sizes, a 36 px send and a
+  44 px control row and status line, and keep their mic; a Thread's status
+  line folds away while the on-screen keyboard is up and comes back as the
+  field lets go, New's never; `test:composer-edges-ui` measures each). Hairlines stay
+  for content (a diff's file headers, a table) and controls (an input's or a
+  button's outline). **Every corner is square**, as the fin is: the radius tokens
   (`--radius-*`) are all 0, so panes, rows, tabs, cards, fields, buttons,
   menus, dialogs, toasts, the composer, the prompt bubble and avatars meet
   at square corners. Only what means a dot (status dots, the unread sphere,
@@ -3822,7 +3908,8 @@ deliberate action and never rides along with a commit.
   `--sea` (mako-cloud `apps/site`), hue 245. Until November 2026 the accent
   was an orange "ember" that appeared nowhere in the brand. It is
   punctuation: the open Thread's lit fin, the glint crossing a working fin,
-  the composer caret, at most one badge. Never on links, borders, focus, selection, hover
+  the composer caret and its send once there is something to send, at most
+  one badge. Never on links, borders, focus, selection, hover
   fills, icons at rest, or any fill larger than a badge; if two sea moments
   are visible in one pane, one is wrong. Selection and hover are tints of the
   text colour (`--fill-hover` / `--fill-selected`), never the accent. Beyond
@@ -4052,12 +4139,17 @@ steering message or an approval is a notice above the composer only while it
 is under way or went wrong (`src/desk/notices.ts`), and an idle provider
 closes itself after ten minutes. A notice that no longer stands is not kept
 anywhere to be found later. The
-routing row gives way in a fixed order as the pane narrows (the centre can be
-450px), found by measuring rather than a width breakpoint
-(`use-compact-row.ts`): the access chip drops to its glyph first, the harness
-chip second, and what still overflows scrolls behind a faded edge instead of
-being cut off silently. The model and its reasoning are what people read
-there and are never shortened.
+composer's one control row holds what a person touches every message: plus,
+the harness and model with its reasoning, Plan while it's on, send. Where and
+how the work runs (this Mac or the cloud, the project folder or its branch,
+the access level in words, coloured only for full access, the Thread's Fins
+and relations) is a quiet status line under the box, each still the control
+it was, with the context reading at its end under the send. The status line
+gives way in a fixed order as the pane narrows (the centre can be 450px),
+found by measuring rather than a width breakpoint (`use-compact-row.ts`):
+where it runs and the access level drop to their glyphs first, the branch
+second, and what still overflows scrolls behind a faded edge instead of being
+cut off silently. The model and its reasoning are never shortened.
 
 Settings › Projects is one page per project (`projects-section.tsx`, opened by `openProjectSettings`, the rail's
 project menu and the palette's "Project settings: <name>"), the list grouped Active and Hidden (`hiddenProjects`).
@@ -4099,7 +4191,7 @@ selection, or in the row's tip (`rail-tip.tsx`). A Thread row is 28 px: the fin 
 the title in 14 px fading at its edge (`.rail-fade`) at 72% (full while it needs the person, holds an unread answer
 or a Mark as unread; 45% once Done), and a trailing slot (`RowEnd`): the status glyph the person set
 (`WorkGlyph`), then the time, or "Failed" in faint grey. Under the pointer the slot gives way to Archive and `⋯`.
-The branch, worktree, Sessions, setup purpose, pin and app went to the tip. The top rows are quiet with one count,
+The branch, worktree, Sessions, setup purpose, pin, app and the Thread's handle went to the tip. The top rows are quiet with one count,
 the Inbox's in the attention hue; Pull requests and Automations say theirs in their tips, and an automation whose
 last run failed since Automations was opened counts in the Inbox (`failedAutomationRuns`), as a proposal does
 through its agent's ask. Customize sidebar (`prefs.railNav`, Setup hidden at first) is in the Projects header's
@@ -4559,6 +4651,14 @@ session's own list at start. Execution
 preferences sync between windows; draft text and preview layout remain separate.
 
 ## Access tiers and steering
+
+An agent does its own Git work with Mako's tools at every tier: moving onto its branch, bringing or putting back what a
+move left, committing, pushing, updating from main, opening its pull request and re-running its checks. The harness's
+own approval governs each call; Mako adds an ask only where the person decides: merging below full access (`POLICY`)
+and the `AgentAskGate` tools. A move onto the Thread's branch asks nothing; a read-only tier refuses it. No agent-facing words send the person to the app for what a
+tool does, and an agent asks the person only for a decision that's theirs (its question tool, or `agents_report`);
+`scripts/test-own-git-work.ts` holds both. A failed `gh api user` reads as signed out only when `gh` says so
+(`accountUser`); anything else is a lookup to retry, never "Sign in".
 
 `packages/host/src/contracts/access.ts` is the one ladder: plan, chat, ask, edits, auto,
 full, deny. A provider mode carries the tier it implements (`access`) and who
@@ -5593,7 +5693,8 @@ has no project of its own and shows the first three), then Pinned, then
 Threads by project. There is no view switch: Recent, a bounded chronological
 list, and Archived are choices in the Threads heading's filter menu, and the
 heading names the one showing and leads back. The phone's list
-(`src/web-client/list.tsx`) has the Inbox as a chip, then Needs you (each Fin
+(`src/web-client/list.tsx`) heads with the desk's own rows (`RailRow`: the
+Inbox, and New thread on a tablet, where a phone's New floats), then Needs you (each Fin
 asking as a row of its own, "Mobile polish ·" before its question), Working
 and Recent, and `/inbox` is its Inbox screen (`inbox-screen.tsx`, the same Fin
 asks answered through `answerFin`). Where a Thread runs and its project are said

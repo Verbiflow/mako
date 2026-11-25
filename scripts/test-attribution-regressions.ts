@@ -837,7 +837,10 @@ test("a turn's count journals what was heard and never forces or waits on a resc
   await v.tracker.settled()
   held = true
   v.events.restore()
-  await new Promise((resolve) => setTimeout(resolve, 50))
+  // Wait for the rescan to reach its walk rather than guessing how long a slow runner takes to start it.
+  for (const until = performance.now() + 10_000; !release && performance.now() < until; ) {
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
   assert.ok(release, "the rescan is walking")
   const started = performance.now()
   await v.tracker.settled({ rescans: false })

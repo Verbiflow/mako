@@ -238,17 +238,32 @@ export interface AgentsShiver {
 export type ShiverMate = Omit<FrontDoorChild, "direct">
 
 /**
- * The person's other Apexes on this host (`agents_list` with `scope: apexes`),
- * every one outside the caller's own tree whose conversation is open here.
- * Typed facts the host holds, never a transcript, and reading them never
- * wakes or messages one.
+ * The person's other top-level Threads on this host (`agents_list` with
+ * `scope: apexes`), outside the caller's own tree: each that leads a Fin still
+ * open, whole (`apexes`); of the rest, those the person wrote in last, in a
+ * line each (`others`), and how many more there are (`more`), which
+ * `agents_send` reaches by handle all the same. Typed facts the host holds,
+ * never a transcript, and reading them never wakes or messages one.
  */
 export interface AgentsApexes {
   apexes: OtherApex[]
+  others?: OtherThread[]
+  more?: number
+}
+/** A top-level Thread leading no open Fin, as `scope: apexes` lists it: `agents_send` takes it as `apex:<handle>`. */
+export interface OtherThread {
+  handle: string
+  title?: string
+  harness?: string
+  working: boolean
+  folder?: string
+  branch?: string
 }
 export interface OtherApex {
   /** Its Thread, which `agents_send` takes as `apex:<thread>`. */
   thread: string
+  /** Its handle (`threadHandle`), which `agents_send` takes as `apex:<handle>`: as many characters as name it alone here. */
+  handle: string
   title?: string
   harness?: string
   working: boolean
@@ -394,7 +409,7 @@ export interface AgentsSettleInput {
 export type AgentsSettleResult = { action: ReportAction; deduped?: true } | AgentRefused
 
 export interface AgentsSendInput {
-  /** Your own Fin's name or Thread ID, or another of the person's Apexes as `apex:<title or Thread ID>`. Shiver siblings need a parent relay through agents_report; discovery grants no send authority. */
+  /** Your own Fin's name or Thread ID, or another of the person's top-level Threads as `apex:<handle, title or Thread ID>`. Shiver siblings need a parent relay through agents_report; discovery grants no send authority. */
   to: string
   /** Pass on the person's message this turn answers, word for word, as theirs: the host fills it in, so the call stays short. */
   forward?: boolean
@@ -623,7 +638,7 @@ export const ORCHESTRATION_INSTRUCTIONS = [
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   `The person writes to this Thread: a message for a ${FIN_WORD} goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn. Answer a ${FIN_WORD}'s question with \`agents_answer\` within your access, or \`person: true\` when it's theirs.`,
   `A ${FIN_WORD} whose harness runs out or should change moves with \`agents_move\`; never start a new one to take over.`,
-  `Read the person's other ${APEX_WORD}es with \`agents_list\` \`scope: apexes\` before touching shared files or branches; reading never wakes them. Message one only when the person asked or it alone can give or decide what you need.`,
+  `Read the person's other Threads with \`agents_list\` \`scope: apexes\` before editing shared files or branches; reading never wakes them. Message one only when the person asked or it alone can give or decide what you need.`,
 ].join(" ")
 
 /** A Fin as the front door's note shows it to its Apex: typed facts the host already holds, never its transcript. */
@@ -811,8 +826,8 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
     aliases: { scope: { [LEGACY_SHIVER_SCOPE]: "shiver" } },
     mcp: {
       name: "agents_list",
-      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Every PR fact stays inline by default. Explicit presentation summary replaces large PR arrays with counts: open and draft are known open; reported means its current state is unknown. Pass each read object to agents_read, then follow pulls.next as offset. These details expire at expiresAt, at most 30 minutes from capture, or on host restart; they require the same caller Session and current access. After that the original facts cannot be recovered; a new list gives current facts. Use full for lasting evidence. Reports wake you on their own, so read this when you need the whole picture, not to wait. Each answer carries a mark: pass it as since next time to list only the ${FIN_WORD}s that changed. A ${FIN_WORD} reads its ${SHIVER_WORD} (its ${APEX_WORD} and the other ${FIN_WORD}s it started) with scope shiver, before work another of them may be doing. Scope apexes reads the person's other ${APEX_WORD}es without waking them.`,
-      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting or need a decision, and those that ended or went idle in the last day; what needs you is always listed, and older idle or ended ones are counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, shiver: your ${SHIVER_WORD} (your ${APEX_WORD} and the other ${FIN_WORD}s it started), what each was asked and last reported, folded the same way; or apexes: the person's other ${APEX_WORD}es, each with its folder, branch, ${FIN_WORD} counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, since: "The mark an earlier list answered: only the Fins that changed since (state, report, open questions or pull requests) are listed, the rest counted in unchanged. A Fin waiting on you is always listed. A mark from another host or an earlier host life lists every Fin.", ended: `With children, tree or shiver: also list the ${FIN_WORD}s that ended or went idle over a day ago, which folded counts.`, presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
+      description: `This Thread's ${FIN_WORD}s as they stand: name, harness, state, last step and last report. Every PR fact stays inline by default. Explicit presentation summary replaces large PR arrays with counts: open and draft are known open; reported means its current state is unknown. Pass each read object to agents_read, then follow pulls.next as offset. These details expire at expiresAt, at most 30 minutes from capture, or on host restart; they require the same caller Session and current access. After that the original facts cannot be recovered; a new list gives current facts. Use full for lasting evidence. Reports wake you on their own, so read this when you need the whole picture, not to wait. Each answer carries a mark: pass it as since next time to list only the ${FIN_WORD}s that changed. A ${FIN_WORD} reads its ${SHIVER_WORD} (its ${APEX_WORD} and the other ${FIN_WORD}s it started) with scope shiver, before work another of them may be doing. Scope apexes reads the person's other Threads without waking them.`,
+      fields: { scope: `children (default): your ${FIN_WORD}s that are at work, waiting or need a decision, and those that ended or went idle in the last day; what needs you is always listed, and older idle or ended ones are counted in folded; all: every one of them; tree, which adds every ${FIN_WORD} below them, folded the same way; or, from a ${FIN_WORD}, shiver: your ${SHIVER_WORD} (your ${APEX_WORD} and the other ${FIN_WORD}s it started), what each was asked and last reported, folded the same way; or apexes: other top-level Threads: handle, folder, branch, Fin counts and digest; or threads: the conversations on this device, each with the ref context and thread_history take.`, query: `With scope threads: words of a title, a Thread ID or a ${FIN_WORD}'s name.`, since: "The mark an earlier list answered: only the Fins that changed since (state, report, open questions or pull requests) are listed, the rest counted in unchanged. A Fin waiting on you is always listed. A mark from another host or an earlier host life lists every Fin.", ended: `With children, tree or shiver: also list the ${FIN_WORD}s that ended or went idle over a day ago, which folded counts.`, presentation: "full (default): every PR fact inline. summary: explicit opt-in to counts and same-Session PR pages lost at expiresAt or host restart; relisting cannot recover the original facts. Other scopes stay full." },
       annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     },
   },
@@ -922,10 +937,10 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         `An idle or finished ${FIN_WORD} takes it as its next task in its own Thread. A working one takes it as deliver says: queue (the default) after its turn, for more to do; steer, into the turn it's running, when the message changes what it's doing now; interrupt, stopping that turn first, when what it's running is wrong.`,
         `One running in an agent CLI your shell started is stopped and its session resumed here with the message, its last step maybe cut short.`,
         `It returns at once, saying when that ${FIN_WORD}'s harness lets it hear the message; what the ${FIN_WORD} does reports back as its work does.`,
-        `Another ${APEX_WORD} (apex:<title>) hears it after its turn (steer only when its current work is wrong); its reply wakes you once; at most 3 an hour to one. Message one only when the person asked, or it owns the files or branch you'd change, or its work blocks yours; never for status, thanks or acknowledgement. One message with everything it needs; don't reply to a reply unless it asks you something.`,
+        `Another top-level Thread hears it after its turn (steer only when its current work is wrong); its reply wakes you once; at most 3 an hour to one. Message one only when the person asked, or it owns the files or branch you'd change, or its work blocks yours; never for status, thanks or acknowledgement. One message with everything it needs; don't reply to a reply unless it asks you something.`,
       ].join(" "),
       fields: {
-        to: `The ${FIN_WORD}'s name (fin:<name> as your note lists it) or Thread ID; another ${APEX_WORD}: apex:<title or Thread ID>.`,
+        to: `The ${FIN_WORD}'s name (fin:<name> as your note lists it) or Thread ID; a top-level Thread: apex:<handle>.`,
         forward: "true: pass on the person's message this turn answers, as their words.",
         text: "Your own words: beneath the person's with forward, else the whole message.",
         deliver: `For a working ${FIN_WORD}: queue (default), steer or interrupt.`,

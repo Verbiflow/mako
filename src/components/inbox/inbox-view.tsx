@@ -216,17 +216,17 @@ const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
       }}
       className="flex flex-col gap-2 bg-raised px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
     >
-      <div className="flex h-5 min-w-0 items-center gap-2">
+      <div data-ask-head className="flex h-5 min-w-0 items-center gap-2">
         <AskMark item={item} />
         <Crumb item={item} />
         <span className="tabular shrink-0 text-label text-faint">{formatRelative(item.since)}</span>
       </div>
-      <p className="pl-7 text-ui text-foreground">{item.question}</p>
+      <p data-ask-question className="pl-7 text-ui text-foreground">{item.question}</p>
       {item.kind === "fin" && item.ask.ask.action ? <p className="-mt-1 pl-7 text-label text-muted-foreground">{item.ask.ask.action}</p> : null}
       {item.kind === "agent-ask" && item.ask.want.kind === "automation-proposal" ? (
         <ProposalAsk item={item} sending={sending} setSending={setSending} />
       ) : (
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5 pl-7">
+      <div data-ask-answers className="flex min-w-0 flex-wrap items-center gap-1.5 pl-7">
         {item.kind === "fin" ? (
           <FinAnswers item={item} sending={sending} send={(answer) => settle(answerFin(item.apex.conversation, item.ask, answer))} />
         ) : item.kind === "approval" && item.answerable ? (

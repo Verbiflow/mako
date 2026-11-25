@@ -65,7 +65,7 @@ import { hostPlatform, nodePlatform, onMac, onWindows } from "./base/platform.js
 import type { HostEvent } from "./contracts/host-events-boot.js"
 import type { KeepAwakeSettings } from "./contracts/keep-awake.js"
 import type { LifecycleWork } from "./contracts/app-lifecycle.js"
-import { openThreads, declareThreadMethods, declareUnreadRecordMethods, ThreadTitler } from "./threads/index.js"
+import { conversationNamed, openThreads, declareThreadMethods, declareUnreadRecordMethods, ThreadTitler } from "./threads/index.js"
 import type { Control, ControlService } from "./control/index.js"
 import type { SimulatorAgent, SimulatorCaller, SimulatorsListed } from "./contracts/simulators.js"
 import { accountBorrowing, BorrowedSimulators, ControlResidency, ControlSessions, SimulatorTools, controlLine, controlLoad, controlVideoMedia } from "./control/load.js"
@@ -609,6 +609,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // Who changed what in every checkout a Thread works in. It catches up on its own, after the host is up.
   const unfollowEffects = fixtureDesk ? undefined : liveToolEffects.subscribe((reported) => {
     late.attribution?.effects(reported.conversation, reported.call)
+    // The same report says which files the call wrote: two Threads of one Shiver writing the same one is their Apex's to hear.
+    late.conversations?.agents?.wrote(reported.conversation, reported.call)
     // A call that may have written: the Thread's checkpoint follows a few seconds later, when it's kept ready.
     if (reported.call.status !== "refused" && reported.call.effects.some((effect) => effect.kind !== "read")) late.readiness?.wrote(reported.conversation)
     // And the worktree it wrote in has its uncommitted files counted again for the rail, once the writes settle.
@@ -1727,6 +1729,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   live.asks.answering = async (conversation, ask, allow) => { await late.agentAsks?.answer(conversation, ask, allow) }
   late.threadMoves = new ThreadMoveTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
+    named: (ref) => (threads.store ? conversationNamed(threads.store, ref) : { conversation: ref }),
     place: (id) => {
       if (live.session(id) && !cloudConversations?.has(id)) return "here"
       const row = cloudConversations?.listedRow(id)
@@ -1751,6 +1754,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   // Rename, Archive and Restore for an agent's `thread` and `mako thread`, through the calls the app's menu makes.
   late.threadActs = new ThreadActTool({
     conversationOf: (session) => threads.store?.conversationsOf(session).at(-1),
+    named: (ref) => (threads.store ? conversationNamed(threads.store, ref) : { conversation: ref }),
     threadOf: (id) => threads.store?.journalPlacement(id)?.thread,
     tier: (id) => sessionAccessTier(live.session(id)),
     invoke: async (channel, args) => z.json().optional().parse(decodeRuntimeValue(await methods.invoke(channel, args))),

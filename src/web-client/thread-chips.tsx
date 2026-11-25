@@ -1,5 +1,5 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ArrowLeftRightIcon, CheckIcon, ChevronDownIcon, SearchIcon, ShieldIcon, TriangleAlertIcon } from "lucide-react"
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { ArrowLeftRightIcon, CheckIcon, ChevronDownIcon, SearchIcon, ShieldAlertIcon, ShieldIcon } from "lucide-react"
 import { toast } from "sonner"
 import { errorMessage } from "@mako/host/contracts/error-message"
 import type { LiveSessionMode } from "@mako/host/contracts/providers-acp"
@@ -25,52 +25,81 @@ import { chipReading, effortControl, modeLabel, modeSummary, riskyMode, type Set
 const SEARCH_FROM = 8
 
 /**
- * A Thread's model, effort and access in its composer's bar: one chip that says what the next message runs on
- * ("GPT-5.6 Sol · High", a caution mark while nothing waits for approval) and one sheet that changes any of it.
+ * A Thread's model, effort and access in its composer, as the desktop's composer says them: the harness's mark, the
+ * model and its effort in the control row (`chip`), and the access level in words on the status line under the box
+ * (`access`), full access alone in the caution hue. Both open one sheet that changes any of it, the access row
+ * already open when it's the access that was pressed.
  *
  * - The model and its effort are the desk's per-conversation choice (`composer-settings.ts`): kept for this Thread and
  *   sent with its next message, which switches the running Session to them, as the desk's composer does. A choice the
  *   harness can't take is put back at once, saying why.
  * - Access is the running Session's mode, changed on its owner now (`mako:live-mode`); Send waits while the change is
- *   on its way, so the next message runs under it. Refused, the chip stays where the Session is and says why. Every new
+ *   on its way, so the next message runs under it. Refused, the line stays where the Session is and says why. Every new
  *   session's access is the account's choice (`access.ts`): offered under the Thread's, never changed by it.
  *
  * What each harness offers comes from its own catalog and ladder, so no harness has a branch here: a model without
- * effort has no effort control, a harness without a ladder no access row.
+ * effort has no effort control, a harness without a ladder no access row and nothing on the status line.
  */
-export function ThreadChips({ conversation, harness }: { conversation: string; harness: string }) {
+export function ThreadChips({ conversation, harness, children }: { conversation: string; harness: string | undefined; children: (said: ChipsSaid) => ReactNode }) {
+  return harness ? <ChipsOf conversation={conversation} harness={harness}>{children}</ChipsOf> : children({})
+}
+
+/** What the composer draws of a Thread's settings: the chip for its control row, the access for its status line. */
+export interface ChipsSaid {
+  chip?: ReactNode
+  access?: ReactNode
+}
+
+function ChipsOf({ conversation, harness, children }: { conversation: string; harness: string; children: (said: ChipsSaid) => ReactNode }) {
   const view = useComposerSettings(harness)
-  const [open, setOpen] = useState(false)
-  const [chip, setChip] = useState<HTMLElement | null>(null)
+  const [open, setOpen] = useState<"model" | "access" | undefined>(undefined)
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null)
   const modes = useAcp((state) => (activeLiveAcp(state)?.key === conversation ? activeLiveAcp(state)?.session.modes : undefined))
   const current = useAcp((state) => (activeLiveAcp(state)?.key === conversation ? activeLiveAcp(state)?.session.currentMode : undefined))
   const switching = useSwitching((state) => state.pending.get(conversation))
   const shownMode = modes?.find((mode) => mode.id === (switching?.mode ?? current))
   const reading = readingOf(view)
   const said = chipReading(reading, shownMode)
-  return (
+  const opens = (which: "model" | "access") => (event: React.MouseEvent<HTMLElement>) => {
+    setAnchor(event.currentTarget)
+    setOpen(which)
+  }
+  const chip = (
+    <button
+      type="button"
+      aria-label={said.spoken}
+      aria-haspopup="dialog"
+      aria-expanded={open !== undefined}
+      data-thread-chip="settings"
+      className="web-chip web-chip-shrinks web-settings-chip"
+      onClick={opens("model")}
+    >
+      <WebHarnessIcon harness={harness} className="size-3.5 shrink-0" />
+      <span className="truncate font-semibold text-foreground">{said.model}</span>
+      {said.effort ? <span className="web-settings-chip-effort">{said.effort}</span> : null}
+      <ChevronDownIcon aria-hidden className="size-3 shrink-0 opacity-50" />
+    </button>
+  )
+  const access = (
     <>
-      <button
-        type="button"
-        aria-label={said.spoken}
-        aria-haspopup="dialog"
-        aria-expanded={open}
-        data-thread-chip="settings"
-        data-risky={said.risky || undefined}
-        className="web-chip web-chip-shrinks web-settings-chip"
-        onClick={(event) => {
-          setChip(event.currentTarget)
-          setOpen(true)
-        }}
-      >
-        {switching ? <Spinner aria-hidden className="size-3.5 shrink-0" /> : said.risky ? <TriangleAlertIcon aria-hidden data-risky-mark className="size-3.5 shrink-0 text-caution" /> : null}
-        <span className="truncate">{said.model}</span>
-        {said.effort ? <span className="web-settings-chip-effort">· {said.effort}</span> : null}
-        <ChevronDownIcon aria-hidden className="size-3 shrink-0 opacity-50" />
-      </button>
-      <SettingsSheet anchor={chip} open={open} onDismiss={() => setOpen(false)} view={view} reading={reading} conversation={conversation} harness={harness} modes={modes} current={switching?.mode ?? current ?? undefined} switching={Boolean(switching)} />
+      {shownMode ? (
+        <button
+          type="button"
+          aria-label={`Access: ${modeLabel(shownMode)}`}
+          aria-haspopup="dialog"
+          data-thread-chip="access"
+          data-access={shownMode.access ?? shownMode.id}
+          className="web-chip"
+          onClick={opens("access")}
+        >
+          {switching ? <Spinner aria-hidden className="size-3 shrink-0" /> : said.risky ? <ShieldAlertIcon aria-hidden data-risky-mark className="size-3 shrink-0" /> : <ShieldIcon aria-hidden className="size-3 shrink-0" />}
+          <span className="truncate">{modeLabel(shownMode)}</span>
+        </button>
+      ) : null}
+      <SettingsSheet anchor={anchor} open={open !== undefined} accessFirst={open === "access"} onDismiss={() => setOpen(undefined)} view={view} reading={reading} conversation={conversation} harness={harness} modes={modes} current={switching?.mode ?? current ?? undefined} switching={Boolean(switching)} />
     </>
   )
+  return children({ chip, access })
 }
 
 function readingOf(view: ComposerSettingsView): SettingsReading {
@@ -127,6 +156,8 @@ function chooseSetting(view: ComposerSettingsView, choose: () => void, said: str
 interface SheetProps {
   anchor: HTMLElement | null
   open: boolean
+  /** Opened from the access on the status line: its row is open from the start. */
+  accessFirst: boolean
   onDismiss: () => void
   view: ComposerSettingsView
   reading: SettingsReading
@@ -142,15 +173,15 @@ interface SheetProps {
  * last row, opened in place. It stays open while choices are made, each taking effect as it's tapped; a drag down, a
  * tap outside or Back closes it.
  */
-function SettingsSheet({ anchor, open, onDismiss, view, reading, conversation, harness, modes, current, switching }: SheetProps) {
+function SettingsSheet({ anchor, open, accessFirst, onDismiss, view, reading, conversation, harness, modes, current, switching }: SheetProps) {
   const [accessOpen, setAccessOpen] = useState(false)
   const [query, setQuery] = useState("")
-  // Each opening starts as the sheet first did: the access closed, no search.
+  // Each opening starts as the sheet first did, no search, the access row open only when the access was pressed.
   const [opened, setOpened] = useState(open)
   if (opened !== open) {
     setOpened(open)
     if (open) {
-      setAccessOpen(false)
+      setAccessOpen(accessFirst)
       setQuery("")
     }
   }
@@ -380,7 +411,7 @@ function AccessRow({ open, onToggle, onChosen, conversation, harness, modes, cur
 
 function AccessMark({ mode, switching }: { mode: LiveSessionMode | undefined; switching: boolean }) {
   if (switching) return <Spinner aria-hidden className="size-[18px] shrink-0" />
-  return riskyMode(mode) ? <TriangleAlertIcon aria-hidden className="size-[18px] shrink-0 text-caution" /> : <ShieldIcon aria-hidden className="size-[18px] shrink-0 text-muted-foreground" />
+  return riskyMode(mode) ? <ShieldAlertIcon aria-hidden className="size-[18px] shrink-0 text-caution" /> : <ShieldIcon aria-hidden className="size-[18px] shrink-0 text-muted-foreground" />
 }
 
 /** What every new session of this harness starts in, as the account keeps it, and making this Session's that. */

@@ -158,7 +158,7 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
       {fin ? <FinAskCard key={`${fin.fin}:${fin.ask.id}`} apex={conversation} ask={fin} more={finAsks.length - 1} answerTyped={answerTyped} /> : null}
       {!ask && !fin ? <LimitContinueCard /> : null}
       {unsent.length ? (
-        <ul role="list" aria-label="Messages not sent" className="mx-auto flex w-full max-w-content flex-col gap-1.5 px-2 pb-1">
+        <ul role="list" aria-label="Messages not sent" className="mx-auto flex w-full max-w-content flex-col gap-1.5 px-3 pb-1">
           {unsent.map((message) => (
             <li key={message.id} className="web-unsent">
               <p className="min-w-0 flex-1 truncate text-ui">{message.text}</p>
@@ -173,34 +173,41 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
           ))}
         </ul>
       ) : null}
-      <div data-dock-queue className="mx-auto w-full max-w-content px-2">
+      <div data-dock-queue className="mx-auto w-full max-w-content px-3">
         <PromptQueue onEdit={editing.begin} />
       </div>
       <ReviewTray conversation={conversation} />
       <FinOfApexNote conversation={conversation} />
-      <Composer
-        key={draftKey}
-        draftKey={draftKey}
-        placeholder={placeholder}
-        running={running}
-        stopping={canceling}
-        onStop={() => void acp.cancel()}
-        stopFor={conversation}
-        onSend={send}
-        onWrite={target.cloudThread ? () => void wakeThread(target.cloudThread!, conversation) : undefined}
-        onUnsent={(message: Outgoing) => keepUnsent({ ...message, conversation })}
-        // A question is answered in words: nothing to attach, and the hint gets the room.
-        attach={ask?.kind !== "question" && !typedFin && !waits}
-        // A question waiting, its own or a Fin's: typed words are its answer, which a send takes; nothing steers past it.
-        steering={ask?.kind === "question" || typedFin || addressee ? undefined : steering}
-        answering={ask?.kind === "question" || typedFin}
-        straight={Boolean(addressee)}
-        editing={editing.current}
-        waiting={switching ? "Switching access…" : undefined}
-        tools={harnessId && !waits ? <ThreadChips conversation={conversation} harness={harnessId} /> : undefined}
-        header={sendsTo && harnessId ? <SendsTo harness={harnessId} words={sendsTo} /> : undefined}
-        hold={asksFirst && ask?.kind !== "question" && !running ? <StaleSend words={asksFirst} onSure={() => setSure(true)} /> : undefined}
-      />
+      {/* Read from a Mac's copy, nothing is chosen here: no model, no access. */}
+      <ThreadChips conversation={conversation} harness={waits ? undefined : harnessId}>
+        {(said) => (
+          <Composer
+            key={draftKey}
+            draftKey={draftKey}
+            placeholder={placeholder}
+            running={running}
+            stopping={canceling}
+            onStop={() => void acp.cancel()}
+            stopFor={conversation}
+            onSend={send}
+            onWrite={target.cloudThread ? () => void wakeThread(target.cloudThread!, conversation) : undefined}
+            onUnsent={(message: Outgoing) => keepUnsent({ ...message, conversation })}
+            // A question is answered in words: nothing to attach, and the hint gets the room.
+            attach={ask?.kind !== "question" && !typedFin && !waits}
+            // A question waiting, its own or a Fin's: typed words are its answer, which a send takes; nothing steers past it.
+            steering={ask?.kind === "question" || typedFin || addressee ? undefined : steering}
+            answering={ask?.kind === "question" || typedFin}
+            straight={Boolean(addressee)}
+            editing={editing.current}
+            waiting={switching ? "Switching access…" : undefined}
+            tools={said.chip}
+            status={said.access}
+            foldStatus
+            header={sendsTo && harnessId ? <SendsTo harness={harnessId} words={sendsTo} /> : undefined}
+            hold={asksFirst && ask?.kind !== "question" && !running ? <StaleSend words={asksFirst} onSure={() => setSure(true)} /> : undefined}
+          />
+        )}
+      </ThreadChips>
     </div>
   )
 }
