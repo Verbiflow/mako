@@ -1,7 +1,7 @@
 {
   "harness": "claude",
-  "version": "2.1.327",
-  "on": "2026-11-18",
+  "version": "2.1.329",
+  "on": "2026-11-20",
   "via": "the Agent SDK's claude -p --output-format stream-json, stopped at system/init",
   "tools": [
     "Bash",
@@ -55,6 +55,7 @@
     "withdrawn_files_note_v2",
     "ui_pane_widget_v1",
     "reload_plugins_refuse_if_busy_v1",
+    "get_usage_detached_v1",
     "silent_resend_files_v1"
   ]
 }
