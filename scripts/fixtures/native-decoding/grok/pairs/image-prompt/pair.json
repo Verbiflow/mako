@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.89"
+    "version": "1.0.92"
   },
   "about": "What colour is the attached image? Don't run commands. A prompt that carries an image, answered without a tool.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1ef51-f2e1-7983-ab14-8c43bfaf3233/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1fe8d-87c5-7291-a72f-d930635472fd/updates.jsonl",
       "known": [
         {
           "side": "-",

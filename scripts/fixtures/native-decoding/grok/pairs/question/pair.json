@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.89"
+    "version": "1.0.92"
   },
   "about": "Ask me with your question tool, once, whether the release should ship on Friday or Monday, then tell me what I picked. Don't run commands. A question with two options, answered with the first, then the answer.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1ef51-2988-74c2-a658-c474d7e5ce4e/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1fe8d-665b-7dc3-b1ea-a03f5c43d3b3/updates.jsonl",
       "known": []
     }
   ]

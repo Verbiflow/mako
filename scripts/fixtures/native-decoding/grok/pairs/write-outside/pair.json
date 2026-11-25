@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.89"
+    "version": "1.0.92"
   },
   "about": "Run `echo hi > ../outside.txt` in the shell and tell me whether it worked. A command that writes outside the project, which a sandboxed harness refuses. Codex 0.159.3 sends no item for a command its sandbox refused; its rollout keeps the call.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1ef51-2579-74a2-b8bd-be25265a6590/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1fe8d-6285-74c1-b47a-1513b30395ff/updates.jsonl",
       "known": []
     }
   ]

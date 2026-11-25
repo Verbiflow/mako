@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.89"
+    "version": "1.0.92"
   },
   "about": "Run exactly one subagent in the background (do not wait for it) whose whole task is to reply with a marker, then end your turn at once. A subagent left running in the background reports after the turn that started it; the harness runs a turn of its own on the report, or takes it into the turn still running.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1ef51-408a-7d10-bab7-b404074675f1/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1fe8d-8235-7c92-aff0-f090d99835d5/updates.jsonl",
       "known": []
     }
   ]

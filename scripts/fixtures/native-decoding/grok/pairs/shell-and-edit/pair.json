@@ -1,13 +1,13 @@
 {
   "harness": "grok",
   "native": {
-    "version": "1.0.89"
+    "version": "1.0.92"
   },
   "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
   "stores": [
     {
       "reader": "grok",
-      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1ef51-1fb8-79b2-9888-55adf71d5f6c/updates.jsonl",
+      "path": ".grok/sessions/%2Ftmp%2Fmako-pair%2Fproject/01a1fe8d-5d25-7f83-9b0c-57e51c94334a/updates.jsonl",
       "known": []
     }
   ]
