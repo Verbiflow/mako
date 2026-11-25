@@ -414,6 +414,11 @@ export class CloudAccounts {
   #checkpointSource: Stored | undefined
   /** Every write of the sign-in to the keychain, one after another, so a later one never lands under an earlier one. */
   #writes: Promise<unknown> = Promise.resolve()
+  /**
+   * Every sidecar cursor write, one after another. Apart from `#writes`: a keychain write may wait up to 30 s for another
+   * host's borrowing lock, and events heard meanwhile are still remembered.
+   */
+  #cursorWrites: Promise<unknown> = Promise.resolve()
   /** A sign-out the cloud hasn't heard of, held in memory when there's no keychain to keep it in. */
   #unfinished: UnfinishedSignOut | undefined
   #finishing: NodeJS.Timeout | undefined
@@ -1447,7 +1452,7 @@ export class CloudAccounts {
       this.#seenSave = undefined
       this.#saveSeen()
     }
-    const requiredWrites = this.#writes
+    const requiredWrites = this.#writes, cursorWrites = this.#cursorWrites
     const checkpoint = this.#inlineStop
     this.#saveInline(true)
     if (this.#finishing) clearTimeout(this.#finishing)
@@ -1465,7 +1470,8 @@ export class CloudAccounts {
       }, QUIT_INLINE_MS)
     })
     // Real credential saves and the sidecar still drain; only optional rollback checkpoints are cancelled.
-    return this.#closing = requiredWrites.then(() => Promise.race([checkpointWrite, deadline])).then(() => undefined).finally(() => clearTimeout(timer))
+    const credentialWrites = requiredWrites.then(() => Promise.race([checkpointWrite, deadline]))
+    return this.#closing = Promise.all([credentialWrites, cursorWrites]).then(() => undefined).finally(() => clearTimeout(timer))
   }
 
   // Signing in.
@@ -1627,8 +1633,8 @@ export class CloudAccounts {
     const stored = this.#stored
     if (!stored || this.#seen === undefined) return
     const scope = eventScope(stored), seen = this.#seen
-    const write = this.#writes.then(async () => { await this.#options.eventCursors.write(scope, seen); this.#scheduleInline() })
-    this.#writes = write.catch(() => undefined)
+    const write = this.#cursorWrites.then(async () => { await this.#options.eventCursors.write(scope, seen); this.#scheduleInline() })
+    this.#cursorWrites = write.catch(() => undefined)
     void write.catch((error: Error) => this.#options.log?.("cloud account event not remembered as heard", { error: error.message }))
   }
 
