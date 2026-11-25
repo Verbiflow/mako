@@ -215,6 +215,7 @@ export function FileViewer({
                   pane={pane}
                   documents={documents}
                   focused={focusedPaneId === pane.id}
+                  framed={hasSecondPane && focusedPaneId === pane.id}
                   composer={composerPane?.id === pane.id}
                   canClosePane={closable(pane)}
                 />
@@ -232,6 +233,7 @@ const FilePane = memo(function FilePane({
   pane,
   documents,
   focused,
+  framed,
   composer,
   canClosePane,
 }: {
@@ -239,6 +241,8 @@ const FilePane = memo(function FilePane({
   pane: ViewerPane
   documents: Record<string, ViewerDocument>
   focused: boolean
+  /** Two panes stand side by side and this one has focus: its frame says which. One pane alone has none. */
+  framed: boolean
   composer: boolean
   canClosePane: boolean
 }) {
@@ -264,7 +268,7 @@ const FilePane = memo(function FilePane({
       }}
       className={cn(
         "workbench-pane relative flex min-h-0 min-w-0 flex-1 flex-col bg-surface",
-        focused && "ring-1 ring-border ring-inset"
+        framed && "workbench-pane-focused"
       )}
     >
       <StageStrip paneId={pane.id} canClosePane={canClosePane} />

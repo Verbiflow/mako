@@ -627,7 +627,7 @@
 
   /*
    * The composer is the desktop's box (`composer-frame.tsx`; `.composer-box` and `.composer-send` in `index.css`): a
-   * hairline frame on the pane's surface that firms while typing, the field in the prose size, one control row, the
+   * box a tone up from the pane, floated by a soft shadow and lifted while typing, the field in the prose size, one control row, the
    * status line under it, and the send a sea square once there is something to send. What's here fits it to a finger:
    * the field grows to 180 px and then scrolls (the keyboard has half the screen), and every control is 36 px drawn
    * and 44 px under a finger, reaching past its edges rather than making the row taller. Under a pointer it keeps the

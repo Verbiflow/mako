@@ -3838,8 +3838,8 @@ deliberate action and never rides along with a commit.
   shell; a pane's body is the surface; panes side by side are parted by a 6px
   gutter of the shell (`Divider`, whose bar shows only under the pointer), and
   a pane's sections by tone and spacing, never a hairline. The composer is
-  one box in the transcript's column, framed by a hairline on the pane's own
-  surface, the same in a new Thread, an existing one, a resting pane and the
+  one box in the transcript's column, a tone up from the pane and floated by a
+  soft shadow, never outlined, the same in a new Thread, an existing one, a resting pane and the
   web app's on every form (`composer-frame.tsx`, which `web-client/composer.tsx`
   draws too: a phone's and an iPad's take a finger's sizes, a 36 px send and a
   44 px control row and status line, and keep their mic; a Thread's status

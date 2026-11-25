@@ -28,7 +28,7 @@ export const AgentWordsCard = memo(function AgentWordsCard({ words, raw, timesta
   // A wake's reports are the Fins' own messages; the words around them are the Apex's to read, not the person's.
   if (words.reports?.length) return <FinReports reports={words.reports} timestamp={timestamp} />
   return (
-    <div data-agent-words={kind} className="bg-shell/55 px-4 py-3 [box-shadow:inset_0_0_0_0.5px_var(--hairline)]">
+    <div data-agent-words={kind} className="bg-shell/55 px-4 py-3">
       <div className="flex items-center gap-2 text-label text-faint">
         <AgentAvatar harness={harness} kind={from === YOUR_APEX ? "thread" : "fin"} label={name} className="bg-surface" />
         <span className="font-medium text-muted-foreground">{passedOn ? `Your message, passed on by ${name}` : `From ${name}`}</span>
