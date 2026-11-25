@@ -66,7 +66,7 @@ export function antigravityProfile(processes: DiscoveryProcesses, dataRoot: stri
           return antigravityCatalog(opened)
         } catch (error) {
           if (error instanceof RequestError && error.code === RequestError.authRequired().code)
-            return { models: [], configurationError: "Antigravity isn't signed in. Sign in or add a Gemini API key in Settings → Agents." } satisfies HarnessModelCatalog
+            return { models: [], signInRequired: true, configurationError: "Antigravity isn't signed in. Send a message to sign in, or add a Gemini API key in Settings → Agents." } satisfies HarnessModelCatalog
           throw error
         }
       })

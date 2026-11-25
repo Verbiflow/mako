@@ -7,6 +7,9 @@ import { resolveExecutable } from "../../base/executable.js"
 import { NO_NATIVE_PROMPT_IDENTITY } from "../../contracts/native-prompt-identity.js"
 import type { ProviderAcpSource } from "../acp-source.js"
 
+/** What picks Antigravity's account and its store: decided with the launch, never by a Thread's Setup values. */
+export const AGY_ACCOUNT_VARIABLES = ["GEMINI_API_KEY", "GOOGLE_API_KEY", "GOOGLE_APPLICATION_CREDENTIALS", "GOOGLE_GENAI_USE_VERTEXAI", "GEMINI_HOME", "MAKO_AGY_DATA_DIRECTORY"] as const
+
 export function agyArgs(env?: NodeJS.ProcessEnv): string[] {
   return ["acp", "--process-per-session", ...(env?.GEMINI_API_KEY ? ["--app-data-dir", agyDataDirectory(env)] : [])]
 }
@@ -81,7 +84,7 @@ export const antigravityAcp: ProviderAcpSource = {
   available: () => Boolean(resolveExecutable("agy")),
   async launch({ env }) {
     const command = resolveExecutable("agy", env)
-    return command ? { command, args: agyArgs(env), configureEnvironment() {},
+    return command ? { command, args: agyArgs(env), configureEnvironment() {}, accountVariables: AGY_ACCOUNT_VARIABLES,
       ...env?.GEMINI_API_KEY && { authenticateWith: "gemini-api-key" } } : null
   },
 }

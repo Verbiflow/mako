@@ -73,6 +73,7 @@ export function availableProviderProfile(
   if (problems.length) hostWarn("discovery", "Mako's default model isn't offered", { harness: loader.provider, problems: problems.join("; ") })
   if (catalog.configurationError)
     profile.configurationError = catalog.configurationError
+  if (catalog.signInRequired) profile.signInRequired = true
   if (catalog.defaultModel) profile.defaultModel = catalog.defaultModel
   if (catalog.configuredModel) profile.configuredModel = catalog.configuredModel
   return profile
