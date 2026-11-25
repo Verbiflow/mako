@@ -70,6 +70,8 @@ async function check() {
   const load = async (path, width, height, mobile = false) => {
     await window.loadURL("about:blank")
     await page.debugger.sendCommand("Emulation.setDeviceMetricsOverride", { width, height, deviceScaleFactor: 2, mobile })
+    // A phone's and an iPad's input: a finger, no hover, as their browsers report it.
+    await page.debugger.sendCommand("Emulation.setTouchEmulationEnabled", mobile ? { enabled: true, maxTouchPoints: 5 } : { enabled: false })
     await window.loadURL(`${base}${path}`).catch((error) => {
       if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
     })
@@ -159,6 +161,38 @@ async function check() {
         placeInControls: Boolean(controls.querySelector('[data-run-place], [data-workspace], [aria-label^="Access:"]')),
       }
     })()`)
+  /**
+   * The web app's composer (`web-client/composer.tsx`) read the same way: the desktop's frame from `composer-frame.tsx`
+   * on every form, its controls at a finger's size under one.
+   */
+  const measureWebComposer = () =>
+    evaluate(`(() => {
+      document.activeElement?.blur?.()
+      const composer = document.querySelector('form.web-composer')
+      if (!composer) return null
+      const box = composer.querySelector('.composer-box')
+      const input = box?.querySelector('.web-composer-input')
+      const controls = box?.querySelector('[data-composer-controls]')
+      const status = composer.querySelector(':scope > [data-composer-status]')
+      const send = controls?.querySelector('.composer-send')
+      if (!box || !input || !controls || !status || !send) return { missing: [box, input, controls, status, send].map(Boolean) }
+      const pane = composer.parentElement.getBoundingClientRect()
+      const rect = (node) => node.getBoundingClientRect()
+      const style = (node) => getComputedStyle(node)
+      const at2 = (value) => Math.round(value * 2) / 2
+      return {
+        column: Math.abs(rect(box).width - (Math.min(pane.width, parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--container-content'))) - 24)) <= 1,
+        centred: Math.abs((rect(box).left - pane.left) - (pane.right - rect(box).right)) <= 1,
+        background: style(box).backgroundColor,
+        frame: style(box).boxShadow,
+        corners: style(box).borderRadius,
+        inputFont: [style(input).fontSize, style(input).paddingTop, style(input).paddingLeft],
+        controls: at2(rect(controls).height),
+        send: [at2(rect(send).width), at2(rect(send).height)],
+        status: [at2(rect(status).height), at2(rect(status).top - rect(box).bottom) >= 0],
+        placeInControls: Boolean(controls.querySelector('[data-access], [aria-label="Where it runs"], [aria-label="Project"]')),
+      }
+    })()`)
   await load("/?mock", 1440, 900)
   await until("Boolean(document.querySelector('.composer-box [data-composer-status], [data-composer] [data-composer-status]'))", "the existing Thread's composer")
   const existing = await measureComposer()
@@ -188,6 +222,18 @@ async function check() {
   await until("Boolean(document.querySelector('[data-composer] [data-composer-status]'))", "a laptop's browser's composer")
   const browser = await measureComposer()
   for (const key of ["column", "centred", "background", "frame", "input", "controls", "send", "placeInControls"]) assert.deepEqual(browser[key], existing[key], `a laptop's browser's composer has the desk's ${key}`)
+  // New in a laptop's browser (`StartForm`, the web's composer): the desk's box over the desk's ocean, where it runs on
+  // the status line, the desk's 32 px send.
+  await load("/scripts/web-desk.html?webapp&theme=dark", 1440, 900)
+  await until("Boolean([...document.querySelectorAll('button, a, [role=button]')].find(node => node.offsetParent && /^New thread/.test(node.innerText.trim())))", "the browser's rail")
+  await evaluate("[...document.querySelectorAll('button, a, [role=button]')].find(node => node.offsetParent && /^New thread/.test(node.innerText.trim())).click(); true")
+  await until("Boolean(document.querySelector('form.web-composer .composer-box'))", "New in a laptop's browser")
+  const browserNew = await measureWebComposer()
+  assert.ok(browserNew && !browserNew.missing, `New's composer in a laptop's browser: ${JSON.stringify(browserNew)}`)
+  for (const key of ["column", "centred", "background", "frame", "placeInControls"]) assert.deepEqual(browserNew[key], fresh[key], `New in a laptop's browser has the desk's new Thread's ${key}`)
+  assert.deepEqual([browserNew.send, browserNew.status[0]], [existing.send, existing.status[0]], "the desk's send and status line in a laptop's browser")
+  assert.equal(await evaluate("document.querySelector('form.web-composer .web-composer-input').placeholder"), "Ask anything", "New says what the desk's new Thread says")
+  await capture("browser-new.png")
 
   // The phone's dock: what it draws over the box lines up with it too.
   await load("/scripts/phone-apex.html?app=apex&fins=limit", 390, 844, true)
@@ -195,6 +241,14 @@ async function check() {
   await evaluate("document.querySelector('[data-thread][data-apex-row]').click(); true")
   await until("Boolean(document.querySelector('.composer-box, .web-dock textarea'))", "the phone's composer")
   await until("Boolean(document.querySelector('.web-composer-field'))", "the phone's field")
+  // The phone's composer is the desk's box: the same frame, tones, corners, field and status line under it. What a
+  // finger changes is deliberate: a 36 px send reaching 44, a 44 px control row and a 44 px status line.
+  const phone = await measureWebComposer()
+  assert.ok(phone && !phone.missing, `the phone's composer: ${JSON.stringify(phone)}`)
+  for (const key of ["column", "centred", "background", "frame", "placeInControls"]) assert.deepEqual(phone[key], existing[key], `the phone's composer has the desk's ${key}`)
+  assert.equal(phone.corners, "0px", "the phone's composer is square")
+  assert.deepEqual(phone.inputFont, ["16px", existing.input[0], existing.input[1]], "the phone's field is the desk's prose size and inset")
+  assert.deepEqual([phone.send, phone.controls >= 44, phone.status], [[36, 36], true, [44, true]], `a finger's sizes: ${JSON.stringify(phone)}`)
   const conversation = await evaluate("document.querySelector('[data-conversation]').dataset.conversation")
   await evaluate(`import('/src/web-client/outbox.ts').then(({ keepUnsent }) => { keepUnsent({ id: crypto.randomUUID(), conversation: ${JSON.stringify(conversation)}, text: 'Not sent yet', attachments: [] }); return true })`)
   await until("Boolean(document.querySelector('.web-unsent'))", "the phone's unsent message")
@@ -213,6 +267,10 @@ async function check() {
   await until("Boolean(document.querySelector('[data-thread][data-apex-row]'))", "the iPad's list")
   await evaluate("document.querySelector('[data-thread][data-apex-row]').click(); true")
   await until("Boolean(document.querySelector('.web-composer-field'))", "the iPad's field")
+  const ipad = await measureWebComposer()
+  assert.ok(ipad && !ipad.missing, `the iPad's composer: ${JSON.stringify(ipad)}`)
+  for (const key of ["column", "centred", "background", "frame", "placeInControls"]) assert.deepEqual(ipad[key], existing[key], `the iPad's composer has the desk's ${key}`)
+  assert.deepEqual([ipad.send, ipad.status], [[36, 36], [44, true]], "the iPad's composer at a finger's sizes")
   await evaluate(`(() => {
     const dock = document.querySelector('.web-dock')
     dock.querySelector('[data-dock-queue]').insertAdjacentHTML('beforeend', '<div data-probe=queue style="height:4px"></div>')
@@ -222,6 +280,6 @@ async function check() {
   await lined("on an iPad", ".web-composer-field", ["[data-probe=queue]", "[data-probe=ask]"])
 
   guard.done()
-  console.log("Composer edges: every notice lines up with the box, on the desk, in the browser, on the phone and on an iPad; one composer in a new Thread, an existing one, a resting pane and the browser")
+  console.log("Composer edges: every notice lines up with the box, on the desk, in the browser, on the phone and on an iPad; one composer in a new Thread, an existing one, a resting pane, the browser, its New, a phone and an iPad")
   app.exit(0)
 }

@@ -46,7 +46,7 @@ import {
 import { recordLabel, writeDraft } from "@/lib/context/draft"
 import { ComposerActionButton } from "@/components/composer/composer-action-button"
 import { useComposerResume } from "@/components/composer/use-composer-resume"
-import { ComposerRouting } from "@/components/composer/composer-routing"
+import { ComposerPlace, ComposerRouting } from "@/components/composer/composer-routing"
 import { ContextMeter } from "@/components/composer/context-meter"
 import type { PlanHandle } from "@/components/composer/plan-toggle"
 import { keepPlanning, planTakesFeedback, recordSentPlanBuilds, usePlanDecision } from "@/state/plan-mode"
@@ -1458,7 +1458,7 @@ export function Composer() {
             </div>
           </div>
         </div>
-        <ComposerStatus place={!wordsOnly} trailing={liveOwnsComposer && !wordsOnly ? <ContextMeter /> : null} />
+        <ComposerStatus trailing={liveOwnsComposer && !wordsOnly ? <ContextMeter /> : null}>{wordsOnly ? null : <ComposerPlace />}</ComposerStatus>
       </div>
     </div>
   )

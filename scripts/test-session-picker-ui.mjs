@@ -156,7 +156,7 @@ async function check() {
       const opened = await c.evaluate(`${current}.textContent`)
       assert.ok(opened.includes(FORK) && opened.includes("Fork · Asleep"), `nothing picks the newest for the person: it opens on its first, and says so: ${opened}`)
       assert.equal(await c.evaluate(sendsTo), `To Cursor fork · ${FORK}`, "the composer says where the words go")
-      assert.equal(await c.evaluate(`document.querySelector('${field}').placeholder`), "Message", "the line names the Session; the placeholder doesn't again")
+      assert.equal(await c.evaluate(`document.querySelector('${field}').placeholder`), "Ask anything", "the line names the Session; the placeholder doesn't again")
       await c.capture(`default-${theme}`)
 
       // The screen picked the old fork, not the person: a send asks first, the words kept.

@@ -3839,8 +3839,12 @@ deliberate action and never rides along with a commit.
   gutter of the shell (`Divider`, whose bar shows only under the pointer), and
   a pane's sections by tone and spacing, never a hairline. The composer is
   one box in the transcript's column, framed by a hairline on the pane's own
-  surface, the same in a new Thread, an existing one and a resting pane
-  (`composer-frame.tsx`; `test:composer-edges-ui` measures it). Hairlines stay
+  surface, the same in a new Thread, an existing one, a resting pane and the
+  web app's on every form (`composer-frame.tsx`, which `web-client/composer.tsx`
+  draws too: a phone's and an iPad's take a finger's sizes, a 36 px send and a
+  44 px control row and status line, and keep their mic; a Thread's status
+  line folds away while the on-screen keyboard is up and comes back as the
+  field lets go, New's never; `test:composer-edges-ui` measures each). Hairlines stay
   for content (a diff's file headers, a table) and controls (an input's or a
   button's outline). **Every corner is square**, as the fin is: the radius tokens
   (`--radius-*`) are all 0, so panes, rows, tabs, cards, fields, buttons,
@@ -5689,7 +5693,8 @@ has no project of its own and shows the first three), then Pinned, then
 Threads by project. There is no view switch: Recent, a bounded chronological
 list, and Archived are choices in the Threads heading's filter menu, and the
 heading names the one showing and leads back. The phone's list
-(`src/web-client/list.tsx`) has the Inbox as a chip, then Needs you (each Fin
+(`src/web-client/list.tsx`) heads with the desk's own rows (`RailRow`: the
+Inbox, and New thread on a tablet, where a phone's New floats), then Needs you (each Fin
 asking as a row of its own, "Mobile polish ·" before its question), Working
 and Recent, and `/inbox` is its Inbox screen (`inbox-screen.tsx`, the same Fin
 asks answered through `answerFin`). Where a Thread runs and its project are said

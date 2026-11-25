@@ -622,60 +622,36 @@
   }
 
   /*
-   * The composer: one card, as the desk's composer is one tile. A message is one row in it, `+`, the field and its
-   * action; a start adds where above the field and a bar under it, `+`, what it starts with, and Start.
+   * The composer is the desktop's box (`composer-frame.tsx`; `.composer-box` and `.composer-send` in `index.css`): a
+   * hairline frame on the pane's surface that firms while typing, the field in the prose size, one control row, the
+   * status line under it, and the send a sea square once there is something to send. What's here fits it to a finger:
+   * the field grows to 180 px and then scrolls (the keyboard has half the screen), and every control is 36 px drawn
+   * and 44 px under a finger, reaching past its edges rather than making the row taller. Under a pointer it keeps the
+   * desktop's sizes.
    */
   .web-composer {
-    @apply mx-auto flex w-full max-w-content px-2 pt-1.5 pb-2;
-  }
-  .web-composer-field {
-    @apply grid min-w-0 flex-1 items-end bg-raised p-1;
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-  .web-composer-field > .web-attachments,
-  .web-composer-field > .web-where {
-    grid-column: 1 / -1;
-  }
-  .web-composer-field > .web-composer-input {
-    grid-column: 2;
-  }
-  .web-composer-field[data-tools] {
-    @apply flex flex-col items-stretch p-1.5;
+    @apply pt-1.5;
   }
   .web-composer-add {
     @apply size-9 text-muted-foreground;
   }
   .web-composer-input {
-    @apply min-w-0 resize-none bg-transparent px-2 py-[7px] text-foreground caret-sea outline-none placeholder:text-faint;
-    font-size: max(16px, var(--text-ui));
-    line-height: 22px;
+    @apply block min-h-12 w-full resize-none bg-transparent px-4 pt-3.5 pb-1 text-foreground caret-sea outline-none placeholder:text-faint;
+    /* The desktop's prose size, which is also the 16 px under which iOS zooms into a field it focuses. */
+    font-size: max(16px, var(--text-prose));
+    line-height: 1.6;
     max-height: 180px;
+    overflow-y: auto;
   }
-  .web-composer-field:not(:has(.web-composer-add)) > .web-composer-input {
-    @apply pl-3;
-  }
-  .web-composer-field[data-tools] .web-composer-input {
-    @apply px-2.5 pt-1.5 pb-2;
-    min-height: 72px;
-  }
-  .web-where {
-    @apply flex min-w-0 items-center gap-0.5;
+  .web-composer-tools {
+    @apply flex min-w-0 flex-1 items-center gap-1;
   }
   /* Over a Thread's field when it has more than one Session: the one the words go to, as quiet as the placeholder. */
   .web-sends-to {
-    @apply flex min-w-0 items-center gap-1.5 px-2.5 pt-1 text-label text-faint;
-  }
-  .web-where > .web-chip {
-    flex-shrink: 1;
-  }
-  .web-composer-bar {
-    @apply flex min-w-0 items-center gap-1;
-  }
-  .web-composer-tools {
-    @apply flex min-w-0 flex-1 items-center gap-0.5;
+    @apply flex min-w-0 items-center gap-1.5 px-4 pt-2.5 text-label text-faint;
   }
   .web-send {
-    @apply relative flex size-9 shrink-0 items-center justify-center bg-foreground text-surface;
+    @apply relative flex size-9 shrink-0 items-center justify-center text-on-sea;
   }
   /* 36px drawn, 44px under a finger. */
   .web-send::after,
@@ -685,11 +661,9 @@
     position: absolute;
     inset: -4px;
   }
+  /* Nothing to send yet: the arrow alone, as on the desktop, never a grey slab saying "not yet". */
   .web-send:disabled {
-    @apply bg-fill-selected text-faint;
-  }
-  .web-stop {
-    @apply bg-foreground text-surface;
+    @apply text-faint;
   }
   .web-mic {
     @apply bg-transparent text-muted-foreground;
@@ -698,34 +672,39 @@
     @apply bg-negative text-white;
     animation: web-listening 1.6s ease-in-out infinite;
   }
-
   /*
-   * The desk's composer, as the desktop draws it: a square tile across the pane's foot under a hairline, the field in
-   * the prose size, and one routing row under it, where, model and access as quiet text with their glyphs.
+   * The status line's facts read as the desktop's do: quiet words with their glyphs, a size down from the controls,
+   * full access alone in the caution hue. Under a finger the line is a thumb's 44 px and its facts as tall: the line
+   * scrolls sideways when it runs out of room, which would clip a target reaching past its edges.
    */
-  .web-composer[data-desk] {
-    @apply max-w-none bg-surface p-0;
+  /* The control row's chips read in the UI size, the model's name as the desktop's does. */
+  .web-composer-bar .web-chip,
+  .web-composer-status .web-chip {
+    @apply font-normal;
+    font-size: var(--text-ui);
+    line-height: var(--text-ui--line-height);
   }
-  .web-composer[data-desk] .web-composer-field {
-    @apply flex flex-col rounded-none bg-transparent p-0;
-    box-shadow: none;
+  .web-composer-status .web-chip {
+    @apply text-faint;
   }
-  .web-composer[data-desk] .web-composer-input {
-    @apply min-h-20 px-4 pt-4 pb-2;
-    font-size: var(--text-prose);
-    line-height: 1.6;
+  .web-composer-status .web-chip[data-access="full"] {
+    @apply text-caution;
   }
-  .web-composer[data-desk] .web-composer-bar {
-    @apply min-h-11 gap-1 px-3 pb-3;
+  @media (pointer: coarse) {
+    .web-composer-status .web-chip {
+      @apply h-11;
+    }
   }
-  .web-composer[data-desk] .web-where {
-    @apply w-auto shrink;
-  }
-  .web-composer[data-desk] .web-chip {
-    @apply h-7 px-2 text-ui font-normal;
-  }
-  .web-composer[data-desk] .web-composer-add {
-    @apply size-7;
+  @media (pointer: fine) {
+    .web-composer .web-chip {
+      @apply h-7 px-2;
+    }
+    .web-composer-add {
+      @apply size-7;
+    }
+    .web-send {
+      @apply size-8;
+    }
   }
 
   /* New in a laptop's browser, over the desk's ocean: the water holds still while the person types, as it does over the
@@ -814,7 +793,7 @@
  * elements.
  *
  * Reuse, edit and rewind are the desk's: they need its composer and its checkout, so the phone shows a message's time
- * and its copy, and nothing it can't do. A laptop's browser has the desk's composer, so Reuse stays there. A reply's fork is the phone's Branch, under it and under a long press
+ * and its copy, and nothing it can't do. A laptop's browser has the desk's composer, so Reuse stays there. A reply's Fork and Copy answer are the desk's words under it and under a long press
  * (`reply.tsx`), where the host can make one.
  */
 .web-live [data-transcript-action],
@@ -959,8 +938,8 @@
   display: flex;
   flex-direction: column;
   margin: 0 auto 8px;
-  width: calc(100% - 16px);
-  max-width: calc(var(--container-content) - 16px);
+  width: calc(100% - 24px);
+  max-width: calc(var(--container-content) - 24px);
   max-height: calc(var(--app-height, 100dvh) * 0.6);
   overflow: hidden;
   border-radius: 0;
@@ -1128,11 +1107,6 @@
  * The composer's one send button and its mic (`send-button.tsx`, `composer.tsx`). While the agent works and the field
  * has words, the button is a pill that says what a tap does; held, it offers both ways over itself.
  */
-.web-composer-actions {
-  display: flex;
-  align-items: flex-end;
-  gap: 2px;
-}
 .web-composer-mic {
   @apply size-9;
 }
@@ -1175,7 +1149,7 @@
 }
 /* A queued message being edited in the field: one line over it that says so, with Cancel. */
 .web-composer-editing {
-  @apply col-span-full flex min-w-0 items-center gap-2 pr-0.5 pl-3 text-label text-muted-foreground;
+  @apply flex min-w-0 items-center gap-2 pr-0.5 pl-4 text-label text-muted-foreground;
   min-height: 34px;
   box-shadow: inset 0 -1px 0 var(--hairline);
   margin-bottom: 2px;
@@ -1184,26 +1158,11 @@
 .web-composer-editing-cancel {
   @apply -my-[5px] h-11 px-2.5;
 }
-/* A Thread's chips give way to the send pill: each keeps its glyph and a few letters, the model more. */
-.web-chip-model {
-  min-width: 5.5rem;
-}
-.web-chip-access {
-  min-width: 4.25rem;
-}
-/* A Thread's card: the field one line tall to start, its model, access, mic and send in the bar under it. */
-.web-composer-field[data-tools]:not(:has(.web-where)) .web-composer-input {
-  min-height: 40px;
-  padding-bottom: 4px;
-}
 
 /*
  * Dictation while it listens: the stop square, the time, five 3 px bars between 5 and 14 px tall moving with the
  * microphone, and the words still being heard, the last few dimmed.
  */
-.web-composer-recording {
-  @apply col-span-full flex min-w-0 items-center gap-1;
-}
 .web-recording {
   @apply flex h-11 min-w-0 flex-1 items-center gap-2.5 pr-1 pl-0.5;
   animation: web-rise 180ms var(--ease-out) both;
@@ -1398,8 +1357,9 @@
 .web-reply-actions {
   @apply -ml-2 flex items-center gap-1;
 }
+/* The desk's answer footer (`exchange.tsx`): its words, glyphs and quiet weight, 36 px tall for a thumb. */
 .web-reply-action {
-  @apply flex h-9 items-center gap-1.5 px-2 text-label font-medium text-muted-foreground;
+  @apply flex h-9 items-center gap-1 px-2 text-label text-muted-foreground;
   transition: background-color 160ms ease, color 160ms ease;
 }
 .web-reply-action:active:not(:disabled) {
@@ -1766,5 +1726,36 @@
   }
   .web-move-fill {
     transition: none;
+  }
+}
+
+/*
+ * A Thread's status line under a finger, while the field has the on-screen keyboard up (`data-keyboard`, from
+ * `keyboard.ts`): it folds away, so the transcript keeps the 44 px, and comes back as the field lets go. A short fold
+ * on the desk's leaving curve, and back on its arriving one; under reduced motion it simply goes and comes. Outside the
+ * layer, so it wins over the line's own height utility.
+ */
+@media (pointer: coarse) {
+  .web-composer[data-fold-status] > .web-composer-status {
+    overflow: hidden;
+    transition:
+      height 200ms var(--ease-out),
+      opacity 160ms var(--ease-out);
+  }
+  /* The box keeps a breath off the keyboard's edge where the line stood. */
+  :root[data-keyboard] .web-composer[data-fold-status][data-typing] {
+    padding-bottom: 6px;
+  }
+  :root[data-keyboard] .web-composer[data-fold-status][data-typing] > .web-composer-status {
+    height: 0;
+    opacity: 0;
+    transition:
+      height 160ms var(--ease-swift),
+      opacity 100ms var(--ease-swift);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .web-composer[data-fold-status] > .web-composer-status {
+    transition: none !important;
   }
 }

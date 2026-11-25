@@ -116,6 +116,11 @@ async function checkDesk() {
     assert.equal(await evaluate(`Boolean(${held}.querySelector('[data-live-mark="open"][aria-label^="Open in Devin"]'))`), true, "a session Devin's own app holds wears the Mac's hollow ring")
     await capture("list-1280-dark.png")
     console.log("Rail: checkouts, earlier agents, background work and another app's ring from the Mac's list")
+    // The rail's top is the desk's own rows (`RailRow`), the ones a phone's and an iPad's list head with too
+    // (`test-phone-rail-ui`): here at the desk's 28 px, with Search, which a touch list has no palette for.
+    const top = await evaluate("[...document.querySelectorAll('[data-rail-top] [data-rail-top-row]')].map((node) => [node.dataset.railTopRow, node.classList.contains('group/top'), Math.round(node.getBoundingClientRect().height)])")
+    assert.deepEqual(top.map(([row]) => row), ["session.new", "view.command-palette", "inbox"], `the browser's rail top: ${JSON.stringify(top)}`)
+    assert.ok(top.every(([, desk, height]) => desk && height === 28), `the desk's RailRow at its own size: ${JSON.stringify(top)}`)
 
     await desk("dark")
     assert.equal(await evaluate("matchMedia('(pointer: fine) and (hover: hover)').matches"), true, "the page reads as under a mouse")
