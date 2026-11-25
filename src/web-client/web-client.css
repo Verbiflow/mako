@@ -243,6 +243,10 @@
   .web-setup-card {
     @apply mx-4 mt-3 bg-raised;
   }
+  /* At the foot of an iPad's rail, as the desk's rail has it, inset with the rail's rows. */
+  [data-list="rail"] .web-setup-card {
+    @apply mx-2 mt-2;
+  }
   .web-setup-step {
     @apply flex min-h-11 w-full items-center gap-3 px-3 text-left text-ui;
     transition: background-color 220ms ease;
@@ -716,13 +720,6 @@
     animation-play-state: paused;
   }
 
-  /* New: the composer, waiting in the middle of the pane. */
-  .web-start-pane-body {
-    @apply mx-auto flex w-full min-h-0 max-w-[680px] flex-1 flex-col justify-center px-6 pb-[12vh];
-  }
-  .web-start-pane .web-composer {
-    @apply px-0;
-  }
   .web-start-line {
     @apply mx-auto w-full max-w-content px-4 pb-1.5;
   }

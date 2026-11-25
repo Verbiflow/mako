@@ -147,19 +147,21 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
   useRowFlip(scroller, showArchived ? "archived" : "threads", {})
   return (
     <div data-list={wide ? "rail" : "screen"} className={cn("web-list relative flex min-h-0 flex-1 flex-col", wide ? "bg-shell" : "bg-surface")}>
-      <header className="web-bar flex shrink-0 items-center gap-0.5 pr-1.5 pl-4">
-        <h1 className="min-w-0 flex-1 truncate text-title font-semibold">Threads</h1>
-        {wide ? (
+      {/* A phone's screen says where you are and holds your account; an iPad's rail, as the desk's, has no title of its
+          own: only the notch's room, and where the list stands while it isn't simply live. */}
+      {wide ? (
+        <header data-rail-head className="flex min-h-[calc(env(safe-area-inset-top)+12px)] shrink-0 items-end justify-end px-4 pt-[env(safe-area-inset-top)]">
           <ListPhase list={list} />
-        ) : (
-          <>
-            <ListPhase list={list} />
-            <button type="button" aria-label="Settings" onClick={onSettings} className="web-icon-button">
-              <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} />
-            </button>
-          </>
-        )}
-      </header>
+        </header>
+      ) : (
+        <header className="web-bar flex shrink-0 items-center gap-0.5 pr-1.5 pl-4">
+          <h1 className="min-w-0 flex-1 truncate text-title font-semibold">Threads</h1>
+          <ListPhase list={list} />
+          <button type="button" aria-label="Settings" onClick={onSettings} className="web-icon-button">
+            <Avatar name={client.account.name} src={client.account.image ?? undefined} size={6} />
+          </button>
+        </header>
+      )}
       <div ref={scroller} className="web-scroll relative min-h-0 flex-1 overflow-y-auto">
         <PullIndicator pulled={pull.pulled} refreshing={pull.refreshing} />
         <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
@@ -217,6 +219,8 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
         onDismiss={() => setMenu((shown) => (shown ? { ...shown, open: false } : shown))}
         onArchive={(thread) => archiveWithUndo(client, thread)}
       />
+      {/* Finish setting up, at the rail's foot on an iPad as on the desk; at the head of a phone's list. */}
+      {wide && list.phase !== "starting" ? <SetupCard onNew={onNew} onSettings={onSettings} /> : null}
       {wide ? (
         <footer className="shrink-0 p-2">
           <button type="button" aria-label="Settings" aria-current={settings ? "page" : undefined} onClick={onSettings} className="web-account">
