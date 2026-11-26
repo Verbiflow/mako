@@ -1,3 +1,6 @@
+import { spawn } from "node:child_process"
+import { createRequire } from "node:module"
+
 /**
  * Every way an Electron UI check can end says why. A check that ran past
  * its time, a rejection or exception nothing caught, a renderer that went
@@ -44,4 +47,41 @@ export function electronExit(name, code, signal) {
 
 function described(value) {
   return value instanceof Error ? value.stack ?? value.message : String(value)
+}
+
+/**
+ * Launch an Electron check under a deadline the launching side keeps. The
+ * watchdog in `guardElectronCheck` lives inside Electron, so an Electron that
+ * stalls before it runs our code never fires it; a SIGTERM to the
+ * `node_modules/.bin/electron` shim alone left such a stall running, and an
+ * update's machine check waited out its whole 20 minutes. The Electron binary
+ * runs in its own process group: past `ms` the group gets SIGTERM, then
+ * SIGKILL, and the check exits 1 saying so.
+ */
+export async function runElectronCheck(name, args, { env, ms }) {
+  // Inside Electron, "electron" is its API; here, beside it, the binary's path.
+  const binary = createRequire(import.meta.url)("electron")
+  const child = spawn(binary, args, { env, stdio: "inherit", detached: true })
+  const signal = (kind) => {
+    try { process.kill(-child.pid, kind) } catch {}
+  }
+  let late = false
+  const timer = setTimeout(() => {
+    late = true
+    console.error(`${name}: Electron didn't finish within ${Math.round(ms / 1000)} s; stopping it`)
+    signal("SIGTERM")
+    setTimeout(() => signal("SIGKILL"), 5_000).unref()
+  }, ms)
+  const parted = () => signal("SIGKILL")
+  process.once("exit", parted)
+  try {
+    const [code, ended] = await new Promise((resolve, reject) => {
+      child.once("error", reject)
+      child.once("exit", (code, ended) => resolve([code, ended]))
+    })
+    return late ? 1 : electronExit(name, code, ended)
+  } finally {
+    clearTimeout(timer)
+    process.off("exit", parted)
+  }
 }

@@ -1,7 +1,7 @@
 import { build } from "esbuild"
-import { spawn } from "node:child_process"
 import { mkdir, symlink, writeFile } from "node:fs/promises"
 import { join, resolve } from "node:path"
+import { runElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
 
 const root = testScratch("mako-application-runtime-")
@@ -28,17 +28,5 @@ await build({
 })
 const env = { ...process.env }
 delete env.ELECTRON_RUN_AS_NODE
-const child = spawn(resolve("node_modules/.bin/electron"), [root], {
-  env,
-  stdio: "inherit",
-})
-const timer = setTimeout(() => child.kill(), 45_000)
-try {
-  process.exitCode = await new Promise((resolve, reject) => {
-    child.once("error", reject)
-    child.once("exit", (code) => resolve(code ?? 1))
-  })
-} finally {
-  clearTimeout(timer)
-}
+process.exitCode = await runElectronCheck("application runtime", [root], { env, ms: 45_000 })
 console.log(`Isolated lifecycle runtime: ${root}`)

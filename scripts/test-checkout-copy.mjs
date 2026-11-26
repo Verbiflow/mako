@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process"
 import { mkdir, readFile, writeFile } from "node:fs/promises"
 import { constants } from "node:fs"
 import { resolveLocalIdentity } from "./mac-local-signing.mjs"
@@ -8,6 +7,7 @@ import assert from "node:assert/strict"
 import { packArchive } from "./lib/pack-archive.mjs"
 import { copyBuildSource, verifyLocalCandidate } from "@mako/host/application/local-updates"
 import { physicalFiles } from "@mako/host/base/physical-files"
+import { runElectronCheck } from "./lib/electron-check.mjs"
 import { testScratch } from "./lib/test-scratch.mjs"
 
 async function check() {
@@ -68,6 +68,5 @@ if (process.versions.electron) {
   await writeFile(join(root, "package.json"), JSON.stringify({ name: "mako-copy-check", main: fileURLToPath(import.meta.url) }))
   const env = { ...process.env, MAKO_COPY_TEST_ROOT: root, MAKO_COPY_TEST_SOURCE: source, MAKO_COPY_TEST_APP: stagedApp ? "1" : "", MAKO_COPY_TEST_IDENTITY: stagedApp ? await resolveLocalIdentity(undefined, source) : "" }
   delete env.ELECTRON_RUN_AS_NODE
-  const child = spawn(resolve("node_modules/.bin/electron"), [root], { stdio: "inherit", env })
-  process.exitCode = await new Promise((resolve, reject) => { child.once("error", reject); child.once("exit", (code) => resolve(code ?? 1)) })
+  process.exitCode = await runElectronCheck("checkout copy", [root], { env, ms: 60_000 })
 }
