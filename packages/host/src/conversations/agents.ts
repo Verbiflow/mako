@@ -2787,7 +2787,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const atWork = state.kind === "working" || state.kind === "starting" || state.kind === "queued"
     let next: string | undefined
     if (atWork && !asks.length && !actions.items.length && input.report === undefined && input.view !== "pulls") {
-      const facts = JSON.stringify([state.kind, reports.at(-1)?.id ?? null])
+      // Its step too: a read that shows a Fin further on isn't unchanged, though it still hears its report wakes it.
+      const facts = JSON.stringify([state.kind, state.kind === "working" ? state.phase ?? state.step ?? null : null, reports.at(-1)?.id ?? null])
       const reading = this.pollReading(apex, `agents_read ${edge.child} ${input.view ?? "report"}`, facts, this.now())
       next = reading.since !== undefined ? unchangedNext(`agents_read of fin:${edge.name}`, reading.since, [edge.name], "Its report wakes you; end your turn.") : AFTER_READ
       if (reading.since !== undefined) {
