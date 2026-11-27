@@ -1,8 +1,54 @@
 import { open } from "node:fs/promises"
 import { z } from "zod"
 
-/** The key Mako's instructions go under in `turn/start`'s `additionalContext`; Codex renders it `<mako>…</mako>`. */
+/** The prefix of the keys Mako's instructions go under in `turn/start`'s `additionalContext`; Codex renders each `<mako_01>…</mako_01>`. */
 export const PRIMER_KEY = "mako"
+
+/**
+ * The most of one `additionalContext` value Codex shows whole: 1,000 tokens, counted as 4 bytes a token. It replaces
+ * the middle of a longer one with "…387 tokens truncated…" and tells the client nothing. Mako's routes, policy and
+ * server block went as one entry of about 5.9 KB until 2026-11-26, and Codex Threads lost the policy, the Fins' report
+ * rule and the pull request wait rule from its middle.
+ */
+export const CONTEXT_ENTRY_BYTES = 4_000
+
+/** Mako's instructions as Codex's entries, by key: `mako_01`, `mako_02`, … in the order Codex shows them, its keys' order. */
+export type PrimerEntries = Readonly<Record<string, string>>
+
+const bytes = (text: string) => Buffer.byteLength(text, "utf8")
+
+/** A text as pieces of at most `CONTEXT_ENTRY_BYTES`: whole lines where they fit, else sentences, else as many characters as fit. */
+function pieces(text: string, limit: number): string[] {
+  if (bytes(text) <= limit) return [text]
+  const out: string[] = []
+  let piece = ""
+  const add = (part: string, joiner: string) => {
+    if (bytes(part) > limit) {
+      if (piece) out.push(piece)
+      piece = ""
+      // A line too long: its sentences, each ending on its ". ", or past one too long its characters.
+      const smaller = joiner === "\n" ? part.split(/(?<=\. )/) : [...part]
+      for (const each of smaller.length > 1 ? smaller : [...part]) add(each, "")
+      return
+    }
+    if (bytes(piece + joiner + part) > limit) {
+      if (piece) out.push(piece)
+      piece = part
+    } else piece = piece ? piece + joiner + part : part
+  }
+  for (const line of text.split("\n")) add(line, "\n")
+  if (piece) out.push(piece)
+  return out
+}
+
+/**
+ * Mako's blocks as Codex's `additionalContext` entries, each whole: a block that fits is one entry, a longer one
+ * several, cut between lines. Keys number them in order (`mako_01`), since Codex shows entries in its keys' order.
+ */
+export function primerEntries(blocks: readonly string[], limit = CONTEXT_ENTRY_BYTES): PrimerEntries {
+  const parts = blocks.flatMap((block) => pieces(block, limit))
+  return Object.fromEntries(parts.map((part, index) => [`${PRIMER_KEY}_${String(index + 1).padStart(2, "0")}`, part]))
+}
 
 /** How far back a rollout is read for the primer at most; past it, the transcript is taken to lack it. */
 const SCAN_LIMIT = 256 * 1024 * 1024
@@ -10,8 +56,8 @@ const CHUNK = 1024 * 1024
 /** A line longer than this is skipped unread, as every reader skips one. */
 const MAX_LINE = 16 * 1024 * 1024
 
-/** What a rollout line says about the primer, read back from its end. */
-type Mark = "primer" | "other-primer" | "forgot" | undefined
+/** What a rollout line says about the primer, read back from its end: forgotten, or the texts of Mako's entries it holds. */
+type Mark = "forgot" | string[] | undefined
 
 /** The rollout records that say something about the primer; every other line parses to nothing. */
 const PrimerRecordSchema = z.union([
@@ -23,8 +69,8 @@ const PrimerRecordSchema = z.union([
   }),
 ])
 
-function lineMark(line: string, rendered: string): Mark {
-  if (!line.includes('"compacted"') && !line.includes('"thread_rolled_back"') && !line.includes(`<${PRIMER_KEY}>`)) return undefined
+function lineMark(line: string): Mark {
+  if (!line.includes('"compacted"') && !line.includes('"thread_rolled_back"') && !line.includes(`<${PRIMER_KEY}`)) return undefined
   let json: unknown
   try {
     json = JSON.parse(line)
@@ -34,27 +80,39 @@ function lineMark(line: string, rendered: string): Mark {
   const record = PrimerRecordSchema.safeParse(json)
   if (!record.success) return undefined
   if (record.data.type !== "response_item") return "forgot"
-  const texts = record.data.payload.content.flatMap((part) => part.text === undefined ? [] : [part.text.trim()])
-  if (!texts.some((text) => text.startsWith(`<${PRIMER_KEY}>`))) return undefined
-  return texts.includes(rendered) ? "primer" : "other-primer"
+  const texts = record.data.payload.content.flatMap((part) => part.text === undefined ? [] : [part.text.trim()]).filter((text) => text.startsWith(`<${PRIMER_KEY}`))
+  return texts.length ? texts : undefined
 }
 
 /**
- * Whether a Codex thread's rollout already holds `value` as Mako's primer: the
- * newest `<mako>` developer message, with no compaction or rollback after it,
- * says exactly this. Read back from the file's end a chunk at a time, stopping
- * at the first that decides; a file that can't be read, or holds no such
- * message within `SCAN_LIMIT`, doesn't.
+ * Whether a Codex thread's rollout already holds `entries` as Mako's primer:
+ * for each key, the newest developer message under it, with no compaction or
+ * rollback after it, says exactly this entry. An entry under a key Mako no
+ * longer sends (an earlier build's single `<mako>`) says nothing. Read back
+ * from the file's end a chunk at a time, stopping at the first line that
+ * decides; a file that can't be read, or doesn't hold them all within
+ * `SCAN_LIMIT`, doesn't.
  */
-export async function rolloutHoldsPrimer(path: string, value: string): Promise<boolean> {
-  const rendered = `<${PRIMER_KEY}>${value}</${PRIMER_KEY}>`.trim()
+export async function rolloutHoldsPrimer(path: string, entries: PrimerEntries): Promise<boolean> {
+  const wanted = new Map(Object.entries(entries).map(([key, value]) => [key, `<${key}>${value}</${key}>`.trim()]))
+  if (!wanted.size) return true
   const file = await open(path, "r").catch(() => undefined)
   if (!file) return false
   try {
     const { size } = await file.stat()
     const decide = (line: Buffer): boolean | undefined => {
-      const mark = lineMark(line.toString("utf8"), rendered)
-      return mark === undefined ? undefined : mark === "primer"
+      const mark = lineMark(line.toString("utf8"))
+      if (mark === undefined) return undefined
+      if (mark === "forgot") return false
+      for (const text of mark) {
+        const key = /^<([A-Za-z0-9_]+)>/.exec(text)?.[1]
+        const rendered = key === undefined ? undefined : wanted.get(key)
+        if (rendered === undefined) continue
+        // The newest under this key says something else: the primer changed since.
+        if (text !== rendered) return false
+        wanted.delete(key!)
+      }
+      return wanted.size ? undefined : true
     }
     let end = size
     // The end of a line whose start lies before `end`; empty while `skipping` one past `MAX_LINE`.
@@ -102,12 +160,12 @@ export async function rolloutHoldsPrimer(path: string, value: string): Promise<b
  * leaves it out, which empties the store, and the next carries it.
  */
 export class CodexPrimer {
-  readonly value: string
+  readonly entries: PrimerEntries
   heard: boolean
   private held = false
 
-  constructor(value: string, heard: boolean) {
-    this.value = value
+  constructor(entries: PrimerEntries, heard: boolean) {
+    this.entries = entries
     this.heard = heard
   }
 

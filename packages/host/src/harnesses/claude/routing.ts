@@ -35,9 +35,11 @@ export const CLAUDE_FIN_DEFINITION = {
 
 /**
  * A Claude tool call as a native spawn, or undefined for any other tool. An
- * `Explore` agent the turn waits for (`run_in_background: false`; Claude runs
- * agents in the background by default) reads and ends in the turn. With agent
- * teams on, a named agent is a teammate that `SendMessage` reaches.
+ * agent the turn waits for says `run_in_background: false`: Claude runs agents
+ * in the background by default, so any other is a background spawn. An
+ * `Explore` one the turn waits for reads and ends in the turn. `Workflow` runs
+ * a script of agents. With agent teams on, a named agent is a teammate that
+ * `SendMessage` reaches.
  */
 export function claudeSpawn(tool: string, input: ClaudeAgentInput, teams: boolean): NativeSpawn | undefined {
   if (!SPAWN_TOOLS.has(tool)) return undefined
@@ -47,6 +49,7 @@ export function claudeSpawn(tool: string, input: ClaudeAgentInput, teams: boolea
     tool,
     start: CLAUDE_START_TOOL,
     ...(agent.subagent_type === "Explore" && agent.run_in_background === false && { inTurnExplore: true }),
+    ...(tool === "Workflow" ? { workflow: true } : agent.run_in_background !== false && { background: true, inTurn: "run_in_background: false" }),
     ...(agent.isolation !== undefined && { isolated: true }),
     ...(teams && agent.name !== undefined && { teammate: true }),
   }
@@ -67,13 +70,13 @@ export interface ClaudeRouting {
 /** Mako's tools as Claude names an MCP server's tool. */
 const claudeNames = (tool: string) => `mcp__${MAKO_THREAD_SERVER}__${tool}`
 
-const BashInput = z.object({ command: z.string() }).partial().catch({})
+const BashInput = z.object({ command: z.string(), run_in_background: z.boolean() }).partial().catch({})
 
 /** A Claude tool call's route among Mako's tools: Bash by its command, `mcp__<server>__<tool>` by its server. */
 function claudeCallRoute(thread: CallThread, input: PreToolUseHookInput): CallRoute {
   if (input.tool_name === "Bash") {
-    const command = BashInput.parse(input.tool_input).command
-    return command ? routeShellCall(thread, { command, cwd: input.cwd }, claudeNames) : { kind: "allow" }
+    const { command, run_in_background: background } = BashInput.parse(input.tool_input)
+    return command ? routeShellCall(thread, { command, cwd: input.cwd, ...background && { background } }, claudeNames) : { kind: "allow" }
   }
   const mcp = mcpToolName(input.tool_name)
   return routeNativeTool(thread, { tool: input.tool_name, ...mcp && { server: mcp.server } }, claudeNames)
@@ -107,3 +110,17 @@ export function claudeRoutedCall(routing: ClaudeRouting, input: PreToolUseHookIn
 /** SubagentStart: every native subagent starts with Mako's paragraph for native children, but Mako's `fin`, whose work is starting one. */
 export const claudeSubagentStart: HookCallback = async (input) =>
   input.hook_event_name === "SubagentStart" && input.agent_type !== CLAUDE_FIN_AGENT ? { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: NATIVE_CHILD_INSTRUCTIONS } } : {}
+
+/**
+ * Stop: a Fin whose turn would end with no report that stands is sent back to call `agents_report`, once a turn, with
+ * the host's words (`Agents.finStop`, which reads the turn and what wakes the Fin). A turn Claude already sent back
+ * (`stop_hook_active`) ends, as does one with background work or a scheduled wake its harness holds.
+ */
+export function claudeFinStop(ask: () => string | undefined): HookCallback {
+  return async (input) => {
+    if (input.hook_event_name !== "Stop" || input.stop_hook_active) return {}
+    if (input.background_tasks?.length || input.session_crons?.length) return {}
+    const reason = ask()
+    return reason ? { decision: "block", reason } : {}
+  }
+}

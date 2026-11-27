@@ -3,10 +3,12 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js"
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js"
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js"
 import { ORCHESTRATION_INSTRUCTIONS } from "@mako/host/contracts/agent-tools"
-import { MAKO_THREAD_SERVER, withoutInstructions } from "@mako/host/contracts/mcp-reach"
-import { MAKO_SERVER_INSTRUCTIONS, primerText } from "@mako/host/contracts/primer"
+import { ALWAYS_LOADED_TOOLS, MAKO_THREAD_SERVER, withoutInstructions } from "@mako/host/contracts/mcp-reach"
+import { MAKO_SERVER_INSTRUCTIONS, primerBlocks, primerText } from "@mako/host/contracts/primer"
 import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "@mako/host/contracts/report-actions"
 import { makoNote } from "@mako/host/conversations/mako-note"
+import { registerAgentTools } from "@mako/host/conversations/agent-tools"
+import { registerThreadTools } from "@mako/host/conversations/thread-move-tool"
 import { codexLayer } from "@mako/host/harnesses/codex/layer"
 import { DEVIN_LAYER } from "@mako/host/harnesses/devin/layer"
 import { layerOf } from "@mako/host/harnesses/mako-layer"
@@ -45,12 +47,12 @@ for (const rule of [
   "a turn ending on progress nothing will wake tells your Apex it ended unfinished",
   "`mode: \"wait\"`",
   "If you poll gh yourself: at most once a minute per repository; after a 403/429 stop all GitHub calls until Retry-After.",
-  "Never run an agent CLI with nohup",
+  "an agent CLI with nohup, which can't report or ask",
   "wait: to wait on your Fins",
 ]) assert.ok(MAKO_INSTRUCTIONS.includes(rule), `the instructions say ${JSON.stringify(rule.slice(0, 60))}`)
 // Grok reads only the start: every Fin rule and the wait rule sit inside its cut.
 const grokSees = MAKO_INSTRUCTIONS.slice(0, GROK_INSTRUCTIONS_CUT)
-for (const rule of ["call `agents_report`", "`waitingOn`", "`agents_move`", "`forward: true`", "`scope: apexes`", "wait: to wait on your Fins"])
+for (const rule of ["call `agents_report`", "`waitingOn`", "`agents_move`", "`forward: true`", "`scope: apexes`", "wait: to wait on your Fins", "Never poll or sleep.", "goes through `agents_start`, not your harness's own subagent tool", "never gh --watch"])
   assert.ok(grokSees.includes(rule), `Grok's cut keeps ${JSON.stringify(rule)}`)
 
 // Each fact once: the routes are the primer's, the follow-up rule the Fin's brief's and agents_report's.
@@ -77,7 +79,7 @@ const layer = layerOf({ conversationTools: tools })
 const codex = codexLayer.apply(layer, "c")
 assert.equal(codex.servers.find((server) => server.name === MAKO_THREAD_SERVER)?.url, withoutInstructions(tools.makoUrl), "Codex's mako URL asks for no instructions")
 assert.equal(codex.servers.find((server) => server.name !== MAKO_THREAD_SERVER)?.url, tools.computerUrl, "mako-computer is untouched")
-assert.equal(codex.instructions, `${primer}\n\n${MAKO_SERVER_INSTRUCTIONS}`, "Codex's developer context carries the server's instructions once")
+assert.deepEqual(Object.values(codex.instructions ?? {}), [...primerBlocks({ role: "thread", noRecipe: false, computer: true }).map((block) => block.text), MAKO_SERVER_INSTRUCTIONS], "Codex's developer context carries the server's instructions once, each block an entry of its own")
 assert.deepEqual(layer.servers.map((server) => server.url), [tools.computerUrl, tools.makoUrl], "the layer every other harness reads keeps the plain URL")
 const off = codexLayer.apply(layerOf({ conversationTools: tools, primer: false }), "c")
 assert.equal(off.servers.find((server) => server.name === MAKO_THREAD_SERVER)?.url, tools.makoUrl, "with no primer Codex reads them from the server")
@@ -91,7 +93,11 @@ assert.equal((await standing(true))["server"], MAKO_SERVER_INSTRUCTIONS, "Devin'
 assert.equal((await standing(false))["server"], undefined, "a harness that reads the server hears them there only")
 
 // Over HTTP, as the harnesses connect: the plain URL serves the instructions, Codex's serves none.
-const servers = await startConversationMcp({ authorizeAgent() {} }, async () => ({ content: [] }), [() => {}])
+const door = { invoke: async () => ({}), caller: () => ({ kind: "person" as const }), filled: () => ({}) }
+const servers = await startConversationMcp({ authorizeAgent() {} }, async () => ({ content: [] }), [
+  (server, _id, conversation) => registerAgentTools(server, door, conversation === undefined ? undefined : "fin"),
+  (server) => registerThreadTools(server, door),
+])
 try {
   const grant = servers.mint("binding", "conversation")
   const instructionsAt = async (url: string) => {
@@ -105,6 +111,17 @@ try {
   }
   assert.equal(await instructionsAt(grant.makoUrl!), MAKO_INSTRUCTIONS, "Claude, Cursor, Grok, OpenCode and Devin are served the instructions")
   assert.equal(await instructionsAt(withoutInstructions(grant.makoUrl!)), undefined, "Codex's connection carries no instructions")
+  // The tools an agent must never have to look up are in Claude's prompt from the first turn, never behind its tool search.
+  const lister = new Client({ name: "instructions-check", version: "1" })
+  await lister.connect(new StreamableHTTPClientTransport(new URL(grant.makoUrl!), { requestInit: { headers: { Authorization: `Bearer ${grant.token}` } } }))
+  try {
+    const listed = (await lister.listTools()).tools
+    const loaded = listed.filter((tool) => tool._meta?.["anthropic/alwaysLoad"] === true).map((tool) => tool.name).toSorted()
+    assert.deepEqual(loaded, [...ALWAYS_LOADED_TOOLS].filter((name) => listed.some((tool) => tool.name === name)).toSorted(), "each always-loaded tool listed is tagged, and only those")
+    for (const name of ALWAYS_LOADED_TOOLS) assert.ok(loaded.includes(name), `${name} is always loaded`)
+  } finally {
+    await lister.close()
+  }
   const [here, there] = InMemoryTransport.createLinkedPair()
   const inProcess = await grant.makoServer!()
   const reader = new Client({ name: "instructions-check", version: "1" })

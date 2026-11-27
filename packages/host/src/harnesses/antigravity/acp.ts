@@ -22,6 +22,8 @@ const planArtifact = z.object({
   Content: z.string().min(1),
   ArtifactMetadata: z.object({ UserFacing: z.literal(true), RequestFeedback: z.literal(true) }),
 })
+/** An `initialize` whose agent takes an append to its system prompt. */
+const SystemPromptOffer = z.looseObject({ _meta: z.looseObject({ antigravity: z.looseObject({ systemPrompt: z.looseObject({ append: z.literal(true) }) }) }) })
 const terminalStep = z.object({ idx: z.number(), step_type: z.number() })
 function lastStep(path?: string) {
   if (!path) return undefined
@@ -61,8 +63,13 @@ export const antigravityAcp: ProviderAcpSource = {
   planning: { via: "mode", mode: "plan", proposal: "A completed implementation_plan.md artifact that requests feedback.",
     feedback: { kind: "next-message", reason: "An ACP permission answer carries the selected option." } },
   nativeRouting: { kind: "words", reason: "Mako's instructions direct delegation to its Fins." },
+  systemPrompt: {
+    via: "`_meta.antigravity.systemPrompt.append` on `session/new` and `session/load`, where `initialize` offers it (`agentCapabilities._meta.antigravity.systemPrompt.append`, Antigravity 1.5.16); else Mako's note.",
+    offered: (capabilities) => SystemPromptOffer.safeParse(capabilities).success,
+    meta: (text) => ({ antigravity: { systemPrompt: { append: text } } }),
+  },
   layer: {
-    instructions: { kind: "fallback", via: "prompt-note", loses: "The agent reads Mako's instructions with the message." },
+    instructions: { kind: "native", via: "system-append", how: "`_meta.antigravity.systemPrompt.append` on each session request, where the agent's `initialize` offers it; Mako's note otherwise", inUse: true, verified: { version: "1.5.16", how: "its `initialize` advertised `systemPrompt.append`, in a scratch home" } },
     toolServing: { kind: "native", via: "http-mcp", how: "HTTP MCP servers passed to each ACP session.", inUse: true },
     removal: { kind: "fallback", via: "words", loses: "Native tools stay available." },
     interception: { kind: "fallback", via: "words", loses: "The agent decides which tool to call." },

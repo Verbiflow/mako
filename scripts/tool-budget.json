@@ -3,12 +3,12 @@
   "roles": {
     "thread": {
       "total": {
-        "tokens": 14978,
-        "bytes": 65589
+        "tokens": 15146,
+        "bytes": 66290
       },
       "instructions": {
-        "tokens": 726,
-        "bytes": 3096
+        "tokens": 734,
+        "bytes": 3123
       },
       "tools": {
         "worktree_status": {
@@ -84,8 +84,8 @@
           "bytes": 502
         },
         "pull_request_status": {
-          "tokens": 659,
-          "bytes": 2884
+          "tokens": 679,
+          "bytes": 2967
         },
         "pull_request_open": {
           "tokens": 718,
@@ -108,8 +108,8 @@
           "bytes": 1168
         },
         "agents_start": {
-          "tokens": 1264,
-          "bytes": 5342
+          "tokens": 1380,
+          "bytes": 5857
         },
         "agents_link": {
           "tokens": 239,
@@ -136,8 +136,8 @@
           "bytes": 1505
         },
         "agents_send": {
-          "tokens": 610,
-          "bytes": 2696
+          "tokens": 622,
+          "bytes": 2734
         },
         "agents_stop": {
           "tokens": 183,
@@ -168,19 +168,19 @@
           "bytes": 1072
         },
         "wait": {
-          "tokens": 541,
-          "bytes": 2102
+          "tokens": 553,
+          "bytes": 2140
         }
       }
     },
     "apex": {
       "total": {
-        "tokens": 14978,
-        "bytes": 65589
+        "tokens": 15146,
+        "bytes": 66290
       },
       "instructions": {
-        "tokens": 726,
-        "bytes": 3096
+        "tokens": 734,
+        "bytes": 3123
       },
       "tools": {
         "worktree_status": {
@@ -256,8 +256,8 @@
           "bytes": 502
         },
         "pull_request_status": {
-          "tokens": 659,
-          "bytes": 2884
+          "tokens": 679,
+          "bytes": 2967
         },
         "pull_request_open": {
           "tokens": 718,
@@ -280,8 +280,8 @@
           "bytes": 1168
         },
         "agents_start": {
-          "tokens": 1264,
-          "bytes": 5342
+          "tokens": 1380,
+          "bytes": 5857
         },
         "agents_link": {
           "tokens": 239,
@@ -308,8 +308,8 @@
           "bytes": 1505
         },
         "agents_send": {
-          "tokens": 610,
-          "bytes": 2696
+          "tokens": 622,
+          "bytes": 2734
         },
         "agents_stop": {
           "tokens": 183,
@@ -340,19 +340,19 @@
           "bytes": 1072
         },
         "wait": {
-          "tokens": 541,
-          "bytes": 2102
+          "tokens": 553,
+          "bytes": 2140
         }
       }
     },
     "fin": {
       "total": {
-        "tokens": 15974,
-        "bytes": 69949
+        "tokens": 16154,
+        "bytes": 70688
       },
       "instructions": {
-        "tokens": 726,
-        "bytes": 3096
+        "tokens": 734,
+        "bytes": 3123
       },
       "tools": {
         "worktree_status": {
@@ -428,8 +428,8 @@
           "bytes": 502
         },
         "pull_request_status": {
-          "tokens": 659,
-          "bytes": 2884
+          "tokens": 679,
+          "bytes": 2967
         },
         "pull_request_open": {
           "tokens": 718,
@@ -452,8 +452,8 @@
           "bytes": 1168
         },
         "agents_start": {
-          "tokens": 1264,
-          "bytes": 5342
+          "tokens": 1380,
+          "bytes": 5857
         },
         "agents_link": {
           "tokens": 239,
@@ -472,8 +472,8 @@
           "bytes": 2737
         },
         "agents_report": {
-          "tokens": 996,
-          "bytes": 4360
+          "tokens": 1008,
+          "bytes": 4398
         },
         "agents_settle": {
           "tokens": 618,
@@ -484,8 +484,8 @@
           "bytes": 1505
         },
         "agents_send": {
-          "tokens": 610,
-          "bytes": 2696
+          "tokens": 622,
+          "bytes": 2734
         },
         "agents_stop": {
           "tokens": 183,
@@ -516,19 +516,19 @@
           "bytes": 1072
         },
         "wait": {
-          "tokens": 541,
-          "bytes": 2102
+          "tokens": 553,
+          "bytes": 2140
         }
       }
     },
     "fin-apex": {
       "total": {
-        "tokens": 15974,
-        "bytes": 69949
+        "tokens": 16154,
+        "bytes": 70688
       },
       "instructions": {
-        "tokens": 726,
-        "bytes": 3096
+        "tokens": 734,
+        "bytes": 3123
       },
       "tools": {
         "worktree_status": {
@@ -604,8 +604,8 @@
           "bytes": 502
         },
         "pull_request_status": {
-          "tokens": 659,
-          "bytes": 2884
+          "tokens": 679,
+          "bytes": 2967
         },
         "pull_request_open": {
           "tokens": 718,
@@ -628,8 +628,8 @@
           "bytes": 1168
         },
         "agents_start": {
-          "tokens": 1264,
-          "bytes": 5342
+          "tokens": 1380,
+          "bytes": 5857
         },
         "agents_link": {
           "tokens": 239,
@@ -648,8 +648,8 @@
           "bytes": 2737
         },
         "agents_report": {
-          "tokens": 996,
-          "bytes": 4360
+          "tokens": 1008,
+          "bytes": 4398
         },
         "agents_settle": {
           "tokens": 618,
@@ -660,8 +660,8 @@
           "bytes": 1505
         },
         "agents_send": {
-          "tokens": 610,
-          "bytes": 2696
+          "tokens": 622,
+          "bytes": 2734
         },
         "agents_stop": {
           "tokens": 183,
@@ -692,8 +692,8 @@
           "bytes": 1072
         },
         "wait": {
-          "tokens": 541,
-          "bytes": 2102
+          "tokens": 553,
+          "bytes": 2140
         }
       }
     }

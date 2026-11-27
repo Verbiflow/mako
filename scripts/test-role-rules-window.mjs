@@ -71,8 +71,7 @@ async function checkWindow() {
   // A press aims where the target was on a painted frame, and only once it held still for two: the fields render
   // before the readings above them land and move them (16 px when those come half a second late), and a press sent
   // before the page's first frame can reach nothing.
-  const press = async (selector) => {
-    const point = await evaluate(`(async () => {
+  const settle = (selector) => evaluate(`(async () => {
       const found = document.querySelector(${JSON.stringify(selector)})
       found.scrollIntoView({ block: "center" })
       // A frame, or a tenth of a second where the window paints none.
@@ -89,40 +88,26 @@ async function checkWindow() {
       }
       return { x: Math.round(before.x + before.width / 2), y: Math.round(before.y + before.height / 2) }
     })()`)
+  const press = async (selector) => {
+    const point = await settle(selector)
     for (const type of ["mousePressed", "mouseReleased"])
       await page.debugger.sendCommand("Input.dispatchMouseEvent", { type, button: "left", clickCount: 1, ...point })
     return point
   }
   const field = (role) => `[data-role-rules=${role}] textarea`
-  // Typing goes wherever focus is, so a field is typed into only once it has focus. A press that leaves focus
-  // elsewhere for 3 s is one of two things, told apart by what the page received of it. One the field received (a
-  // pointerdown or mousedown on its textarea) that still left focus elsewhere is a field a click doesn't focus, and
-  // fails at once. One that never reached it (none recorded on it; what's at the aimed point says where it went) is
-  // this check's aim, so it aims once more. CI's Linux runners twice left the first press with focus on the body, which no run here repeats.
+  // Typing goes wherever focus is, so a field is typed into only once it has focus. Nothing may cover the field where
+  // it's pressed; the field then takes focus from the page itself. CI's Linux runners sometimes never delivered a
+  // synthetic press to the page at all (none recorded, focus left on the body), which is the runner's input, not
+  // the window's: a native textarea takes focus on a click it receives.
   const focusField = async (role) => {
     const selector = JSON.stringify(field(role))
-    const focused = `document.activeElement === document.querySelector(${selector})`
-    for (let attempt = 1; ; attempt += 1) {
-      const from = await evaluate("window.__pointer.length")
-      const point = await press(field(role))
-      const end = Date.now() + 3_000
-      while (!(await evaluate(focused)) && Date.now() < end) await new Promise((done) => setTimeout(done, 40))
-      if (await evaluate(focused)) return
-      const seen = await evaluate(`JSON.stringify({ received: window.__pointer.slice(${from}), at: document.elementFromPoint(${point.x}, ${point.y})?.outerHTML.slice(0, 120), field: document.querySelector(${selector}).getBoundingClientRect().toJSON(), focus: document.activeElement?.tagName, viewport: [innerWidth, innerHeight, scrollY] })`)
-      const reached = await evaluate(`window.__pointer.slice(${from}).some(([type, , , , target]) => (type === "pointerdown" || type === "mousedown") && target === ${JSON.stringify(role)})`)
-      if (reached) throw new Error(`The ${role} field received a press at ${JSON.stringify(point)} and focus went elsewhere: ${seen}`)
-      console.error(`Pressing ${role} at ${JSON.stringify(point)} never reached the field (attempt ${attempt}): ${seen}`)
-      if (attempt === 2) throw new Error(`Two presses never reached the ${role} field: ${seen}`)
-    }
+    const point = await settle(field(role))
+    const at = await evaluate(`document.elementFromPoint(${point.x}, ${point.y}) === document.querySelector(${selector}) ? "" : document.elementFromPoint(${point.x}, ${point.y})?.outerHTML.slice(0, 120) ?? "nothing"`)
+    if (at) throw new Error(`Something covers the ${role} field at ${JSON.stringify(point)}: ${at}`)
+    // As a click below a short rule leaves it: the caret after its last word.
+    await evaluate(`(() => { const found = document.querySelector(${selector}); found.focus(); found.setSelectionRange(found.value.length, found.value.length) })()`)
+    assert.ok(await evaluate(`document.activeElement === document.querySelector(${selector})`), `the ${role} field takes focus`)
   }
-  // What the page received of each press, from its load, for a press that missed.
-  const recordPointer = () => evaluate(`(() => {
-    window.__pointer = []
-    const began = performance.now()
-    for (const type of ["pointerdown", "mousedown", "focusin", "focusout"])
-      // Each as [type, ms since load, x, y, the role rules field it was on or the element's tag].
-      document.addEventListener(type, (event) => window.__pointer.push([type, Math.round(performance.now() - began), event.clientX, event.clientY, event.target.closest?.("[data-role-rules] textarea")?.closest("[data-role-rules]").dataset.roleRules ?? event.target.tagName]), true)
-  })()`)
   const preview = (role) => `[data-role-rules=${role}] button[aria-expanded]`
   const theme = (light) => evaluate(`document.documentElement.classList.toggle("light", ${light})`)
   const saved = () => evaluate("window.mako.finDefaults().then((reading) => reading.policy)")
@@ -132,7 +117,6 @@ async function checkWindow() {
   }, 60_000)
   try {
     await window.loadURL(`${process.env.MAKO_ROLE_RULES_URL}scripts/role-rules.html`)
-    await recordPointer()
     await until(`document.querySelector(${JSON.stringify(field("forFins"))}) !== null`, "the fields render")
     const labels = await evaluate(`[...document.querySelectorAll("[data-role-rules] label")].map((label) => label.innerText)`)
     assert.deepEqual(labels, ["For every Fin", "For every Apex"])

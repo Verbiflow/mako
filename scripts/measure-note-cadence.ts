@@ -137,7 +137,7 @@ async function primers(): Promise<{ primers: string[]; turns: number }> {
     const Developer = z.object({ payload: z.object({ role: z.literal("developer"), content: z.array(z.object({ text: z.string() })) }) })
     const found = readFileSync(rollout, "utf8").trim().split("\n")
       .flatMap((line) => Developer.safeParse(JSON.parse(line)).data?.payload.content.map((part) => part.text) ?? [])
-      .filter((text) => text.startsWith("<mako>"))
+      .filter((text) => text.startsWith("<mako_01>"))
     return { primers: found, turns }
   } finally {
     spawn.mock.restore()

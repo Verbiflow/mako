@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import { AGENT_TOOLS, LEGACY_SHIVER_SCOPE, ORCHESTRATION_INSTRUCTIONS, type AgentsApexes, type AgentsShiver } from "@mako/host/contracts/agent-tools"
 import type { AgentCaller, Report } from "@mako/host/contracts/agents"
-import { agentWords, apexNote, FROM_AGENTS, fromAgent, fromApex, YOUR_APEX } from "@mako/host/contracts/children"
+import { agentWords, APEX_BRIEF, apexNote, FINAL_REPORT, FROM_AGENTS, fromAgent, fromApex, YOUR_APEX } from "@mako/host/contracts/children"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { threadHandle } from "@mako/host/contracts/thread-handles"
 import { agentToolSchema, agentToolText } from "@mako/host/conversations/agent-tools"
@@ -96,6 +96,10 @@ async function shiver(): Promise<void> {
     const oldBrief = `${fromAgent(YOUR_APEX)}\nYou're fin:docs, a Fin: another Thread, your Apex, started you for one piece of work. It reads your reports, not this conversation. agents_list with scope ${LEGACY_SHIVER_SCOPE} shows it and the other Fins it started.\n\nWrite the router's docs.`
     assert.equal(agentWords(oldBrief)?.body, "Write the router's docs.", "a brief from before the Shiver reads the same")
     assert.equal(agentWords(brief.slice(brief.indexOf(fromAgent(YOUR_APEX))))?.body, "Write the router's docs.", "the person's card of the brief leaves its lines for the Fin out")
+    assert.ok(brief.includes(FINAL_REPORT) && !brief.includes(APEX_BRIEF), "a worker's brief says what its final report reads, and nothing of splitting work")
+    const leadBrief = world.prompts.find((prompt) => prompt.conversation === lead)!.text
+    assert.ok(leadBrief.includes(APEX_BRIEF), "a lead's brief says how to split its work and when to stay quiet")
+    assert.equal(agentWords(leadBrief.slice(leadBrief.indexOf(fromAgent(YOUR_APEX))))?.body, "Lead the review of the router port. Two reviewers.", "and its card leaves that out, as the rest of Mako's lines for the Fin")
     const earlier = `${fromAgent(YOUR_APEX)}\nYou're fin:docs, a Fin: another Thread, your Apex, started you for one piece of work. It reads your reports, not this conversation.\n\nWrite the router's docs.`
     assert.equal(agentWords(earlier)?.body, "Write the router's docs.", "a brief an earlier build wrote reads the same")
 

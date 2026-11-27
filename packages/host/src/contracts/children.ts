@@ -1,7 +1,7 @@
 import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "./report-actions.js"
 import { z } from "zod"
 import { LISTED_AFTER, LISTED_FINS, LISTED_WAITING_ON, type ListedFin, type ListedFinState } from "@mako/protocol/thread-listing"
-import { APEX_WORD, entryState, FIN_WORD, finsWord, SHIVER_WORD, LEGACY_APEX_WORD, UNFINISHED_WORDS, waitingStateWords, type Brief, type ChildState } from "./agents.js"
+import { APEX_ROLE, APEX_WORD, entryState, FIN_WORD, finsWord, SHIVER_WORD, LEGACY_APEX_WORD, UNFINISHED_WORDS, waitingStateWords, type Brief, type ChildRole, type ChildState } from "./agents.js"
 import type { Block } from "./conversation-session.js"
 import { CHILDREN_BINDING, isProviderWork, type FinAnswered, type FinAsk, type NativeAgent, type NativeAgentRoster, type WaitingOn } from "./native-agents.js"
 import type { Waiting } from "@mako/protocol/attention"
@@ -171,12 +171,33 @@ const CREW_INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started 
 /** The intro's tail before a Fin could read its Shiver. */
 const EARLIER_INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation.`
 export const BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells ${YOUR_APEX} how it ended.`
+/**
+ * What a Fin hears once when a turn of its ends with no report that stands and nothing that wakes it: as its harness's
+ * Stop hook's reason where the harness asks one before the turn ends (`FIN_STOP_ASK`), else as Mako's note, its next
+ * turn (`FIN_REPORT_ASK`). Its end after that is its report, as it was before it was asked.
+ */
+const REPORT_ASK_TAIL = `Your ${APEX_WORD} hears how your work stands only from it. Call agents_report now: done with what you did (and its pull request), failed with why, or blocked or needs-input with your question; waiting on a pull request's checks, progress with waitingOn. Then end your turn.`
+export const FIN_STOP_ASK = `You haven't called agents_report this turn. ${REPORT_ASK_TAIL}`
+export const FIN_REPORT_ASK = `Mako: your turn ended without agents_report. ${REPORT_ASK_TAIL}`
 /** A brief's lines as builds before the names wrote them, still left out of its card. */
 const LEGACY_INTRO = { head: "You're child:", tail: ", a Thread another Thread started to do one piece of work. It reads your reports, not this conversation." }
 const LEGACY_BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells your ${LEGACY_APEX_WORD} how it ended.`
 
-/** What a Fin's first turn reads: who asked, as an agent's words, and everything it knows of the work. */
-export function briefText(brief: Brief, name: string): string {
+/**
+ * How an Apex splits work into Fins, said where it decides: `agents_start`'s description and a lead Fin's brief
+ * (`APEX_BRIEF`). In the 14 days to 2026-11-26, none of 23 Fins started with `after`, and Apexes ran independent
+ * pieces one after another.
+ */
+export const SPLIT_WORK = "To split work, first map the files each piece touches. Start every independent piece in the same turn, never one after another; a piece that needs another's result waits for it with after, and one that edits the same lines as another goes on that Fin's branch (workspace base: its branch) and merges after it."
+/** How an Apex answers its Fins' reports: the person hears what needs them, together, and nothing else. */
+export const APEX_QUIET = "On a report that changes nothing for the person, end your turn without a word; tell them what needs them in one message."
+/** Beneath a lead Fin's brief, for it alone: it's an Apex of its own. */
+export const APEX_BRIEF = `You're an ${APEX_WORD} too: start ${FIN_WORD}s for the pieces of this work with agents_start. ${SPLIT_WORK} ${APEX_QUIET}`
+/** What a Fin's last report holds when its brief names nothing else: what its Apex reads first. */
+export const FINAL_REPORT = "Your final report reads: Outcome / PR / Needs / Cost / Lesson."
+
+/** What a Fin's first turn reads: who asked, as an agent's words, and everything it knows of the work; a lead's, how it splits its work. */
+export function briefText(brief: Brief, name: string, role?: ChildRole): string {
   const lines = [
     fromAgent(YOUR_APEX),
     briefIntro(name),
@@ -185,7 +206,8 @@ export function briefText(brief: Brief, name: string): string {
   ]
   if (brief.doneWhen?.length) lines.push("", "Done when:", ...brief.doneWhen.map((item) => `- ${item}`))
   if (brief.boundaries?.length) lines.push("", "Boundaries:", ...brief.boundaries.map((item) => `- ${item}`))
-  if (brief.output) lines.push("", `Your report carries: ${brief.output}`)
+  lines.push("", brief.output ? `Your report carries: ${brief.output}` : FINAL_REPORT)
+  if (role === APEX_ROLE) lines.push("", APEX_BRIEF)
   lines.push("", BRIEF_CLOSE, REPORT_FOLLOW_UP_INSTRUCTIONS)
   return lines.join("\n")
 }
@@ -226,7 +248,7 @@ export function agentWords(text: string): AgentWords | undefined {
   const body = words
     .slice(header[0].length)
     .split("\n")
-    .filter((line) => line !== BRIEF_CLOSE && line !== REPORT_FOLLOW_UP_INSTRUCTIONS && line !== LEGACY_BRIEF_CLOSE && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && (line.endsWith(APEX_NOTE_TAIL) || line.endsWith(LEGACY_APEX_NOTE_TAIL))))
+    .filter((line) => line !== BRIEF_CLOSE && line !== REPORT_FOLLOW_UP_INSTRUCTIONS && line !== LEGACY_BRIEF_CLOSE && line !== FINAL_REPORT && line !== APEX_BRIEF && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && (line.endsWith(APEX_NOTE_TAIL) || line.endsWith(LEGACY_APEX_NOTE_TAIL))))
     .join("\n")
     .trim()
   return { from: spoken(header[1]!), body, ...(reports.length && { reports }) }

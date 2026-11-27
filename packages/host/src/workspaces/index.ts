@@ -1,4 +1,5 @@
 import { AppDataRetention } from "./app-data-retention.js"
+import { turnOf } from "../base/poll-answers.js"
 import { ThreadScratch, threadArchived, SCRATCH_PASS_MS, threadDataAncestorsClosed } from "./thread-scratch.js"
 import { declareThreadScratchMethods } from "./thread-scratch-methods.js"
 import { AppOutputHints } from "./app-output-hints.js"
@@ -654,6 +655,7 @@ function agentTools({ git, workspaces, live, store, emit, person, pullRequestsAs
     person,
     pullRequestsAs,
     threadOf: (id) => store?.journalPlacement(id)?.thread,
+    turnOf: (id) => turnOf(live.snapshot(id)?.requests),
   })
   return [
     (server, conversationId) => registerWorkspaceTools(server, workspace, conversationId),
