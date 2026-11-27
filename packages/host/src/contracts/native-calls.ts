@@ -44,6 +44,8 @@ export interface CallThread {
   computer?: boolean
   /** This machine's build slots now (`BuildSlots`): a heavy suite started while every one is in use hears so. */
   builds?: { slots: number; holders: string[] }
+  /** The keys of this Thread's `agents_start` calls refused for overlap lately: a retry under one asks nobody (`asksNobody`). */
+  startRetries?: readonly string[]
 }
 
 /** How a harness names a Mako tool, for the message: `mcp__mako__worktree_move` on Claude, the bare name elsewhere. */

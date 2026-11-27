@@ -763,6 +763,8 @@ const inputs = {
           .optional(),
         timeoutMs: z.number().optional(),
         after: z.array(z.string()).optional(),
+        touches: z.array(z.string()).optional(),
+        proceed: z.string().optional(),
         queue: z.boolean().optional(),
         context: z.array(z.object({ thread: z.string() })).optional(),
         clientKey: z.string(),
@@ -2024,6 +2026,8 @@ const inputs = {
                   z.literal("finish"),
                 ])
                 .optional(),
+              touches: z.array(z.string()).optional(),
+              proceed: z.string().optional(),
             }),
             parentSession: z.string(),
             startedBy: z.union([

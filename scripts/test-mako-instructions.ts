@@ -52,7 +52,7 @@ for (const rule of [
 ]) assert.ok(MAKO_INSTRUCTIONS.includes(rule), `the instructions say ${JSON.stringify(rule.slice(0, 60))}`)
 // Grok reads only the start: every Fin rule and the wait rule sit inside its cut.
 const grokSees = MAKO_INSTRUCTIONS.slice(0, GROK_INSTRUCTIONS_CUT)
-for (const rule of ["call `agents_report`", "`waitingOn`", "`agents_move`", "`forward: true`", "`scope: apexes`", "wait: to wait on your Fins", "Never poll or sleep.", "goes through `agents_start`, not your harness's own subagent tool", "never gh --watch"])
+for (const rule of ["call `agents_report`", "Split only independent pieces worth 15+ minutes (one feature or bug is one Fin, or yours)", "`waitingOn`", "`agents_move`", "`forward: true`", "`scope: apexes`", "wait: to wait on your Fins", "Never poll or sleep.", "goes through `agents_start`, not your harness's own subagent tool", "never gh --watch"])
   assert.ok(grokSees.includes(rule), `Grok's cut keeps ${JSON.stringify(rule)}`)
 
 // Each fact once: the routes are the primer's, the follow-up rule the Fin's brief's and agents_report's.

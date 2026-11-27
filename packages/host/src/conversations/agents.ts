@@ -16,7 +16,8 @@ import { finMovedText, finResumedText, worktreeRemadeText, worktreeRemadeWords }
 import type { WorktreeRestored } from "../contracts/thread-worktrees.js"
 import { isLimitAsk, limitNoticeId, limitNoticeLine, limitNoticeWords, movedLine, movedWords, outOfAccountsLine, placeKey, stepKey, type AccountContinuation, type FallbackAccount, type FallbackConnection, type FallbackStep, type FinMove } from "../contracts/fin-fallback.js"
 import { errorMessage } from "../base/error-message.js"
-import { insideOf, within } from "../base/path-style.js"
+import { insideOf, under, within } from "../base/path-style.js"
+import { meetings, overlapWhy, touchesRefusal, touchPath, type OverlapMate } from "../contracts/fin-overlap.js"
 import { z } from "zod"
 import type { TreePlace } from "@mako/protocol/moves"
 import { homedir } from "node:os"
@@ -583,6 +584,16 @@ interface LimitEpisode {
 /** The longest a timer holds: a limit's reset can be further off. */
 const LONGEST_TIMER_MS = 2 ** 31 - 1
 
+/**
+ * What an Apex changed itself counts against a Fin's `touches` from the earliest start of its Fins at work, or this
+ * long before the start, whichever is earlier: older changes are its own base, most likely committed.
+ */
+const OWN_CHANGES_MS = 30 * 60_000
+/** How long a start refused for overlap may come again under its key without asking the person again (`startRetries`). */
+const OVERLAP_RETRY_MS = 15 * 60_000
+/** Keys held for that per conversation: past it the oldest goes. */
+const OVERLAP_RETRIES_KEPT = 32
+
 /** An Apex resolved in the store: its Session, its Thread, and its conversation here. */
 interface Apex {
   session: string
@@ -732,6 +743,9 @@ interface StartRecord {
   /** The name it was asked for, which a stop by name finds it by before it has one of its own. */
   asked?: string
   name?: string
+  /** What it said it would edit, and the branch it asked for: another start's overlap reads them before its edge is written. */
+  touches?: readonly string[]
+  branch?: string
   launching?: { where: string; tree: string }
   cancelled: boolean
   answer: Promise<AgentsStartResult>
@@ -960,6 +974,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly quietSteps = new Map<string, { since: number; step?: string; running?: true }>()
   /** Threads of one Shiver that changed the same file in one folder, from the writes their calls state (`FinCollisions`). */
   readonly collisions: FinCollisions
+  /** Per conversation, the keys of its starts refused for overlap, and when: a retry under one asks nobody (`startRetries`). */
+  private readonly overlapRetries = new Map<string, Map<string, number>>()
   /** Conversations that aren't a Fin's, so activity in them costs a set lookup: emptied when the edges change. */
   private readonly notFins = new Set<string>()
   /** Turns' waits (`wait`): armed in the store, met by Fins' results and ends and pull requests' outcomes, fired once. */
@@ -1861,6 +1877,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     const op = `start:${apex.session}:${input.clientKey}`
     const { record, joined } = this.starts.open(op, () => startRecord(op, apex.thread, input.name ?? input.title))
     if (joined) return record.answer.then((answer) => ("refused" in answer ? answer : { ...answer, deduped: true as const }))
+    if (input.touches?.length) record.touches = input.touches
+    if (input.workspace?.branch) record.branch = input.workspace.branch
     record.answer = this.admit(apex, input, record).finally(() => this.retire(record))
     return record.answer
   }
@@ -1896,6 +1914,101 @@ export class Agents implements AgentOperations, ConversationChildren {
     return this.starts.size
   }
 
+  /**
+   * The keys of this conversation's starts refused for overlap lately: the person approved the call that was refused,
+   * so its retry under the same key, with `proceed` or `after`, goes without asking them again (`CallThread.startRetries`).
+   */
+  startRetries(conversation: string): readonly string[] {
+    const kept = this.overlapRetries.get(conversation)
+    if (!kept) return []
+    const since = this.now() - OVERLAP_RETRY_MS
+    for (const [key, at] of kept) if (at < since) kept.delete(key)
+    if (!kept.size) this.overlapRetries.delete(conversation)
+    return [...kept.keys()]
+  }
+
+  private keepRetry(apex: Apex, clientKey: string): void {
+    if (!apex.conversation) return
+    const kept = this.overlapRetries.get(apex.conversation) ?? new Map<string, number>()
+    kept.delete(clientKey)
+    kept.set(clientKey, this.now())
+    while (kept.size > OVERLAP_RETRIES_KEPT) kept.delete(kept.keys().next().value!)
+    this.overlapRetries.set(apex.conversation, kept)
+  }
+
+  /**
+   * Whether an agent's start would edit what another of its Threads edits (`AgentsStartInput.touches`): what its Fins
+   * at work or waiting to start said they'd touch, what they changed since they started, and what the caller changed
+   * itself (`FinCollisions.writtenBy`). A Fin it starts after, or one whose branch it starts on, doesn't count, nor
+   * does any start without `touches` or the person's own. Paths meet repo-relative, in the caller's folder; a path in
+   * a Thread's worktree is read as the same path in its main checkout, so Fins in worktrees of their own meet too.
+   */
+  private startOverlap(apex: Apex, input: AgentsStartInput, op: string): { why: string; files: string[]; with: string[] } | undefined {
+    const store = this.store()
+    if (!store || apex.away || !input.touches?.length) return undefined
+    const folder = input.cwd ?? (apex.conversation ? this.deps.live.session(apex.conversation)?.cwd : undefined)
+    if (!folder) return undefined
+    const worktrees = store.worktrees()
+    const inMain = (path: string): string => {
+      const tree = worktrees.find((worktree) => within(worktree.path, path))
+      return !tree ? path : path === tree.path ? tree.repoRoot : under(tree.repoRoot, insideOf(tree.path, path))
+    }
+    const root = inMain(folder)
+    const relative = (path: string): string | undefined => {
+      const main = inMain(path)
+      return main === root ? "" : within(root, main) ? insideOf(root, main) : undefined
+    }
+    const declared = (touches: readonly string[] | undefined): string[] => (touches ?? []).flatMap((touch) => {
+      const path = touch.startsWith("/") ? relative(touch) : touchPath(touch)
+      return path === undefined ? [] : [path]
+    })
+    const mine = declared(input.touches)
+    if (!mine.length) return undefined
+    const after = this.afterOf(apex, input.after ?? [])
+    const sequenced = new Set("refused" in after ? [] : after.flatMap((ref) => [ref.child, ref.op].filter((id): id is string => id !== undefined)))
+    const named = new Set((input.after ?? []).map(finName))
+    const onBranch = new Set([input.workspace?.base, input.workspace?.branch].filter((branch): branch is string => branch !== undefined))
+    const mates: OverlapMate[] = []
+    const meet = (mate: Omit<OverlapMate, "files">, theirs: readonly string[]) => {
+      const files = meetings(mine, theirs)
+      if (files.length) mates.push({ ...mate, files })
+    }
+    const now = this.now()
+    let earliest = now - OWN_CHANGES_MS
+    for (const edge of store.edges().children(apex.thread)) {
+      if (edge.closedAt !== undefined || edge.op === op || sequenced.has(edge.child) || named.has(edge.name)) continue
+      const state = this.stateOf(edge)
+      if (state.kind !== "starting" && state.kind !== "working" && state.kind !== "blocked" && state.kind !== "queued") continue
+      const branch = edge.asked.workspace?.branch ?? worktrees.find((worktree) => worktree.thread === edge.child)?.branch
+      if (branch !== undefined && onBranch.has(branch)) continue
+      earliest = Math.min(earliest, edge.createdAt)
+      const changed = edge.placed ? [] : this.collisions.writtenBy(edge.child, edge.createdAt).flatMap((file) => relative(file) ?? [])
+      const said = declared(edge.asked.touches)
+      const how = meetings(mine, said).length || !changed.length ? "editing" : "changed"
+      meet({ name: edge.name, how, ...(branch !== undefined && { branch }) }, [...said, ...changed])
+    }
+    const queued = new Set<string>()
+    for (const { spawn, queued: waiting } of this.queuedOfApex(apex)) {
+      queued.add(spawn.op)
+      if (spawn.op === op || store.edges().byOp(spawn.op) || sequenced.has(spawn.op)) continue
+      const name = waiting.input.name ?? waiting.input.title
+      const branch = waiting.input.workspace?.branch
+      if ((name !== undefined && named.has(name)) || (branch !== undefined && onBranch.has(branch))) continue
+      meet({ name: name ?? "queued", how: "will edit", ...(branch !== undefined && { branch }) }, declared(waiting.input.touches))
+    }
+    // Starts deciding or launching beside this one, as an Apex starts its pieces in one turn: no edge or row says them yet.
+    for (const other of this.starts.values()) {
+      if (other.op === op || other.thread !== apex.thread || !other.touches || queued.has(other.op) || store.edges().byOp(other.op)) continue
+      const name = other.name ?? other.asked
+      if ((name !== undefined && named.has(name)) || (other.branch !== undefined && onBranch.has(other.branch))) continue
+      meet({ name: name ?? "unnamed", how: "will edit", ...(other.branch !== undefined && { branch: other.branch }) }, declared(other.touches))
+    }
+    const own = this.collisions.writtenBy(apex.thread, earliest).flatMap((file) => relative(file) ?? [])
+    meet({ how: "changed" }, own)
+    if (!mates.length) return undefined
+    return { why: overlapWhy(mates, input.workspace !== undefined), files: [...new Set(mates.flatMap((mate) => mate.files))], with: mates.map((mate) => (mate.name ? `fin:${mate.name}` : "self")) }
+  }
+
   /** Whether the start `op` is under way: deciding, launching, or taken from its queue row and coming up. */
   startUnderWay(op: string): boolean {
     return this.starts.has(op)
@@ -1920,8 +2033,19 @@ export class Agents implements AgentOperations, ConversationChildren {
     const store = this.store()!
     const place = input.place === undefined ? HERE : PlaceSchema.safeParse(input.place).data
     if (!place) return this.refuse(input.clientKey, "place-unavailable", "place is here, device:<name> or cloud.")
-    if (place !== HERE) return this.admitAway(apex, input, start, place)
     const op = `start:${apex.session}:${input.clientKey}`
+    const bounds = touchesRefusal(input)
+    if (bounds) return this.refuse(op, "conflict", bounds)
+    // A repeat of a start that went ahead answers its Fin, whatever has started since; a refusal is never its key's answer.
+    if (!store.edges().byOp(op) && !store.queuedSpawns().some((spawn) => spawn.op === op)) {
+      const overlap = this.startOverlap(apex, input, op)
+      if (overlap && input.proceed === undefined) {
+        this.keepRetry(apex, input.clientKey)
+        return this.refuse(op, "overlap", overlap.why)
+      }
+      if (overlap) hostLog("agents", "start overlap proceed", { op, proceed: input.proceed, files: overlap.files.join(" "), with: overlap.with.join(" ") })
+    }
+    if (place !== HERE) return this.admitAway(apex, input, start, place)
     const kept = store.edges().byOp(op)
     if (kept) return this.started(kept, apex, true)
     if (store.queuedSpawns().some((spawn) => spawn.op === op)) return this.queuedAnswer(op, apex, true)
@@ -2248,6 +2372,8 @@ export class Agents implements AgentOperations, ConversationChildren {
         ...(input.workspace && { workspace: input.workspace }),
         ...(input.mode && { mode: input.mode }),
         ...(input.wake && { wake: input.wake }),
+        ...(input.touches?.length && { touches: input.touches }),
+        ...(input.proceed && { proceed: input.proceed }),
       },
       op,
       startedBy: { kind: "agent", session },
@@ -4458,6 +4584,8 @@ export class Agents implements AgentOperations, ConversationChildren {
         ...(input.workspace && { workspace: input.workspace }),
         ...(input.mode && { mode: input.mode }),
         ...(input.wake && { wake: input.wake }),
+        ...(input.touches?.length && { touches: input.touches }),
+        ...(input.proceed && { proceed: input.proceed }),
       },
       op,
       startedBy: { kind: "agent", session: SessionIdSchema.parse(apex.session) },

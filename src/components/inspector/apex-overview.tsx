@@ -244,6 +244,7 @@ const FinRow = memo(function FinRow({
     agent.role === APEX_ROLE ? APEX_WORD : undefined,
     agent.usage?.toolUses !== undefined ? `${agent.usage.toolUses} ${agent.usage.toolUses === 1 ? "tool use" : "tool uses"}` : undefined,
     agent.runsOn?.rule ? `started by your rule: ${agent.runsOn.rule}` : undefined,
+    agent.child?.proceed ? `started on files another ${FIN_WORD} edits: ${agent.child.proceed}` : undefined,
   ].filter(Boolean).join(" · ")
   return (
     <div className={cn("contain-turn group/fin relative", nested && "ml-5")}>

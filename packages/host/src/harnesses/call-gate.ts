@@ -86,7 +86,7 @@ export function callGateAnswer(event: "pre" | "post" | "before", call: HookCall 
   if (!call) return {}
   // An Apex's own bookkeeping and a tree's talk within itself through Mako's tools ask nobody, whatever the access (`asksNobody`).
   const mako = mcpToolName(call.tool_name ?? "")
-  if (event !== "post" && mako?.server === MAKO_THREAD_SERVER && asksNobody(mako.tool, AskedCallSchema.catch({}).parse(call.tool_input))) return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } }
+  if (event !== "post" && mako?.server === MAKO_THREAD_SERVER && asksNobody(mako.tool, AskedCallSchema.catch({}).parse(call.tool_input), thread.startRetries)) return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } }
   const route = hookRoute(call, thread)
   if (route.kind === "deny" && event !== "post") {
     hostLog("routing", "native call denied", { tool: call.tool_name, conversation, family: route.family, rule: route.rule })

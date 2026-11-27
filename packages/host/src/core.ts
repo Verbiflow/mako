@@ -2267,7 +2267,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
   ], async (conversationId, event, body, binding) => {
     const cwd = live.session(conversationId)?.cwd
     if (!cwd) return {}
-    const thread = callThreadOf(threads.store ?? undefined, conversationId, cwd, workspaces.environments?.launchedWith(conversationId), buildSlots.reading())
+    const thread = callThreadOf(threads.store ?? undefined, conversationId, cwd, workspaces.environments?.launchedWith(conversationId), buildSlots.reading(), late.conversations?.agents?.startRetries(conversationId))
     const call = HookCall.safeParse(body).data
     // A call that goes and may write waits for its turn's checkpoint to hold the workspace, where the turn holds writes.
     return heldAnswer(writeHolds, event, call, callGateAnswer(event, call, thread, conversationId, callNotes), binding)

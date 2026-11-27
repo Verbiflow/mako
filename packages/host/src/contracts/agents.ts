@@ -170,6 +170,10 @@ export const ChildSpecSchema = z.lazy(() => z.object({
   mode: StartModeSchema.optional(),
   /** Absent: `decisions`. */
   wake: WakeOnSchema.optional(),
+  /** The repo-relative files or directories it said it would edit (`AgentsStartInput.touches`). */
+  touches: z.array(z.string().min(1).max(300)).max(50).optional(),
+  /** Why it started though it overlapped another Fin's files, as its Apex said (`AgentsStartInput.proceed`). */
+  proceed: z.string().min(1).max(300).optional(),
 }))
 export type ChildSpec = z.infer<typeof ChildSpecSchema>
 
@@ -920,7 +924,7 @@ export function childEntry(edge: ThreadParent, thread: ChildThread, journal: Chi
     provider: thread.harness ?? edge.asked.harness ?? edge.run?.harness ?? "unknown",
     observedAt: thread.updatedAt ?? edge.createdAt,
     startedAt: thread.startedAt ?? edge.createdAt,
-    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(edge.placed && edge.asked.place && { place: edge.asked.place }), ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }), ...(thread.sharing && { sharing: thread.sharing }) },
+    child: { thread: edge.child, name: edge.name, origin: edge.origin, ...(edge.placed && edge.asked.place && { place: edge.asked.place }), ...(thread.session && { session: thread.session }), ...(thread.nativeId && { nativeId: thread.nativeId }), ...(thread.path && { path: thread.path }), ...(thread.conversation && { conversation: thread.conversation }), state: carried(state), ...(edge.tuned?.rerouted?.line && { moved: edge.tuned.rerouted.line }), ...(thread.sharing && { sharing: thread.sharing }), ...(edge.asked.proceed && { proceed: edge.asked.proceed }) },
   }
   entry.detail = edge.asked.brief.objective.slice(0, 8192)
   const model = thread.model ?? edge.asked.model
@@ -1330,6 +1334,8 @@ export type AgentRefusalReason =
   | "rate-limited"
   | "unavailable"
   | "unsupported"
+  /** It would edit files another of the caller's Fins at work edits, or the caller changed (`AgentsStartInput.touches`). */
+  | "overlap"
 export interface AgentRefused {
   refused: AgentRefusalReason
   why: string
