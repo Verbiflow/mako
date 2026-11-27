@@ -70,7 +70,7 @@ export const MAKO_SERVER_INSTRUCTIONS = [
   "Mako's tools for the Thread this Session belongs to. Each acts on this Thread only.",
   "wait: to wait on your Fins, a pull request, an app check or a time, call wait and end your turn; Mako wakes you. Never poll or sleep.",
   ORCHESTRATION_INSTRUCTIONS,
-  `Mako refuses git worktree add, a new branch in the main checkout, gh pr merge, agent CLIs and waiting by sleeping or gh --watch, naming the call to make; ${NATIVE_OVERRIDE} before one runs it anyway, never a worktree, and only when that call failed. Other native routes run with a note naming the better tool. Commit, push, diff and log stay plain Git.`,
+  `Mako refuses git worktree add, a new branch in the main checkout, gh pr merge, agent CLIs and waiting by sleeping or gh --watch, naming the call to make; ${NATIVE_OVERRIDE} before one runs it anyway, never a worktree or a wait, and only when that call failed. Other native routes run with a note naming the better tool. Commit, push, diff and log stay plain Git.`,
   "thread_move: this Thread itself to the cloud, when the person asks. That's this Thread going on elsewhere, not new work for a Fin.",
   "Their words:",
   "- main checkout: the project's own folder, the user's.",
