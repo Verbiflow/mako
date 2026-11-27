@@ -634,16 +634,18 @@ export function afterStart(wake: WakeOn, waited?: StartWaited): string {
 /**
  * The paragraph the `mako` server's instructions carry on every harness, with
  * the roles' words from `APEX_WORD` and `FIN_WORD`. The routing workstream
- * proposes changes to it; it's written here once. A Fin's own rules come
- * first, since Grok cuts server instructions at about 2,047 characters; the
- * follow-up rule for a Fin's reports is in its brief and `agents_report`.
+ * proposes changes to it; it's written here once. What agents most often got
+ * wrong comes first, since Grok cuts server instructions at about 2,047
+ * characters: a Fin's report, then work in parallel through `agents_start`,
+ * then ending the turn to be woken. The follow-up rule for a Fin's reports is
+ * in its brief and `agents_report`.
  */
 export const ORCHESTRATION_INSTRUCTIONS = [
   `agents_*: other Threads this Thread starts, its ${FIN_WORD}s; it is their ${APEX_WORD}.`,
   `If you're a ${FIN_WORD}, call \`agents_report\` when you finish, are blocked, or need a decision; finished work that leaves a decision is done with its question, options and \`decides\`. Ready for review, or waiting on your ${APEX_WORD} or the person, is done with an \`action\`, never progress: progress is for a turn that goes on; a turn ending on progress nothing will wake tells your ${APEX_WORD} it ended unfinished.`,
-  "To wait on a pull request, report progress with `waitingOn` (checks, review or merge) and end your turn: Mako wakes you. Read PR and CI status with pull_request_status, never gh --watch. If you poll gh yourself: at most once a minute per repository; after a 403/429 stop all GitHub calls until Retry-After.",
-  "Parallel, background, cross-harness or remote work goes through `agents_start`, even when your harness has its own subagent tool (keep that for a quick look you wait for); a one-file change, a question, or work that needs your own context is faster in your turn. Never run an agent CLI with nohup: it can't report or ask.",
+  "Parallel, background, cross-harness or remote work goes through `agents_start`, not your harness's own subagent tool (keep that for a quick look you wait for) nor an agent CLI with nohup, which can't report or ask; a one-file change or a question is faster in your turn.",
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
+  "To wait on a pull request, report progress with `waitingOn` (checks, review or merge) and end your turn: Mako wakes you. Read PR and CI status with pull_request_status, never gh --watch. If you poll gh yourself: at most once a minute per repository; after a 403/429 stop all GitHub calls until Retry-After.",
   `The person writes to this Thread: a message for a ${FIN_WORD} goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn. Answer a ${FIN_WORD}'s question with \`agents_answer\` within your access, or \`person: true\` when it's theirs.`,
   `A ${FIN_WORD} whose harness runs out or should change moves with \`agents_move\`; never start a new one to take over.`,
   `Read the person's other Threads with \`agents_list\` \`scope: apexes\` before editing shared files or branches; reading never wakes them. Message one only when the person asked or it alone can give or decide what you need.`,

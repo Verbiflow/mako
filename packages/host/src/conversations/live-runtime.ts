@@ -234,6 +234,13 @@ export function launchRouting(dependencies: Pick<Dependencies, "agents">, sessio
   return () => ({ role: agents()?.isApex(session) ? "apex" : "thread" })
 }
 
+/** A launch's ask before its turn ends (`ProviderStartOptions.finStop`): only a Thread given Mako's tools has `agents_report` to call. */
+export function launchFinStop(dependencies: Pick<Dependencies, "agents">, conversation: string, tools: ConversationTools | undefined): (() => string | undefined) | undefined {
+  const agents = dependencies.agents
+  if (!tools?.makoUrl || !agents) return undefined
+  return () => agents()?.finStop?.(conversation)
+}
+
 /**
  * A launch's native calls (`ProviderStartOptions.nativeCalls`): only a Thread
  * given Mako's tools has them to route to. Read at each call, so a
@@ -264,6 +271,8 @@ export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "work
 export interface ConversationChildren {
   /** A Fin's edge was just written, under the op its start named: it leaves the line of those waiting (`queueRefresh`). */
   edgeWritten?(op: string): void
+  /** The words that send a Fin back to report before its turn ends, where its harness asks (`Agents.finStop`), or undefined to let it end. */
+  finStop?(conversation: string): string | undefined
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
   /** The conversation's armed wait as its waiting line reads (`turnWaitLine`), the same object until it changes. */

@@ -2,6 +2,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { z } from "zod"
 import { accountCall, machineCall, NOT_THE_PERSON } from "../base/host-client.js"
 import type { MethodTable } from "../base/methods.js"
+import { toolMeta } from "../contracts/mcp-reach.js"
 import type { AgentCaller, AgentRefused, AgentsCancelInput, AgentsNoticeCall, AgentsPlaceInput } from "../contracts/agents.js"
 import {
   AGENT_TOOLS,
@@ -158,7 +159,7 @@ export function registerAgentTools(server: McpServer, door: AgentToolDoor, role?
     if (hidden.has(tool.verb)) continue
     server.registerTool(
       tool.mcp.name,
-      { description: tool.mcp.description, inputSchema: agentToolSchema(tool), annotations: tool.mcp.annotations },
+      { description: tool.mcp.description, inputSchema: agentToolSchema(tool), annotations: tool.mcp.annotations, ...toolMeta(tool.mcp.name) },
       async (input) => {
         try {
           const known = door.filled()

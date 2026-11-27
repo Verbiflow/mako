@@ -268,9 +268,9 @@ cases.push(["native instruction slots", async () => {
     assert.equal(turns.length, expected.length)
     for (const [index, frame] of turns.entries()) {
       const [text, primer] = expected[index]!
-      const params = z.object({ additionalContext: z.object({ mako: z.object({ kind: z.literal("application"), value: z.string() }) }).optional(), input: z.array(z.object({ text: z.string() })) }).parse(frame.params)
+      const params = z.object({ additionalContext: z.record(z.string(), z.object({ kind: z.literal("application"), value: z.string() })).optional(), input: z.array(z.object({ text: z.string() })) }).parse(frame.params)
       assert.equal(params.input.map(item => item.text).join(""), text)
-      if (primer) assert.equal(params.additionalContext?.mako.value, `${instructions}\n\n${MAKO_SERVER_INSTRUCTIONS}`, `Codex "${text}" carries the primer, with the server's instructions, as the turn's developer application context`)
+      if (primer) assert.deepEqual(Object.values(params.additionalContext ?? {}).map((entry) => entry.value), [...BLOCKS, MAKO_SERVER_INSTRUCTIONS], `Codex "${text}" carries the primer, with the server's instructions, as the turn's developer application context, a block an entry`)
       else assert.equal(params.additionalContext, undefined, `Codex "${text}": the transcript holds the primer, so the turn leaves it out`)
       assert.equal(params.input.some(item => item.text.includes(FILE_LINK)), false, "the primer never replaces the person's words")
     }
