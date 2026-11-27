@@ -31,6 +31,12 @@ export interface NativeSpawn {
   isolated?: boolean
   /** A peer in an agent team rather than a subagent. */
   teammate?: boolean
+  /** Runs past the call, in the background: work Mako's Fins do, on any Thread. */
+  background?: boolean
+  /** A script of subagents (Claude's `Workflow`): long parallel work, Mako's on any Thread. */
+  workflow?: boolean
+  /** How this harness runs the same spawn in the turn instead, for a message to name: `run_in_background: false`. */
+  inTurn?: string
 }
 
 export type NativeRoute = { kind: "allow" } | { kind: "deny"; message: string }
@@ -38,12 +44,19 @@ export type NativeRoute = { kind: "allow" } | { kind: "deny"; message: string }
 /**
  * An Apex's delegation is Mako's, so the person can open, steer and see it:
  * every native spawn is denied but an explorer that reads and ends in the
- * turn. Elsewhere native spawns keep their speed, but for a second worktree,
- * a remote run or a team of peers, which are Mako's work on any Thread.
+ * turn. Elsewhere native spawns keep their speed for a look the turn waits
+ * for, but a second worktree, a remote run, a team of peers, a subagent left
+ * running in the background and a workflow are Mako's work on any Thread: a
+ * background subagent's end wakes nothing Mako sees, and the person can't
+ * open or steer it. A spawn denied only for running in the background hears
+ * how to run it in the turn (`inTurn`).
  */
 export function routeNativeSpawn(thread: RoutedThread, spawn: NativeSpawn): NativeRoute {
-  const makos = spawn.isolated === true || spawn.teammate === true || (thread.role === "apex" && spawn.inTurnExplore !== true)
-  return makos ? { kind: "deny", message: routedMessage(spawn.start) } : { kind: "allow" }
+  const always = spawn.isolated === true || spawn.teammate === true || spawn.workflow === true
+  const apexOnly = thread.role === "apex" && spawn.inTurnExplore !== true
+  if (always || apexOnly) return { kind: "deny", message: routedMessage(spawn.start) }
+  if (spawn.background === true) return { kind: "deny", message: `${routedMessage(spawn.start)}${spawn.inTurn ? ` For a quick look you wait for, run it in your turn instead (${spawn.inTurn}).` : ""}` }
+  return { kind: "allow" }
 }
 
 /**

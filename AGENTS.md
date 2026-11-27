@@ -3095,6 +3095,32 @@ Mako's writes to the harness's own. `npm run harness:doctor -- <harness>
 source to a place the harness reads, and `test:native-authoring-live` reads
 back what Mako wrote with Codex, Grok and Devin in scratch homes.
 
+Whether a harness's own route for work Mako has a tool for goes ahead is one
+decision (`routeShellCall`, `routeNativeTool`, `contracts/native-calls.ts`;
+`routeNativeSpawn`, `contracts/native-routing.ts`), each driver delivering it
+as its harness allows: Claude's PreToolUse in process, Codex's and Devin's
+command hooks and OpenCode's plugin through `callGateAnswer`, Grok's client
+hooks, Cursor's shell rewrite. A warn reaches Codex, Grok, OpenCode and Devin
+only after the command ran, and each rule's note once per conversation
+(`CallNotes`), so a workaround of how a Thread hands off and waits is a deny,
+refused before it runs with the exact Mako call to make: an agent CLI
+(`agent-cli-*`, foreground or nohup'd: `agents_start` with its harness),
+watching checks (`gh-watch`), a sleep loop that polls `gh` or sleeps 10 s or
+more a round (`sleep-loop`), a sleep of 10 s or more before a `gh` status read
+(`sleep-then-poll`) and a foreground sleep of a minute or more (`long-sleep`),
+each `wait` with what it waits on, then ending the turn. A short sleep, a
+readiness loop of short sleeps (a warn), and a backgrounded sleep (`sleep 300
+&`, or Claude's Bash with `run_in_background`, a timer its harness wakes the
+agent on) go ahead; one-off `gh pr checks`, `gh run view` and `gh api` reads,
+background work and the rest stay warns. Every deny but `git-worktree-add`
+lets a command starting with `MAKO_NATIVE=1` run, after the Mako tool failed.
+On Claude a background `Agent` (its default: anything but
+`run_in_background: false`) and a `Workflow` are refused on every Thread, not
+only an Apex's, naming `agents_start` and, for an agent, the in-turn form
+(`NativeSpawn.inTurn`); an agent the turn waits for keeps its speed on a
+Thread that isn't an Apex. `npm run test:native-calls` and
+`test:native-routing` hold each rule and each case that must go ahead.
+
 ## Browser and computer control
 
 For the Local Control API refactor, migration and validation progress, read
