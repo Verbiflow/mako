@@ -612,8 +612,9 @@ export const ReportSchema = z.lazy(() => z.object({
    */
   unfinished: z.literal(true).optional(),
   /**
-   * Work it hands to another Fin of its Apex: a progress report that names one ("hand the slot to fin:x"), or its
-   * message to a sibling, which it can't send itself (`text`, relayed). It wakes the Apex, who passes it on. Host-owned.
+   * Work it hands to another Fin of its Apex: a progress report that names one ("hand the slot to fin:x"), with what
+   * to pass on (`text`) when it's the stopped or another device's sibling's. It wakes the Apex, who passes it on.
+   * Host-owned.
    */
   handoff: z.object({ to: z.string().max(200), child: ThreadIdSchema.optional(), text: z.string().max(16_000).optional() }).optional(),
   /**
@@ -1317,7 +1318,6 @@ export type AgentRefusalReason =
   | "budget"
   | "cycle"
   | "unknown-child"
-  | "relayed"
   | "unknown-apex"
   | "unknown-harness"
   | "unknown-thread"

@@ -2988,7 +2988,7 @@ export class Agents implements AgentOperations, ConversationChildren {
     const edge = this.resolve(apex, input.to, false)
     if (!edge) {
       const sibling = this.siblingIn(apex, input.to)
-      return sibling ? this.sendToSibling(apex, sibling.own, sibling.edge, input, began) : this.unsendableFin(apex, input)
+      return sibling ? this.sendToSibling(apex, sibling.own, sibling.edge, input, began) : unknownFin(input.to)
     }
     const op = `send:${apex.session}:${input.clientKey}`
     const request = namedUuid(op)
@@ -7129,20 +7129,17 @@ export class Agents implements AgentOperations, ConversationChildren {
     return { session: edge.parentSession, thread: edge.parent, ...(conversation && { conversation }) }
   }
 
-  /**
-   * Another Fin of the caller's Apex, when that Apex is a deliberate one (`Apexes`): the person made that Shiver to
-   * work together, so its Fins message each other directly. Any other Apex's Fins hand work on through it.
-   */
+  /** Another Fin of the caller's Apex: Fins of one Shiver message each other directly. */
   private siblingIn(caller: Apex, to: string): { own: ThreadParent; edge: ThreadParent } | undefined {
     const store = this.store()!
     const own = store.edges().of(caller.thread)
-    if (!own || !store.apex(own.parent)) return undefined
+    if (!own) return undefined
     const edge = store.edges().children(own.parent).find((each) => each.child !== caller.thread && (each.child === to || each.name === finName(to)))
     return edge ? { own, edge } : undefined
   }
 
   /**
-   * A Fin's message to a sibling in a deliberate Apex's Shiver: its own words, never the person's, queued after the
+   * A Fin's message to a sibling in its Shiver: its own words, never the person's, queued after the
    * sibling's turn or steered into it, with the restraint a message to another Thread has (`APEX_SENDS_PER_HOUR` to
    * one an hour, no interrupt, no forward). A stopped sibling stays stopped: only its Apex or the person resumes it.
    * Its Apex hears of it in its next note from the sibling's own reports, as of any work.
@@ -7174,30 +7171,6 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.sent.set(op, answer)
     hostLog("agents", "send sibling", { op, from: own.child, to: sibling.child, request, delivery: sent.delivery, ms: Math.round(performance.now() - began) })
     return answer
-  }
-
-  /**
-   * A discovered sibling is a Shiver mate to read, not an authorized send target: what it was sent goes to the Apex instead, as
-   * a handoff that wakes it (`Report.handoff`, carrying the words), and the Apex passes it on in one step. The send is
-   * still refused (`relayed`): nothing reached the sibling.
-   */
-  private unsendableFin(caller: Apex, input: AgentsSendInput): AgentRefused {
-    const edges = this.store()!.edges()
-    const own = edges.of(caller.thread)
-    const sibling = own && edges.children(own.parent).find((edge) => edge.child !== caller.thread && (edge.child === input.to || edge.name === finName(input.to)))
-    if (!own || !sibling) return unknownFin(input.to)
-    const report: Report = {
-      id: `report:${own.child}:relay:${input.clientKey}`,
-      child: ThreadIdSchema.parse(own.child),
-      status: "progress",
-      summary: `Pass this to ${sibling.name}: ${input.text}`,
-      handoff: { to: sibling.name, child: ThreadIdSchema.parse(sibling.child), text: input.text },
-      ownerGeneration: this.generation,
-      at: this.now(),
-    }
-    const kept = this.keepReport(own, report)
-    if ("refused" in kept) return kept
-    return { refused: "relayed", why: `${sibling.name} (${sibling.child}) is your sibling, owned by your ${APEX_WORD} (${sibling.parent}); you can't send to it. Your message went to your ${APEX_WORD} instead, which it wakes, to pass on to ${sibling.name}: nothing reached ${sibling.name} directly (report ${kept.report.id}).` }
   }
 
   /** Another open Fin of `edge`'s Apex, by its name, `fin:<name>` or its Thread. */

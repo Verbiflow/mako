@@ -445,8 +445,8 @@ try {
       finTurn: async (turn, name, count) => {
         if (name === "mate" && turn.text.includes("tell the worker")) {
           const sent = await turn.world.agents.send(turn.caller, { to: "worker", text: "Use the v2 schema.", clientKey: "relay" })
-          assert.ok("refused" in sent && sent.refused === "relayed", JSON.stringify(sent))
-          return "Told my Apex."
+          assert.ok(!("refused" in sent) && sent.name === "worker", JSON.stringify(sent))
+          return "Told the worker."
         }
         if (name === "worker" && count > 1 && turn.text.includes("ask again")) {
           await turn.world.agents.report(turn.caller, { status: "done", summary: "Both would work.", question: "Ship the small one?", clientKey: `ask-${count}` })
@@ -499,13 +499,12 @@ try {
     const direct = kept(await f.world.agents.direct(f.apex.conversation, { to: "worker", request: randomUUID(), text: "And the changelog." }))
     assert.equal(direct.fin, f.child)
     await reopened("the person's @ from its Apex's composer", "And the changelog.", "person")
-    // A sibling's message, relayed by the Apex.
+    // A sibling's message, sent to it directly.
     const mate = await f.start("mate")
     await f.world.settle(400)
     kept(await f.world.agents.send(f.apex.caller, { to: "mate", text: "tell the worker which schema", clientKey: "mate" }))
-    await until("the Apex to pass the sibling's words on", () => relayed.length === 1)
-    assert.match(relayed[0]!, /"mate" \(Claude\) → worker/)
-    await reopened("a sibling's message its Apex passed on", "Your mate says: use the v2 schema.", "apex")
+    await reopened("a sibling's own message", "Use the v2 schema.", "apex")
+    assert.equal(relayed.length, 0, "its Apex wasn't asked to pass it on")
     assert.ok(mate.child)
     // An answer, once something asks again: asked since it closed, its question is as open as any.
     kept(await f.world.agents.send(f.apex.caller, { to: "worker", text: "ask again", clientKey: "re-ask" }))

@@ -579,9 +579,9 @@ async function oldQueuedKeepsNewerInstructions(): Promise<void> {
   }
 }
 
-/** Shiver discovery gives no peer-send authority; a refusal names the relation and the existing parent relay. */
-async function siblingRefusalNamesRelay(): Promise<void> {
-  const { world, apex, fin } = await team("sibling-relay", "codex", ["claude", "cursor"])
+/** Fins of any Shiver message each other directly, by name, `fin:<name>` or Thread; their Apex isn't woken for it. */
+async function siblingsMessageDirectly(): Promise<void> {
+  const { world, apex, fin } = await team("sibling-direct", "codex", ["claude", "cursor"])
   try {
     const caller = world.caller(fin.claude!)
     const sibling = world.store.edges().all.find((edge) => edge.name === "cursor")!
@@ -589,23 +589,16 @@ async function siblingRefusalNamesRelay(): Promise<void> {
     assert.ok("shiver" in shiver && shiver.shiver.some((mate) => mate.name === "cursor"))
     const before = world.live.snapshot(fin.cursor!)!.requests.length
     for (const to of ["cursor", "fin:cursor", sibling.child]) {
-      const receipt = await world.agents.send(caller, { to, text: "Coordinate this change.", clientKey: to })
-      // Refused as a send, and relayed: the message goes to their Apex, which passes it on.
-      assert.ok("refused" in receipt && receipt.refused === "relayed", JSON.stringify(receipt))
-      assert.match(receipt.why, /sibling/)
-      assert.ok(receipt.why.includes(sibling.child), "the refused target is identified")
-      assert.ok(receipt.why.includes(sibling.parent), "the relay owner is identified")
-      assert.match(receipt.why, /went to your Apex instead/)
-      assert.match(receipt.why, /nothing reached cursor directly/)
+      const receipt = await world.agents.send(caller, { to, text: `Coordinate this change (${to}).`, clientKey: to })
+      assert.ok(!("refused" in receipt) && receipt.child === sibling.child, JSON.stringify(receipt))
     }
-    assert.equal(world.live.snapshot(fin.cursor!)!.requests.length, before, "refusal does not deliver to the sibling")
     await world.settle()
-    assert.ok(world.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes("Coordinate this change.") && prompt.text.includes("→ cursor")), "the parent receives what it was sent, naming the sibling")
-    const relay = await world.agents.report(caller, { status: "done", summary: `Please relay this change to cursor (${sibling.child}).`, clientKey: "relay" })
-    assert.ok(!("refused" in relay) && relay.delivered === "notice", "an explicit parent relay uses the existing wake receipt")
-    await world.settle()
-    assert.ok(world.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes("Please relay this change")), "the parent actually receives the relay request")
-    assert.equal(world.live.snapshot(fin.cursor!)!.requests.length, before, "reporting asks the parent; it never silently forwards to the sibling")
+    const heard = world.live.snapshot(fin.cursor!)!.requests.slice(before)
+    assert.equal(heard.length, 3, "each message reached the sibling itself")
+    assert.ok(heard.every((request) => request.text.includes("fin:claude, another Fin of your Apex")), "named as a Fin's words, not the person's")
+    assert.ok(!world.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes("Coordinate this change")), "the Apex isn't woken to pass it on")
+    const fourth = await world.agents.send(caller, { to: "cursor", text: "Once more.", clientKey: "fourth" })
+    assert.ok("refused" in fourth && fourth.refused === "rate-limited", "three an hour to one sibling, as to another Thread")
     const unknown = await world.agents.send(caller, { to: "missing", text: "No target", clientKey: "missing" })
     assert.ok("refused" in unknown && !unknown.why.includes("sibling"), "unknown targets are not guessed to be siblings")
   } finally {
@@ -614,7 +607,7 @@ async function siblingRefusalNamesRelay(): Promise<void> {
 }
 
 try {
-  await runCases([siblingRefusalNamesRelay, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, queuedJoinOneTurn, apexMessagesNeverFold, theInboxCarrier, foldUndoneOnStop, foldAfterTurnInProgress, steerAsATurnBegins, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice], (name) => console.log(`ok ${name}`))
+  await runCases([siblingsMessageDirectly, notificationDoesNotReportCompletion, notificationsAcrossApexes, oldQueuedKeepsNewerInstructions, aRowCountsItsTurn, idleTakesATurn, queueByDefault, queuedJoinOneTurn, apexMessagesNeverFold, theInboxCarrier, foldUndoneOnStop, foldAfterTurnInProgress, steerAsATurnBegins, steerAcrossHarnesses, refusedSteerQueues, cursorHoldsASteer, interruptGoesFirst, forwardTakesTheChoice], (name) => console.log(`ok ${name}`))
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

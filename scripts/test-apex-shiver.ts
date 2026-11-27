@@ -96,14 +96,14 @@ try {
   world.say(apex.conversation, "How do things stand?")
   await until("the Apex's turn with Needs you", () => world.prompts.some((prompt) => prompt.conversation === apex.conversation && /Needs the person now \(changed since your last turn\):\n- fin:icons/.test(prompt.text)))
 
-  // An ordinary Apex's Fins still hand a sibling's message through it.
+  // An ordinary Apex's Fins message each other directly too.
   const plain = await world.apex("codex")
   apexes.add(plain.conversation)
   const a = await world.agents.start(plain.caller, { brief: { objective: "One (hold)." }, harness: "claude", name: "a", clientKey: "a", cwd: world.root })
   const b = await world.agents.start(plain.caller, { brief: { objective: "Two (hold)." }, harness: "claude", name: "b", clientKey: "b", cwd: world.root })
   assert.ok(!("refused" in a) && !("refused" in b))
-  const relayed = await world.agents.send(world.caller(a.conversation!), { to: "b", text: "hi", clientKey: "x" })
-  assert.ok("refused" in relayed && relayed.refused === "relayed", "outside a deliberate Apex, a sibling message goes through the Apex")
+  const direct = await world.agents.send(world.caller(a.conversation!), { to: "b", text: "hi", clientKey: "x" })
+  assert.ok(!("refused" in direct) && direct.name === "b", `an ordinary Apex's Fins message each other: ${JSON.stringify(direct)}`)
   world.release(a.conversation!)
   world.release(b.conversation!)
   // A Fin's brief names its mates' asks, so any of them may have held on another's words: let every one go.

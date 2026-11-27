@@ -172,7 +172,7 @@ export const STEPS = [
   [41, "MAKO_TEST_HARNESSES=opencode,devin npm run test:delivery-retry"],
   [109, "npm run test:orch-front-door"],
   [72, "npm run test:person-rules"],
-  [73, "CASES=siblingRefusalNamesRelay,notificationDoesNotReportCompletion,notificationsAcrossApexes,oldQueuedKeepsNewerInstructions,aRowCountsItsTurn npm run test:orch-deliver"],
+  [73, "CASES=siblingsMessageDirectly,notificationDoesNotReportCompletion,notificationsAcrossApexes,oldQueuedKeepsNewerInstructions,aRowCountsItsTurn npm run test:orch-deliver"],
   [90, "CASES=idleTakesATurn,queueByDefault,steerAcrossHarnesses,refusedSteerQueues,cursorHoldsASteer,interruptGoesFirst,forwardTakesTheChoice npm run test:orch-deliver"],
   [6, "npm run test:steer-landing"],
   [2, "npm run test:thread-stays-live"],
