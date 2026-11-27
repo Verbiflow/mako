@@ -882,7 +882,27 @@ has it and made from the newest start in the rest. A report (`agents_report`, el
 implicit report at a turn's end, which a completed turn also writes when its
 last report was progress that hands nothing on and names no wait Mako watches:
 a pull request the watch reads, an armed turn wait or its own Fins at work,
-`progressLeftUnwatched`) sends its Apex a notice. A Fin whose word is progress
+`progressLeftUnwatched`) sends its Apex a notice. Before Mako writes that
+implicit report for a completed turn, the Fin is asked once to make its own:
+where its harness asks before a turn ends (Claude Code's Stop hook,
+`claudeFinStop`, `ProviderStartOptions.finStop`), `Agents.finStop` sends the
+turn back with `FIN_STOP_ASK` as the hook's block reason, unless the hook is
+already active or the turn holds a report that stands, work its harness holds
+(`pendingWake`, the hook's background tasks and scheduled wakes), its own Fins
+at work, a digest on its way or an armed turn wait; elsewhere Mako's note
+(`FIN_REPORT_ASK`, as a `turn-wait` service message so it draws as Mako's
+words and an older build parses it) is queued as its next turn under one ID
+per asked turn (`reportAskId`), in the same step as the turn's end, so the
+Fin never reads as finished between them, a restart keeps it and a repeat
+joins it. A turn the hook sent back is never asked by the note, nor is a Fin
+with a message already queued, a wait armed, or its conversation archived or
+gone. The ask's turn is read with the turn it asked about (`reportAskOf`): a
+report in either stands, and with none the implicit report is written then
+from that turn's reply, as before. While the ask waits the Fin reads as working,
+so a `wait` start and what waits `after` it hold
+(`test:fin-turn-ends`; `AgentsDeps.reportAsks`, which `AgentsWorld` leaves
+off unless a test passes `reportAsks`, so a script of one turn per Fin keeps
+its subject). A Fin whose word is progress
 (said this turn, or before a turn Mako's note started) that ends a turn with a
 reply and no result hasn't said it's done: its end is a report marked
 `unfinished` (kept as `failed`, so an older build never reads it as done) that
@@ -3119,6 +3139,35 @@ Mako's writes to the harness's own. `npm run harness:doctor -- <harness>
 `scripts/fixtures/native-authoring`, `test-harness-concepts.ts` holds every
 source to a place the harness reads, and `test:native-authoring-live` reads
 back what Mako wrote with Codex, Grok and Devin in scratch homes.
+
+Whether a harness's own route for work Mako has a tool for goes ahead is one
+decision (`routeShellCall`, `routeNativeTool`, `contracts/native-calls.ts`;
+`routeNativeSpawn`, `contracts/native-routing.ts`), each driver delivering it
+as its harness allows: Claude's PreToolUse in process, Codex's and Devin's
+command hooks and OpenCode's plugin through `callGateAnswer`, Grok's client
+hooks, Cursor's shell rewrite. A warn reaches Codex, Grok, OpenCode and Devin
+only after the command ran, and each rule's note once per conversation
+(`CallNotes`), so a workaround of how a Thread hands off and waits is a deny,
+refused before it runs with the exact Mako call to make: an agent CLI
+(`agent-cli-*`, foreground or nohup'd: `agents_start` with its harness),
+watching checks (`gh-watch`), a sleep loop that polls `gh` or sleeps 10 s or
+more a round (`sleep-loop`), a sleep of 10 s or more before a `gh` status read
+(`sleep-then-poll`) and a foreground sleep of a minute or more (`long-sleep`),
+each `wait` with what it waits on, then ending the turn. A short sleep, a
+readiness loop of short sleeps (a warn), and a backgrounded sleep (`sleep 300
+&`, or Claude's Bash with `run_in_background`, a timer its harness wakes the
+agent on) go ahead; one-off `gh pr checks`, `gh run view` and `gh api` reads,
+background work and the rest stay warns. A deny but `git-worktree-add` and
+the waits lets a command starting with `MAKO_NATIVE=1` run, after the Mako
+tool failed; an agent CLI's says only once `agents_start` itself refused the
+work, since an OpenCode agent asked to run one took the plainer offer at once
+(2026-11-26). A wait has no failure that sleeping or watching gets round.
+On Claude a background `Agent` (its default: anything but
+`run_in_background: false`) and a `Workflow` are refused on every Thread, not
+only an Apex's, naming `agents_start` and, for an agent, the in-turn form
+(`NativeSpawn.inTurn`); an agent the turn waits for keeps its speed on a
+Thread that isn't an Apex. `npm run test:native-calls` and
+`test:native-routing` hold each rule and each case that must go ahead.
 
 ## Browser and computer control
 

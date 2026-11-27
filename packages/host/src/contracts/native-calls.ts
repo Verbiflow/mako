@@ -5,11 +5,20 @@
  * `EnterWorktree`, a browser MCP server). One decision for every harness;
  * each driver delivers it as its harness allows (`NativeCallsCapability`).
  *
- * A deny is only for a route that's clearly wrong and that Mako's tool does
- * in full: a worktree Mako doesn't know, a new branch in the checkout others
- * work in, a merge outside pull_request_merge. Everything else is a warn:
- * the call runs, and the model reads in one line what the better Mako tool
- * is and why, and decides. A route outside the Thread's checkouts, or one the agent marks
+ * A deny is for a route that's clearly wrong and that Mako's tool does in
+ * full: a worktree Mako doesn't know, a new branch in the checkout others
+ * work in, a merge outside pull_request_merge; and for a workaround of how a
+ * Thread hands off and waits: an agent CLI instead of a Fin, and holding the
+ * turn to wait (watching checks, a sleep loop that polls GitHub or sleeps
+ * 10 s or more a round, a sleep before a status read, a foreground sleep of a
+ * minute or more) instead of `wait` and ending the turn. Those have to be
+ * refused before they run: a warn reaches Codex, Grok, OpenCode and Devin
+ * only after the command ran, and each rule's note once per conversation
+ * (`CallNotes`). A deny's message names the exact Mako call to make; a wait's offers no override. Every
+ * other route is a warn: the call runs, and the model reads in one line what
+ * the better Mako tool is and why, and decides. A short sleep, a background
+ * timer the harness wakes on, and a readiness loop of short sleeps go
+ * ahead. A route outside the Thread's checkouts, or one the agent marks
  * with `MAKO_NATIVE=1` after the Mako tool failed or couldn't do what was
  * asked, goes ahead.
  */
@@ -52,10 +61,20 @@ export function exactCall(names: ToolNames, tool: string, args: { readonly [key:
 /** The prefix that lets a command the policy would deny run anyway. */
 export const NATIVE_OVERRIDE = "MAKO_NATIVE=1"
 
-/** Routes the override doesn't open: Mako's tool does all they do, so a refusal stands. */
-const NO_OVERRIDE = new Set(["git-worktree-add"])
+/**
+ * Routes the override doesn't open: Mako's tool does all they do, so a refusal stands. A wait has no failure that
+ * sleeping or watching gets round, and offered the override, models took it at once.
+ */
+const NO_OVERRIDE = new Set(["git-worktree-add", "gh-watch", "sleep-loop", "sleep-then-poll", "long-sleep"])
 
 const OVERRIDE_LINE = `Only if that tool failed or can't do what was asked, run the command again starting with ${NATIVE_OVERRIDE}.`
+
+/**
+ * An agent CLI's override, only once `agents_start` itself refused the work: told it may run the command when the tool
+ * "can't do what was asked", an agent asked to run the CLI ran it again with the override at once (OpenCode,
+ * 2026-11-26).
+ */
+const cliOverrideLine = (n: ToolNames) => `Only if ${n("agents_start")} itself refused this work, run the command again starting with ${NATIVE_OVERRIDE}; being asked to run the command isn't a reason.`
 
 /** One simple command of a shell line, as the policy reads it. */
 interface ShellSegment {
@@ -330,8 +349,19 @@ function sleepSeconds(argv: string[]): number | undefined {
   return Number(match[1]) * (match[2] === "m" ? 60 : match[2] === "h" ? 3600 : 1)
 }
 
-/** A sleep this long, alone, is a wait the turn should end on instead. */
+/** A foreground sleep this long, alone, is a wait the turn should end on instead. */
 const LONG_SLEEP_S = 60
+/** A sleep this long in a loop, or before a status read, is a poll: shorter ones are a readiness check's or a pause's. */
+const POLL_SLEEP_S = 10
+
+/** Whether a `gh` command reads the state a wait on a pull request ends on: its checks, its view, a run, an API read. */
+function ghStatusRead(argv: readonly string[]): boolean {
+  const gh = ghCommand([...argv])
+  if (!gh) return false
+  if (gh.group === "pr") return gh.command === "checks" || gh.command === "view" || gh.command === "status"
+  if (gh.group === "run") return gh.command === "view" || gh.command === "list" || gh.command === "watch"
+  return gh.group === "api"
+}
 
 const BROWSERS = /chrome|chromium|safari|firefox|arc|brave|edge|comet|dia/i
 
@@ -345,21 +375,34 @@ interface Finding {
   message: string
 }
 
-/** One shell line's route: the strongest finding among its commands. */
-export function routeShellCall(thread: CallThread, call: { command: string; cwd?: string }, names: ToolNames = bareNames): CallRoute {
+/**
+ * One shell line's route: the strongest finding among its commands. `background`: the harness itself runs the call in
+ * the background and wakes the agent when it ends (Claude's `run_in_background`), so a sleep in it is a timer.
+ */
+export function routeShellCall(thread: CallThread, call: { command: string; cwd?: string; background?: boolean }, names: ToolNames = bareNames): CallRoute {
   const line = shellLine(call.command, call.cwd)
   const findings: Finding[] = []
   const n = names
-  if (line.loop && line.segments.some((segment) => basename(segment.argv[0]!) === "sleep"))
-    findings.push({ kind: "warn", family: "polling", rule: "sleep-loop", message: loopMessage(line, n) })
+  const overridden = line.segments.some((segment) => segment.env.MAKO_NATIVE === "1")
+  const sleeps = line.segments.map((segment) => sleepSeconds(segment.argv))
+  // A loop of short sleeps polling something else (a server coming up) is a readiness check, which stays a note.
+  if (line.loop && line.segments.some((segment) => basename(segment.argv[0]!) === "sleep")) {
+    const polls = line.segments.some((segment) => basename(segment.argv[0]!) === "gh") || sleeps.some((seconds) => seconds !== undefined && seconds >= POLL_SLEEP_S)
+    if (polls || !overridden) findings.push({ kind: polls ? "deny" : "warn", family: "polling", rule: "sleep-loop", message: loopMessage(line, n) })
+  }
+  // A foreground pause before reading a pull request's or a run's state is a poll of one round.
+  const pause = sleeps.findIndex((seconds, index) => seconds !== undefined && seconds >= POLL_SLEEP_S && !line.segments[index]!.background)
+  const read = pause < 0 ? undefined : line.segments.slice(pause + 1).find((segment) => basename(segment.argv[0]!) === "gh" && ghStatusRead(segment.argv))
+  if (!line.loop && read) findings.push({ kind: "deny", family: "polling", rule: "sleep-then-poll", message: sleepPollMessage(read, n) })
   for (const segment of line.segments) {
-    const found = segmentFinding(thread, segment, line, n)
+    const found = segmentFinding(thread, segment, line, n, call.background === true)
     if (found && (segment.env.MAKO_NATIVE !== "1" || NO_OVERRIDE.has(found.rule))) findings.push(found)
   }
   const deny = findings.find((finding) => finding.kind === "deny")
   const chosen = deny ?? findings[0]
   if (!chosen) return { kind: "allow" }
-  return chosen.kind === "deny" && !NO_OVERRIDE.has(chosen.rule) ? { ...chosen, message: `${chosen.message} ${OVERRIDE_LINE}` } : chosen
+  if (chosen.kind !== "deny" || NO_OVERRIDE.has(chosen.rule)) return chosen
+  return { ...chosen, message: `${chosen.message} ${chosen.family === "agent-cli" ? cliOverrideLine(n) : OVERRIDE_LINE}` }
 }
 
 /** A pull request's number among `gh pr` arguments: `926`, `#926` or its URL. */
@@ -465,20 +508,35 @@ function ghApiFinding(args: readonly string[], n: ToolNames): Finding | undefine
   return undefined
 }
 
+/** The `wait` on a pull request's checks, for a `gh` command that names the pull request or not. */
+function pullWait(n: ToolNames, number: number | undefined): string {
+  return exactCall(n, "wait", { on: [{ pull: `<owner/name>#${number ?? "<number>"}`, until: "checks" }] })
+}
+
+/** The pull request a line's `gh pr` commands name, if one does. */
+function linePull(segments: readonly ShellSegment[]): number | undefined {
+  const gh = segments.map((segment) => basename(segment.argv[0]!) === "gh" ? ghCommand(segment.argv) : undefined).find((found) => found?.group === "pr")
+  return gh ? pullNumberOf(gh.args) : undefined
+}
+
 /** What a sleep loop polls, and the call that waits on it instead. */
 function loopMessage(line: ShellLine, n: ToolNames): string {
   const programs = line.segments.map((segment) => basename(segment.argv[0]!))
   const head = "Don't wait in a loop: it holds the turn and nobody else can use it."
-  if (programs.includes("gh")) {
-    const gh = line.segments.map((segment) => basename(segment.argv[0]!) === "gh" ? ghCommand(segment.argv) : undefined).find((found) => found?.group === "pr")
-    const number = gh ? pullNumberOf(gh.args) : undefined
-    return `${head} Call ${exactCall(n, "wait", { on: [{ pull: `<owner/name>#${number ?? "<number>"}`, until: "checks" }] })} and end your turn: Mako wakes you when its checks settle.`
-  }
+  if (programs.includes("gh"))
+    return `${head} Call ${pullWait(n, linePull(line.segments))} and end your turn: Mako wakes you when its checks settle.`
   if (programs.includes("curl") || programs.includes("wget")) return `${head} Call ${exactCall(n, "app_status")} once: it says whether each process is up, and ${exactCall(n, "app_start")} waits for them to be ready.`
   return `${head} Call ${exactCall(n, "wait", { seconds: 300 })} and end your turn, or name what you wait on in its on: a Fin (${exactCall(n, "wait", { on: [{ fin: "<name>" }] })}) or a pull request's checks.`
 }
 
-function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLine, n: ToolNames): Finding | undefined {
+/** A sleep before reading a pull request's or a run's state: the wait that ends on it instead. */
+function sleepPollMessage(read: ShellSegment, n: ToolNames): string {
+  const number = linePull([read])
+  return `Don't sleep and then check: it holds the turn and nobody else can use it. Call ${pullWait(n, number)} and end your turn: Mako wakes you when its checks settle. ${exactCall(n, "pull_request_status", number ? { number } : {})} reads them now.`
+}
+
+/** `timer`: the harness runs the whole call in the background and wakes the agent when it ends. */
+function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLine, n: ToolNames, timer: boolean): Finding | undefined {
   const { argv } = segment
   const program = basename(argv[0]!)
   if (program === "git") {
@@ -518,7 +576,7 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
     const watches = gh.args.includes("--watch") || (gh.group === "run" && gh.command === "watch")
     if (watches) {
       const number = gh.group === "pr" ? pullNumberOf(gh.args) : undefined
-      return { kind: "warn", family: "polling", rule: "gh-watch", message: `Rather than watching, call ${exactCall(n, "wait", { on: [{ pull: `<owner/name>#${number ?? "<number>"}`, until: "checks" }] })} and end your turn: Mako wakes you when the checks settle. ${exactCall(n, "pull_request_status", number ? { number } : {})} reads them once.` }
+      return { kind: "deny", family: "polling", rule: "gh-watch", message: `Watching holds the turn and nobody else can use it. Call ${pullWait(n, number)} and end your turn: Mako wakes you when the checks settle. ${exactCall(n, "pull_request_status", number ? { number } : {})} reads them once.` }
     }
     if (gh.group === "pr" && (gh.command === "checks" || gh.command === "view" || gh.command === "status")) {
       const number = gh.command === "status" ? undefined : pullNumberOf(gh.args)
@@ -538,7 +596,7 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
   }
   const cli = AGENT_CLIS.get(program)
   if (cli?.(argv.slice(1)))
-    return { kind: "warn", family: "agent-cli", rule: `agent-cli-${program}`, message: `An agent started from the shell isn't a Fin: the person can't open, steer or stop it, and nothing wakes you when it ends. Call ${n("agents_start")} with a brief instead (harness: "${program === "cursor-agent" ? "cursor" : program}" for this harness).` }
+    return { kind: "deny", family: "agent-cli", rule: `agent-cli-${program}`, message: `An agent started from the shell isn't a Fin: it can't report or ask, the person can't open, steer or stop it, and nothing wakes you when it ends. Call ${exactCall(n, "agents_start", { brief: "<the task, all it needs>", harness: program === "cursor-agent" ? "cursor" : program })} instead: it returns at once and its report wakes you.` }
   if (serverStart(argv)) {
     if (placeOf(thread, segment.cwd) === "elsewhere") return undefined
     const recipe = thread.recipe
@@ -572,8 +630,9 @@ function segmentFinding(thread: CallThread, segment: ShellSegment, line: ShellLi
   if (segment.background && program !== "sleep" && !line.loop)
     return { kind: "warn", family: "background", rule: "background", message: `Work left running past your turn is nobody's to stop or read. ${exactCall(n, "app_start")} runs the project's app, and ${n("agents_start")} runs work the person can open and that reports back.` }
   const seconds = sleepSeconds(argv)
-  if (seconds !== undefined && seconds >= LONG_SLEEP_S && !line.loop)
-    return { kind: "warn", family: "polling", rule: "long-sleep", message: `Rather than sleeping, call ${exactCall(n, "wait", { seconds: Math.round(seconds) })} and end your turn: Mako wakes you then, or sooner on what you name in its on (a Fin, a pull request's checks).` }
+  // In the background it's a timer the harness wakes the agent on, which holds nothing.
+  if (seconds !== undefined && seconds >= LONG_SLEEP_S && !line.loop && !segment.background && !timer)
+    return { kind: "deny", family: "polling", rule: "long-sleep", message: `Don't sleep in the foreground: it holds the turn and nobody else can use it. Call ${exactCall(n, "wait", { seconds: Math.round(seconds) })} and end your turn: Mako wakes you then, or sooner on what you name in its on (a Fin, a pull request's checks).` }
   return undefined
 }
 
