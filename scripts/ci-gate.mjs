@@ -177,7 +177,7 @@ export const STEPS = [
   [6, "npm run test:steer-landing"],
   [2, "npm run test:thread-stays-live"],
   [14, "npm run test:agents-doors"],
-  // What the `mako` server's tools and instructions cost each role's context, held to scripts/tool-budget.json, and each role's tool set.
+  // What the `mako` server's tools and instructions cost each role's context, held under fixed ceilings, and each role's tool set.
   [6, "npm run test:tool-budget"],
   [3, "npm run bench:person-ask"],
   [32, "npm run test:agents-cli"],

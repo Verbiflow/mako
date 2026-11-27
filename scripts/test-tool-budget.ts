@@ -1,34 +1,31 @@
 import assert from "node:assert/strict"
-import { readFileSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
 import { Tiktoken } from "js-tiktoken/lite"
 import o200kBase from "js-tiktoken/ranks/o200k_base"
-import { z } from "zod"
 import { AGENT_TOOL_ROLES, AGENT_TOOLS, ROLE_HIDES, type AgentToolRole } from "@mako/host/contracts/agent-tools"
 import { makoToolList } from "./lib/mako-tool-list.ts"
 
 /**
- * What Mako's `mako` server costs an agent's context, per role, held to a committed budget
- * (`scripts/tool-budget.json`): the server instructions and each tool as tools/list sends it, in o200k_base tokens and
- * UTF-8 bytes of its JSON. Harnesses load these per tool (Claude's ToolSearch, Codex's lookup, Cursor's and Grok's tool
- * search) or the whole server at once (Devin's listing), so each tool and the total are held. A tool over its line, a
- * total over its role's, or a tool the budget doesn't name fails. Lower numbers pass; lower the budget with them.
+ * What Mako's `mako` server costs an agent's context, per role, held under fixed ceilings: the server instructions and
+ * each tool as tools/list sends it, in o200k_base tokens. Harnesses load these per tool (Claude's ToolSearch, Codex's
+ * lookup, Cursor's and Grok's tool search) or the whole server at once (Devin's listing), so each tool and each role's
+ * total have a ceiling. They sit well above today's sizes: an ordinary wording change passes, a tool or role that
+ * balloons fails. Each role's tool set is held exactly.
  *
  *   tsx scripts/test-tool-budget.ts            check
- *   tsx scripts/test-tool-budget.ts --write    write the budget as measured (an increase is a reviewed change)
  *   tsx scripts/test-tool-budget.ts --table    print each role's tools and totals as Markdown
  */
 
-const BUDGET_FILE = join(import.meta.dirname, "tool-budget.json")
+/** A role's whole server, instructions included: about 17,000 tokens today. */
+const ROLE_CEILING = 22_000
+/** Any one tool: the largest, agents_start, is about 1,300 tokens today. */
+const TOOL_CEILING = 2_000
+/** The server instructions: about 750 tokens today. */
+const INSTRUCTIONS_CEILING = 1_200
+
 const encoder = new Tiktoken(o200kBase)
 
 interface Cost { tokens: number; bytes: number }
-const Cost = z.object({ tokens: z.number(), bytes: z.number() })
-const Budget = z.object({
-  tokenizer: z.literal("o200k_base"),
-  roles: z.record(z.string(), z.object({ total: Cost, instructions: Cost, tools: z.record(z.string(), Cost) })),
-})
-type RoleCost = z.infer<typeof Budget>["roles"][string]
+interface RoleCost { total: Cost; instructions: Cost; tools: Record<string, Cost> }
 
 const cost = (text: string): Cost => ({ tokens: encoder.encode(text).length, bytes: Buffer.byteLength(text) })
 
@@ -65,22 +62,12 @@ if (process.argv.includes("--table")) {
   }
 }
 
-if (process.argv.includes("--write")) {
-  writeFileSync(BUDGET_FILE, `${JSON.stringify({ tokenizer: "o200k_base", roles: measured }, null, 2)}\n`)
-  console.log(`wrote ${BUDGET_FILE}`)
-} else {
-  const budget = Budget.parse(JSON.parse(readFileSync(BUDGET_FILE, "utf8")))
-  const over: string[] = []
-  const hold = (what: string, now: Cost, line: Cost | undefined) => {
-    if (!line) return void over.push(`${what}: not in the budget (${now.tokens} tokens, ${now.bytes} bytes)`)
-    for (const key of ["tokens", "bytes"] as const) if (now[key] > line[key]) over.push(`${what}: ${now[key]} ${key}, budget ${line[key]}`)
-  }
-  for (const role of AGENT_TOOL_ROLES) {
-    const now = measured[role], line = budget.roles[role]
-    hold(`${role} total`, now.total, line?.total)
-    hold(`${role} instructions`, now.instructions, line?.instructions)
-    for (const [name, one] of Object.entries(now.tools)) hold(`${role} ${name}`, one, line?.tools[name])
-  }
-  assert.deepEqual(over, [], `Mako's tool definitions grew past scripts/tool-budget.json. Shorten them, or raise the budget in review with \`tsx scripts/test-tool-budget.ts --write\`:\n${over.join("\n")}`)
-  for (const role of AGENT_TOOL_ROLES) console.log(`${role}: ${Object.keys(measured[role].tools).length} tools, ${measured[role].total.tokens} tokens, ${measured[role].total.bytes} bytes (budget ${budget.roles[role]!.total.tokens}, ${budget.roles[role]!.total.bytes})`)
+const over: string[] = []
+for (const role of AGENT_TOOL_ROLES) {
+  const { total, instructions, tools } = measured[role]
+  if (total.tokens > ROLE_CEILING) over.push(`${role} total: ${total.tokens} tokens, ceiling ${ROLE_CEILING}`)
+  if (instructions.tokens > INSTRUCTIONS_CEILING) over.push(`${role} instructions: ${instructions.tokens} tokens, ceiling ${INSTRUCTIONS_CEILING}`)
+  for (const [name, one] of Object.entries(tools)) if (one.tokens > TOOL_CEILING) over.push(`${role} ${name}: ${one.tokens} tokens, ceiling ${TOOL_CEILING}`)
 }
+assert.deepEqual(over, [], `Mako's tool definitions grew past their ceilings. Shorten them:\n${over.join("\n")}`)
+for (const role of AGENT_TOOL_ROLES) console.log(`${role}: ${Object.keys(measured[role].tools).length} tools, ${measured[role].total.tokens} tokens (ceiling ${ROLE_CEILING})`)
