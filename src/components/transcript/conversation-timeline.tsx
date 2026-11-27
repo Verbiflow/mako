@@ -1231,12 +1231,16 @@ export function ConversationTimeline({
     const node = viewport.current,
       snapshot = readingAnchor.current
     if (!node || awaitingEarlier.current) return
+    // Either way across, the column is a different one: laid-out turns become rows placed at their estimates, or the
+    // reverse, and a shorter column is no shrink to keep room for at a followed end (`pin`). Left to the room, a crossing
+    // the carry couldn't make (at the end of a short pane, where what follows the turns fills it and no turn is in view
+    // to hold) kept the laid-out column's height after the rows, and the end it went to was blank, every row far above.
+    reflow()
     if (carried.current) {
       carried.current = false
       // The rows it couldn't know take their sizes before this paints, so no frame shows them at an estimate, and the row
       // in view is held by hand: the virtualizer keeps a reader's place for a first measure, not for one going up. It's
       // already where the reader was, so one who's up gets no seek, which would only send them to their turn's top.
-      reflow()
       const top = node.getBoundingClientRect().top
       const placed = [...(node.querySelector("[data-virtual-transcript]")?.children ?? [])]
       const held = placed.find((row) => row.getBoundingClientRect().bottom > top)
