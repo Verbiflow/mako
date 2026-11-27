@@ -355,12 +355,16 @@ async function checkWindow() {
     await click('[data-sonner-toast] [data-close-button]')
     await until(`document.querySelector('[data-sonner-toast]') === null`)
   }
-  // Maximize and its restore live in the dock's options menu.
+  // Maximize and its restore live in the dock's options menu. A closed menu hands focus back to its button a task later
+  // (Radix's focus scope, in a timeout). A press before that opened the next menu, and the returning focus, outside it,
+  // closed it again: CI's Mac found no "Restore size" with the button focused and the menu shut, or lost the item
+  // between finding and marking it (suites 3, 2026-11-21, 24 and 27). So the item is found and marked in one step, in a
+  // menu that's open, and an option is done once its menu is gone and the focus is back on the button.
   const terminalOption = async (label) => {
     await click('[aria-label="Terminal options"]')
-    await until(`[...document.querySelectorAll('[role=menuitem]')].some(item => item.textContent === ${JSON.stringify(label)})`)
-    await evaluate(`[...document.querySelectorAll('[role=menuitem]')].find(item => item.textContent === ${JSON.stringify(label)}).setAttribute('data-check-target', '')`)
-    await click('[data-check-target]')
+    await until(`(() => { const item = [...document.querySelectorAll('[role=menu][data-state=open] [role=menuitem]')].find(item => item.textContent === ${JSON.stringify(label)}); item?.setAttribute('data-check-target', ''); return Boolean(item) })()`)
+    await click('[role=menu] [data-check-target]')
+    await until(`document.querySelector('[role=menu]') === null && document.activeElement === document.querySelector('[aria-label="Terminal options"]')`)
   }
   await terminalOption("Maximize")
   await until(`document.querySelector('[aria-label="Resize terminal dock"]') === null`)
