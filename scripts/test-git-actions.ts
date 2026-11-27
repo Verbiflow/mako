@@ -438,7 +438,7 @@ try {
   assert.ok(repeated.pullRequest && /^Nothing changed since your last pull_request_status \d+ s ago\. Checks are still running\. Call /.test(repeated.next), `the first repeat is whole, saying so: ${repeated.next}`)
   const short = await whole()
   assert.equal(short.pullRequest, undefined, "the next is only that it's unchanged")
-  assert.equal(typeof short.unchangedSince, "number")
+  assert.ok(Number.isFinite(short.unchangedSince), "and says since when")
   assert.match(short.next, /^Nothing changed since your last pull_request_status/)
   assert.ok((await statusOf({ checks: "all" })) !== undefined, "another call shape is read whole")
   rollup((checks) => { checks.find((check) => check.name === "mac-host")!.conclusion = "CANCELLED" })

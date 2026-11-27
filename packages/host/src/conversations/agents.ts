@@ -2707,10 +2707,10 @@ export class Agents implements AgentOperations, ConversationChildren {
   }
 
   /** How a read stands against the caller's last read of the same call, in the caller's current turn. */
-  private pollReading(apex: Apex, shape: string, facts: string, now: number) {
+  private pollReading(apex: Apex, call: string, facts: string, now: number) {
     const conversation = apex.away ? undefined : apex.conversation
     const requests = conversation ? (this.deps.live.held(conversation) ?? this.deps.live.snapshot(conversation))?.requests : undefined
-    return this.polls.read(conversation, shape, facts, turnOf(requests), now)
+    return this.polls.read(conversation, call, facts, turnOf(requests), now)
   }
 
   /**

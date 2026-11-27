@@ -38,22 +38,22 @@ export class PollAnswers {
   }
 
   /**
-   * Notes that `conversation` called `shape` (the tool and what it named) in `turn` and was answered `facts`, and says
+   * Notes that `conversation` made `call` (the tool and what it named) in `turn` and was answered `facts`, and says
    * how often in a row that answer was the same. A caller with no conversation (a terminal's `mako agents list`) is
    * never counted.
    */
-  read(conversation: string | undefined, shape: string, facts: string, turn: string | undefined, now: number): PollReading {
+  read(conversation: string | undefined, call: string, facts: string, turn: string | undefined, now: number): PollReading {
     if (!conversation) return { repeats: 0 }
     let calls = this.heard.get(conversation)
     if (calls) this.heard.delete(conversation)
     else calls = new Map()
     this.heard.set(conversation, calls)
     if (this.heard.size > this.limit) this.heard.delete(this.heard.keys().next().value!)
-    const last = calls.get(shape)
+    const last = calls.get(call)
     const same = last !== undefined && last.facts === facts && last.turn === turn && now - last.at <= this.windowMs
-    calls.delete(shape)
-    calls.set(shape, { facts, turn, at: now, repeats: same ? last.repeats + 1 : 0 })
-    // A conversation's own calls stay few: the shapes it read least recently go first.
+    calls.delete(call)
+    calls.set(call, { facts, turn, at: now, repeats: same ? last.repeats + 1 : 0 })
+    // A conversation's own calls stay few: the calls it made least recently go first.
     if (calls.size > 32) calls.delete(calls.keys().next().value!)
     return same ? { repeats: last.repeats + 1, since: Math.max(0, Math.round((now - last.at) / 1000)) } : { repeats: 0 }
   }

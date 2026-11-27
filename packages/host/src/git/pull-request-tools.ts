@@ -54,18 +54,22 @@ interface Deps {
   now?(): number
 }
 
-/** A pull request whose head's checks still run, as `pull_request_status` reports it: `owner/name#412`. */
-function pendingPulls(value: unknown, found: string[] = []): string[] {
-  if (Array.isArray(value)) for (const each of value) pendingPulls(each, found)
-  else if (value && typeof value === "object") {
-    const pull = (value as { pullRequest?: { url?: unknown; checks?: unknown; state?: unknown } }).pullRequest
-    const ref = typeof pull?.url === "string" ? /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(pull.url) : null
-    const checks = pull?.checks
-    const running = Array.isArray(checks) ? checks.some((check: { state?: unknown }) => check.state === "running") : typeof checks === "object" && checks !== null && /\brunning\b/.test(String((checks as { totals?: unknown }).totals))
-    if (ref && running && (pull?.state === "open" || pull?.state === "draft")) found.push(`${ref[1]}#${ref[2]}`)
-    for (const [key, each] of Object.entries(value)) if (key !== "pullRequest") pendingPulls(each, found)
-  }
-  return found
+/** What a status read says of a pull request it read: where it is, whether it's open, and its checks. */
+type ReadPull = Pick<NonNullable<PullRequestReport["pullRequest"]>, "url" | "state" | "checks">
+/** A status read, with its one pull request or each repository's. */
+interface StatusRead {
+  pullRequest?: ReadPull
+  repositories?: readonly { pullRequest?: ReadPull }[]
+}
+
+/** The open pull requests a status read names whose head's checks still run, each as `owner/name#412`. */
+function pendingPulls(read: StatusRead): string[] {
+  return [read.pullRequest, ...(read.repositories ?? []).map((each) => each.pullRequest)].flatMap((pull) => {
+    if (!pull || (pull.state !== "open" && pull.state !== "draft") || pull.checks === "none reported") return []
+    const running = Array.isArray(pull.checks) ? pull.checks.some((check) => check.state === "running") : /\brunning\b/.test(pull.checks.totals)
+    const ref = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(pull.url)
+    return running && ref ? [`${ref[1]}#${ref[2]}`] : []
+  })
 }
 
 /** On a cloud machine, who its pull requests go as (`pull-requests` in `MACHINE_IDENTITY_DIR`); undefined before the agent wrote it. */
@@ -141,7 +145,7 @@ export function pullRequestTools(deps: Deps): PullRequestTools {
    * A status read whose checks still run says to wait on them and end the turn. The same read again in that turn, with
    * nothing changed, says so; the time after, it's only that.
    */
-  const answered = async (conversationId: string, options: StatusOptions, value: object): Promise<string> => {
+  const answered = async <Read extends StatusRead>(conversationId: string, options: StatusOptions, value: Read): Promise<string> => {
     const pending = pendingPulls(value)
     if (!pending.length) return toolText(value)
     const text = await toolText(value)
