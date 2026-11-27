@@ -324,6 +324,8 @@ async function checkWindow() {
   // A folder's actions join its row under the pointer, as they do for a person.
   const newThreadIn = async (folder) => {
     const action = `button[aria-label="New thread in ${folder}"]`
+    // Scrolled to, as a person would: under the rail's own rows a folder may sit below the setup bar at its foot.
+    await evaluate(`document.querySelector(${JSON.stringify(action)}).closest('[data-flip-key^="folder:"]').scrollIntoView({ block: "center" }), true`)
     const row = await evaluate(`(() => { const r = document.querySelector(${JSON.stringify(action)}).closest('[data-flip-key^="folder:"]').getBoundingClientRect(); return {x: Math.round(r.x + r.width / 2), y: Math.round(r.y + r.height / 2)} })()`)
     await page.debugger.sendCommand("Input.dispatchMouseEvent", { type: "mouseMoved", ...row })
     await until(`document.querySelector(${JSON.stringify(action)}).getBoundingClientRect().width > 0`)
