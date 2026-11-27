@@ -110,3 +110,17 @@ export function claudeRoutedCall(routing: ClaudeRouting, input: PreToolUseHookIn
 /** SubagentStart: every native subagent starts with Mako's paragraph for native children, but Mako's `fin`, whose work is starting one. */
 export const claudeSubagentStart: HookCallback = async (input) =>
   input.hook_event_name === "SubagentStart" && input.agent_type !== CLAUDE_FIN_AGENT ? { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: NATIVE_CHILD_INSTRUCTIONS } } : {}
+
+/**
+ * Stop: a Fin whose turn would end with no report that stands is sent back to call `agents_report`, once a turn, with
+ * the host's words (`Agents.finStop`, which reads the turn and what wakes the Fin). A turn Claude already sent back
+ * (`stop_hook_active`) ends, as does one with background work or a scheduled wake its harness holds.
+ */
+export function claudeFinStop(ask: () => string | undefined): HookCallback {
+  return async (input) => {
+    if (input.hook_event_name !== "Stop" || input.stop_hook_active) return {}
+    if (input.background_tasks?.length || input.session_crons?.length) return {}
+    const reason = ask()
+    return reason ? { decision: "block", reason } : {}
+  }
+}
