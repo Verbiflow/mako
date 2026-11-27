@@ -410,16 +410,6 @@ handler, and reaches the agent three ways from the one projection
 commits the Fin's Thread, its edge, its Session and its first request (the
 brief, the Apex's words, not the person's) together
 (`LiveStartOptions.parent`), at an access tier no higher than its Apex's.
-A brief that names no `output` ends saying what its final report reads
-(`FINAL_REPORT`: Outcome / PR / Needs / Cost / Lesson), and a lead's carries
-how an Apex splits work (`APEX_BRIEF`), from the words `agents_start`'s
-description says too (`SPLIT_WORK`, `APEX_QUIET`): map the files each piece
-touches, start every independent piece in one turn, `after` for one that
-needs another's result, a piece on the same lines stacked on that Fin's
-branch and merged after it, and no word to the person on a report that
-changes nothing for them. In the 14 days to 2026-11-26 none of 23 Fins
-started with `after`. The person's card of a brief leaves those lines out
-(`agentWords`, `test:orch-comms`).
 A harness with no mode at or below the tier asked (Cursor's one mode is
 full) sends a Fin that named no harness, model or rule to the person's next
 harness that offers it, and otherwise runs it on the harness's nearest mode

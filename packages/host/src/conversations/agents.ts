@@ -4445,7 +4445,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       conversationId,
       ...(decided.rerouted?.to?.why === "account" && { account: decided.rerouted.to.account }),
       // An Apex of its own starts Fins too: it reads the person's rules with its brief.
-      initialRequest: { id: namedUuid(`${op}\nbrief`), ...await this.withContext([briefText(input.brief, name, input.role), ...(input.role === APEX_ROLE ? [this.policyLines().join("\n")] : [])].filter(Boolean).join("\n\n"), attached), attachments: [] },
+      initialRequest: { id: namedUuid(`${op}\nbrief`), ...await this.withContext([briefText(input.brief, name), ...(input.role === APEX_ROLE ? [this.policyLines().join("\n")] : [])].filter(Boolean).join("\n\n"), attached), attachments: [] },
       title: input.title ?? name,
       modeId: childMode(this.deps.modes(harness), tier)?.id ?? accessModeId(tier),
       ...(tuning && { tuning }),
