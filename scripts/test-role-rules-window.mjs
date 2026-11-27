@@ -44,6 +44,10 @@ async function checkWindow() {
   await app.whenReady()
   await mkdir(evidence, { recursive: true })
   const window = new BrowserWindow({ show: false, width: 820, height: 1000, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  // On Linux a window never shown is never mapped, and Chromium there let synthetic input to it go nowhere: a press into
+  // a field, a press elsewhere and an Escape each failed CI's runner in turn, never a Mac. Shown without focus, it takes
+  // them; on a Mac it stays hidden, as every other check's window does.
+  if (process.platform === "linux") window.showInactive()
   const page = window.webContents
   page.debugger.attach("1.3")
   page.on("console-message", (details) => {
