@@ -366,12 +366,6 @@ export interface ProviderStartOptions extends LiveStartOptions {
    */
   nativeCalls?: () => CallThread
   /**
-   * Asked as a turn is about to end, where the harness asks first (Claude Code's Stop hook): the words that send a Fin
-   * back to call `agents_report` (`Agents.finStop`), or undefined to let the turn end. Absent where the host serves no
-   * Mako tools; a harness that can't ask hears Mako's note after its turn instead.
-   */
-  finStop?: () => string | undefined
-  /**
    * Nobody is at this host to sign a harness in (a cloud machine, whose sign-ins come from the account): a start that
    * would ask a person to sign in fails at once, saying the harness isn't signed in, instead of waiting for an answer.
    */

@@ -23,7 +23,7 @@ import { SessionHeldError } from "../threads/index.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { LiveRequestSchema } from "./live-journal.js"
 import { prepareLiveContext } from "./live-context.js"
-import { bindingPath, launchAccount, launchCalls, launchFinStop, launchRouting, neverRan, noteCarriedFolders, noteStartedWith } from "./live-runtime.js"
+import { bindingPath, launchAccount, launchCalls, launchRouting, neverRan, noteCarriedFolders, noteStartedWith } from "./live-runtime.js"
 import { errorMessage } from "../base/error-message.js"
 import type {
   LiveAccess,
@@ -535,7 +535,6 @@ export class LiveTransfers {
           conversationTools,
           threadEnvironment,
           nativeRouting: launchRouting(this.host.dependencies, source.session.id, conversationTools),
-          finStop: launchFinStop(this.host.dependencies, source.session.id, conversationTools),
           nativeCalls: launchCalls(this.host.dependencies, source.session.id, source.session.cwd, conversationTools, threadEnvironment),
           // A hand-over to another account: the binding that will name it isn't active yet.
           pinnedAccount: transfer.input.account ? () => transfer.input.account : launchAccount(resident, transfer.input.provider),

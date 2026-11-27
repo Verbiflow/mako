@@ -51,7 +51,7 @@ import { CallBounds } from "../call-bounds.js"
 import type { WriteHolds } from "../write-holds.js"
 import { claudeSubmitRunsServer } from "./person-code.js"
 import { claudeCallHooks } from "./call-hooks.js"
-import { claudeFinStop, claudeSubagentStart } from "./routing.js"
+import { claudeSubagentStart } from "./routing.js"
 import { CallNotes } from "../call-notes.js"
 import { ClaudeRequests, ClaudeTranscriptTail, openedTurnLines, takenIn, TASK_PROMPT_WAIT_MS, transcriptNotification, type TranscriptNotification, type TranscriptTailStats } from "./transcript-tail.js"
 import { claudeGoalFeedback, claudeGoalLine, readClaudeGoal } from "./goals.js"
@@ -930,8 +930,7 @@ export function createClaudeSdkDriver(
             ],
             // A fresh session reports its transcript at the first prompt, not only when that turn ends.
             UserPromptSubmit: [...(config.hooks?.UserPromptSubmit ?? []), { hooks: [transcript.hook] }],
-            // A Fin's turn about to end with no report is sent back once to make one (`claudeFinStop`).
-            Stop: [...(config.hooks?.Stop ?? []), { hooks: [transcript.hook, ...options.finStop ? [claudeFinStop(options.finStop)] : []] }],
+            Stop: [...(config.hooks?.Stop ?? []), { hooks: [transcript.hook] }],
             PostCompact: [...(config.hooks?.PostCompact ?? []), { hooks: [decoder.hook] }],
             // Each call's exact bounds and the files it wrote, for attribution (`CallBounds`). A call that may write waits
             // here for its turn's checkpoint, at most `BEFORE_CHECKPOINT_WAIT_MS`; the timeout, in seconds, stays well past

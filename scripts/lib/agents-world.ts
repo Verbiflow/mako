@@ -110,11 +110,6 @@ export interface WorldOptions {
   /** Whether a conversation's next request waits before it runs (`LiveDependencies.ownerCheck`), as the host's `ownerHold` says. */
   ownerCheck?: ConstructorParameters<typeof LiveConversations>[0]["ownerCheck"]
   script: Script
-  /**
-   * Whether a Fin whose turn ends with no report is asked once to make one (`AgentsDeps.reportAsks`). Off unless true,
-   * so a script written for one turn per Fin keeps its subject.
-   */
-  reportAsks?: boolean
   /** Scripted native facts, never a provider/model call. Ordinary fixtures represent a killed, unfinished run. */
   nativeTurn?: NativeTurnReader | false
   nativeInspection?: Extract<ProviderLiveDriver["resume"], { kind: "native" }>["inspect"]
@@ -435,7 +430,6 @@ export class AgentsWorld {
       ...(this.options.order && { harnessOrder: async () => this.options.order! }),
       ...(this.options.policy && { finPolicy: this.options.policy }),
       ...(this.options.movePending && { movePending: this.options.movePending }),
-      reportAsks: this.options.reportAsks === true,
       ...(this.options.budget && { budget: this.options.budget }),
       ...(this.options.capacity && { capacity: this.options.capacity }),
       ...(this.options.observeCapacity && { observeCapacity: this.options.observeCapacity }),
