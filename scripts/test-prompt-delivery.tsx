@@ -6,10 +6,11 @@ import { readingLive, receivingLive } from "../src/state/live-door"
 import { failAroundTheDoor } from "./live-door-watch"
 import { stagePrompt, removePendingPrompt } from "../src/state/acp-pending"
 import { beginStart } from "../src/state/acp-start"
-import { autoContinuePending, continueTurnPrompt, foldedPromptParts, promptDelivery, recoverableRequests, recoveriesByPlace, makoPrompts, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
+import { autoContinuePending, continueTurnPrompt, foldedPromptParts, promptDelivery, recoverableRequests, recoveriesByPlace, makoPrompts, queuedNotThePerson, savedMakoPrompt, turnStopLabel, turnStops, turnWords } from "../src/state/prompt-delivery"
 import { foldedSeparator } from "@mako/host/contracts/live-conversations"
 import { FROM_AGENTS, fromAgent, YOUR_APEX } from "@mako/host/contracts/children"
 import { pullWakeNote } from "@mako/host/contracts/pull-waits"
+import { APEX_NOTE_PREFIX } from "@mako/host/contracts/apexes"
 import { autoContinueCandidate, crashedChildTurn, savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { classifyProviderFailure, providerTextEvidence } from "@mako/host/contracts/provider-failure"
 import { failureAfterRetry, GIVE_UP_MS, nextRetry } from "@mako/host/contracts/delivery-retry"
@@ -637,3 +638,14 @@ console.log("PASS: a gateway outage shows its automatic retry time and reason, w
   }
 }
 console.log("PASS: explicit access refusal is immediate; exhausted ambiguous authentication offers a sign-in check without claiming sign-out")
+
+{
+  // Up next names a queued message that isn't the person's by who wrote it, in a line, never as raw headers.
+  assert.equal(queuedNotThePerson(`${APEX_NOTE_PREFIX}fin:readme (“README overview”) joined your Shiver. The person moved it in with its history. Read it with agents_read.`), "README overview joined the Shiver")
+  assert.equal(queuedNotThePerson(`${fromAgent(YOUR_APEX)}\nCheck the schema first.\nThen the docs.`), "From the Apex: Check the schema first.")
+  assert.equal(queuedNotThePerson(`${fromAgent("schema")}\n\nDone with the migration.`), "From schema: Done with the migration.")
+  assert.match(queuedNotThePerson(`${FROM_AGENTS}\n1 finished:\n  • "schema" (Codex) done:\n    Done: the schema checked.`) ?? "", /^From the Fins: 1 finished$/)
+  assert.equal(queuedNotThePerson("Fix the flaky test please"), undefined, "the person's own words stay theirs")
+  for (const text of [queuedNotThePerson(`${APEX_NOTE_PREFIX}fin:a (“A”) joined your Shiver.`), queuedNotThePerson(`${fromAgent(YOUR_APEX)}\nHi`)]) assert.doesNotMatch(text ?? "", /\[mako ·/)
+}
+console.log("PASS: Up next names Mako's notes and agents' messages by who wrote them")

@@ -13,8 +13,9 @@ import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-g
 import { usageLimitSources } from "@/state/usage-limit-wait"
 import { pullWakeWords } from "@mako/host/contracts/pull-waits"
 import { turnWaitWords } from "@mako/host/contracts/turn-waits"
-import { apexNoteLine } from "@mako/host/contracts/apexes"
-import { agentWords, type AgentWords } from "@mako/host/contracts/children"
+import { APEX_NOTE_PREFIX, apexNoteLine } from "@mako/host/contracts/apexes"
+import { agentWords, YOUR_APEX, YOUR_FINS, type AgentWords } from "@mako/host/contracts/children"
+import { APEX_WORD, FIN_WORD } from "@mako/host/contracts/agents"
 import { foldedParts } from "@mako/host/contracts/live-conversations"
 
 export { continueTurnPrompt }
@@ -177,6 +178,23 @@ export function savedMakoPrompt(text: string): MakoPrompt | undefined {
   if (words === goalContinuePrompt(objective)) return { kind: "goal", step: { step: "continue" } }
   if (words === goalStartPrompt(objective)) return { kind: "goal", step: { step: "set" } }
   return undefined
+}
+
+/**
+ * A queued message that isn't the person's, in a line as Up next shows it: Mako's note to an Apex ("README overview
+ * joined the Shiver"), a wake ("Pull request #12 merged"), or an agent's message by who wrote it ("From the Apex: …",
+ * "Reports from 3 Fins"). Undefined for the person's own words, which show as they wrote them and stay theirs to edit.
+ */
+export function queuedNotThePerson(text: string): string | undefined {
+  if (text.startsWith(APEX_NOTE_PREFIX)) return apexNoteLine(text)
+  const mako = savedMakoPrompt(text)
+  if (mako?.kind === "pull" || mako?.kind === "wait") return mako.line
+  const agent = agentWords(text)
+  if (!agent) return undefined
+  if (agent.reports?.length) return `Reports from ${agent.reports.length} ${FIN_WORD}${agent.reports.length === 1 ? "" : "s"}`
+  const from = agent.from === YOUR_APEX ? `the ${APEX_WORD}` : agent.from === YOUR_FINS ? `the ${FIN_WORD}s` : agent.from
+  const line = agent.body.split("\n").find((each) => each.trim())?.trim().replace(/:$/, "")
+  return line ? `From ${from}: ${line}` : `From ${from}`
 }
 
 /**
