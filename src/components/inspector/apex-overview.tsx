@@ -81,7 +81,7 @@ export function ApexOverview({
   return (
     <section data-apex-fins={counts.total} data-fin-counts={rollupLabel(counts)} data-deliberate-apex={deliberate ? "" : undefined} aria-label={`${apexTitle}'s ${FIN_WORD}s`} className="mb-1">
       {deliberate ? <ApexHeader apex={deliberate} /> : null}
-      <div className="flex h-7 items-center gap-1.5 px-2 text-label text-faint">
+      <div data-apex-counts className="flex h-7 items-center gap-1.5 px-2 text-label text-faint">
         <span className="tabular min-w-0 shrink truncate">{finsWord(counts.total)} · {rollupLine(counts)}</span>
         {stoppable && conversation ? (
           <button
