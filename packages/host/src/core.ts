@@ -1388,7 +1388,8 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       },
       ownSlot: (conversationId) => {
         const harness = late.conversations?.live.session(conversationId)?.harness
-        return harness === undefined ? undefined : harnesses.host.liveDrivers.get(harness)?.makoInstructions !== undefined
+        const slot = harness === undefined ? undefined : harnesses.host.liveDrivers.get(harness)?.makoInstructions
+        return harness === undefined ? undefined : slot !== undefined && slot.holds?.(conversationId) !== false
       },
       serverUnread: (conversationId) => {
         const harness = late.conversations?.live.session(conversationId)?.harness

@@ -25,6 +25,8 @@ export function createAcpLiveDriver(
   context: Pick<HarnessContext, "dataRoot" | "appRoot" | "streams" | "writeHolds">
 ): ProviderLiveDriver {
   let loading: Promise<AcpEngine> | undefined
+  /** The conversations whose session took Mako's blocks into the agent's system prompt (`ProviderAcpSource.systemPrompt`). */
+  const held = new Set<string>()
   const engine = () => (loading ??= import("./acp.js").then(({ createAcpEngine }) => createAcpEngine(source, {
     processes: host.discovery,
     servesMcp: () => host.mcpSources.get(source.provider) !== undefined,
@@ -32,6 +34,7 @@ export function createAcpLiveDriver(
     approvalRoot: approvalRoot(context),
     streams: context.streams,
     ...context.writeHolds && { writeHolds: context.writeHolds },
+    ...source.systemPrompt && { instructionsHeld: (conversationId: string, holds: boolean) => void (holds ? held.add(conversationId) : held.delete(conversationId)) },
   })))
   // Observers are pure until a session feeds them, so one made here only reads what it can do.
   const stopsOneBackground = source.observeBackground?.().stopOne !== undefined
@@ -61,6 +64,7 @@ export function createAcpLiveDriver(
     ...context.writeHolds && source.callHooks?.writes && { firstWrite: { via: source.callHooks.writes.via } },
     ...context.writeHolds && !source.callHooks?.writes && source.hookWrites && { firstWrite: source.hookWrites },
     launchEnvironment: { kind: "prepared", via: "Shared ACP launch applies the admitted account environment before native process creation." },
+    ...source.systemPrompt && { makoInstructions: { via: source.systemPrompt.via, holds: (conversationId: string) => held.has(conversationId) } },
     nativeIdentity: ACP_NATIVE_IDENTITY,
     nativeExclusion: NO_NATIVE_EXCLUSION,
     nativePromptIdentity: source.nativePromptIdentity,

@@ -69,6 +69,7 @@ import { ProviderStartupWatch, stderrDetail } from "./provider-startup.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { acpLayer } from "./acp-layer.js"
 import { layerOf } from "./mako-layer.js"
+import { instructionText } from "../contracts/mako-layer.js"
 import { bindProviderPid } from "../base/provider-children.js"
 import { errorMessage } from "../base/error-message.js"
 import { objectValue } from "../base/json-values.js"
@@ -179,11 +180,14 @@ interface Live {
 }
 
 
-/** A session request's `_meta`: the source's own for the launch's settings, and Mako's call hooks where the launch routes calls. */
-function sessionMeta(source: ProviderAcpSource, tuning: AcpTuning | undefined, routesCalls: boolean): NewSessionRequest["_meta"] {
+/**
+ * A session request's `_meta`: the source's own for the launch's settings, Mako's call hooks where the launch routes
+ * calls, and Mako's blocks for the agent's system prompt where it takes them (`ProviderAcpSource.systemPrompt`).
+ */
+function sessionMeta(source: ProviderAcpSource, tuning: AcpTuning | undefined, routesCalls: boolean, prompt?: NewSessionRequest["_meta"]): NewSessionRequest["_meta"] {
   const own = tuning ? source.sessionMetadata?.(tuning) : undefined
   const hooks = routesCalls ? source.callHooks?.meta : undefined
-  return hooks ? { ...own, ...hooks } : own
+  return hooks || prompt ? { ...own, ...hooks, ...prompt } : own
 }
 
 function newSessionRequest(
@@ -191,10 +195,11 @@ function newSessionRequest(
   source: ProviderAcpSource,
   tuning: AcpTuning | undefined,
   mcpServers: NewSessionRequest["mcpServers"],
-  routesCalls: boolean
+  routesCalls: boolean,
+  prompt?: NewSessionRequest["_meta"]
 ): NewSessionRequest {
   const request: NewSessionRequest = { cwd, mcpServers }
-  const meta = sessionMeta(source, tuning, routesCalls)
+  const meta = sessionMeta(source, tuning, routesCalls, prompt)
   if (meta) request._meta = meta
   return request
 }
@@ -205,10 +210,11 @@ function loadSessionRequest(
   source: ProviderAcpSource,
   tuning: AcpTuning | undefined,
   mcpServers: LoadSessionRequest["mcpServers"],
-  routesCalls: boolean
+  routesCalls: boolean,
+  prompt?: NewSessionRequest["_meta"]
 ): LoadSessionRequest {
   const request: LoadSessionRequest = { sessionId, cwd, mcpServers }
-  const meta = sessionMeta(source, tuning, routesCalls)
+  const meta = sessionMeta(source, tuning, routesCalls, prompt)
   if (meta) request._meta = meta
   return request
 }
@@ -267,6 +273,8 @@ export interface AcpEngineDependencies {
   streams?: string
   /** Where calls that may write wait for their turn's checkpoint (`HarnessContext.writeHolds`). */
   writeHolds?: WriteHolds
+  /** Hears, once a session's agent answered `initialize`, whether its system prompt holds Mako's blocks (`ProviderAcpSource.systemPrompt`). */
+  instructionsHeld?(conversationId: string, held: boolean): void
 }
 
 export type AcpEngine = ReturnType<typeof createAcpEngine>
@@ -766,6 +774,10 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
       const advertised = initialized.agentCapabilities?.promptCapabilities ?? {}
       live.promptCapabilities = source.readsUnadvertised?.image ? { ...advertised, image: true } : advertised
       live.closesSession = Boolean(initialized.agentCapabilities?.sessionCapabilities?.close)
+      // Mako's blocks go into the agent's own system prompt where it offers that, and Mako's note leaves them out.
+      const blocks = source.systemPrompt?.offered(initialized.agentCapabilities) ? instructionText(layerOf(options)) : undefined
+      const systemPrompt = blocks === undefined ? undefined : source.systemPrompt!.meta(blocks)
+      dependencies.instructionsHeld?.(id, systemPrompt !== undefined)
       const mcpCapabilities = initialized.agentCapabilities?.mcpCapabilities
       const transports: McpTransport[] = ["stdio"]
       if (mcpCapabilities?.http) transports.push("http")
@@ -801,7 +813,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
         open: async () => {
           if (!resume) {
             const created = await trace.step("session-open", () => watch.step("session/new", providerCall(connection.newSession(
-              newSessionRequest(workingDir, source, options.tuning, live.mcpServers, options.nativeCalls !== undefined)
+              newSessionRequest(workingDir, source, options.tuning, live.mcpServers, options.nativeCalls !== undefined, systemPrompt)
             ))))
             record({ response: "session/new", result: created })
             return parseNewAcpSession(created)
@@ -811,7 +823,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
           if (resuming?.kind === "native" && resuming.beforeLoad)
             await trace.step("session-resume", () => resuming.beforeLoad!({ nativeId: resume, cwd: workingDir, env }))
           const reply = await trace.step("session-resume", () => watch.step("session/load", providerCall(connection.loadSession(
-            loadSessionRequest(resume, workingDir, source, options.tuning, live.mcpServers, options.nativeCalls !== undefined)
+            loadSessionRequest(resume, workingDir, source, options.tuning, live.mcpServers, options.nativeCalls !== undefined, systemPrompt)
           ))))
           record({ response: "session/load", result: reply })
           stream?.opened()
