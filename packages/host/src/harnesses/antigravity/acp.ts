@@ -69,7 +69,7 @@ export const antigravityAcp: ProviderAcpSource = {
     meta: (text) => ({ antigravity: { systemPrompt: { append: text } } }),
   },
   layer: {
-    instructions: { kind: "native", via: "system-append", how: "`_meta.antigravity.systemPrompt.append` on each session request, where the agent's `initialize` offers it; Mako's note otherwise", inUse: true, verified: { version: "1.5.16", how: "initialize advertised it; a real session's model quoted Mako's blocks without Mako's note" } },
+    instructions: { kind: "native", via: "system-append", how: "`_meta.antigravity.systemPrompt.append` on each session request, where the agent's `initialize` offers it; Mako's note otherwise", inUse: true, verified: { version: "1.5.16", how: "its `initialize` advertised `systemPrompt.append`, in a scratch home" } },
     toolServing: { kind: "native", via: "http-mcp", how: "HTTP MCP servers passed to each ACP session.", inUse: true },
     removal: { kind: "fallback", via: "words", loses: "Native tools stay available." },
     interception: { kind: "fallback", via: "words", loses: "The agent decides which tool to call." },
