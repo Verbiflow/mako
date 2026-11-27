@@ -58,7 +58,7 @@ const run = promisify(execFile)
 const pause = (ms: number) => new Promise((done) => setTimeout(done, ms))
 
 /** Each harness's mode for full access, as its live driver names it. */
-const FULL: Record<string, string | undefined> = { claude: "bypassPermissions", codex: "access:full", grok: "access:full", devin: "bypass", opencode: "access:full", cursor: undefined }
+const FULL = new Map([["claude", "bypassPermissions"], ["codex", "access:full"], ["grok", "access:full"], ["devin", "bypass"], ["opencode", "access:full"]])
 
 const Json = z.json()
 type Json = z.infer<typeof Json>
@@ -73,10 +73,12 @@ async function until<T>(what: string, read: () => Promise<T | undefined> | T | u
   const deadline = Date.now() + timeoutMs
   let failed: unknown
   for (;;) {
-    const value = await Promise.resolve().then(read).catch((error: unknown) => {
+    let value: T | undefined
+    try {
+      value = await read()
+    } catch (error) {
       failed = error
-      return undefined
-    })
+    }
     if (value !== undefined && value !== false) return value
     if (Date.now() > deadline) throw new Error(`Timed out: ${what}`, { cause: failed })
     await pause(2_000)
@@ -111,6 +113,7 @@ const sessionOf = (conversation: string) => store((db) => z.object({ session_id:
 const threadOf = (conversation: string) => store((db) => z.object({ thread_id: z.string() }).safeParse(db.prepare("SELECT m.thread_id FROM journals j JOIN memberships m ON m.session_id = j.session_id WHERE j.conversation_id = ?").get(conversation)).data?.thread_id)
 const Edge = z.object({ child_thread: z.string(), name: z.string(), record: z.string(), created_at: z.number() })
 const edgesUnder = (thread: string) => store((db) => z.array(Edge).parse(db.prepare("SELECT child_thread, name, record, created_at FROM thread_parents WHERE parent_thread = ? ORDER BY created_at").all(thread)))
+const EdgeRecord = z.looseObject({ asked: z.looseObject({ after: Json.optional() }).optional() })
 const Report = z.object({ id: z.string(), record: z.string(), at: z.number() })
 const reportsOf = (child: string) => store((db) => z.array(Report).parse(db.prepare("SELECT id, record, at FROM thread_reports WHERE child_thread = ? ORDER BY at").all(child))).map((row): Record<string, Json> & { id: string; at: number } => ({ ...z.record(z.string(), Json).parse(JSON.parse(row.record)), id: row.id, at: row.at }))
 const conversationsOfThread = (thread: string) => store((db) => z.array(z.object({ conversation_id: z.string() })).parse(db.prepare("SELECT j.conversation_id FROM journals j JOIN memberships m ON m.session_id = j.session_id WHERE m.thread_id = ? ORDER BY j.created_at").all(thread))).map((row) => row.conversation_id)
@@ -134,7 +137,7 @@ async function startThread(harness: string, text: string, title: string): Promis
   const conversationId = randomUUID()
   const request = randomUUID()
   firstRequest.set(conversationId, request)
-  const mode = FULL[harness]
+  const mode = FULL.get(harness)
   await call("mako:live-start", [harness, project, { conversationId, title, initialRequest: { id: request, text, attachments: [] }, ...mode && { modeId: mode } }])
   return conversationId
 }
@@ -307,7 +310,7 @@ try {
       return said.filter((line) => line.kind === "text").length > 0 && finished && idle ? true : undefined
     }, 900_000).catch(() => undefined)
     const edges = edgesUnder(apexThread).map((edge) => {
-      const record = JSON.parse(edge.record) as { asked?: { after?: Json }; createdAt?: number }
+      const record = EdgeRecord.parse(JSON.parse(edge.record))
       return { name: edge.name, createdAt: edge.created_at, after: record.asked?.after ?? null }
     })
     const queued = hostLines().slice(before).filter((line) => mentions(line, "start queued") && line.raw.includes("after")).map((line) => line.raw)
