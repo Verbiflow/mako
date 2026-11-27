@@ -178,6 +178,8 @@ export const NativeAgentObservationSchema = z.object({
       moved: z.string().max(512).optional(),
       /** A file it changed that another open Thread of its Shiver changed too, in one folder: "Also editing agents.ts with tests" (`sharingWords`). */
       sharing: z.string().max(512).optional(),
+      /** Why its Apex started it though it overlapped another Fin's files (`ChildSpec.proceed`): its row's tip says it. */
+      proceed: z.string().max(300).optional(),
       /** Where it runs when that isn't its Apex's device (`place: device:<name>`): its row says the device. */
       place: z.string().max(220).optional(),
       /** The one notice of a limit its tree hit, on the first Fin it touched, until the person has seen it (`limitNoticeLine`). */

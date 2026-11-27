@@ -17,7 +17,7 @@ import { makoToolList } from "./lib/mako-tool-list.ts"
 
 /** A role's whole server, instructions included: about 17,000 tokens today. */
 const ROLE_CEILING = 22_000
-/** Any one tool: the largest, agents_start, is about 1,300 tokens today. */
+/** Any one tool: the largest, agents_start, is about 1,500 tokens today. */
 const TOOL_CEILING = 2_000
 /** The server instructions: about 750 tokens today. */
 const INSTRUCTIONS_CEILING = 1_200

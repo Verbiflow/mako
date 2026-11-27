@@ -246,13 +246,13 @@ export function launchFinStop(dependencies: Pick<Dependencies, "agents">, conver
  * given Mako's tools has them to route to. Read at each call, so a
  * worktree_move or a recipe published mid-session counts from then on.
  */
-export function launchCalls(dependencies: Pick<Dependencies, "threads" | "builds">, conversation: string, cwd: string, tools: ConversationTools | undefined, environment: ThreadEnvironment | undefined): (() => CallThread) | undefined {
+export function launchCalls(dependencies: Pick<Dependencies, "threads" | "builds" | "agents">, conversation: string, cwd: string, tools: ConversationTools | undefined, environment: ThreadEnvironment | undefined): (() => CallThread) | undefined {
   if (!tools?.makoUrl) return undefined
-  return () => callThreadOf(dependencies.threads, conversation, cwd, environment, dependencies.builds?.())
+  return () => callThreadOf(dependencies.threads, conversation, cwd, environment, dependencies.builds?.(), dependencies.agents?.()?.startRetries?.(conversation))
 }
 
 /** The Thread a conversation's calls run in, as routing reads it now: its folder, its worktree and main checkout, its recipe. */
-export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "worktrees"> | undefined, conversation: string, cwd: string, environment: ThreadEnvironment | undefined, builds?: CallThread["builds"]): CallThread {
+export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "worktrees"> | undefined, conversation: string, cwd: string, environment: ThreadEnvironment | undefined, builds?: CallThread["builds"], startRetries?: readonly string[]): CallThread {
   const recipe = environment?.recipe
   const thread = store?.journalPlacement(conversation)?.thread
   const found = thread ? worktreeAt(store!.worktrees().filter((worktree) => worktree.thread === thread), cwd) : undefined
@@ -264,6 +264,7 @@ export function callThreadOf(store: Pick<ThreadStore, "journalPlacement" | "work
     ...recipe?.kind === "none" && { recipe: { kind: "none" as const } },
     computer: true,
     ...builds && { builds },
+    ...startRetries?.length && { startRetries },
   }
 }
 
@@ -275,6 +276,8 @@ export interface ConversationChildren {
   finStop?(conversation: string): string | undefined
   /** A start made its Thread a deliberate Apex (`LiveStartOptions.apex`): its profile and files are written before it runs. */
   apexMade?(thread: string, apex: import("../contracts/apexes.js").ApexStart): void
+  /** The keys of this conversation's starts refused for overlap lately (`Agents.startRetries`): their retries ask nobody. */
+  startRetries?(conversation: string): readonly string[]
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
   /** The conversation's armed wait as its waiting line reads (`turnWaitLine`), the same object until it changes. */

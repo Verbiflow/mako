@@ -100,7 +100,7 @@ function claudeNativeCall(routing: ClaudeRouting, input: PreToolUseHookInput): S
 export function claudeRoutedCall(routing: ClaudeRouting, input: PreToolUseHookInput): SyncHookJSONOutput | undefined {
   // An Apex's own bookkeeping and a tree's talk within itself through Mako's tools ask nobody, whatever the access (`asksNobody`).
   const mako = mcpToolName(input.tool_name)
-  if (mako?.server === MAKO_THREAD_SERVER && asksNobody(mako.tool, AskedCallSchema.catch({}).parse(input.tool_input))) return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } }
+  if (mako?.server === MAKO_THREAD_SERVER && asksNobody(mako.tool, AskedCallSchema.catch({}).parse(input.tool_input), routing.calls?.().startRetries)) return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } }
   const spawn = claudeSpawn(input.tool_name, ClaudeAgentInput.parse(input.tool_input), routing.teams)
   if (!spawn) return claudeNativeCall(routing, input)
   if (!routing.thread) return undefined

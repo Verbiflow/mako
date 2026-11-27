@@ -5,6 +5,7 @@ import { type AgentsCancelInput, type AgentsCancelled, type AgentsCapabilities, 
 import { APEX_QUIET, SPLIT_WORK, type Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
+import { TOUCHES_LIMIT } from "./fin-overlap.js"
 
 /**
  * The orchestration operations, each defined once: a host call
@@ -49,6 +50,14 @@ export interface AgentsStartInput extends DoorFilled {
   timeoutMs?: number
   /** The caller's own Fins, by name or Thread, queued ones too, that it starts after: once each has finished. */
   after?: string[]
+  /**
+   * The repo-relative files or directories it will edit, at most `TOUCHES_LIMIT` of at most `TOUCH_CHARS` each: an
+   * agent's start that overlaps what its other Fins at work touch or changed, or what it changed itself, is refused
+   * (`overlap`). Absent for a Fin that only reads.
+   */
+  touches?: string[]
+  /** Why a start that overlaps (`touches`) starts anyway, 1 to `PROCEED_CHARS` characters: kept on its edge and logged. */
+  proceed?: string
   /** True: past the person's limit or the tree's running budget it waits for one to end instead of being refused. */
   queue?: boolean
   /** Threads its brief refers to, each attached to it as a person's chip attaches one: it reads them whole with thread_history. */
@@ -643,7 +652,7 @@ export function afterStart(wake: WakeOn, waited?: StartWaited): string {
 export const ORCHESTRATION_INSTRUCTIONS = [
   `agents_*: other Threads this Thread starts, its ${FIN_WORD}s; it is their ${APEX_WORD}.`,
   `If you're a ${FIN_WORD}, call \`agents_report\` when you finish, are blocked, or need a decision; finished work that leaves a decision is done with its question, options and \`decides\`. Ready for review, or waiting on your ${APEX_WORD} or the person, is done with an \`action\`, never progress: progress is for a turn that goes on; a turn ending on progress nothing will wake tells your ${APEX_WORD} it ended unfinished.`,
-  "Parallel, background, cross-harness or remote work goes through `agents_start`, not your harness's own subagent tool (keep that for a quick look you wait for) nor an agent CLI with nohup, which can't report or ask; a one-file change or a question is faster in your turn.",
+  "Parallel, background, cross-harness or remote work goes through `agents_start`, not your harness's own subagent tool (keep that for a quick look you wait for) nor an agent CLI with nohup, which can't report or ask. Split only independent pieces worth 15+ minutes (one feature or bug is one Fin, or yours); a one-file change or a question is faster in your turn.",
   `After starting, end your turn: reports wake you. Don't poll \`agents_list\` or wait in a loop; when your next step needs a ${FIN_WORD}'s result, start it with \`mode: "wait"\`.`,
   "To wait on a pull request, report progress with `waitingOn` (checks, review or merge) and end your turn: Mako wakes you. Read PR and CI status with pull_request_status, never gh --watch. If you poll gh yourself: at most once a minute per repository; after a 403/429 stop all GitHub calls until Retry-After.",
   `The person writes to this Thread: a message for a ${FIN_WORD} goes there with \`agents_send\` (\`forward: true\`) as your first call, then end your turn. Answer a ${FIN_WORD}'s question with \`agents_answer\` within your access, or \`person: true\` when it's theirs.`,
@@ -753,7 +762,7 @@ export function ago(at: number, now: number): string {
 
 const START = [
   `Start a ${FIN_WORD}: another Thread working for this one, on any harness, in this checkout or its own worktree, with its own model and access (at most yours).`,
-  "Use it for work that outlives this turn, runs in parallel, writes beside another writer, needs another harness or model, or that the person should be able to open and steer; not for a one-file change, a question you can answer, or work that needs this conversation's context.",
+  "Use it for work that outlives this turn, runs in parallel, needs another harness or model, or that the person should be able to open and steer; not for a one-file change, a question you can answer, or work that needs this conversation's context.",
   "The brief is all it knows; attach Threads it refers to with context, not paths.",
   `To replace a ${FIN_WORD} whose harness ran out or should change, use agents_move instead.`,
   "It returns at once and its reports wake you; don't wait or poll after. Use mode wait only when your next step can't go on without its result: you get it here within " + WAIT_WORDS + ", else your turn ends and the result starts your next.",
@@ -811,6 +820,8 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         wake: "decisions (default): its result, a block or a question wakes you. finish: only its result. never: nothing; read it with agents_read. With finish or never, its questions go to the person.",
         timeoutMs: `For wait: how long to hold here, at most ${WAIT_LIMIT_MS} (the default).`,
         after: `Your ${FIN_WORD}s (names or Threads, queued ones too, at most ${AFTER_LIMIT}) that must finish first; if one fails or is stopped this doesn't start, and you're woken to decide.`,
+        touches: `The repo-relative files or directories it will edit (at most ${TOUCHES_LIMIT}); leave out for one that only reads. A start that overlaps what your working ${FIN_WORD}s touch or changed, or what you changed, is refused with its options.`,
+        proceed: "Only after an overlap refusal: why these don't collide. It starts anyway, and the reason is kept on its record.",
         context: `Threads it refers to, as [{ thread }]: a thread:<harness>:<id> ref, a Thread ID or a ${FIN_WORD}'s name, attached as an @ chip and read whole with thread_history. agents_list scope threads finds refs.`,
         queue: "true: when its place (a device, the cloud plan, the person's ceiling) or this tree's running budget is full, wait for room. Absent: a full place refuses, naming where else it could run.",
         clientKey: `Your key for this start: a repeat answers the same ${FIN_WORD}.`,

@@ -184,15 +184,21 @@ const LEGACY_INTRO = { head: "You're child:", tail: ", a Thread another Thread s
 const LEGACY_BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells your ${LEGACY_APEX_WORD} how it ended.`
 
 /**
- * How an Apex splits work into Fins, said where it decides: `agents_start`'s description and a lead Fin's brief
- * (`APEX_BRIEF`). In the 14 days to 2026-11-26, none of 23 Fins started with `after`, and Apexes ran independent
- * pieces one after another.
+ * When an Apex splits work into Fins, and how, said where it decides: `agents_start`'s description and a lead Fin's
+ * brief (`APEX_BRIEF`). Apexes ran independent pieces one after another (none of 23 Fins in the 14 days to 2026-11-26
+ * started with `after`), and split one feature into Fins that edited the same file or read the same design whole,
+ * each loading the same context and meeting the others at merge. So it says when not to split as well as how, and
+ * asks for `touches`, which `agents_start` checks against the Fins already at work (`startOverlap`).
  */
-export const SPLIT_WORK = "To split work, first map the files each piece touches. Start every independent piece in the same turn, never one after another; a piece that needs another's result waits for it with after, and one that edits the same lines as another goes on that Fin's branch (workspace base: its branch) and merges after it."
+export const SPLIT_WORK = "Split only what's independent and big: pieces that don't need each other's decisions, each worth 15+ minutes. Breadth splits (separate questions, repos, modules, harness proofs, reviews); depth doesn't (one feature, one bug or one refactor is one Fin, or yours). Smaller than its brief would be: do it yourself. Start independent pieces in the same turn, never one after another; use after only when one needs another's output. Name the files each will edit in touches: two pieces on the same files are one piece. When the person asks for Fins, start them as asked."
 /** How an Apex answers its Fins' reports: the person hears what needs them, together, and nothing else. */
 export const APEX_QUIET = "On a report that changes nothing for the person, end your turn without a word; tell them what needs them in one message."
 /** Beneath a lead Fin's brief, for it alone: it's an Apex of its own. */
-export const APEX_BRIEF = `You're an ${APEX_WORD} too: start ${FIN_WORD}s for the pieces of this work with agents_start. ${SPLIT_WORK} ${APEX_QUIET}`
+export const APEX_BRIEF = `You're an ${APEX_WORD} too: with agents_start, start a ${FIN_WORD} for each piece of this work worth one, and do the rest yourself. ${SPLIT_WORK} ${APEX_QUIET}`
+/** `APEX_BRIEF` as earlier builds wrote it: kept briefs still hold it, and a card leaves it out as it leaves out this one. */
+const EARLIER_APEX_BRIEFS: ReadonlySet<string> = new Set([
+  `You're an ${APEX_WORD} too: start ${FIN_WORD}s for the pieces of this work with agents_start. To split work, first map the files each piece touches. Start every independent piece in the same turn, never one after another; a piece that needs another's result waits for it with after, and one that edits the same lines as another goes on that Fin's branch (workspace base: its branch) and merges after it. ${APEX_QUIET}`,
+])
 /** What a Fin's last report holds when its brief names nothing else: what its Apex reads first. */
 export const FINAL_REPORT = "Your final report reads: Outcome / PR / Needs / Cost / Lesson."
 
@@ -248,7 +254,7 @@ export function agentWords(text: string): AgentWords | undefined {
   const body = words
     .slice(header[0].length)
     .split("\n")
-    .filter((line) => line !== BRIEF_CLOSE && line !== REPORT_FOLLOW_UP_INSTRUCTIONS && line !== LEGACY_BRIEF_CLOSE && line !== FINAL_REPORT && line !== APEX_BRIEF && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && (line.endsWith(APEX_NOTE_TAIL) || line.endsWith(LEGACY_APEX_NOTE_TAIL))))
+    .filter((line) => line !== BRIEF_CLOSE && line !== REPORT_FOLLOW_UP_INSTRUCTIONS && line !== LEGACY_BRIEF_CLOSE && line !== FINAL_REPORT && line !== APEX_BRIEF && !EARLIER_APEX_BRIEFS.has(line) && !briefIntroLine(line) && !(line.startsWith(APEX_NOTE_HEAD) && (line.endsWith(APEX_NOTE_TAIL) || line.endsWith(LEGACY_APEX_NOTE_TAIL))))
     .join("\n")
     .trim()
   return { from: spoken(header[1]!), body, ...(reports.length && { reports }) }

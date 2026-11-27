@@ -14,6 +14,7 @@ import { localHost, type HostTransport } from "./transport.js"
 export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--model <id>] [--reasoning <level>] [--fast|--standard] [--rule <n>] [--access <tier>]
                     [--worktree --branch <b> | --base <b>] [--title <words>] [--name <n>] [--key <k>]
                     [--wait [--timeout <ms>]] [--wake decisions|finish|never] [--thread <ref|id|fin>]…
+                    [--touches <path>]… [--proceed <why>]
   mako agents move <fin|all> <harness> [--model <id>] [--reasoning <level>] [--fast|--standard] [--key <k>]
   mako agents list [--tree | --shiver | --apexes | --threads [words]]
   mako agents read <fin> [--transcript | --actions] [--report <id>] [--after-ask <id>] [--after-action <id>]
@@ -28,6 +29,8 @@ export const AGENTS_HELP = `  mako agents start <harness> --brief-file <f> [--mo
   A brief file ending .json is a brief ({objective, doneWhen, boundaries, output}); any other is its objective.
   The caller is the Session ${SESSION_VARIABLE} names, as in a Mako Thread's shell: an Apex, and each Thread it starts
   one of its Fins, named by its name, fin:<name> or its Thread ID. --key repeats a start, report or message.
+  --touches names a file or directory the Fin will edit, one each; a start that overlaps another Fin's is refused
+  until it's sent there, started after it, or started anyway with --proceed and why.
   --wait holds for the Fin's result (at most ${WAIT_LIMIT_MS / 1000} s); past that, the result starts the caller's next turn.
   send --forward passes on the person's message the caller's turn answers; any words go beneath it.`
 
@@ -97,6 +100,8 @@ const OPTIONS = {
   forward: { type: "boolean" },
   threads: { type: "boolean" },
   thread: { type: "string", multiple: true },
+  touches: { type: "string", multiple: true },
+  proceed: { type: "string" },
 } as const
 type Parsed = ReturnType<typeof parseArgs<{ args: string[]; allowPositionals: true; options: typeof OPTIONS }>>
 
@@ -133,6 +138,8 @@ async function input(verb: string, { values, positionals }: Parsed, cwd: string)
           ...(values.wait && { mode: "wait" }),
           ...(values.wake && { wake: values.wake }),
           ...(values.timeout && { timeoutMs: Number(values.timeout) }),
+          ...(values.touches?.length && { touches: values.touches }),
+          ...(values.proceed !== undefined && { proceed: values.proceed }),
           ...attached(values),
         },
       }

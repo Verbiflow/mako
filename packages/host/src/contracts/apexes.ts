@@ -66,11 +66,16 @@ export const APEX_BOOKKEEPING = new Set(["list", "get", "plan", "plan_write", "p
 const WITHIN_THE_TREE = new Set(["agents_report", "agents_list", "agents_read", "agents_wait"])
 
 /** The part of a Mako tool call's input that says whether it asks: an `apex` action, an `agents_send` addressee. */
-export const AskedCallSchema = z.lazy(() => z.object({ action: z.string().optional(), to: z.string().optional() }).loose())
+export const AskedCallSchema = z.lazy(() => z.object({ action: z.string().optional(), to: z.string().optional(), clientKey: z.string().optional() }).loose())
 export type AskedCall = z.infer<typeof AskedCallSchema>
 
-export function asksNobody(tool: string, call: AskedCall): boolean {
+/**
+ * `retries`: the keys of the Thread's `agents_start` calls refused for overlap lately (`Agents.startRetries`). The
+ * person approved the refused call, so its retry under the same key (with `proceed` or `after`) isn't asked again.
+ */
+export function asksNobody(tool: string, call: AskedCall, retries?: readonly string[]): boolean {
   if (tool === "memory_save" || WITHIN_THE_TREE.has(tool)) return true
+  if (tool === "agents_start") return call.clientKey !== undefined && retries?.includes(call.clientKey) === true
   if (tool === "agents_send") return call.to !== undefined && !call.to.startsWith("apex:")
   return tool === "apex" && call.action !== undefined && APEX_BOOKKEEPING.has(call.action)
 }
