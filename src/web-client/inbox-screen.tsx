@@ -1,5 +1,7 @@
 import { useEffect, useMemo } from "react"
-import { checkWebPlan, loadWebApexes, useWebPlanAsks } from "./apexes"
+import { checkWebAnswer, checkWebPlan, loadWebApexes, useWebPlanAsks } from "./apexes"
+import { QuestionLine } from "./apex-digest"
+import { planQuestion } from "@mako/host/contracts/apexes"
 import { useWebClient } from "./client"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { CheckIcon, ChevronLeftIcon } from "lucide-react"
@@ -84,11 +86,17 @@ export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefin
                   <ApexMark className="size-3 shrink-0" />
                   <span className="truncate font-medium text-foreground/90">{ask.apex.name}</span>
                 </span>
-                <span className="text-ui text-foreground">{ask.text}</span>
+                {planQuestion(ask.text) ? (
+                  <div className="-mx-4">
+                    <QuestionLine item={{ key: ask.text, line: planQuestion(ask.text)!.question, kind: "question", options: planQuestion(ask.text)!.options }} onAnswer={(answer) => checkWebAnswer(client, ask.apex.deviceId, ask.apex.thread, ask.section, ask.index, answer)} />
+                  </div>
+                ) : <span className="text-ui text-foreground"><span className="mr-1.5 text-label text-attention">Your to-do</span>{ask.text}</span>}
                 <span className="flex items-center gap-2">
-                  <button type="button" data-inbox-plan-done onClick={() => void checkWebPlan(client, ask.apex.deviceId, ask.apex.thread, ask.section, ask.index)} className="pressable flex h-10 items-center gap-1.5 bg-foreground px-3.5 text-label text-background">
-                    <CheckIcon className="size-3.5" />Done
-                  </button>
+                  {planQuestion(ask.text) ? null : (
+                    <button type="button" data-inbox-plan-done onClick={() => void checkWebPlan(client, ask.apex.deviceId, ask.apex.thread, ask.section, ask.index)} className="pressable flex h-10 items-center gap-1.5 bg-foreground px-3.5 text-label text-background">
+                      <CheckIcon className="size-3.5" />Mark done
+                    </button>
+                  )}
                   {openApex(ask.apex.thread) ? (
                     <button type="button" onClick={openApex(ask.apex.thread)} className="pressable flex h-10 items-center px-3.5 text-label text-foreground">Open {ask.apex.name}</button>
                   ) : null}

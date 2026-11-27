@@ -7,7 +7,11 @@ import { cn } from "@/lib/utils"
 import { useThreadChildren } from "@/state/apex-fins"
 import { useSeenSince } from "@/state/apexes"
 import { useWebClient } from "./client"
-import { checkWebPlan, markWebSeen, useWebApex, useWebApexes, useWebDigest } from "./apexes"
+import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
+import { FinAnswerButtons } from "@/components/viewer/fin-answer-buttons"
+import { useFinAnswer } from "@/components/viewer/use-fin-answer"
+import { childStateOf, openAsk } from "@mako/host/contracts/children"
+import { checkWebAnswer, checkWebPlan, markWebSeen, useWebApex, useWebApexes, useWebDigest } from "./apexes"
 import type { WebSession, WebThread } from "./threads"
 import { ownerOf } from "./threads"
 
@@ -56,9 +60,13 @@ export function PhoneApexDigest({ thread, session, onOpenFin }: { thread: WebThr
       </button>
       {shown ? (
         <div className="flex max-h-[45dvh] flex-col overflow-y-auto overscroll-contain pb-2">
-          <Part heading={DIGEST_HEADINGS.needs} items={digest.needs} shown={5} attention render={(item) => (item.kind === "plan"
-            ? <PlanLine key={item.key} item={item} onDone={() => check(item)} />
-            : <FinLine key={item.key} item={item} needs onOpen={() => { const agent = fin(item); if (agent) onOpenFin(agent) }} />)} />
+          <Part heading={DIGEST_HEADINGS.needs} items={digest.needs} shown={5} attention render={(item) => {
+            if (item.kind === "plan") return <PlanLine key={item.key} item={item} onDone={() => check(item)} />
+            if (item.kind === "question" && item.planAt && deviceId)
+              return <QuestionLine key={item.key} item={item} onAnswer={(answer) => checkWebAnswer(client, deviceId, apex.thread, item.planAt!.section, item.planAt!.index, answer)} />
+            const agent = fin(item)
+            return agent ? <FinAskLine key={item.key} item={item} agent={agent} apex={session.row.conversation} apexTitle={apex.name} onOpen={() => onOpenFin(agent)} /> : null
+          }} />
           <Part heading={DIGEST_HEADINGS.new} items={digest.new} folds render={(item) => <FinLine key={item.key} item={item} onOpen={() => { const agent = fin(item); if (agent) onOpenFin(agent) }} />} />
           <Part heading={DIGEST_HEADINGS.progress} items={digest.progress} folds render={(item) => <FinLine key={item.key} item={item} onOpen={() => { const agent = fin(item); if (agent) onOpenFin(agent) }} />} />
         </div>
@@ -107,13 +115,54 @@ function FinLine({ item, onOpen, needs = false }: { item: DigestItem; onOpen: ()
   )
 }
 
+/** A to-do of the person's the plan lists: ticked once done. */
 function PlanLine({ item, onDone }: { item: DigestItem; onDone: () => void }) {
   return (
     <div data-phone-digest-item="plan" className="flex min-h-11 items-center gap-3 px-4 py-1.5">
-      <span className="min-w-0 flex-1 text-ui font-medium text-foreground">{item.line}</span>
-      <button type="button" data-phone-plan-done onClick={onDone} className="pressable flex h-9 shrink-0 items-center gap-1.5 bg-foreground px-3 text-label text-background">
-        <CheckIcon className="size-3.5" />Done
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="text-label text-attention">Your to-do</span>
+        <span className="text-ui font-medium text-foreground">{item.line}</span>
+      </span>
+      <button type="button" data-phone-plan-done onClick={onDone} className="pressable flex h-9 shrink-0 items-center gap-1.5 bg-raised px-3 text-label text-foreground">
+        <CheckIcon className="size-3.5" />Mark done
       </button>
+    </div>
+  )
+}
+
+/** A question the plan asks the person, answered where it stands: its answers a tap each, their own words beside. */
+export function QuestionLine({ item, onAnswer }: { item: DigestItem; onAnswer: (answer: string) => Promise<boolean> }) {
+  const [sent, setSent] = useState<string | null>(null)
+  const send = async (answer: string) => {
+    setSent(answer)
+    if (!(await onAnswer(answer))) setSent(null)
+  }
+  return (
+    <div data-phone-digest-item="question" className="flex flex-col gap-2 px-4 py-2">
+      <span className="text-ui font-medium text-foreground">{item.line}</span>
+      <div className="flex flex-wrap items-center gap-1.5">
+        {(item.options ?? []).map((option, at) => (
+          <button key={option} type="button" data-phone-answer={option} disabled={sent !== null} onClick={() => void send(option)} className={cn("pressable flex h-9 items-center px-3 text-label font-medium disabled:opacity-50", at === 0 ? "bg-foreground text-background" : "bg-raised text-foreground/85")}>
+            {option}
+          </button>
+        ))}
+        <FinTypedAnswer title={item.line} options={item.options?.length ?? 0} disabled={sent !== null} onAnswer={(words) => void send(words)} />
+      </div>
+    </div>
+  )
+}
+
+/** A Fin's ask of the person, answered in the row as its card answers it: its options, or the person's own words. */
+function FinAskLine({ item, agent, apex, apexTitle, onOpen }: { item: DigestItem; agent: NativeAgent; apex: string; apexTitle: string; onOpen: () => void }) {
+  const { sent, send } = useFinAnswer(agent, apex)
+  const ask = openAsk(childStateOf(agent))?.ask
+  return (
+    <div data-phone-digest-item={item.kind} className="flex flex-col gap-2 px-4 py-2">
+      <button type="button" onClick={onOpen} className="pressable flex flex-col text-left">
+        <span className="truncate text-ui font-medium text-foreground">{item.fin?.title}</span>
+        <span className="line-clamp-2 text-label text-muted-foreground">{item.line}</span>
+      </button>
+      {ask ? <FinAnswerButtons agent={agent} ask={ask} apexTitle={apexTitle} sent={sent} send={send} compact typed /> : null}
     </div>
   )
 }

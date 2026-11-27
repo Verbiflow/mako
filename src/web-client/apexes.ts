@@ -52,6 +52,18 @@ export async function checkWebPlan(client: WebClient, deviceId: string, thread: 
   }
 }
 
+/** The person answers a question the Apex's plan asks, from the phone: the Mac sends their words to the Apex. */
+export async function checkWebAnswer(client: WebClient, deviceId: string, thread: string, section: string, item: number, answer: string): Promise<boolean> {
+  try {
+    const saved = await macCall<ApexPlanReading | { refused: string; why: string }>(client.gateway, client.deviceId, deviceId, "mako:apex-plan-answer", [thread, section, item, answer])
+    if ("refused" in saved) return false
+    webApexesStore.set((state) => ({ ...state, plans: { ...state.plans, [thread]: saved.text } }))
+    return true
+  } catch {
+    return false
+  }
+}
+
 export function markWebSeen(client: WebClient, deviceId: string, thread: string): void {
   void macCall(client.gateway, client.deviceId, deviceId, "mako:apex-seen", [thread], { passive: true }).catch(() => undefined)
 }
