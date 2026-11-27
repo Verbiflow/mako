@@ -121,7 +121,7 @@ async function checkWindow() {
   // 1. The top rows, in order, each 28px, and no Projects / Recent / Status switch under them.
   const rows = await evaluate(`[...document.querySelectorAll('[data-rail-top-row]')].map((node) => ({ id: node.dataset.railTopRow, text: node.innerText.split('\\n')[0], height: Math.round(node.getBoundingClientRect().height) }))`)
   // Setup shows once asked for (Customize sidebar).
-  assert.deepEqual(rows.map((row) => row.text), ["New thread", "Search", "Inbox", "Pull requests", "Automations"])
+  assert.deepEqual(rows.map((row) => row.text), ["New thread", "New Apex", "Search", "Inbox", "Pull requests", "Automations"])
   assert.ok(rows.every((row) => row.height === 28), `the top rows are 28px: ${JSON.stringify(rows)}`)
   assert.equal(await evaluate(`document.querySelector('[aria-label="Thread view"]')`), null, "no view switch")
   assert.equal(await evaluate(`document.querySelector('[data-rail-threads-heading]')?.textContent`), "Projects")

@@ -1,4 +1,5 @@
 import { HostConnectionNotice } from "./host-connection-notice"
+import { ApexDialog } from "@/components/apexes/apex-dialog"
 import { FileEventsNotice } from "./file-events-notice"
 import { ApplicationDialog, ApplicationNotice } from "@/components/settings/application-dialog"
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
@@ -167,6 +168,7 @@ export function AppShell() {
         </div>
         <CommandPalette />
         <OpenProjectPalette />
+        <ApexDialog />
         {/* Settings takes the whole window under the palette's z-50, so the
           palette can still open over it; Radix owns Escape and the focus trap. */}
         {settingsMounted && (

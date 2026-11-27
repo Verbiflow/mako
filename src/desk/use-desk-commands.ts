@@ -1,4 +1,5 @@
 import { useEffect } from "react"
+import { openNewApex } from "@/state/apexes"
 import { setupLeftStore, showSetupChecklist } from "@/state/setup-checklist"
 import {
   commands,
@@ -150,6 +151,14 @@ const DESK_COMMANDS: DeskCommand[] = [
     section: "Session",
     keys: "mod+n",
     run: () => void actions.newSession(),
+  },
+  {
+    id: "apex.new",
+    title: "New Apex",
+    section: "Agent",
+    hint: "A Thread that owns an area of work: its Fins, its plan and its rules",
+    keywords: "lead orchestrate team owner area",
+    run: () => openNewApex(),
   },
   {
     id: "session.new-chat",

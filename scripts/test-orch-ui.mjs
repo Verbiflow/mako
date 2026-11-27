@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url"
 import { testScratch } from "./lib/test-scratch.mjs"
 import { atSize, withMotion } from "./lib/test-window.mjs"
 
-// An Apex's Fins on the desk and the phone, through production components on the mock bridge (`?mock&app=apex`):
+// An Apex's Fins on the desk and the phone, through production components on the mock bridge (`?mock&app=apex&apexes=none`):
 // the rail lists only the Fins that need the person, under the Apex's row and its pips; a Fin's tab opens it in place with its brief and its
 // breadcrumb, and Back returns; Stop in the Apex's composer asks first; the Agents panel groups the Fins; a message
 // the person wrote to a Fin straight stands as its own routing line, and Reply or `@` writes the next one to a Fin
@@ -104,7 +104,7 @@ async function check() {
   const press = (selector) =>
     evaluate(`(() => { const node = document.querySelector(${JSON.stringify(selector)}); if (!node) return false; node.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, detail: 1 })); node.click(); return true })()`)
 
-  await window.loadURL(`${base}?mock&app=apex`)
+  await window.loadURL(`${base}?mock&app=apex&apexes=none`)
   await until("document.querySelectorAll('.thread-jump-scope [data-asking-fin]').length === 2", "the Apex's pips and asking Fins in the rail")
 
   // The rail lists the Apex once, and of its Fins only those that need the person, under it.
@@ -231,7 +231,7 @@ async function check() {
   await until("Boolean(document.querySelector('[data-apex-fins]'))", "the panel's Fins section")
   const panel = await evaluate(`(() => {
     const section = document.querySelector('[data-apex-fins]')
-    return { heading: section.querySelector('div').innerText, groups: [...section.querySelectorAll('[data-child-group]')].map((group) => group.innerText.replace(/\\s+/g, ' ')), rows: section.querySelectorAll('[data-child-row]').length }
+    return { heading: section.querySelector('[data-apex-counts]').innerText, groups: [...section.querySelectorAll('[data-child-group]')].map((group) => group.innerText.replace(/\\s+/g, ' ')), rows: section.querySelectorAll('[data-child-row]').length }
   })()`)
   console.log("PANEL", JSON.stringify(panel))
   assert.match(panel.heading, /12 Fins · 2 need you · 5 working · 2 queued · 1 idle · 2 done/)
@@ -346,7 +346,7 @@ async function check() {
   // it, no other; its Shiver card opens a Fin, whose back reads the Apex's name; Stop asks
   // first, full width.
   window.setContentSize(390, 844)
-  await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex&apexes=none`)
   await until("Boolean(document.querySelector('[data-thread][data-apex-row]'))", "the Apex's pips in the phone's list")
   // The calm list: the Apex is one row, its Fins that need the person hung under it (folded), its counts its own.
   const list = await evaluate(`(() => { const rows = document.querySelector('[data-list]').cloneNode(true); const asking = [...rows.querySelectorAll('[data-asking-fin]')].map((node) => node.querySelector('[data-asking-title]').textContent); rows.querySelectorAll('[data-fin-row]').forEach((node) => node.remove()); return { text: rows.innerText, asking, apexRows: document.querySelectorAll('[data-thread][data-apex-row]').length, label: document.querySelector('[data-thread][data-apex-row]').dataset.finCounts } })()`)
@@ -411,7 +411,7 @@ async function check() {
   // a click as the person's own answer, under a request ID; the rail marks the Apex with the first; an answered ask
   // leaves. An ask is drawn in one place: the composer holds none while the card is on screen.
   window.setContentSize(1440, 900)
-  await window.loadURL(`${base}?mock&app=apex`)
+  await window.loadURL(`${base}?mock&app=apex&apexes=none`)
   await until("document.querySelectorAll('[data-shiver] [data-fin-ask]').length === 2", "the Fins' asks in the Shiver card through the Apex's turn")
   assert.equal(await evaluate("document.querySelectorAll('[data-fin-asks] [data-fin-ask]').length"), 0, "and none over the composer as well")
   const deskAsks = await evaluate(`(() => ({
@@ -441,7 +441,7 @@ async function check() {
   // On the phone the same: the Shiver card stays through the Apex's turn and holds its Fins' asks, each a tap; the dock
   // holds none of them while the card is drawn.
   window.setContentSize(390, 844)
-  await window.loadURL(`${base}scripts/phone-apex.html?app=apex`)
+  await window.loadURL(`${base}scripts/phone-apex.html?app=apex&apexes=none`)
   await click("[data-thread][data-apex-row]")
   await until("document.querySelectorAll('[data-shiver] [data-fin-ask]').length === 2", "the Fins' asks in the phone's Shiver card")
   assert.equal(await evaluate("Boolean(document.querySelector('.web-dock [data-ask=fin]'))"), false, "none in the dock as well")
@@ -575,7 +575,7 @@ async function bench(BrowserWindow, base, root) {
     const window = new BrowserWindow({ width: 1440, height: 900, show: false, webPreferences: { backgroundThrottling: false, ...(counting && { preload, contextIsolation: false, sandbox: false }) } })
     atSize(window, 1440, 900)
     // A cold dev server reloads the page once its dependencies are bundled, aborting this load; the wait below holds.
-    await window.loadURL(`${base}?mock&app=apex${query}`).catch((error) => {
+    await window.loadURL(`${base}?mock&app=apex&apexes=none${query}`).catch((error) => {
       if (!/ERR_ABORTED|ERR_FAILED/.test(String(error))) throw error
     })
     const evaluate = (code) => window.webContents.executeJavaScript(code)

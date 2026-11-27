@@ -100,7 +100,7 @@ import { usePrefs } from "@/state/prefs"
 import { cn } from "@/lib/utils"
 import type { ChatMessage, MessageOrigin } from "@/lib/types"
 import type { ToolCall } from "@/extend/slots"
-import {
+import { CornerDownRightIcon,
   CheckIcon,
   CircleStopIcon,
   CloudIcon,
@@ -631,6 +631,7 @@ function makoLine(mako: MakoPrompt | undefined): string | undefined {
       return GOAL_NOTES[mako.step.step]
     case "pull":
     case "wait":
+    case "apex":
       return mako.line
     default:
       return undefined
@@ -648,6 +649,8 @@ function MakoLine({ mako, prompt }: { mako: MakoPrompt | undefined; prompt: Chat
       return <PullWakeNote line={mako.line} timestamp={prompt.timestamp} origin={prompt.origin} />
     case "wait":
       return <TurnWaitNote line={mako.line} detail={mako.detail} timestamp={prompt.timestamp} origin={prompt.origin} />
+    case "apex":
+      return <EventLine align="end" icon={CornerDownRightIcon} time={prompt.timestamp} data-apex-note words={{ title: mako.line }} action={<ShowOriginal origins={[prompt.origin]} />} />
     default:
       return null
   }

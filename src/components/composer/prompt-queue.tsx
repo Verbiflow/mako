@@ -17,7 +17,7 @@ import {
   CornerDownRightIcon,
 } from "lucide-react"
 import { acp, activeAcp, activeLiveAcp, useAcp } from "@/state/acp"
-import { promptDelivery, type PendingPrompt } from "@/state/prompt-delivery"
+import { promptDelivery, queuedNotThePerson, type PendingPrompt } from "@/state/prompt-delivery"
 import { discardWaiting, editQueuedPrompt, sendWaitingNow, type QueueTarget } from "@/state/acp-queue"
 import { parsePlanContext } from "@/lib/proposed-plan"
 import { readMessage } from "@/lib/context/wire"
@@ -261,6 +261,8 @@ function QueueRow({
   const body = request.text.startsWith(parsedBody) ? parsedBody : rawBody
   // Mako's words picking up a turn cut short are not the person's to read as theirs, or to edit.
   const continuation = savedContinuation(request.text) !== undefined
+  // An agent's message or Mako's note waiting its turn reads as who wrote it, in a line; it isn't the person's to edit.
+  const notThePerson = continuation ? undefined : queuedNotThePerson(request.text)
   const [editing, setEditing] = useState(false)
   const [editingSource, setEditingSource] = useState<PendingPrompt>()
   const editKey = `queue:${target.kind === "live" ? target.id : target.path}:${request.id}`
@@ -383,7 +385,7 @@ function QueueRow({
       ) : (
         <div className="flex items-start gap-2">
           <p className="line-clamp-2 min-w-0 flex-1 text-ui leading-relaxed whitespace-pre-wrap text-muted-foreground">
-            {continuation ? "Continues the turn where it stopped" : body || `${request.attachments.length} attachments`}
+            {continuation ? "Continues the turn where it stopped" : notThePerson ?? (body || `${request.attachments.length} attachments`)}
           </p>
           <div className="flex shrink-0 items-center gap-0.5 text-faint">
             {request.status === "held" && !request.signIn && !limitWait ? <button type="button" data-queued-action="resume" aria-label={request.wake ? "Send this message now" : "Resume queued message"} disabled={busy} onClick={() => void change("resume")} className="pressable h-6 px-2 text-label text-foreground hover:bg-fill-hover disabled:opacity-40">{request.wake ? "Send now" : "Resume"}</button> : null}
@@ -405,7 +407,7 @@ function QueueRow({
               data-queued-action="edit"
               aria-label="Edit queued message"
               title="Edit queued message"
-              disabled={!editable || busy || continuation}
+              disabled={!editable || busy || continuation || notThePerson !== undefined}
               className="pressable grid size-6 place-items-center hover:bg-fill-hover hover:text-foreground disabled:opacity-30"
               ref={editButton}
               onClick={() => (onEdit ? onEdit(request, body) : void change("pause"))}

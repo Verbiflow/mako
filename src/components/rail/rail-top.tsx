@@ -4,6 +4,7 @@ import { ContextMenu, ContextMenuContent, ContextMenuTrigger, MenuItem, MenuLabe
 import { formatChord, keysFor, runCommand, useCommands } from "@/extend/commands"
 import { openInbox } from "@/components/inbox/open-inbox"
 import { RailRow } from "@/components/rail/rail-row"
+import { ApexMark } from "@/components/ui/apex-mark"
 import { Keys } from "@/components/ui/kit"
 import { automations, automationsOn, failedAutomationRuns, pendingProposals, useAutomations } from "@/state/automations"
 import { toggleAutomations } from "@/state/automations-view"
@@ -39,6 +40,7 @@ export const RailTop = memo(function RailTop() {
       <ContextMenuTrigger asChild>
         <nav aria-label="Go to" data-rail-top className="flex shrink-0 flex-col gap-px px-2 pt-1 pb-1">
           <CommandRow command="session.new" icon={<SquarePenIcon />} label="New thread" />
+          {routed ? null : <CommandRow command="apex.new" icon={<ApexMark />} label="New Apex" />}
           {shows("search") ? <CommandRow command="view.command-palette" icon={<SearchIcon />} label="Search" /> : null}
           {shows("inbox") ? <InboxRow /> : null}
           {shows("pulls") ? <PullsRow /> : null}

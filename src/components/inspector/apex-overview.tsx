@@ -1,4 +1,7 @@
-import { memo, useCallback, useMemo, useState, type ReactNode, type RefObject } from "react"
+import { Fragment, memo, useCallback, useMemo, useState, type ReactNode, type RefObject } from "react"
+import { DIGEST_HEADINGS } from "@mako/host/contracts/apexes"
+import { ApexHeader, NewSection, PlanNeeds, PlanSection, RulesSection } from "@/components/apexes/apex-overview-parts"
+import { useApex, usePlanNeedsCount } from "@/state/apexes"
 import { ChevronRightIcon, GitPullRequestDraftIcon, GitPullRequestIcon } from "lucide-react"
 import { APEX_ROLE, APEX_WORD, FIN_WORD, finsWord } from "@mako/host/contracts/agents"
 import { askWords, childGroup, childLine, childStateOf, childWord, openAsk, rollup, rollupLabel, rollupLine, sameRollup } from "@mako/host/contracts/children"
@@ -67,15 +70,18 @@ export function ApexOverview({
   open?: string
   onOpen?: (agent: NativeAgent) => void
 }) {
+  const deliberate = useApex(thread)
   const counts = useRailAcp((state) => rollup(overviewChildren(state, thread, conversation)), sameRollup)
   const stoppable = useRailAcp((state) => overviewChildren(state, thread, conversation).filter((agent) => agent.stoppable).length)
+  const planNeedsCount = usePlanNeedsCount(deliberate)
   const stopAll = () => {
     if (!conversation) return
     for (const agent of overviewChildren(railAcpStore.get(), thread, conversation)) if (agent.stoppable) void acp.stopAgent(conversation, agent.nativeId)
   }
   return (
-    <section data-apex-fins={counts.total} data-fin-counts={rollupLabel(counts)} aria-label={`${apexTitle}'s ${FIN_WORD}s`} className="mb-1">
-      <div className="flex h-7 items-center gap-1.5 px-2 text-label text-faint">
+    <section data-apex-fins={counts.total} data-fin-counts={rollupLabel(counts)} data-deliberate-apex={deliberate ? "" : undefined} aria-label={`${apexTitle}'s ${FIN_WORD}s`} className="mb-1">
+      {deliberate ? <ApexHeader apex={deliberate} /> : null}
+      <div data-apex-counts className="flex h-7 items-center gap-1.5 px-2 text-label text-faint">
         <span className="tabular min-w-0 shrink truncate">{finsWord(counts.total)} · {rollupLine(counts)}</span>
         {stoppable && conversation ? (
           <button
@@ -89,9 +95,24 @@ export function ApexOverview({
         ) : null}
       </div>
       {OVERVIEW_SECTIONS.map((section) => (
-        <FinSection key={section} section={section} thread={thread} conversation={conversation} apexTitle={apexTitle} scroller={scroller} open={open} onOpen={onOpen} />
+        <Fragment key={section}>
+          <FinSection
+            section={section}
+            thread={thread}
+            conversation={conversation}
+            apexTitle={apexTitle}
+            scroller={scroller}
+            open={open}
+            onOpen={onOpen}
+            {...(deliberate && section === "working" && { label: DIGEST_HEADINGS.progress })}
+            {...(deliberate && section === "needs" && { extra: <PlanNeeds apex={deliberate} />, extraCount: planNeedsCount })}
+          />
+          {deliberate && section === "needs" ? <NewSection apex={deliberate} onOpen={onOpen} /> : null}
+        </Fragment>
       ))}
       <PullsSection thread={thread} conversation={conversation} apexTitle={apexTitle} />
+      {deliberate ? <PlanSection apex={deliberate} /> : null}
+      {deliberate ? <RulesSection apex={deliberate} /> : null}
     </section>
   )
 }
@@ -142,6 +163,9 @@ const FinSection = memo(function FinSection({
   scroller,
   open,
   onOpen,
+  label,
+  extra,
+  extraCount = 0,
 }: {
   section: OverviewSection
   thread: string | undefined
@@ -150,6 +174,11 @@ const FinSection = memo(function FinSection({
   scroller: RefObject<HTMLDivElement | null>
   open?: string
   onOpen?: (agent: NativeAgent) => void
+  /** A deliberate Apex's own word for the section ("In progress"). */
+  label?: string
+  /** Rows of its own after the Fins': a deliberate Apex's plan lines that wait on the person, counted with them. */
+  extra?: ReactNode
+  extraCount?: number
 }) {
   const fins = useOverviewSection(thread, section, conversation)
   const key = foldKey(thread ?? conversation, section)
@@ -160,14 +189,15 @@ const FinSection = memo(function FinSection({
     (agent: NativeAgent) => <FinRow key={agent.nativeId} agent={agent} conversation={conversation} apexTitle={apexTitle} onOpen={onOpen} lit={agent.child?.thread === open} />,
     [conversation, apexTitle, onOpen, open]
   )
-  if (!fins.length) return null
+  if (!fins.length && !extraCount) return null
   return (
     <div data-overview-section={section}>
-      <OverviewHeading id={section} label={OVERVIEW_HEADINGS[section]} count={fins.length} folded={folded} attention={section === "needs"} onToggle={() => toggleOverviewFold(key)} />
+      <OverviewHeading id={section} label={label ?? OVERVIEW_HEADINGS[section]} count={fins.length + extraCount} folded={folded} attention={section === "needs"} onToggle={() => toggleOverviewFold(key)} />
       {folded ? null : (
         <>
           {shown.length > OVERVIEW_WINDOWED ? <WindowedFins fins={shown} scroller={scroller} row={row} /> : shown.map(row)}
           {fins.length > OVERVIEW_SHOWN ? <OverviewMore rest={fins.length - OVERVIEW_SHOWN} opened={opened} onToggle={() => toggleOverviewOpened(key)} /> : null}
+          {extra}
         </>
       )}
     </div>
@@ -257,7 +287,7 @@ function FinAnswers({ agent, conversation, apexTitle }: { agent: NativeAgent; co
   const { sent, send } = useFinAnswer(agent, conversation)
   const ask = openAsk(childStateOf(agent))?.ask
   if (!ask) return null
-  return <FinAnswerButtons agent={agent} ask={ask} apexTitle={apexTitle} sent={sent} send={send} typed={(ask.options?.length ?? 0) === 0} className="pt-0.5 pr-2 pb-2 pl-[2.125rem]" />
+  return <FinAnswerButtons agent={agent} ask={ask} apexTitle={apexTitle} sent={sent} send={send} typed className="pt-0.5 pr-2 pb-2 pl-[2.125rem]" />
 }
 
 /** A Fin that is an Apex of its own: its Fins fold under it, closed until asked, counted as its badge counts them. */

@@ -1,4 +1,7 @@
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
+import { addressApex, apexAddresseeStore, apexesStore, pickedApex, unaddressApex, useApexAddressee, useApexes } from "@/state/apexes"
+import { ApexAddresseeNote, ApexRouteNote } from "@/components/apexes/apex-addressee"
+import { sendTo } from "@/state/acp-queue"
 import { ChildComposerNote } from "@/components/stage/child-view"
 import { useApexStop } from "@/components/composer/stop-apex"
 import { address, addressableFins, addresseeOf, addresseeStore, pickedFin, sendDirect, threadChildren, unaddress, useAddressee, useThreadChildren, type Addressee } from "@/state/apex-fins"
@@ -869,6 +872,19 @@ export function Composer() {
     if (preparingSends.current.has(draftKey)) return
     preparingSends.current.add(draftKey)
     try {
+      // Addressed to an Apex: it goes to that Apex's conversation as the person's, and the Apex opens.
+      const apex = apexAddresseeStore.get().to[draftKey]
+      if (apex) {
+        await submitDraft(mode, async (message, files) => {
+          const sent = await sendTo(apex.conversation, message, files)
+          if (sent) {
+            unaddressApex(draftKey)
+            acp.open(apex.conversation)
+          }
+          return sent
+        })
+        return
+      }
       const conversation = activeLiveAcp(acpStore.get())?.key
       const to = conversation ? addresseeStore.get().to[conversation] : undefined
       if (conversation && to) {
@@ -913,6 +929,17 @@ export function Composer() {
   const pick = useCallback(
     (value: string, context?: ContextInput) => {
       if (!mention) return
+      // An Apex from `@` is where the message goes, not words in it.
+      const apexThread = pickedApex(value)
+      const apex = apexThread ? apexesStore.get().byThread[apexThread] : undefined
+      if (apex?.conversation) {
+        const next = replaceMention(draft, mention, "")
+        update(next.text.trim() ? next.text : "")
+        setMention(null)
+        addressApex(draftKey, { thread: apex.thread, name: apex.name, conversation: apex.conversation })
+        focusComposerSoon(textarea, next.text.trim() ? next.caret : 0, viewRef)
+        return
+      }
       // A Fin from `@` is who the message goes to, not words in it.
       const fin = pickedFin(value)
       if (fin) {
@@ -969,7 +996,7 @@ export function Composer() {
       setMention(null)
       focusComposerSoon(textarea, next.caret, viewRef)
     },
-    [attachments, draft, mention, update]
+    [attachments, draft, draftKey, mention, update]
   )
 
   const stopCurrentTurn = useCallback(() => actions.stopCurrentTurn(), [])
@@ -1161,7 +1188,15 @@ export function Composer() {
   const viewingOutdated = useRestorePlans((state) => viewingPath !== undefined && state.plans[viewingPath]?.kind === "update")
   const newHarness = useThreads((state) => state.composerHarness)
   const finsHere = addressableFins(useThreadChildren(useOnScreen().thread)).length > 0
-  const placeholder = addressee && liveOwnsComposer && !held
+  const apexAddressee = useApexAddressee((state) => state.to[draftKey])
+  // A deliberate Apex that hasn't heard from the person yet: its first message is what it's for.
+  const liveThread = useAcp((state) => (activeLiveAcp(state)?.requests?.length ? undefined : activeLiveAcp(state)?.threadId))
+  const unbriefed = useApexes((state) => (liveThread ? state.byThread[liveThread]?.name : undefined))
+  const placeholder = apexAddressee
+    ? `Message ${apexAddressee.name}`
+    : unbriefed && liveOwnsComposer && !held
+    ? `What is ${unbriefed} for, and what should it start on?`
+    : addressee && liveOwnsComposer && !held
     ? `Message ${addressee.title}`
     : planDecision && !held
     ? `Tell ${harnessTitle(planDecision.harness ?? newHarness)} what to change in the plan`
@@ -1297,6 +1332,8 @@ export function Composer() {
            * trade all four for the same visual result.
            */}
           <ChildComposerNote />
+          <ApexAddresseeNote draft={draftKey} />
+          <ApexRouteNote draft={draft} draftKey={draftKey} folder={cwd} active={!liveDraftKey && !viewingPath} />
           <ComposerSendsTo />
           <PlanContextChips
             plans={draftPlans ?? []}

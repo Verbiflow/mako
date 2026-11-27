@@ -1,4 +1,5 @@
 import { finsWord } from "@mako/host/contracts/agents"
+import { useApexes } from "@/state/apexes"
 import { childGroup, childStateOf, rollupLabel, type Rollup } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { threadAsking, threadRollup } from "@/state/fin-rollup"
@@ -38,7 +39,10 @@ export function apexPips(state: AcpState, thread: string | undefined): Pips {
 
 /** Whether a Thread leads Fins: what turns its row into two lines. True or false until its first Fin starts or its last goes. */
 export function useIsApex(thread: string | undefined): boolean {
-  return useRailAcp((state) => threadRollup(state, thread).total > 0)
+  const leads = useRailAcp((state) => threadRollup(state, thread).total > 0)
+  // A deliberate Apex is one before its first Fin, too.
+  const made = useApexes((state) => (thread ? state.byThread[thread] !== undefined : false))
+  return leads || made
 }
 
 function sameEntries(left: readonly NativeAgent[], right: readonly NativeAgent[]): boolean {

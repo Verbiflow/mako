@@ -154,7 +154,7 @@ async function check() {
   if (!(await evaluate("Boolean(document.querySelector('[data-apex-fins]'))"))) await evaluate("document.querySelector('[data-agents-toggle]').click(); true")
   await until("Boolean(document.querySelector('[data-apex-fins]'))", "the Agents panel's Fins")
   assert.equal(await counts("[data-apex-fins]"), label, "the Agents panel counts the roster as every surface does")
-  agrees("the Agents panel", await text("[data-apex-fins] > div"), truth)
+  agrees("the Agents panel", await text("[data-apex-fins] [data-apex-counts]"), truth)
 
   // The stop card, opened from the composer's stop, counts the same.
   const stop = await evaluate("(() => { const button = document.querySelector('[data-composer] button[aria-label^=\"Stop\"]'); if (!button) return false; button.click(); return true })()")

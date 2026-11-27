@@ -1,4 +1,6 @@
 import { approvalWords } from "@mako/host/contracts/children"
+import { ApexInboxSection } from "@/components/apexes/apex-inbox"
+import { useApexPlanAsks } from "@/state/apexes"
 import { everyWhileShown } from "@/lib/window-shown"
 import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
 import { memo, useEffect, useRef, useState } from "react"
@@ -86,7 +88,8 @@ function InboxPane() {
   useMinute()
   const seenAt = usePrefs((prefs) => prefs.automationsSeenAt)
   const failedRuns = useAutomations((state) => failedAutomationRuns(state, seenAt))
-  const empty = !model.asks.length && !model.toRead.length && !failedRuns
+  const planAsks = useApexPlanAsks().length
+  const empty = !model.asks.length && !model.toRead.length && !failedRuns && !planAsks
   return (
     <section data-inbox aria-label="Inbox" className="absolute inset-0 z-30 flex min-h-0 flex-col bg-surface">
       <header className="shrink-0 px-5 pt-3.5 pb-3">
@@ -112,6 +115,7 @@ function InboxPane() {
               </ul>
             </section>
           ) : null}
+          <ApexInboxSection spaced={model.asks.length > 0} />
           {failedRuns ? (
             <section aria-label="Automations" data-inbox-section="automations" className={cn(model.asks.length && "pt-5")}>
               <h2 className="flex h-7 items-center text-label font-medium text-attention">Automations</h2>

@@ -124,7 +124,7 @@ async function checkWindow() {
     const pulls = document.querySelector('[data-rail-top-row="pulls"]')
     return { rows, pullsCount: pulls?.querySelector('[data-pulls-count]') !== null && pulls?.querySelector('[data-pulls-count]') !== undefined, height: pulls?.getBoundingClientRect().height }
   })()`)
-  assert.deepEqual(top.rows, ["session.new", "view.command-palette", "inbox", "pulls", "automations"], "Setup is hidden at first")
+  assert.deepEqual(top.rows, ["session.new", "apex.new", "view.command-palette", "inbox", "pulls", "automations"], "Setup is hidden at first")
   assert.equal(top.pullsCount, false, "Pull requests draws no count")
   assert.equal(Math.round(top.height), 28, "top rows are 28 px")
   console.log("PASS: quiet top rows, Setup hidden, no Pull requests count")

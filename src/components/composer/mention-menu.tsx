@@ -1,4 +1,7 @@
 import { useGitPush } from "@/state/git-push"
+import { APEX_WORD } from "@mako/host/contracts/agents"
+import { apexPick, useApexList } from "@/state/apexes"
+import { ApexMark } from "@/components/ui/apex-mark"
 import { GIT_CONFLICT_CONTEXT } from "@/lib/git-conflict-context"
 import { PULL_REQUEST_CONTEXT } from "@/lib/pull-request-context"
 import { pullRequestDetail } from "@/lib/pull-request-mentions"
@@ -190,6 +193,19 @@ export function MentionMenu({
     })), query)
     return rows.length ? [{ label: `${FIN_WORD}s`, rows }] : []
   }, [fins, query])
+  // The person's Apexes, each with what it covers: picked, the message goes to that Apex instead.
+  const apexes = useApexList()
+  const apexGroups = useMemo<Group[]>(() => {
+    if (kind !== "@") return []
+    const rows = rankReferences(apexes.filter((apex) => apex.thread !== apexThread && apex.conversation).map((apex) => ({
+      value: apexPick(apex.thread),
+      title: apex.name,
+      hint: apex.purpose ?? `${APEX_WORD} · ${apex.folder?.split("/").filter(Boolean).at(-1) ?? ""}`,
+      icon: <ApexMark />,
+      key: `${apex.name} ${apex.purpose ?? ""} apex`,
+    })), query)
+    return rows.length ? [{ label: `${APEX_WORD}es`, rows }] : []
+  }, [apexes, apexThread, kind, query])
 
   const referenceGroups = useMemo<Group[]>(() => {
     if (capabilities) return []
@@ -412,8 +428,8 @@ export function MentionMenu({
   }, [commands, commandsHarness, kind, leading, query])
 
   const groups = useMemo(
-    () => (capabilities ? [...makoGroup, ...commandGroup, ...capabilityGroups] : kind === "#" ? pullGroups : [...finGroups, ...referenceGroups]),
-    [capabilities, kind, makoGroup, commandGroup, capabilityGroups, pullGroups, finGroups, referenceGroups]
+    () => (capabilities ? [...makoGroup, ...commandGroup, ...capabilityGroups] : kind === "#" ? pullGroups : [...finGroups, ...apexGroups, ...referenceGroups]),
+    [capabilities, kind, makoGroup, commandGroup, capabilityGroups, pullGroups, finGroups, apexGroups, referenceGroups]
   )
   const rows = useMemo(() => groups.flatMap((group) => group.rows), [groups])
 

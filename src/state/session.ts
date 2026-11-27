@@ -22,6 +22,7 @@ import { applyMcpSignIns, loadMcpSignIns } from "@/state/mcp-sign-ins"
 import { loadUnopened } from "@/state/unopened-conversations"
 import { applyThreadTitles, loadThreadTitles } from "@/state/thread-titles"
 import { applyThreadMarks, loadThreadMarks } from "@/state/thread-marks"
+import { applyApexes, applyApexPlan, applyApexRules, loadApexes } from "@/state/apexes"
 import { applyWorktreeSummaries, applyWorktreeSummaryChanges, refreshWorktrees, refreshWorktreeSummaries, worktreeSizesWereMeasured } from "@/state/worktrees"
 import { github, githubStore } from "@/state/github"
 import { applyWorkspaceMoves, loadWorkspaceMoves, moveReviews, workspaceMoved } from "@/state/workspace-moves"
@@ -396,6 +397,18 @@ function apply(event: HostEvent) {
   }
   if (event.type === "thread-marks") {
     applyThreadMarks(event.marks)
+    return
+  }
+  if (event.type === "apexes") {
+    applyApexes(event.apexes)
+    return
+  }
+  if (event.type === "apex-plan") {
+    applyApexPlan(event.thread, event.plan)
+    return
+  }
+  if (event.type === "apex-rules") {
+    applyApexRules()
     return
   }
   if (event.type === "thread-titles") {
@@ -864,6 +877,7 @@ async function loadGroups() {
     loadUnopened().catch(() => undefined),
     quietly("Thread titles", loadThreadTitles).catch((error) => unread("Thread titles", { error })),
     quietly("Thread marks", loadThreadMarks).catch((error) => unread("Thread marks", { error })),
+    quietly("Apexes", loadApexes).catch((error) => unread("Apexes", { error })),
   ])
 }
 

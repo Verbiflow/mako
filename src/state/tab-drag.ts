@@ -1,4 +1,5 @@
 import { createHook, createStore } from "@/state/store"
+import { apexesStore, confirmLowered, moveIntoApex } from "@/state/apexes"
 import { onScreenSession, openInPane, openTabInPane, tabFor } from "@/state/session-panes"
 import type { SessionTab } from "@/state/thread-sessions"
 import { viewerStore, type PaneSession, type PaneSide } from "@/state/viewer"
@@ -13,7 +14,7 @@ import { viewerStore, type PaneSession, type PaneSide } from "@/state/viewer"
 export type DropSide = PaneSide | "center"
 
 /** Where a drag would land: a side of a pane, or the composer, for a sidebar row it can reference. */
-export type DropZone = { paneId: string; side: DropSide } | { composer: true }
+export type DropZone = { paneId: string; side: DropSide } | { composer: true } | { apex: string }
 
 interface TabDrag {
   /** Absent for a sidebar row: its Thread opens on press, and the drop takes the Session that opened. */
@@ -37,6 +38,9 @@ const EDGE = 0.28
 function zoneAt(x: number, y: number, drag: TabDrag): DropZone | null {
   const under = document.elementFromPoint(x, y)
   if (drag.reference && under?.closest("[data-composer]")) return { composer: true }
+  // A sidebar row over a deliberate Apex's row moves into it (Move into Apex), never onto itself.
+  const apex = drag.reference ? under?.closest<HTMLElement>("[data-apex-drop]")?.dataset.apexDrop : undefined
+  if (apex) return apex === drag.thread ? null : { apex }
   // Over a tab strip the tab is still among tabs, not in a chat.
   if (under?.closest('[role="tablist"]')) return null
   const pane = under?.closest<HTMLElement>("[data-pane-id]")
@@ -61,6 +65,7 @@ function zoneAt(x: number, y: number, drag: TabDrag): DropZone | null {
 function sameZone(left: DropZone | null, right: DropZone | null): boolean {
   if (!left || !right) return left === right
   if ("composer" in left || "composer" in right) return "composer" in left && "composer" in right
+  if ("apex" in left || "apex" in right) return "apex" in left && "apex" in right && left.apex === right.apex
   return left.paneId === right.paneId && left.side === right.side
 }
 
@@ -90,11 +95,21 @@ function draggedTab(drag: TabDrag): SessionTab | undefined {
   return opened?.thread === drag.thread ? tabFor(opened) : undefined
 }
 
+/** A sidebar row dropped on an Apex: what was on screen comes back, and the Thread moves into the Apex. */
+function moveInto(drag: TabDrag, apex: string): void {
+  const shown = drag.shown ? tabFor(drag.shown) : undefined
+  const pane = viewerStore.get().focusedPaneId
+  if (drag.shown && shown && pane) openTabInPane(pane, drag.shown.thread, shown)
+  const target = apexesStore.get().byThread[apex]
+  if (target) void moveIntoApex(target, [drag.thread], confirmLowered)
+}
+
 function drop(drag: TabDrag, zone: DropZone): void {
   if ("composer" in zone) {
     if (drag.reference) reference(drag, drag.reference)
     return
   }
+  if ("apex" in zone) return moveInto(drag, zone.apex)
   const tab = draggedTab(drag)
   if (!tab) return
   const { panes, split } = viewerStore.get()

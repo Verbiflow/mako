@@ -1,4 +1,5 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
+import { useApex } from "@/state/apexes"
 import { memo, useCallback, useMemo, useRef, useState } from "react"
 import { ChevronDownIcon, GitBranchIcon, HourglassIcon, SquareIcon } from "lucide-react"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
@@ -140,7 +141,8 @@ export function ConversationAgents({
   const provider = useRailAcp((state) => liveConversation(state, conversation)?.harness)
   const thread = useRailAcp((state) => liveConversation(state, conversation)?.threadId)
   // Its Thread's Fins, as the newest of its conversations holds them: an older Session hears only how they stand.
-  const apex = useRailAcp((state) => overviewChildren(state, thread, conversation).length > 0)
+  const leads = useRailAcp((state) => overviewChildren(state, thread, conversation).length > 0)
+  const apex = useApex(thread) !== undefined || leads
   const apexTitle = useApexName(conversation, thread)
   // Stable, so a batch moving one Fin repaints that Fin's row alone.
   const openChild = useCallback(
