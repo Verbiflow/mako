@@ -103,7 +103,9 @@ if (process.argv[2]) {
 
     const withChild = await stopped("stay-child", "SIGTERM")
     const child = Number(/^CHILD (\d+)$/m.exec(withChild.out)?.[1])
-    await new Promise((resolve) => setTimeout(resolve, 100))
+    // Signalled, it exits in its own time: a loaded runner took longer than a tenth of a second. Five seconds alive is a miss.
+    const alive = () => { try { process.kill(child, 0); return true } catch { return false } }
+    for (const end = Date.now() + 5_000; alive() && Date.now() < end;) await new Promise((resolve) => setTimeout(resolve, 50))
     assert.throws(() => process.kill(child, 0), /ESRCH/, "a signal reaches the child under a wrapper, that was writing there")
 
     const shot = await stopped("stay", "SIGKILL")
