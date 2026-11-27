@@ -1,4 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { loadWebApexes, useEveryWebApex, webRoute } from "./apexes"
+import type { ApexEntry } from "@mako/host/contracts/apexes"
+import { ApexMark } from "@/components/ui/apex-mark"
 import { CheckIcon, ChevronDownIcon, CloudIcon, FolderIcon, LaptopIcon, ShieldAlertIcon, ShieldIcon, XIcon } from "lucide-react"
 import { OceanScene } from "@/components/ui/ocean-scene"
 import { Welcome } from "@/components/transcript/transcript"
@@ -114,6 +117,13 @@ export function StartForm({ onStarted, adding, startIn, desk = false }: { onStar
   }
   const [status, setStatus] = useState<string | undefined>(undefined)
   const [failure, setFailure] = useState<string | undefined>(undefined)
+  // A message one of the person's Apexes covers: offered to it before a new Thread starts (`webRoute`), once per message.
+  const apexes = useEveryWebApex()
+  const [routing, setRouting] = useState<{ text: string; attachments: PromptAttachment[]; to: (ApexEntry & { deviceId: string })[] } | null>(null)
+  const routedDevice = place?.kind === "mac" ? place.deviceId : undefined
+  useEffect(() => {
+    if (routedDevice) void loadWebApexes(client, routedDevice)
+  }, [client, routedDevice])
   // The person's access choices, as the account keeps them; each harness's ladder, as a Mac of theirs declares it.
   const [choices, setChoices] = useState<AccessChoices | undefined>(undefined)
   const [ladders, setLadders] = useState<Record<string, Ladder> | undefined>(undefined)
@@ -199,10 +209,37 @@ export function StartForm({ onStarted, adding, startIn, desk = false }: { onStar
   const projectName = adding ? adding.folder.split("/").filter(Boolean).at(-1) : (projects?.find((each) => each.id === project)?.name ?? (project ? typedRepository(project)?.url.split("/").slice(-2).join("/") : undefined))
   const ready = place !== undefined && startable(place) && project !== undefined && harness !== undefined && status === undefined
 
-  const start = async (text: string, attachments: PromptAttachment[]): Promise<boolean> => {
+  const sendToApex = async (apex: ApexEntry & { deviceId: string }, text: string, attachments: PromptAttachment[]): Promise<boolean> => {
+    if (!apex.conversation) return false
+    setRouting(null)
+    setStatus(`Sending to ${apex.name}…`)
+    try {
+      const conversations = await client.conversations()
+      await conversations.call(apex.conversation, "mako:live-prompt", [apex.conversation, crypto.randomUUID(), text, attachments])
+      setStatus(undefined)
+      onStarted({ conversationId: apex.conversation, threadId: apex.thread }, apex.name)
+      return true
+    } catch (error) {
+      setStatus(undefined)
+      setFailure(error instanceof Error ? error.message : String(error))
+      return false
+    }
+  }
+
+  const start = (text: string, attachments: PromptAttachment[]): Promise<boolean> => begin(text, attachments, false)
+  const begin = async (text: string, attachments: PromptAttachment[], asked: boolean): Promise<boolean> => {
     if (!place || !project || !harness) return false
     if (!text && !attachments.length) return false
     setFailure(undefined)
+    // No owner named: the Apex whose folder and purpose fit is offered first, both when two fit as well.
+    if (!adding && !asked && place.kind === "mac") {
+      const route = webRoute(text, place.deviceId, project, apexes.filter((apex) => apex.deviceId === place.deviceId))
+      if (route) {
+        const ids = route.kind === "one" ? [route.apex.thread] : route.apexes.map((each) => each.thread)
+        setRouting({ text, attachments, to: apexes.filter((apex) => ids.includes(apex.thread)) })
+        return false
+      }
+    }
     const message = { text, attachments, title: titleFromPrompt(text || attachments[0]?.name || "New thread") }
     try {
       let started: Started
@@ -264,6 +301,19 @@ export function StartForm({ onStarted, adding, startIn, desk = false }: { onStar
         </p>
       ) : failure ? (
         <StartFailed message={failure} />
+      ) : routing ? (
+        <div data-web-route={routing.to.length === 1 ? "one" : "two"} className="web-start-line flex flex-wrap items-center gap-2 text-label text-muted-foreground">
+          <ApexMark className="size-3.5" />
+          <span className="min-w-0 flex-1">{routing.to.length === 1 ? `${routing.to[0]!.name} covers this.` : "Two of your Apexes cover this. Which one?"}</span>
+          {routing.to.map((apex) => (
+            <button key={apex.thread} type="button" data-web-route-to={apex.name} onClick={() => void sendToApex(apex, routing.text, routing.attachments)} className="pressable flex h-9 items-center bg-foreground px-3 text-label text-background">
+              Send to {apex.name}
+            </button>
+          ))}
+          <button type="button" data-web-route-new onClick={() => { setRouting(null); void begin(routing.text, routing.attachments, true) }} className="pressable flex h-9 items-center px-3 text-label text-foreground">
+            New Thread
+          </button>
+        </div>
       ) : null}
       <Composer autoFocus placeholder="Ask anything" tools={how} status={where} sendable={ready} onSend={start} sendLabel="Start" desk={desk} draftKey={newDraftKey(client.account.id, adding ? `add:${adding.thread}` : "thread")} />
       <PlaceSheet anchor={chip} open={picking === "place"} onDismiss={() => setPicking(undefined)} all={all} chosen={chosenPlace} onPick={(next) => {

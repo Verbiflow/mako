@@ -22,6 +22,7 @@ import { copyAge, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useAccountList, type AccountListState } from "./account-list"
 import { useWebClient } from "./client"
+import { useWebApexesOf } from "./apexes"
 import { useDelayedStatus } from "./delayed-status"
 import { InstallCard } from "./install-card"
 import { usePullToRefresh } from "./pull"
@@ -100,6 +101,8 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
   useEffect(() => {
     if (list.phase === "live") noteListed(folded.threads)
   }, [list.phase, folded])
+  // Each Mac's Apexes, read now, so an Apex's digest opens with its conversation.
+  useWebApexesOf(client, folded.threads)
   // What this browser asked an owner to mark, once its rows say it, is theirs to say again.
   useEffect(() => settleAskedMarks([...folded.threads, ...folded.placed, ...folded.archived]), [folded])
   const now = useTick(threads.some((thread) => thread.standing === "working"))

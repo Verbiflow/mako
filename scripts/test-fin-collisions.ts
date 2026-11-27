@@ -5,6 +5,9 @@ import { COLLIDE_BURST_MS, FROM_AGENTS, sharingWords } from "@mako/host/contract
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { digest, type Notice } from "@mako/host/conversations/agent-wakes"
 import { FinCollisions, statedWrites, type Mate } from "@mako/host/conversations/fin-collisions"
+import { meetings, overlapWhy, pathsMeet, touchesRefusal, touchPath } from "@mako/host/contracts/fin-overlap"
+import { asksNobody } from "@mako/host/contracts/apexes"
+import type { AgentsStartInput } from "@mako/host/contracts/agent-tools"
 import type { ToolEffects } from "@mako/sessions/tool-effects"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 import { testScratch } from "./lib/test-scratch.mjs"
@@ -255,6 +258,141 @@ test("through the engine: an Apex that writes a file its Fin wrote is told it is
     assert.match(wakes[0]!, /• "tests" \(Codex\) and you both changed src\/a\.ts\./)
     assert.equal(world.agents.roster(apex.conversation).find((entry) => entry.child?.name === "tests")?.child?.sharing, "Also editing a.ts with its Apex")
     world.release(fin)
+  } finally {
+    await world.close()
+  }
+})
+
+// ── A start's touches against the Fins at work (`startOverlap`): refused once, then sent, sequenced or started anyway. ──
+
+test("touches meet as files and directories, repo-relative", () => {
+  assert.equal(touchPath("./src//a.ts/"), "src/a.ts")
+  assert.equal(touchPath("src/x/../a.ts"), "src/a.ts")
+  assert.equal(touchPath("."), "")
+  assert.equal(touchPath("../outside.ts"), undefined, "a path that climbs out of the repository names nothing in it")
+  assert.ok(pathsMeet("src", "src/a.ts"), "a directory holds its files")
+  assert.ok(pathsMeet("src/a.ts", "src"), "either way round")
+  assert.ok(!pathsMeet("src/a", "src/ab.ts"), "a prefix isn't a directory")
+  assert.ok(pathsMeet("", "anything.ts"), "the repository's root holds everything")
+  assert.deepEqual(meetings(["src", "docs/x.md"], ["src/a.ts", "src/b.ts", "lib/c.ts"]), ["src/a.ts", "src/b.ts"], "the narrower path is named")
+  assert.equal(touchesRefusal({ touches: Array.from({ length: 51 }, (_, index) => `${index}.ts`) })?.includes("at most 50"), true)
+  assert.equal(touchesRefusal({ touches: ["x".repeat(301)] })?.includes("300"), true)
+  assert.equal(touchesRefusal({ proceed: "" })?.includes("proceed"), true)
+  assert.equal(touchesRefusal({ touches: ["src/a.ts"], proceed: "separate functions" }), undefined)
+})
+
+test("the refusal names who, which files, what it costs and the three ways on", () => {
+  const why = overlapWhy([{ name: "docs", how: "editing", files: ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"] }], false)
+  assert.equal(why, `fin:docs is editing src/a.ts, src/b.ts, src/c.ts and 1 more, which this Fin would touch. Two Fins on the same files load the same context twice and meet at merge. Send this to fin:docs with agents_send, start it after: ["docs"], or start it anyway with proceed: "<why these don't collide>". Keep this clientKey when you start it again.`)
+  assert.match(overlapWhy([{ how: "changed", files: ["src/a.ts"] }], false), /^You changed src\/a\.ts, which this Fin would touch\. In your folder it would edit them under you\. Do it yourself, or start it anyway with proceed/)
+  assert.match(overlapWhy([{ name: "api", how: "will edit", files: ["api.ts"], branch: "fin/api" }], true), /In its own worktree it would conflict with that work at merge\. .*start it after: \["api"\] or on its branch \(workspace base: "fin\/api"\)/)
+})
+
+test("a start refused for overlap asks nobody again under its key, and only that start", () => {
+  assert.equal(asksNobody("agents_start", { clientKey: "a" }), false, "a start asks as it always did")
+  assert.equal(asksNobody("agents_start", { clientKey: "a" }, ["a"]), true, "its retry under the refused key doesn't")
+  assert.equal(asksNobody("agents_start", { clientKey: "b" }, ["a"]), false, "another start still asks")
+})
+
+test("through the engine: a start's touches are checked against its Fins at work, its own changes and nothing finished", async () => {
+  const script: Script = async (turn) => {
+    if (turn.text.includes("You're fin:")) {
+      await turn.world.hold(turn.conversation)
+      return "Done."
+    }
+    return "ok"
+  }
+  const world = new AgentsWorld({ root: join(root, "overlap"), script })
+  try {
+    const apex = await world.apex("claude", "full")
+    const start = (name: string, more: Partial<AgentsStartInput> = {}) =>
+      world.agents.start(apex.caller, { brief: { objective: `Work on ${name}` }, harness: "codex", name, clientKey: name, cwd: world.root, ...more })
+    const docs = await start("docs", { touches: ["src/a.ts", "src/b.ts"] })
+    assert.ok(!("refused" in docs) && docs.conversation, JSON.stringify(docs))
+
+    // Refused, naming the Fin, the files and every way on.
+    const refused = await start("tests", { touches: ["./src/a.ts", "README.md"] })
+    assert.ok("refused" in refused && refused.refused === "overlap", JSON.stringify(refused))
+    assert.match(refused.why, /^fin:docs is editing src\/a\.ts, which this Fin would touch\./)
+    assert.match(refused.why, /agents_send/)
+    assert.match(refused.why, /after: \["docs"\]/)
+    assert.match(refused.why, /proceed: /)
+    assert.deepEqual(world.agents.startRetries(apex.conversation), ["tests"], "its key's retry asks the person nothing")
+
+    // A directory holds the files in it.
+    const directory = await start("src-sweep", { touches: ["src"] })
+    assert.ok("refused" in directory && directory.refused === "overlap" && /src\/a\.ts, src\/b\.ts/.test(directory.why), JSON.stringify(directory))
+
+    // Without touches, nothing is checked.
+    const reader = await start("reader")
+    assert.ok(!("refused" in reader), JSON.stringify(reader))
+
+    // The same key with after goes through: a refusal is never that key's answer.
+    const sequenced = await start("tests", { touches: ["src/a.ts"], after: ["docs"] })
+    assert.ok(!("refused" in sequenced) && sequenced.state === "queued", JSON.stringify(sequenced))
+
+    // The same key with proceed starts it, and keeps the reason on its record and its row.
+    const anyway = await start("src-sweep", { touches: ["src"], proceed: "docs edits comments only; this renames a function" })
+    assert.ok(!("refused" in anyway) && anyway.conversation, JSON.stringify(anyway))
+    const edge = world.store.edges().children(world.store.journalPlacement(apex.conversation)!.thread).find((each) => each.name === "src-sweep")
+    assert.equal(edge?.asked.proceed, "docs edits comments only; this renames a function")
+    assert.deepEqual(edge?.asked.touches, ["src"])
+    assert.equal(world.agents.roster(apex.conversation).find((entry) => entry.child?.name === "src-sweep")?.child?.proceed, "docs edits comments only; this renames a function")
+
+    // What a Fin at work changed counts, though it declared nothing of it.
+    world.agents.wrote(reader.conversation!, edit("r1", join(world.root, "lib", "c.ts")))
+    const changed = await start("lib", { touches: ["lib/c.ts"] })
+    assert.ok("refused" in changed && changed.why.startsWith("fin:reader changed lib/c.ts"), JSON.stringify(changed))
+
+    // What the caller changed itself counts, said as its own.
+    world.agents.wrote(apex.conversation, edit("o1", join(world.root, "own.ts")))
+    const own = await start("own", { touches: ["own.ts"] })
+    assert.ok("refused" in own && own.why.startsWith("You changed own.ts"), JSON.stringify(own))
+
+    // A finished Fin, and a stopped one, count for nothing.
+    world.release(reader.conversation!)
+    await until(() => world.agents.roster(apex.conversation).find((entry) => entry.child?.name === "reader")?.child?.state?.kind === "ended", "reader finished")
+    const afterFinish = await start("lib-again", { touches: ["lib/c.ts"] })
+    assert.ok(!("refused" in afterFinish), JSON.stringify(afterFinish))
+    await world.agents.stop(apex.caller, { child: "docs", reason: "test" })
+    await world.agents.stop(apex.caller, { child: "src-sweep", reason: "test" })
+    await world.agents.stop(apex.caller, { child: "lib-again", reason: "test" })
+    const afterStop = await start("docs-two", { touches: ["src/a.ts"] })
+    assert.ok(!("refused" in afterStop), JSON.stringify(afterStop))
+    await world.agents.stop(apex.caller, { child: "all", reason: "done" })
+  } finally {
+    await world.close()
+  }
+})
+
+test("through the engine: starting on a sibling's branch, or after it, isn't an overlap; starts in one turn meet each other", async () => {
+  const script: Script = async (turn) => {
+    if (turn.text.includes("You're fin:")) {
+      await turn.world.hold(turn.conversation)
+      return "Done."
+    }
+    return "ok"
+  }
+  const world = new AgentsWorld({ root: join(root, "overlap-branch"), script })
+  try {
+    const apex = await world.apex("claude", "full")
+    const start = (name: string, more: Partial<AgentsStartInput> = {}) =>
+      world.agents.start(apex.caller, { brief: { objective: `Work on ${name}` }, harness: "codex", name, clientKey: name, cwd: world.root, ...more })
+    const first = await start("first")
+    assert.ok(!("refused" in first) && first.conversation)
+    // Queued after first, on a branch of its own: a start on that branch is sequenced on it.
+    const api = await start("api", { touches: ["api.ts"], after: ["first"], workspace: { branch: "fin/api" } })
+    assert.ok(!("refused" in api) && api.state === "queued", JSON.stringify(api))
+    const onIt = await start("api-tests", { touches: ["api.ts"], after: ["first"], workspace: { base: "fin/api" } })
+    assert.ok(!("refused" in onIt), JSON.stringify(onIt))
+    const apart = await start("api-docs", { touches: ["api.ts"], after: ["first"], workspace: { base: "main" } })
+    assert.ok("refused" in apart && apart.refused === "overlap", JSON.stringify(apart))
+    assert.match(apart.why, /fin:api will edit api\.ts.*In its own worktree it would conflict with that work at merge\..*on its branch \(workspace base: "fin\/api"\)/)
+    // Two starts made together, as an Apex starts its pieces in one turn: the second meets the first before either has an edge.
+    const [one, two] = await Promise.all([start("left", { touches: ["shared.ts"] }), start("right", { touches: ["shared.ts"] })])
+    assert.ok(!("refused" in one), JSON.stringify(one))
+    assert.ok("refused" in two && two.why.startsWith("fin:left will edit shared.ts"), JSON.stringify(two))
+    await world.agents.stop(apex.caller, { child: "all", reason: "done" })
   } finally {
     await world.close()
   }

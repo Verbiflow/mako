@@ -44,6 +44,10 @@ async function checkWindow() {
   await app.whenReady()
   await mkdir(evidence, { recursive: true })
   const window = new BrowserWindow({ show: false, width: 820, height: 1000, webPreferences: { contextIsolation: true, nodeIntegration: false, backgroundThrottling: false } })
+  // On Linux a window never shown is never mapped, and Chromium there let synthetic input to it go nowhere: a press into
+  // a field, a press elsewhere and an Escape each failed CI's runner in turn, never a Mac. Shown without focus, it takes
+  // them; on a Mac it stays hidden, as every other check's window does.
+  if (process.platform === "linux") window.showInactive()
   const page = window.webContents
   page.debugger.attach("1.3")
   page.on("console-message", (details) => {
@@ -108,6 +112,12 @@ async function checkWindow() {
     await evaluate(`(() => { const found = document.querySelector(${selector}); found.focus(); found.setSelectionRange(found.value.length, found.value.length) })()`)
     assert.ok(await evaluate(`document.activeElement === document.querySelector(${selector})`), `the ${role} field takes focus`)
   }
+  // Leaving a field is what saves it. Focus leaves it from the page itself, as it does for a click elsewhere: a synthetic
+  // press there sometimes never reached the page on CI's Linux runner, and the save it was for never ran.
+  const leaveField = async () => {
+    await evaluate("document.activeElement?.blur(), true")
+    assert.ok(await evaluate("!document.activeElement?.matches('[data-role-rules] textarea')"), "focus left the field")
+  }
   const preview = (role) => `[data-role-rules=${role}] button[aria-expanded]`
   const theme = (light) => evaluate(`document.documentElement.classList.toggle("light", ${light})`)
   const saved = () => evaluate("window.mako.finDefaults().then((reading) => reading.policy)")
@@ -129,7 +139,7 @@ async function checkWindow() {
     await page.debugger.sendCommand("Input.insertText", { text: "Run the tests you touch before you report.\nNever push to main." })
     await focusField("forApexes")
     await page.debugger.sendCommand("Input.insertText", { text: "Ask me before starting more than four Fins." })
-    await press("main p")
+    await leaveField()
     await until(`window.mako.finDefaults().then((reading) => reading.policy.forApexes === "Ask me before starting more than four Fins.")`, "both saved")
     assert.equal((await saved()).forFins, "Run the tests you touch before you report.\nNever push to main.")
     assert.deepEqual((await saved()).rules.length, 3, "the model rules are kept")
@@ -137,8 +147,9 @@ async function checkWindow() {
     /* Escape reverts and saves nothing. */
     await focusField("forApexes")
     await page.debugger.sendCommand("Input.insertText", { text: " Or five." })
-    await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
-    await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+    // Escape goes to the field from the page, as its focus and blur do: the runner's synthetic keys need a focused window,
+    // and Linux CI's is shown without focus. What's checked is the field's own answer to Escape.
+    await evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true })), true`)
     await until(`document.activeElement !== document.querySelector(${JSON.stringify(field("forApexes"))})`, "Escape leaves the field")
     await new Promise((done) => setTimeout(done, 200))
     assert.equal(await evaluate(`document.querySelector(${JSON.stringify(field("forApexes"))}).value`), "Ask me before starting more than four Fins.", "the field shows the saved words")
@@ -178,14 +189,14 @@ async function checkWindow() {
     await evaluate(`window.__saveRoleRules = window.mako.saveRoleRules; window.mako.saveRoleRules = () => Promise.reject(new Error("The host refused it.")); true`)
     await focusField("forApexes")
     await page.debugger.sendCommand("Input.insertText", { text: " Or five." })
-    await press("main p")
+    await leaveField()
     await until(`document.querySelector("[data-role-unsaved=forApexes]") !== null`, "the field is marked unsaved")
     assert.equal(await evaluate(`document.querySelector(${JSON.stringify(field("forApexes"))}).value`), "Ask me before starting more than four Fins. Or five.", "the typed words stay")
     assert.equal((await saved()).forApexes, "Ask me before starting more than four Fins.", "the host still holds what it saved")
     await capture("unsaved-dark.png", "[data-role-rules=forApexes]")
     await evaluate(`window.mako.saveRoleRules = window.__saveRoleRules; true`)
     await focusField("forApexes")
-    await press("main p")
+    await leaveField()
     await until(`window.mako.finDefaults().then((reading) => reading.policy.forApexes === "Ask me before starting more than four Fins. Or five.")`, "saved on the next blur")
     await until(`document.querySelector("[data-role-unsaved=forApexes]") === null`, "the mark goes once saved")
 

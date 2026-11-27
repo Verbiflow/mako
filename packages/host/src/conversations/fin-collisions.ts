@@ -105,6 +105,19 @@ export class FinCollisions {
     return this.byThread.get(thread) ?? []
   }
 
+  /**
+   * The files `thread` wrote at or after `since`, as held: only while it had a mate, and at most the newest
+   * `FILES_KEPT` files of every writer. What a Fin's start checks its `touches` against (`Agents.startOverlap`).
+   */
+  writtenBy(thread: string, since: number): string[] {
+    const files: string[] = []
+    for (const [path, by] of this.writers) {
+      const at = by.get(thread)
+      if (at !== undefined && at >= since) files.push(path)
+    }
+    return files
+  }
+
   /** How many files are held with their writers: what a test reads to see that nothing is kept. */
   get held(): number {
     return this.writers.size

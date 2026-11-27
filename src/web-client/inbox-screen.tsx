@@ -1,5 +1,10 @@
 import { useMemo } from "react"
-import { ChevronLeftIcon } from "lucide-react"
+import { checkWebAnswer, checkWebPlan, useWebApexesOf, useWebPlanAsks } from "./apexes"
+import { QuestionLine } from "./apex-digest"
+import { planQuestion } from "@mako/host/contracts/apexes"
+import { useWebClient } from "./client"
+import { ApexMark } from "@/components/ui/apex-mark"
+import { CheckIcon, ChevronLeftIcon } from "lucide-react"
 import { MakoMark } from "@/components/ui/mako-mark"
 import { cn } from "@/lib/utils"
 import { useAccountList } from "./account-list"
@@ -27,7 +32,11 @@ export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefin
   const fins = asksBesidePlaced(asks, folded.placed)
   const waiting = waitingThreads(threads, asks, folded.placed)
   const toRead = threads.filter((thread) => thread.standing === "failed" || (thread.standing === "idle" && isUnread(read, thread)))
-  const count = fins.length + waiting.length
+  // The person's Apexes' plan lines that wait on them, read from each Mac their Threads are on.
+  const client = useWebClient()
+  useWebApexesOf(client, threads)
+  const planAsks = useWebPlanAsks(client)
+  const count = fins.length + waiting.length + planAsks.length
   const empty = !count && !toRead.length
   // A Fin's ask opens its Apex's Thread, where its Shiver card holds it.
   const openApex = (id: string) => {
@@ -61,6 +70,34 @@ export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefin
             {fins.map((fin) => (
               <div key={fin.key} data-inbox-item={fin.key}>
                 <FinAskCard apex={fin.apex.conversation} ask={fin.ask} more={0} answerTyped={noTyped} from={fin.apex.title} onOpen={openApex(fin.apex.thread)} />
+              </div>
+            ))}
+          </section>
+        ) : null}
+        {planAsks.length ? (
+          <section aria-label="Your Apexes wait on you" data-inbox-section="apexes" className="web-section flex flex-col gap-2.5 px-2">
+            <h2 className="web-section-label -mx-2 text-attention">Your Apexes wait on you</h2>
+            {planAsks.map((ask) => (
+              <div key={`${ask.apex.thread}:${ask.section}:${ask.index}`} data-inbox-plan={ask.apex.name} className="flex flex-col gap-2.5 bg-raised px-4 py-3.5">
+                <span className="flex min-w-0 items-center gap-1.5 text-label text-faint">
+                  <ApexMark className="size-3 shrink-0" />
+                  <span className="truncate font-medium text-foreground/90">{ask.apex.name}</span>
+                </span>
+                {planQuestion(ask.text) ? (
+                  <div className="-mx-4">
+                    <QuestionLine item={{ key: ask.text, line: planQuestion(ask.text)!.question, kind: "question", options: planQuestion(ask.text)!.options }} onAnswer={(answer) => checkWebAnswer(client, ask.apex.deviceId, ask.apex.thread, ask.section, ask.index, answer)} />
+                  </div>
+                ) : <span className="text-ui text-foreground"><span className="mr-1.5 text-label text-attention">Your to-do</span>{ask.text}</span>}
+                <span className="flex items-center gap-2">
+                  {planQuestion(ask.text) ? null : (
+                    <button type="button" data-inbox-plan-done onClick={() => void checkWebPlan(client, ask.apex.deviceId, ask.apex.thread, ask.section, ask.index)} className="pressable flex h-10 items-center gap-1.5 bg-foreground px-3.5 text-label text-background">
+                      <CheckIcon className="size-3.5" />Mark done
+                    </button>
+                  )}
+                  {openApex(ask.apex.thread) ? (
+                    <button type="button" onClick={openApex(ask.apex.thread)} className="pressable flex h-10 items-center px-3.5 text-label text-foreground">Open {ask.apex.name}</button>
+                  ) : null}
+                </span>
               </div>
             ))}
           </section>

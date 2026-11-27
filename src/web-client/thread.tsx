@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { PhoneApexDigest } from "./apex-digest"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, FolderTreeIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, ServerIcon, XIcon } from "lucide-react"
 import { sessionStanding, type OpenedBy } from "@mako/host/contracts/session-choice"
 import { forkedFrom, sessionBrief, sessionDetail, sessionName } from "@/lib/session-words"
@@ -142,6 +143,7 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
           }
         />
         {thread.sessions.length > 1 ? <SessionSwitcher thread={thread} current={session} wide={wide} onSession={onSession} onAdd={addingTo ? () => setAdding(true) : undefined} /> : null}
+        {thread.archived ? null : <PhoneApexDigest thread={thread} session={session} onOpenFin={openChild} />}
         <RoutedOpenContext value={openChild}>
           <ThreadBody thread={thread} session={session} openedBy={sessionId === undefined ? "screen" : "person"} onSession={onSession} />
         </RoutedOpenContext>

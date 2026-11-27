@@ -117,6 +117,17 @@ assert.match(trustMarkup, /data-request-detail[^>]*>Grok ignores the MCP servers
 assert.match(trustMarkup, /Trust project/)
 assert.match(trustMarkup, /Not now/)
 assert.doesNotMatch(trustMarkup, /Choose how long to allow it/)
+// A tool's ask sits in the composer's column, and says "how long" only when there is a how long to choose.
+{
+  conversation.permission = { id: "plain", sessionId: id, kind: "execute", title: "bun run check", options: [{ optionId: "y", name: "Allow", kind: "allow_once" }, { optionId: "n", name: "Deny", kind: "reject_once" }] }
+  publish()
+  const plain = renderToStaticMarkup(<AcpPanel />)
+  assert.match(plain, /class="mx-auto flex min-h-0 w-full max-w-content flex-col"><div class="mx-3"><div><div data-permission="plain"/, "the ask is in the composer's column, edge to edge with its box")
+  assert.doesNotMatch(plain, /Choose how long to allow it/, "a plain Allow or Deny has no how long")
+  conversation.permission = { id: "always", sessionId: id, kind: "execute", title: "bun run check", options: [{ optionId: "y", name: "Allow once", kind: "allow_once" }, { optionId: "a", name: "Always allow", kind: "allow_always" }, { optionId: "n", name: "Deny", kind: "reject_once" }] }
+  publish()
+  assert.match(renderToStaticMarkup(<AcpPanel />), /Choose how long to allow it/, "with Always allow, there is")
+}
 // Answering a tool approval: the host saves the answer as sending and, for a connection that takes it at once, as handed
 // over in the same moment. Nothing above the composer says the sending: a bar there would be drawn for a frame, empty
 // as it faded in. What still needs the person after the hold, or ever, is said in words.
