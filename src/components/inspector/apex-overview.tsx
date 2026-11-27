@@ -287,7 +287,7 @@ function FinAnswers({ agent, conversation, apexTitle }: { agent: NativeAgent; co
   const { sent, send } = useFinAnswer(agent, conversation)
   const ask = openAsk(childStateOf(agent))?.ask
   if (!ask) return null
-  return <FinAnswerButtons agent={agent} ask={ask} apexTitle={apexTitle} sent={sent} send={send} typed={(ask.options?.length ?? 0) === 0} className="pt-0.5 pr-2 pb-2 pl-[2.125rem]" />
+  return <FinAnswerButtons agent={agent} ask={ask} apexTitle={apexTitle} sent={sent} send={send} typed className="pt-0.5 pr-2 pb-2 pl-[2.125rem]" />
 }
 
 /** A Fin that is an Apex of its own: its Fins fold under it, closed until asked, counted as its badge counts them. */

@@ -1,5 +1,7 @@
 import { CheckIcon } from "lucide-react"
 import { ApexMark } from "@/components/ui/apex-mark"
+import { PlanQuestionAnswers } from "@/components/apexes/plan-question"
+import { planQuestion } from "@mako/host/contracts/apexes"
 import { acp } from "@/state/acp"
 import { checkPlan, useApexPlanAsks, type PlanAsk } from "@/state/apexes"
 import { inboxView } from "@/state/inbox"
@@ -19,17 +21,24 @@ function PlanAsks({ asks, spaced }: { asks: PlanAsk[]; spaced: boolean }) {
     <section aria-label="Your Apexes wait on you" data-inbox-section="apexes" className={spaced ? "pt-5" : undefined}>
       <h2 className="flex h-7 items-center text-label font-medium text-attention">Your Apexes wait on you</h2>
       <ul className="flex flex-col gap-2">
-        {asks.map((ask) => (
-          <li key={`${ask.apex.thread}:${ask.section}:${ask.index}`} data-inbox-plan={ask.apex.name} className="flex flex-col gap-2 bg-raised px-3 py-2.5">
+        {asks.map((ask) => {
+          const asked = planQuestion(ask.text)
+          return (
+          <li key={`${ask.apex.thread}:${ask.section}:${ask.index}`} data-inbox-plan={ask.apex.name} data-inbox-plan-kind={asked ? "question" : "to-do"} className="flex flex-col gap-2 bg-raised px-3 py-2.5">
             <span className="flex min-w-0 items-center gap-1.5 text-label text-faint">
               <ApexMark className="size-3 shrink-0" />
               <span className="min-w-0 truncate font-medium text-foreground/90">{ask.apex.name}</span>
+              <span aria-hidden className="opacity-60">·</span>
+              <span>{asked ? "asks you" : "Your to-do"}</span>
             </span>
-            <span className="text-ui text-foreground">{ask.text}</span>
+            <span className="text-ui text-foreground">{asked?.question ?? ask.text}</span>
+            {asked ? <PlanQuestionAnswers thread={ask.apex.thread} apexName={ask.apex.name} section={ask.section} index={ask.index} options={asked.options} /> : null}
             <span className="flex items-center gap-1.5">
-              <button type="button" data-inbox-plan-done onClick={() => void checkPlan(ask.apex.thread, ask.section, ask.index, true)} className="pressable flex h-7 items-center gap-1.5 bg-foreground px-2.5 text-label text-background hover:opacity-90">
-                <CheckIcon className="size-3" />Done
-              </button>
+              {asked ? null : (
+                <button type="button" data-inbox-plan-done onClick={() => void checkPlan(ask.apex.thread, ask.section, ask.index, true)} className="pressable flex h-7 items-center gap-1.5 bg-foreground px-2.5 text-label text-background hover:opacity-90">
+                  <CheckIcon className="size-3" />Mark done
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => {
@@ -43,7 +52,8 @@ function PlanAsks({ asks, spaced }: { asks: PlanAsk[]; spaced: boolean }) {
               </button>
             </span>
           </li>
-        ))}
+          )
+        })}
       </ul>
     </section>
   )

@@ -303,3 +303,14 @@ export function usePlanNeedsCount(apex: ApexEntry | undefined): number {
   const plan = useApexes((state) => (apex ? state.plans[apex.thread] : undefined))
   return useMemo(() => (plan ? parsePlan(plan).sections.filter((section) => WAITING.test(section.name)).reduce((sum, section) => sum + section.items.filter((item) => !item.done).length, 0) : 0), [plan])
 }
+
+/** The person answers a question the Apex's plan asks them: their words go to the Apex, and the line leaves Needs you. */
+export async function answerPlan(thread: string, section: string, index: number, answer: string): Promise<boolean> {
+  const saved = await getMako().answerApexPlan(thread, section, index, answer).catch((error: Error) => ({ refused: "failed" as const, why: error.message }))
+  if ("refused" in saved) {
+    toast.error("Your answer didn't reach it", { description: saved.why })
+    return false
+  }
+  applyApexPlan(thread, saved.text)
+  return true
+}

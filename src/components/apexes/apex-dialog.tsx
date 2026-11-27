@@ -1,7 +1,11 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from "react"
 import { APEX_NAME_CHARS, APEX_PURPOSE_CHARS } from "@mako/host/contracts/apexes"
 import { localWords } from "@mako/protocol/computer-words"
-import { harnessLabel } from "@/components/rail/harness-meta"
+import { CheckIcon, ChevronDownIcon } from "lucide-react"
+import type { FinTarget } from "@mako/host/contracts/fin-tuning"
+import { TargetPicker } from "@/components/settings/fin-rules"
+import { FileIcon } from "@/components/ui/file-icon"
+import { Menu, MenuContent, MenuItem, MenuLabel, MenuTrigger } from "@/components/ui/menu"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Action, FIELD, Keys, Segmented } from "@/components/ui/kit"
 import { ApexMark } from "@/components/ui/apex-mark"
@@ -101,6 +105,44 @@ async function openWhenHeard(conversation: string): Promise<void> {
   }
 }
 
+/** A home folder itself is no project: an Apex there would let its Fins loose on everything the person keeps. */
+const HOME = /^(?:\/Users\/[^/]+|\/home\/[^/]+|[A-Za-z]:\\Users\\[^\\]+)\/?$/
+
+/** The Apex's folder: a chip, as the composer's, whose menu lists the projects you work in, newest first. */
+function FolderPicker({ folders, folder, onChoose }: { folders: readonly { path: string; name: string }[]; folder: string; onChoose: (path: string) => void }) {
+  const chosen = folders.find((each) => each.path === folder)
+  return (
+    <Menu modal={false}>
+      <MenuTrigger asChild>
+        <button
+          type="button"
+          data-apex-field="folder"
+          aria-label={`Folder: ${chosen?.name ?? "none"}`}
+          className="pressable flex h-7 max-w-full min-w-0 items-center gap-1.5 self-start bg-fill-hover px-2 text-ui font-medium text-foreground/85 hover:bg-fill-selected data-[state=open]:bg-fill-selected"
+        >
+          <FileIcon path={chosen?.path ?? "folder"} folder className="size-3.5 shrink-0 text-muted-foreground" />
+          <span className="truncate">{chosen?.name ?? "Choose a folder"}</span>
+          <ChevronDownIcon className="size-3 shrink-0 text-faint/70" />
+        </button>
+      </MenuTrigger>
+      <MenuContent align="start" className="max-h-80 w-[22rem] overflow-y-auto">
+        <MenuLabel>Its Fins work here, and stay here</MenuLabel>
+        {folders.slice(0, 20).map((each) => (
+          <MenuItem key={each.path} data-apex-folder={each.path} onSelect={() => onChoose(each.path)}>
+            <FileIcon path={each.path} folder className="size-3.5 shrink-0 text-muted-foreground" />
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">{each.name}</span>
+              <span className="truncate text-label text-faint">{each.path.replace(/^\/Users\/[^/]+/, "~")}</span>
+            </span>
+            {each.path === folder ? <CheckIcon className="size-3.5 shrink-0" /> : null}
+          </MenuItem>
+        ))}
+        {folders.length ? null : <p className="px-2 py-1.5 text-label text-faint">Open a project first: ⌘O.</p>}
+      </MenuContent>
+    </Menu>
+  )
+}
+
 function NewApex({ folder: asked }: { folder?: string }) {
   useHarnessIdentity()
   const recent = useRecentProjects()
@@ -110,21 +152,23 @@ function NewApex({ folder: asked }: { folder?: string }) {
   const composerHarness = useThreads((state) => state.composerHarness)
   const order = useHarnessOrder()
   // The project the window is in, never a Fin's worktree inside it.
-  const project = here ? recent.find((each) => here === each.path || here.startsWith(`${each.path}/`))?.path ?? here : undefined
+  const project = here
   const folders = useMemo(() => {
-    const paths = [...new Set([asked, project, ...recent.map((each) => each.path)].filter((path): path is string => Boolean(path)))]
+    // Projects, never a Thread's own worktree of one: an Apex's folder is where its Fins' worktrees come from.
+    const paths = [...new Set([asked, project, ...recent.map((each) => each.path)].filter((path): path is string => path !== undefined && path !== "" && !/\/\.mako\/worktrees\//.test(path) && !HOME.test(path)))]
     return paths.map((path) => ({ path, name: recent.find((each) => each.path === path)?.name ?? path.split("/").filter(Boolean).at(-1) ?? path }))
   }, [asked, project, recent])
   const [name, setName] = useState("")
   const [purpose, setPurpose] = useState("")
-  const [folder, setFolder] = useState(asked ?? project ?? folders[0]?.path ?? "")
-  const [harness, setHarness] = useState(order[0] ?? composerHarness ?? "claude")
-  const [model, setModel] = useState("")
+  const [folder, setFolder] = useState(asked ?? folders[0]?.path ?? "")
+  const profiles = useProviders((state) => state.profiles)
+  const signedIn = useMemo(() => order.filter((each) => profiles[each]?.available), [order, profiles])
+  const [target, setTarget] = useState<FinTarget | undefined>(undefined)
+  const harness = target?.harness ?? signedIn[0] ?? composerHarness ?? order[0] ?? "claude"
   const [run, setRun] = useState<"here" | "device">("here")
   const [device, setDevice] = useState("")
   const [message, setMessage] = useState("")
   const [busy, setBusy] = useState(false)
-  const models = useProviders((state) => state.profiles[harness]?.models)
   const nameRef = useRef<HTMLInputElement>(null)
   useEffect(() => nameRef.current?.focus(), [])
   const ready = Boolean(name.trim() && folder && harness && (run === "here" || device.trim()))
@@ -136,7 +180,8 @@ function NewApex({ folder: asked }: { folder?: string }) {
       ...(purpose.trim() && { purpose: purpose.trim() }),
       cwd: folder,
       harness,
-      ...(model && { model }),
+      ...(target?.settings?.model && { model: target.settings.model }),
+      ...(target?.settings?.options && Object.keys(target.settings.options).length && { options: target.settings.options }),
       ...(run === "device" && { fins: { run: `device:${device.trim()}` } }),
       ...(message.trim() && { message: message.trim() }),
       clientKey: crypto.randomUUID(),
@@ -158,32 +203,19 @@ function NewApex({ folder: asked }: { folder?: string }) {
         </Field>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <Field label="Folder">
-            <select data-apex-field="folder" className={FIELD} value={folder} onChange={(event) => setFolder(event.target.value)}>
-              {folders.length ? null : <option value="">Open a project first</option>}
-              {folders.map((each) => (
-                <option key={each.path} value={each.path} title={each.path}>
-                  {each.name}
-                </option>
-              ))}
-            </select>
+            <FolderPicker folders={folders} folder={folder} onChoose={setFolder} />
           </Field>
-          <div className="grid grid-cols-2 gap-2">
-            <Field label="Harness">
-              <select data-apex-field="harness" className={FIELD} value={harness} onChange={(event) => { setHarness(event.target.value); setModel("") }}>
-                {[...new Set([...order, harness])].map((each) => (
-                  <option key={each} value={each}>{harnessLabel(each)}</option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Model">
-              <select data-apex-field="model" className={FIELD} value={model} onChange={(event) => setModel(event.target.value)}>
-                <option value="">Your default</option>
-                {(models ?? []).map((each) => (
-                  <option key={each.id} value={each.id} disabled={Boolean(each.unavailable)}>{each.label}</option>
-                ))}
-              </select>
-            </Field>
-          </div>
+          <Field label="Runs on">
+            <span data-apex-field="harness" className="flex">
+              <TargetPicker
+                target={target ?? { harness }}
+                profiles={profiles}
+                signedIn={signedIn.length ? signedIn : order}
+                asUsed="The model you last used there"
+                onChoose={(next) => setTarget(next)}
+              />
+            </span>
+          </Field>
         </div>
         <Field label="Its Fins run">
           <div className="flex flex-wrap items-center gap-2">

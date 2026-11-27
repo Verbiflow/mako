@@ -218,11 +218,13 @@ function RuleRow({ index, rule, last, focus, profiles, signedIn, onChange, onMov
  * with its reasoning and speed, from that harness's catalog through the composer's picker. `apexOwn` offers the
  * Apex's own harness, which is what work no rule fits gets until the person picks.
  */
-function TargetPicker({ target, profiles, signedIn, apexOwn = false, onChoose }: {
+export function TargetPicker({ target, profiles, signedIn, apexOwn = false, asUsed = "The Apex's model there, or the one you last used", onChoose }: {
   target: FinTarget | undefined
   profiles: Readonly<Record<string, HarnessProfile>>
   signedIn: readonly string[]
   apexOwn?: boolean
+  /** What "as you use it" means where the picker is: a Fin's rule takes its Apex's model, a new Apex the person's last. */
+  asUsed?: string
   onChoose(target: FinTarget | undefined): void
 }) {
   const [shown, setShown] = useState(target?.harness ?? signedIn[0])
@@ -296,7 +298,7 @@ function TargetPicker({ target, profiles, signedIn, apexOwn = false, onChoose }:
             <MenuItem onSelect={() => choose(undefined)}>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate">{harnessLabel(shown)}, as you use it</span>
-                <span className="truncate text-label text-faint">The Apex's model there, or the one you last used</span>
+                <span className="truncate text-label text-faint">{asUsed}</span>
               </span>
               {here && !here.settings ? <CheckIcon className="size-3.5 shrink-0" /> : null}
             </MenuItem>
