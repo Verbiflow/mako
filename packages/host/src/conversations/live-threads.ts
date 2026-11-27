@@ -2,6 +2,7 @@ import { errorMessage } from "../base/error-message.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
 import { ChildStartSchema, listedUnderApex, type ChildStart } from "../contracts/agents.js"
 import type { LiveSnapshot, LiveStartOptions, LiveSummary } from "../contracts/live-conversations.js"
+import type { ApexStart } from "../contracts/apexes.js"
 import { CLOUD_FOLDER_WHERE } from "../contracts/listed-conversations.js"
 import { SessionIdSchema, ThreadIdSchema, type Actor, type SessionId } from "../contracts/thread-identity.js"
 import type { StartPurpose } from "../contracts/thread-purposes.js"
@@ -104,6 +105,13 @@ export class LiveThreads {
     hostLog("agents", "edge written", { op: asked.op, child: placed.thread, parent: asked.parent, name: edge.name })
     // The Fin is its edge from now: what shows it waiting changes this moment, not when its start answers.
     this.dependencies.agents?.()?.edgeWritten?.(asked.op)
+  }
+
+  /** A deliberate Apex's profile, under the Thread its start just made, before its harness runs. */
+  markApex(conversationId: string, apex: ApexStart): void {
+    const placed = this.dependencies.threads?.journalPlacement(conversationId)
+    if (!placed) throw new Error("The Apex's conversation has no Thread yet.")
+    this.dependencies.agents?.()?.apexMade?.(placed.thread, apex)
   }
 
   /**

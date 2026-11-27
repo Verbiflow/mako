@@ -1302,6 +1302,36 @@ as its continuation ends. That turn goes on even when the person turned off cont
 archived Thread, or after a week unanswered. The rule for when to message is
 in `ORCHESTRATION_INSTRUCTIONS`; `test:orch-comms` covers it too.
 
+Deliberate Apexes (`contracts/apexes.ts`, `conversations/apexes.ts`): an Apex made on purpose rather than by
+starting a Fin. It's a top-level Thread with a profile in the Thread store (`apexes`, added without a number, kept
+whole as JSON over what a newer build added; `ApexProfile`: a name, a purpose of at most 140 characters, what its Fins
+start on and where they run, `from: new|thread`, `seenAt`, and `needsSaid`) and its files in
+`<user root>/apexes/<thread>/` (`PLAN.md`, `RULES.md`, `FIN-RULES.md`), which every window and the phone read through
+this host (`mako:apex-*`). There are no kinds: what it's for is the person's first message, and its first turn is told
+it's new and to write that into its rules and plan. Made from the New Apex form or the palette (`mako:apex-create`,
+its profile written with its Session before its harness starts, `LiveStartOptions.apex`), from any Thread's menu
+(Make this an Apex, `mako:apex-promote`, keeping history, branch and Fins), or by an agent when the person asks
+(`apex` tool, `create`). Back to a Thread (`demote`) drops the profile and keeps its files and the Fins it started;
+the Threads moved into it are their own again (`ThreadStore.releaseEdge`, `origin: attached` only).
+Move into Apex (`gather`, a Thread's menu, a drag onto the Apex's row, `apex gather`) writes an `attached` edge for
+an existing top-level Thread in the Apex's folder: one Apex per Thread, and each refusal said in Mako's words
+(`gatherWords`: a Fin of a Fin, an Apex itself, archived, another folder, another Apex's, another device, or wider
+access, which moves in at the Apex's access once the person confirms). The Apex hears who joined once, as Mako's
+note after its turn (the `apex` service actor). `hand` gives one of its Fins to another Apex the same way.
+Rules come in layers (`RULE_LAYERS`): you everywhere, you in this folder, the folder (`<user root>/rule-layers.json`),
+the Apex's own and its Fins' (a Fin reads its Apex's Fin rules each turn, never the Apex's own); the person's rules
+for every Apex and every Fin stay their own lines. Each layer is a standing line of Mako's note (`ruleLayerLines`,
+merged in `Agents.ruleLines`), said whole once and again only when it changes, within `RULES_BUDGET_CHARS`, the most
+general cut first (`ruleParts`, which the Overview's context preview shows with what was cut or left out). Lessons an
+agent saves (`memory_save`, scoped you, you-folder or folder, by topic, a repeat confirming it) ride their scope's
+layer. A deliberate Apex reads its plan (`PLAN_SECTIONS`, at most `PLAN_TURN_CHARS`) and what needs the person at
+every turn's start (`Apexes.turnLines`, in `frontDoor`), with whether that changed since its last turn: it speaks to
+the person only when it did. The digest (`apexDigest`) is computed from the roster and the plan's "Waiting on you"
+lines, never written, so an ask answered, a Fin stopped or a line checked leaves it at once. Within a deliberate
+Apex's Shiver, Fins message each other directly (`sendToSibling`: queue or steer, at most three an hour to one,
+counted in `fin_messages`); an ordinary Apex's still hand work through it (`relayed`). A Fin isn't listed `apex`.
+`npm run test:apexes` covers the contract, the store and the service, and the engine's Shiver.
+
 A Thread has a handle, `mako-7f3k`, to say and type where its title is too long or changes
 (`contracts/thread-handles.ts`). It's worked out from the Thread's ID and never kept, so every device, the cloud and
 a saved transcript say the same one with nothing to sync: twelve characters of a 31-letter alphabet (no 0/o or

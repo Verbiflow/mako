@@ -103,6 +103,11 @@ const reads = [
   "mako:worktree-branches",
   "mako:project-settings",
   "mako:thread-marks",
+  /** Deliberate Apexes, an Apex's plan, its rules as a reader takes them, and the person's own layers: as they are. */
+  "mako:apexes",
+  "mako:apex-plan-read",
+  "mako:apex-rules-read",
+  "mako:rule-layers",
   /** A GitHub owner's avatar, kept on disk once fetched: asking again reaches the same picture. */
   "mako:repo-avatar",
   "mako:worktree-pulls",
@@ -427,6 +432,19 @@ const replays = [
   "mako:thread-rename",
   /** `ThreadStore.markThread`: the operation id is receipted. */
   "mako:thread-mark",
+  /** A new Apex settles by its client key; the rest of an Apex's changes reach the same end state when repeated. */
+  "mako:apex-create",
+  "mako:apex-promote",
+  "mako:apex-update",
+  "mako:apex-demote",
+  "mako:apex-gather",
+  "mako:apex-seen",
+  "mako:apex-plan-save",
+  "mako:apex-plan-check",
+  "mako:apex-rule-save",
+  "mako:memory-forget",
+  "mako:apex-act",
+  "mako:memory-save",
   /** Importing names only fills Threads that have none, so a repeat changes nothing. */
   "mako:thread-titles-import",
   /** Choosing a task's model a second time is the same choice. */

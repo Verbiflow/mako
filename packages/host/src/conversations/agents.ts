@@ -200,6 +200,8 @@ import type { PullTarget as ReadTarget } from "../git/index.js"
 import { localWords } from "@mako/protocol/computer-words"
 import { PollAnswers, turnOf } from "../base/poll-answers.js"
 import { AFTER_LIST, AFTER_READ, AFTER_WAIT_TIMEOUT, FINS_WAKE, unchangedNext } from "../contracts/poll-words.js"
+import type { Apexes } from "./apexes.js"
+import type { ApexStandingLines, ApexStart } from "../contracts/apexes.js"
 
 const NONE: readonly NativeAgent[] = []
 /** How long `agents_move` holds its answer for the switch to settle: within the door's window, and a failure later reports. */
@@ -1485,7 +1487,29 @@ export class Agents implements AgentOperations, ConversationChildren {
   isApex(conversation: string): boolean {
     if (this.roster(conversation).length) return true
     const thread = this.store()?.journalPlacement(conversation)?.thread
-    return thread !== undefined && this.store()?.edges().of(thread)?.role === APEX_ROLE
+    return thread !== undefined && (this.store()?.edges().of(thread)?.role === APEX_ROLE || this.store()?.apex(thread) !== undefined)
+  }
+
+  /** Deliberate Apexes (`Apexes`), set once both are built: their rules, plans and digests ride this engine's note. */
+  apexes?: Pick<Apexes, "standing" | "turnLines" | "made">
+
+  /** A start made its Thread a deliberate Apex (`LiveStartOptions.apex`). */
+  apexMade(thread: string, apex: ApexStart): void {
+    this.apexes?.made(thread, apex)
+  }
+
+  /** The conversation that speaks for a Thread here: its newest Session's. */
+  conversationFor(thread: string): string | undefined {
+    return this.conversationOf(thread)
+  }
+
+  /** A Thread came under an Apex or left one by a move (`Apexes.gather`): each Apex's roster reads its Fins again, at once. */
+  membersChanged(...parents: string[]): void {
+    this.sync()
+    for (const parent of new Set(parents)) {
+      this.forget(parent)
+      for (const conversation of this.conversationsOfThread(parent)) this.deps.live.childrenChanged(conversation, false)
+    }
   }
 
   /**
@@ -1525,14 +1549,16 @@ export class Agents implements AgentOperations, ConversationChildren {
    * rules, and the Apex rules a top-level Thread, an Apex or a Fin started as one. Its process hears them whole once and
    * then as they change, whoever's message starts its turn (`standingLines`).
    */
-  ruleLines(conversation: string): RoleRuleLines {
+  ruleLines(conversation: string): RoleRuleLines & ApexStandingLines {
     const policy = this.deps.finPolicy?.()
     const requests = (this.deps.live.held(conversation) ?? this.deps.live.snapshot(conversation))?.requests ?? []
     const read = new Set(requests.flatMap((request) => request.ruleLines ?? []))
-    if (!policy?.forFins && !policy?.forApexes && !read.size) return {}
+    // The layers (`Apexes.standing`): each said once and again when it changes; nothing at all for one with none.
+    const layered = this.apexes?.standing(conversation, read) ?? {}
+    if (!policy?.forFins && !policy?.forApexes && !read.size) return layered
     const child = this.childOfConversation(conversation)
     const edge = child ? this.store()?.edges().of(child) : undefined
-    return roleRuleLines(policy, { fin: edge !== undefined, apex: !edge || edge.role === APEX_ROLE || this.isApex(conversation), read })
+    return { ...roleRuleLines(policy, { fin: edge !== undefined, apex: !edge || edge.role === APEX_ROLE || this.isApex(conversation), read }), ...layered }
   }
 
   /**
@@ -1566,7 +1592,9 @@ export class Agents implements AgentOperations, ConversationChildren {
     const door = roster ? frontDoorNote(open.map((edge) => this.frontDoorChild(edge, false, acting)), now, person && includeGuidance, whole ? undefined : this.doorSaid.get(conversation)) : []
     // On the marks' own clock: every change this note read came before it.
     if (roster && open.length) this.doorSaid.set(conversation, this.changes.tick(now))
-    const lines = [...rules, ...door, ...note, ...followUps, ...this.owedReminder(conversation)]
+    // A deliberate Apex reads its plan and what needs the person at every turn's start, whoever's message starts it.
+    const apex = this.apexes?.turnLines(conversation) ?? []
+    const lines = [...rules, ...apex, ...door, ...note, ...followUps, ...this.owedReminder(conversation)]
     hostLog("agents", "front door", { conversation, children: open.length, chars: lines.reduce((sum, line) => sum + line.length + 1, 0) })
     return lines
   }
@@ -2958,7 +2986,10 @@ export class Agents implements AgentOperations, ConversationChildren {
     if ("refused" in apex) return apex
     if (input.to.startsWith(APEX_PREFIX)) return this.sendToApex(apex, input, began)
     const edge = this.resolve(apex, input.to, false)
-    if (!edge) return this.unsendableFin(apex, input)
+    if (!edge) {
+      const sibling = this.siblingIn(apex, input.to)
+      return sibling ? this.sendToSibling(apex, sibling.own, sibling.edge, input, began) : this.unsendableFin(apex, input)
+    }
     const op = `send:${apex.session}:${input.clientKey}`
     const request = namedUuid(op)
     const kept = this.sent.get(op)
@@ -7096,6 +7127,53 @@ export class Agents implements AgentOperations, ConversationChildren {
   private apexOfEdge(edge: ThreadParent): Apex {
     const conversation = this.conversationOfSession(edge.parentSession)
     return { session: edge.parentSession, thread: edge.parent, ...(conversation && { conversation }) }
+  }
+
+  /**
+   * Another Fin of the caller's Apex, when that Apex is a deliberate one (`Apexes`): the person made that Shiver to
+   * work together, so its Fins message each other directly. Any other Apex's Fins hand work on through it.
+   */
+  private siblingIn(caller: Apex, to: string): { own: ThreadParent; edge: ThreadParent } | undefined {
+    const store = this.store()!
+    const own = store.edges().of(caller.thread)
+    if (!own || !store.apex(own.parent)) return undefined
+    const edge = store.edges().children(own.parent).find((each) => each.child !== caller.thread && (each.child === to || each.name === finName(to)))
+    return edge ? { own, edge } : undefined
+  }
+
+  /**
+   * A Fin's message to a sibling in a deliberate Apex's Shiver: its own words, never the person's, queued after the
+   * sibling's turn or steered into it, with the restraint a message to another Thread has (`APEX_SENDS_PER_HOUR` to
+   * one an hour, no interrupt, no forward). A stopped sibling stays stopped: only its Apex or the person resumes it.
+   * Its Apex hears of it in its next note from the sibling's own reports, as of any work.
+   */
+  private async sendToSibling(sender: Apex, own: ThreadParent, sibling: ThreadParent, input: AgentsSendInput, began: number): Promise<AgentsSendResult> {
+    const op = `send:${sender.session}:${input.clientKey}`
+    const kept = this.sent.get(op)
+    if (kept) return { ...kept, deduped: true }
+    const name = `fin:${sibling.name}`
+    if (input.forward) return this.refuse(op, "conflict", `forward passes the person's message on, which only your ${APEX_WORD} has: write what ${name} needs as text.`)
+    if (input.deliver === "interrupt") return this.refuse(op, "conflict", `Another ${FIN_WORD}'s turn is its own to end: queue (the default), or steer when what it's doing now is wrong.`)
+    const words = input.text?.trim()
+    if (!words) return this.refuse(op, "conflict", "A message needs text.")
+    if (edgeStopped(sibling)) return this.refuse(op, "access", `${name} is stopped: only your ${APEX_WORD} or the person sends it on. Report what it should do to your ${APEX_WORD} with agents_report (handoff).`)
+    if (sibling.placed) return this.refuse(op, "unsupported", `${name} runs on another device: hand the work to your ${APEX_WORD} with agents_report (handoff).`)
+    const store = this.store()!
+    const now = this.now()
+    const request = namedUuid(op)
+    const counted = store.finSendsSince({ request, sender: own.child, thread: sibling.child, at: now, since: now - HOUR_MS })
+    if (!counted.existed && counted.recent.length >= APEX_SENDS_PER_HOUR) {
+      const minutes = Math.max(1, Math.ceil((counted.recent[0]! + HOUR_MS - now) / 60_000))
+      return this.refuse(op, "rate-limited", `${name} had ${APEX_SENDS_PER_HOUR} messages from you in the last hour; the next can go in ${minutes} min. If it can't wait, report it to your ${APEX_WORD}.`)
+    }
+    store.addFinMessage({ request, sender: own.child, thread: sibling.child, at: now })
+    const text = `${fromAgent(`fin:${own.name}, another ${FIN_WORD} of your ${APEX_WORD}`)}\n${words}\n\n[mako · answer only what it asks, in one message to fin:${own.name} if it needs one; report your own work to your ${APEX_WORD} as always.]`
+    const sent = await this.deliver(sibling, request, text, [], { kind: "agent", session: SessionIdSchema.parse(sender.session) }, input.deliver ?? "queue", false, input.reply === "none" ? { notification: true } : {})
+    if ("refused" in sent) return this.refuse(op, sent.refused, sent.why)
+    const answer: AgentsSent = { child: sibling.child, name: sibling.name, request, delivery: sent.delivery, hears: sent.hears, ...(sent.deduped && { deduped: true as const }) }
+    this.sent.set(op, answer)
+    hostLog("agents", "send sibling", { op, from: own.child, to: sibling.child, request, delivery: sent.delivery, ms: Math.round(performance.now() - began) })
+    return answer
   }
 
   /**

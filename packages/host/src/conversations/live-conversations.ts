@@ -311,6 +311,7 @@ export class LiveConversations {
       register: (snapshot, actor) => this.threads.register(snapshot, actor),
       markPurpose: (conversationId, purpose, options) => this.threads.markPurpose(conversationId, purpose, options),
       markParent: (conversationId, parent) => this.threads.markParent(conversationId, parent),
+      markApex: (conversationId, apex) => this.threads.markApex(conversationId, apex),
       startingSession: (session) => this.threads.startingSession(session),
       sameSession: (conversationId, ref) => this.threads.sameSession(conversationId, ref, () => {
         const snapshot = this.records.load(conversationId)?.snapshot

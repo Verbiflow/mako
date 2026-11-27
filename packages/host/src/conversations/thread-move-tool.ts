@@ -9,6 +9,7 @@ import type { ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadRet
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
 import { toolMeta } from "../contracts/mcp-reach.js"
 import type { AgentAskWant } from "../contracts/agent-asks.js"
+import type { AgentToolRole } from "../contracts/agent-tools.js"
 import { AFTER_MOVE, THREAD_TOOLS, type ThreadMoveRefused, type ThreadToolDefinition, type ThreadsMoveInput, type ThreadsMoveResult } from "../contracts/thread-tools.js"
 import { namedUuid } from "./cloud-moves.js"
 import type { AgentAskGate } from "./agent-ask-gate.js"
@@ -226,9 +227,13 @@ export function threadToolText(answer: ThreadMoveAnswer): string {
   return answer.refused === undefined ? json : `refused: ${answer.refused}\n${json}`
 }
 
-/** Every Thread tool on a `mako` server, each projected from its definition. */
-export function registerThreadTools(server: McpServer, door: ThreadToolDoor): void {
+/**
+ * Every Thread tool on a `mako` server, each projected from its definition. A Fin isn't listed `apex`: it works for
+ * one, and nothing of it is a Fin's to call (`role`, read as its server is built, as `registerAgentTools` reads it).
+ */
+export function registerThreadTools(server: McpServer, door: ThreadToolDoor, role?: AgentToolRole): void {
   for (const tool of THREAD_TOOLS) {
+    if (role === "fin" && tool.channel === "mako:apex-act") continue
     const { mcp } = tool
     server.registerTool(mcp.name, { description: mcp.description, inputSchema: threadToolSchema(tool), annotations: mcp.annotations, ...toolMeta(mcp.name) }, async (input) => {
       try {

@@ -33,6 +33,8 @@ export const SERVICE_ACTORS = [
   "pull-watch",
   /** Mako waking a Thread whose agent's turn waited (`contracts/turn-waits.ts`). */
   "turn-wait",
+  /** Mako telling a deliberate Apex who joined or left its Shiver (`contracts/apexes.ts`). */
+  "apex",
 ] as const
 
 /**

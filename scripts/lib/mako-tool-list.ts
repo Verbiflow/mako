@@ -32,7 +32,7 @@ export async function makoToolList(role: AgentToolRole, options: { fullAccess?: 
     (server, conversationId) => registerThreadHistoryTools(server, stub, conversationId),
     (server, conversationId) => registerShowTool(server, stub, conversationId),
     (server, _conversationId, conversation) => registerAgentTools(server, stub, roleOf(conversation)),
-    (server) => registerThreadTools(server, stub),
+    (server, _conversationId, conversation) => registerThreadTools(server, stub, roleOf(conversation)),
   ]
   const servers = await startConversationMcp({ authorizeAgent: () => {} }, async () => null, registrars)
   try {

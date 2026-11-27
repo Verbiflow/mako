@@ -77,6 +77,8 @@ export interface LiveStartOptions {
    * own and its first turn already has a parent to report to.
    */
   parent?: import("./agents.js").ChildStart
+  /** This new Thread is a deliberate Apex (`contracts/apexes.ts`): its profile is written with its Session, before its harness starts. */
+  apex?: import("./apexes.js").ApexStart
 }
 
 /**

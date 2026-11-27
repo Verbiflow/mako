@@ -2253,10 +2253,10 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       filled: () => ({ cwd: live.session(conversationId())?.cwd }),
     }, conversation === undefined ? undefined : late.conversations?.agents?.toolRole(conversation)),
     // Always as the Thread's agent: a conversation without a Session is refused, never taken for the person.
-    (server, conversationId) => registerThreadTools(server, {
+    (server, conversationId, conversation) => registerThreadTools(server, {
       invoke: async (channel, args) => ThreadMoveAnswerSchema.parse(decodeRuntimeValue(await methods.invoke(channel, args))),
       caller: () => ({ kind: "agent", session: threads.store?.journalPlacement(conversationId())?.session ?? "" }),
-    }),
+    }, conversation === undefined ? undefined : late.conversations?.agents?.toolRole(conversation)),
     (server, conversationId) => simulatorTools.register(server, {
       invoke: async (channel, args) => decodeRuntimeValue(await methods.invoke(channel, args)),
       caller: () => {
