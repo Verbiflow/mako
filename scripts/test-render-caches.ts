@@ -192,6 +192,16 @@ import { rowChecker } from "../src/components/transcript/row-check"
     assert.deepEqual(resized.at(-1), [3, 140], "The steady check still finds a row no change named")
     assert.equal(reads.size, 12)
     assert.ok(warned.mock.calls.some((call) => String(call.arguments[0]).startsWith("Transcript row corrected")), "A correction its observer never reported is logged")
+    // A row whose contents the browser skips stands at a placeholder, which isn't its size: the row keeps the one placed.
+    heights[5] = 40
+    const skipped = new Set([children[5]!])
+    resized.length = 0
+    assert.equal(check.check({ ...mounted, skipped: (element) => skipped.has(element) }), false, "A skipped row's placeholder is no correction")
+    assert.deepEqual(resized, [])
+    assert.equal(sizes.get(5), 100)
+    skipped.clear()
+    assert.equal(check.check({ ...mounted, skipped: (element) => skipped.has(element) }), true, "Laid out again, the row is read for its size")
+    assert.deepEqual(resized, [[5, 40]])
   } finally {
     warned.mock.restore()
   }

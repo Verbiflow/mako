@@ -1021,7 +1021,7 @@ export function ConversationTimeline({
    * painted over what follows it. The space between rows is the virtualizer's gap, so a row arriving below another
    * doesn't change that one's size.
    */
-  const [rowCheck] = useState(rowChecker)
+  const [rowCheck] = useState(() => rowChecker<Element>())
   /** The viewport and offset a live crossing into a window starts from (`carryIntoWindow`): `initialRect` is read as it's enabled. */
   const crossingRect = useRef({ width: 0, height: 0 })
   const crossingOffset = useRef(0)
@@ -1100,6 +1100,11 @@ export function ConversationTimeline({
     keyOf: rowKey,
     partsOf: (index) => exchanges[index]!.response.length,
     streaming: (index) => exchanges[index]!.id === streamingId,
+    // Only a row kept out of view (`data-sized`) is ever skipped; what's in its turn says whether it is right now.
+    skipped: (element) => {
+      const inside = element.hasAttribute("data-sized") ? element.firstElementChild?.firstElementChild : undefined
+      return Boolean(inside?.checkVisibility() && !inside.checkVisibility({ contentVisibilityAuto: true }))
+    },
     following: pinned.current,
   }, only)
   /*
@@ -1290,12 +1295,19 @@ export function ConversationTimeline({
       if (!list) return
       const skip: [HTMLElement, number][] = []
       const draw: HTMLElement[] = []
+      const placed = new Map(rows.getVirtualItems().map((item) => [item.index, item.size]))
       for (const row of list.children) {
         if (!(row instanceof HTMLElement)) continue
         const index = Number(row.dataset.index)
         const out = index < firstInView || index > lastInView
-        if (out && !row.hasAttribute("data-sized")) skip.push([row, row.getBoundingClientRect().height])
-        else if (!out && row.hasAttribute("data-sized")) draw.push(row)
+        if (out && !row.hasAttribute("data-sized")) {
+          // Only a row at the size it was placed at is set aside. One that changed this frame (its turn finishing in
+          // the batch that brought the next) has a size nobody has read yet, and skipped, it stood at the one the
+          // browser remembered from before: it stays laid out for the row check to read, and goes at the next pass.
+          const height = row.getBoundingClientRect().height
+          const size = placed.get(index)
+          if (size !== undefined && Math.abs(height - size) <= 1) skip.push([row, height])
+        } else if (!out && row.hasAttribute("data-sized")) draw.push(row)
       }
       for (const [row, height] of skip) {
         if (!height) continue
@@ -1305,7 +1317,7 @@ export function ConversationTimeline({
       for (const row of draw) row.removeAttribute("data-sized")
     })
     return () => cancelAnimationFrame(frame)
-  }, [firstInView, lastInView, mountedKeys])
+  }, [firstInView, lastInView, mountedKeys, rows])
 
   useLayoutEffect(() => {
     const node = viewport.current,

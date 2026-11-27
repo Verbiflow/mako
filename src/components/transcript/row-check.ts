@@ -32,6 +32,11 @@ export interface MountedRows<Row extends RowElement = Element> {
   /** The parts of its turn so far, which say what changed since the row was last right. */
   partsOf(index: number): number
   streaming(index: number): boolean
+  /**
+   * The browser skips this row's contents (`content-visibility`), so its box is a placeholder and says nothing of its
+   * size. Absent, every row is laid out.
+   */
+  skipped?(element: Row): boolean
   following: boolean
 }
 
@@ -95,7 +100,7 @@ export function rowChecker<Row extends RowElement = Element>(): RowChecker<Row> 
   }
   return {
     heard: (element) => void heard.add(element),
-    check({ rows, list, keyOf, partsOf, streaming, following }, only) {
+    check({ rows, list, keyOf, partsOf, streaming, skipped, following }, only) {
       const now = performance.now()
       for (const correction of waiting) {
         if (!heard.has(correction.element)) tell(correction, now)
@@ -126,6 +131,14 @@ export function rowChecker<Row extends RowElement = Element>(): RowChecker<Row> 
         const registered = rows.elementsCache.get(key) === element
         // The virtualizer places only the rows it has, and a row it lost is observed again here.
         if (!registered) rows.measureElement(element)
+        // A skipped row stands at the size the browser last remembered for it, which can be one from before its turn
+        // finished: taken for its size, the column closed up under it, and the frame the browser drew it again (it
+        // decides which rows it skips after this check, before the paint) painted it over what follows the rows.
+        if (skipped?.(element)) {
+          const before = right.get(key)
+          if (before) still.set(key, before)
+          continue
+        }
         if (real === 0 || Math.abs(real - stale) <= ROUNDING) {
           still.set(key, { parts: partsOf(index), at: now })
           continue
