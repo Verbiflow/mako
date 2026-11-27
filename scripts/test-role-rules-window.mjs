@@ -147,8 +147,9 @@ async function checkWindow() {
     /* Escape reverts and saves nothing. */
     await focusField("forApexes")
     await page.debugger.sendCommand("Input.insertText", { text: " Or five." })
-    await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
-    await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyUp", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
+    // Escape goes to the field from the page, as its focus and blur do: the runner's synthetic keys need a focused window,
+    // and Linux CI's is shown without focus. What's checked is the field's own answer to Escape.
+    await evaluate(`document.activeElement.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", code: "Escape", bubbles: true, cancelable: true })), true`)
     await until(`document.activeElement !== document.querySelector(${JSON.stringify(field("forApexes"))})`, "Escape leaves the field")
     await new Promise((done) => setTimeout(done, 200))
     assert.equal(await evaluate(`document.querySelector(${JSON.stringify(field("forApexes"))}).value`), "Ask me before starting more than four Fins.", "the field shows the saved words")
