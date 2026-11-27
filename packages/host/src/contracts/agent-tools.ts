@@ -2,7 +2,7 @@ import { REPORT_FOLLOW_UP_INSTRUCTIONS } from "./report-actions.js"
 import type { ReportAction, ReportActionTarget, ReportActionsPage, ReportDisposition } from "./report-actions.js"
 import type { AccessTier } from "./access.js"
 import { type AgentsCancelInput, type AgentsCancelled, type AgentsCapabilities, type AgentsNoticed, type AgentsNoticeCall, type AgentsPlaced, type AgentsPlaceInput, APEX_WORD, decisionWords, UNFINISHED_WORDS, FIN_WORD, SHIVER_WORD, waitingStateWords, waitingWords, type FinPullRequest, type WaitingOn, type AgentCaller, type AgentRefused, type Artifact, type Brief, type ChildOrigin, type ChildRole, type ChildState, type FinDeliver, type FinDelivery, type ReportStatus, type StartMode, type WakeOn } from "./agents.js"
-import type { Rollup } from "./children.js"
+import { APEX_QUIET, SPLIT_WORK, type Rollup } from "./children.js"
 import type { HostCallReplay } from "./host-call-policy.js"
 import { AFTER_LIMIT, type AskOption, type FinAsk } from "./native-agents.js"
 
@@ -747,6 +747,8 @@ const START = [
   "The brief is all it knows; attach Threads it refers to with context, not paths.",
   `To replace a ${FIN_WORD} whose harness ran out or should change, use agents_move instead.`,
   "It returns at once and its reports wake you; don't wait or poll after. Use mode wait only when your next step can't go on without its result: you get it here within " + WAIT_WORDS + ", else your turn ends and the result starts your next.",
+  SPLIT_WORK,
+  APEX_QUIET,
   "Pass model, reasoning or fast only as the person said them (\"Codex on high\", \"the fast one\").",
   "Never run an agent CLI with nohup instead: it can't report or ask.",
 ].join(" ")
@@ -783,7 +785,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
       name: "agents_start",
       description: START,
       fields: {
-        brief: "objective (what and why, with all it needs), doneWhen (the checks that say it's done), boundaries (what not to touch), output (what its report carries).",
+        brief: "objective (what and why, with all it needs), doneWhen (the checks that say it's done), boundaries (what not to touch), output (what its report carries; absent: Outcome / PR / Needs / Cost / Lesson).",
         name: `Short, unique among your ${FIN_WORD}s; made from the brief when absent.`,
         harness: "claude, codex, cursor, grok, opencode or devin; yours when absent. If that one's account is at its limit, the person's next harness with room, said in the answer; a named one at its limit is refused with its reset and what else they can use.",
         model: "Only one the person named, by id or name (\"opus 5.5\"). Absent: their Fins default for the harness, else your model on your harness, else their last one there. One the harness doesn't list is refused with those it does.",
