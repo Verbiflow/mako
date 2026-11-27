@@ -293,6 +293,10 @@ export interface AgentsListed {
   /** This host's own mark (its life and a tick of its clock). Absent from a host before change marks. */
   mark?: string
   unchanged?: number
+  /** What to do next while its Fins are at work (`AFTER_LIST`), or that it repeats the last answer. */
+  next?: string
+  /** A repeat of the caller's last answer, unchanged (`PollAnswers`): seconds since it, with no Fin listed again. */
+  unchangedSince?: number
 }
 export type AgentsListResult = AgentsListed | AgentsShiver | AgentsApexes | AgentsThreads | AgentRefused
 
@@ -359,6 +363,10 @@ export type AgentsReadResult = {
   truncated?: true
   /** A transcript's end is a tail: where the whole is. */
   whole?: string
+  /** What to do next while it's at work (`AFTER_READ`), or that it repeats the last answer. */
+  next?: string
+  /** A repeat of the caller's last answer, unchanged (`PollAnswers`): seconds since it, `text` only saying so. */
+  unchangedSince?: number
 } | AgentRefused
 
 export interface AgentsReportInput {
@@ -488,7 +496,7 @@ export interface AgentsWaitInput {
   /** The cursor a previous wait returned; reports after it count. */
   after?: number
 }
-export type AgentsWaitResult = { reports: { child: string; name: string; status: ReportStatus; line: string; at: number }[]; cursor: number; timedOut: boolean } | AgentRefused
+export type AgentsWaitResult = { reports: { child: string; name: string; status: ReportStatus; line: string; at: number }[]; cursor: number; timedOut: boolean; next?: string; unchangedSince?: number } | AgentRefused
 
 /** The operations an engine answers; each door calls one of these through its host call. */
 /** The same Thread goes on on another harness: one Fin, or `all` of the caller's. */

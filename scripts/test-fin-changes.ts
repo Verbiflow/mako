@@ -8,6 +8,7 @@ import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { FROM_AGENTS } from "@mako/host/contracts/children"
 import { CONTEXT_COMPACTED } from "@mako/host/contracts/native-activity"
 import { FinChanges } from "@mako/host/conversations/fin-changes"
+import { PollAnswers, turnOf } from "@mako/host/base/poll-answers"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -168,6 +169,79 @@ const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
     await world.close()
     rmSync(root, { recursive: true, force: true })
   }
+}
+
+// Reading Fins at work again changes nothing (`PollAnswers`): a list or read says their reports wake the caller; the
+// same read again, unchanged, says so whole; the time after, only that; a change, another call or a terminal resets it.
+{
+  const root = mkdtempSync(join(tmpdir(), "mako-fin-changes-polls-"))
+  let release = () => {}
+  const held = new Promise<void>((resolve) => { release = resolve })
+  const world = new AgentsWorld({ root, script: async (turn) => {
+    if (!turn.text.includes("You're fin:")) return "ok"
+    await held
+    return "Done."
+  } })
+  try {
+    const apex = await world.apex("claude", "full")
+    for (const name of ["slow", "slower"]) {
+      const answer = await world.agents.start(apex.caller, { brief: { objective: `Check ${name}` }, name, harness: "codex", cwd: world.root, clientKey: name })
+      assert.ok(!("refused" in answer), JSON.stringify(answer))
+    }
+    await pause(500)
+    const first = await world.agents.list(apex.caller, {})
+    assert.ok("children" in first, JSON.stringify(first))
+    assert.ok(first.children.every((strip) => strip.state.kind === "working" || strip.state.kind === "starting"), JSON.stringify(first.children.map((strip) => strip.state)))
+    assert.equal(first.next, "Their reports wake you. End your turn or keep working; don't poll.", "a list of Fins at work says their reports wake you")
+    const again = await world.agents.list(apex.caller, {})
+    assert.ok("children" in again && again.children.length === 2, "the first repeat is whole")
+    assert.match(again.next ?? "", /^Nothing changed since your last agents_list \d+ s ago: fin:slow, fin:slower are working\. Their reports wake you; end your turn\.$/)
+    const short = await world.agents.list(apex.caller, {})
+    assert.ok("children" in short && short.children.length === 0 && short.unchanged === 2 && short.unchangedSince !== undefined, `the time after, only that: ${JSON.stringify(short)}`)
+    assert.match(short.next ?? "", /^Nothing changed since your last agents_list/)
+    assert.ok("children" in await world.agents.list(apex.caller, { scope: "all" }), "another call is read whole")
+    const read = await world.agents.read(apex.caller, { child: "slow" })
+    assert.ok(!("refused" in read) && "text" in read, JSON.stringify(read))
+    assert.equal(read.next, "Its report wakes you. End your turn or keep working; don't poll.")
+    const reread = await world.agents.read(apex.caller, { child: "slow" })
+    assert.ok("text" in reread && /^Nothing changed since your last agents_read of fin:slow/.test(reread.next ?? ""), JSON.stringify(reread))
+    const shortRead = await world.agents.read(apex.caller, { child: "slow" })
+    assert.ok("text" in shortRead && shortRead.unchangedSince !== undefined && shortRead.text === shortRead.next, `then only that: ${JSON.stringify(shortRead)}`)
+    assert.ok("text" in await world.agents.read(apex.caller, { child: "slower" }), "another Fin is read whole")
+    // A Fin's report is a change: the next list is whole and says nothing of repeats.
+    const fin = world.store.edges().children(world.store.journalPlacement(apex.conversation)!.thread).find((edge) => edge.name === "slow")!
+    const conversation = world.store.thread(ThreadIdSchema.parse(fin.child))!.sessions.flatMap((session) => world.store.conversationsOf(session))[0]!
+    const reported = await world.agents.report(world.caller(conversation), { status: "progress", summary: "Half way.", clientKey: "half" })
+    assert.ok(!("refused" in reported), JSON.stringify(reported))
+    const changed = await world.agents.list(apex.caller, {})
+    assert.ok("children" in changed && !changed.next?.startsWith("Nothing changed"), `a change resets it: ${JSON.stringify("next" in changed && changed.next)}`)
+    const timedOut = await world.agents.wait(apex.caller, { timeoutMs: 10, after: Date.now() })
+    assert.ok(!("refused" in timedOut) && timedOut.timedOut && timedOut.next === "Nothing new: reports wake you without it. End your turn now; don't wait again.", JSON.stringify(timedOut))
+    const waitedAgain = await world.agents.wait(apex.caller, { timeoutMs: 10, after: "cursor" in timedOut ? timedOut.cursor : 0 })
+    assert.ok(!("refused" in waitedAgain) && waitedAgain.unchangedSince !== undefined && /^Nothing changed since your last agents_wait/.test(waitedAgain.next ?? ""), JSON.stringify(waitedAgain))
+  } finally {
+    release()
+    await world.close()
+    rmSync(root, { recursive: true, force: true })
+  }
+}
+
+// The repeats themselves: per conversation and call, reset by a new turn, a changed answer or the window; none for a
+// caller with no conversation.
+{
+  const polls = new PollAnswers(2, 1_000)
+  assert.deepEqual(polls.read("c", "list", "a", "t1", 0), { repeats: 0 })
+  assert.deepEqual(polls.read("c", "list", "a", "t1", 400), { repeats: 1, since: 0 })
+  assert.deepEqual(polls.read("c", "list", "a", "t1", 2_400), { repeats: 0 }, "past the window it's new")
+  assert.deepEqual(polls.read("c", "list", "a", "t2", 2_500), { repeats: 0 }, "a new turn is new")
+  assert.deepEqual(polls.read("c", "list", "b", "t2", 2_600), { repeats: 0 }, "a changed answer is new")
+  assert.deepEqual(polls.read(undefined, "list", "b", "t2", 2_700), { repeats: 0 })
+  assert.deepEqual(polls.read(undefined, "list", "b", "t2", 2_800), { repeats: 0 }, "a terminal is never counted")
+  polls.read("d", "list", "b", "t", 2_900)
+  polls.read("e", "list", "b", "t", 3_000)
+  assert.deepEqual(polls.read("c", "list", "b", "t2", 3_100), { repeats: 0 }, "bounded: the conversation heard from least recently is forgotten")
+  assert.equal(turnOf([{ id: "q", status: "completed" }, { id: "r", status: "dispatching" }, { id: "s", status: "queued" }]), "r")
+  assert.equal(turnOf([{ id: "q", status: "completed" }]), undefined)
 }
 
 // What needs its Apex is listed whatever `since` says; a mark this host can't read lists every Fin.

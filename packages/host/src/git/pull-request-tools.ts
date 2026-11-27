@@ -8,6 +8,9 @@ import { authorWords, MAKO_GITHUB_APP } from "../contracts/github-person.js"
 import { PULL_REQUESTS_AS, PULL_REQUESTS_FALLBACK_SENTENCE, type PullRequestsAs } from "../contracts/github-authorship.js"
 import { MACHINE_IDENTITY_DIR } from "../contracts/machine-agent.js"
 import { toolText } from "../base/tool-text.js"
+import { hostLog } from "../base/host-log.js"
+import { PollAnswers } from "../base/poll-answers.js"
+import { afterChecksPending, unchangedNext } from "../contracts/poll-words.js"
 import type { Git } from "@mako/git"
 
 /** A repository the calling Session can reach: its name in the project folder, its root, and where its worktree branch started. */
@@ -44,6 +47,29 @@ interface Deps {
   pullRequestsAs?(): Promise<PullRequestsAs | undefined>
   /** The Thread a conversation belongs to, so what's said once per Thread is said once across its Sessions. */
   threadOf?(conversationId: string): string | undefined
+  /** The request the conversation's turn runs now, so a read repeated in one turn is told so (`PollAnswers`). */
+  turnOf?(conversationId: string): string | undefined
+  /** Which reads repeat the caller's last answer; one of the tools' own when absent. */
+  polls?: PollAnswers
+  now?(): number
+}
+
+/** What a status read says of a pull request it read: where it is, whether it's open, and its checks. */
+type ReadPull = Pick<NonNullable<PullRequestReport["pullRequest"]>, "url" | "state" | "checks">
+/** A status read, with its one pull request or each repository's. */
+interface StatusRead {
+  pullRequest?: ReadPull
+  repositories?: readonly { pullRequest?: ReadPull }[]
+}
+
+/** The open pull requests a status read names whose head's checks still run, each as `owner/name#412`. */
+function pendingPulls(read: StatusRead): string[] {
+  return [read.pullRequest, ...(read.repositories ?? []).map((each) => each.pullRequest)].flatMap((pull) => {
+    if (!pull || (pull.state !== "open" && pull.state !== "draft") || pull.checks === "none reported") return []
+    const running = Array.isArray(pull.checks) ? pull.checks.some((check) => check.state === "running") : /\brunning\b/.test(pull.checks.totals)
+    const ref = /github\.com\/([^/]+\/[^/]+)\/pull\/(\d+)/.exec(pull.url)
+    return running && ref ? [`${ref[1]}#${ref[2]}`] : []
+  })
 }
 
 /** On a cloud machine, who its pull requests go as (`pull-requests` in `MACHINE_IDENTITY_DIR`); undefined before the agent wrote it. */
@@ -114,6 +140,22 @@ const GITHUB_POLLING = "Use this and waitingOn, so Mako wakes you, instead of gh
 export function pullRequestTools(deps: Deps): PullRequestTools {
   const report = (repository: ReachableRepository, logs = false, checks?: "all") => pullRequestReport(deps.git, repository.root, { startedFrom: repository.startedFrom, logs, checks })
   const toldFallback = new Set<string>()
+  const polls = deps.polls ?? new PollAnswers()
+  /**
+   * A status read whose checks still run says to wait on them and end the turn. The same read again in that turn, with
+   * nothing changed, says so; the time after, it's only that.
+   */
+  const answered = async <Read extends StatusRead>(conversationId: string, options: StatusOptions, value: Read): Promise<string> => {
+    const pending = pendingPulls(value)
+    if (!pending.length) return toolText(value)
+    const text = await toolText(value)
+    const reading = polls.read(conversationId, `pull_request_status ${JSON.stringify(options)}`, text, deps.turnOf?.(conversationId), deps.now?.() ?? Date.now())
+    const wait = afterChecksPending(pending[0]!)
+    if (reading.since === undefined) return toolText({ ...value, next: wait })
+    hostLog("agents", "poll answered unchanged", { conversation: conversationId, tool: "pull_request_status", repeats: reading.repeats, since: reading.since })
+    const next = unchangedNext("pull_request_status", reading.since, [], wait)
+    return reading.repeats >= 2 ? toolText({ unchangedSince: reading.since, next }) : toolText({ ...value, next })
+  }
   /** The fallback sentence for a Thread's first pull request that went as the App only for want of a token; empty after. */
   const fallbackNote = async (conversationId: string): Promise<string> => {
     const thread = deps.threadOf?.(conversationId) ?? conversationId
@@ -148,7 +190,8 @@ export function pullRequestTools(deps: Deps): PullRequestTools {
       : `None of this project's repositories has an open pull request:\n${lines}`)
   }
   return {
-    async status(conversationId, { logs = false, repository, checks, number, job, run } = {}) {
+    async status(conversationId, options = {}) {
+      const { logs = false, repository, checks, number, job, run } = options
       const place = await deps.place(conversationId)
       if (number !== undefined || job !== undefined || run !== undefined) {
         const one = meant(place, repository)
@@ -156,16 +199,16 @@ export function pullRequestTools(deps: Deps): PullRequestTools {
         const named = place.repositories.length > 1 ? { repository: one.name } : {}
         const log = job !== undefined ? await namedLog(one.root, { job }) : run !== undefined ? await namedLog(one.root, { run }) : undefined
         if (number === undefined) return toolText({ ...named, ...log })
-        return toolText({ ...named, ...await pullRequestByNumber(one.root, number, { logs: logs && !log, checks }), ...log && { log } })
+        return answered(conversationId, options, { ...named, ...await pullRequestByNumber(one.root, number, { logs: logs && !log, checks }), ...log && { log } })
       }
       const one = meant(place, repository)
-      if (one && place.repositories.length === 1) return toolText(await report(one, logs, checks))
+      if (one && place.repositories.length === 1) return answered(conversationId, options, await report(one, logs, checks))
       if (one) {
         const others = place.repositories.filter((other) => other !== one).map((other) => other.name)
-        return toolText({ repository: one.name, ...await report(one, logs, checks), otherRepositories: others })
+        return answered(conversationId, options, { repository: one.name, ...await report(one, logs, checks), otherRepositories: others })
       }
       const reports = await Promise.all(place.repositories.map(async (each) => ({ repository: each.name, ...await report(each, logs, checks) })))
-      return toolText({ projectFolder: place.folder, repositories: reports })
+      return answered(conversationId, options, { projectFolder: place.folder, repositories: reports })
     },
     async open(conversationId, { repository, ...draft }) {
       const place = await deps.place(conversationId)
@@ -247,7 +290,7 @@ export function registerPullRequestTools(server: McpServer, tools: PullRequestTo
     "pull_request_status",
     {
       description:
-        `Call before opening, updating or merging this branch's pull request, and when the user asks about its checks or reviews. Reads the pull request of the branch this Session edits on: check counts by state, each check not passed or skipped with its link, reviews, unresolved review comments by file and line, whether GitHub would merge it, and with logs: true the end of each failed GitHub Actions job's output. With none open, what opening one would do: its base and commits, the repository's PR template, and what's in the way. With number, reads another pull request of the same repository the same way, such as a Fin's, instead of \`gh pr view\` or \`gh api .../pulls/<n>\`. With job or run, the end of that GitHub Actions job's or run's log, instead of \`gh run view\` or \`gh api .../actions/jobs/<id>/logs\`; a check's link ends with them (\`.../actions/runs/<run>/job/<job>\`). ${ONE_PER_REPOSITORY} in the project folder itself it reports every repository, each under its name. Changes nothing. ${GITHUB_POLLING}`,
+        `Call before opening, updating or merging this branch's pull request, and when the user asks about its checks or reviews. Reads the pull request of the branch this Session edits on: check counts by state, each check not passed or skipped with its link, reviews, unresolved review comments by file and line, whether GitHub would merge it, and with logs: true the end of each failed GitHub Actions job's output. With none open, what opening one would do: its base and commits, the repository's PR template, and what's in the way. With number, reads another pull request of the same repository the same way, such as a Fin's, instead of \`gh pr view\` or \`gh api .../pulls/<n>\`. With job or run, the end of that GitHub Actions job's or run's log, instead of \`gh run view\` or \`gh api .../actions/jobs/<id>/logs\`; a check's link ends with them (\`.../actions/runs/<run>/job/<job>\`). ${ONE_PER_REPOSITORY} in the project folder itself it reports every repository, each under its name. Changes nothing. While its checks run, don't call it again to wait: wait on them and end your turn. ${GITHUB_POLLING}`,
       inputSchema: z.object({
         logs: z.boolean().optional().describe("Include the end of each failed GitHub Actions job's log."),
         checks: z.literal("all").optional().describe("List every check, passed ones too."),

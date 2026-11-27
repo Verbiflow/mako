@@ -938,7 +938,18 @@ turn, at its next step where its harness steers there, and what else its
 Fins report waits for the turn's end as one digest, unless the turn is still
 running `FOCUS_MS` (2 minutes) after the first of it, when that digest is
 steered in once (`asksApex`, `armFocus`); at most `WAKES_PER_MINUTE` digests
-an Apex (`agent-wakes.ts`): the Apex never polls. `npm run test:comms-storm`
+an Apex (`agent-wakes.ts`): the Apex never polls. What it reads says so
+where it reads it: `agents_list` with Fins at work and none waiting on it,
+`agents_read` of one at work, an `agents_wait` that held its window for
+nothing, and `pull_request_status` while its head's checks run carry a
+`next` (`contracts/poll-words.ts`: their reports wake you; the exact `wait`
+on the pull request's checks), and the same read again in the same turn,
+within ten minutes, its answer unchanged (`PollAnswers`,
+`base/poll-answers.ts`, one per `Agents` and per pull request tool set,
+bounded, no timer; a caller with no conversation here is never counted)
+says how long since it read the same, whole the first time and only that
+(`unchangedSince`, `next`) after, logged as `poll answered unchanged`
+(`test-fin-changes.ts`, `test-git-actions.ts`). `npm run test:comms-storm`
 holds both ways this can go wrong: a 30-Fin storm around a working Apex
 (steers per minute, the share of its turn left uninterrupted, its turns once
 free, the longest a result waits), a Fin's backlog after a long turn (the
