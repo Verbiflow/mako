@@ -169,6 +169,22 @@ await service.abandon(onFeatureId)
 assert.equal(git(project, "rev-parse", "--verify", "--quiet", "refs/heads/feature"), git(project, "rev-parse", "feature"), "an adopted branch is never deleted")
 await assert.rejects(service.prepare(randomUUID(), project, "Main", { kind: "branch", branch: "main" }), /checked out in your project folder/)
 
+// A Fin's workspace.branch that isn't there yet is made, from its base or the start point; one that is there is taken.
+// Before, every name a Fin's start gave that wasn't a branch yet refused it ("isn't in project anymore").
+await assert.rejects(service.prepare(randomUUID(), project, "Not there", { kind: "branch", branch: "fin/new-one" }), /isn't in project anymore/, "the person's choice of a branch that's gone still refuses")
+const madeId = placed()
+const made = await service.prepare(madeId, project, "A Fin's new branch", { kind: "branch", branch: "fin/new-one", make: { from: "feature" } })
+assert.equal(made.branch, "fin/new-one")
+assert.equal(git(made.path, "rev-parse", "HEAD"), git(project, "rev-parse", "feature"), "made from its base")
+const madeNewest = await service.prepare(placed(), project, "From the start point", { kind: "branch", branch: "fin/from-start", make: {} })
+assert.equal(madeNewest.branch, "fin/from-start")
+assert.equal(git(madeNewest.path, "rev-parse", "HEAD"), (await starts.point(project, false)).commit, "made from the start point without a base")
+const takenId = randomUUID()
+const taken = await service.prepare(takenId, project, "Feature again", { kind: "branch", branch: "feature", make: { from: "main" } })
+assert.equal(git(taken.path, "rev-parse", "HEAD"), git(project, "rev-parse", "feature"), "a branch that's there is taken, its base aside")
+await service.abandon(takenId)
+await assert.rejects(service.prepare(randomUUID(), project, "Bad", { kind: "branch", branch: "two..dots", make: {} }), /isn't a name Git allows/)
+
 // A remote's branch gets a local one that tracks it.
 const onRemoteId = placed()
 const onRemote = await service.prepare(onRemoteId, project, "Remote", { kind: "branch", branch: "origin/remote-only" })

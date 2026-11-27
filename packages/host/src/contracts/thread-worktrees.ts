@@ -208,7 +208,11 @@ export type WorktreeUpdate =
  */
 export type WorktreeStart =
   | { kind: "from"; ref: string }
-  | { kind: "branch"; branch: string }
+  /**
+   * `make`: when the branch isn't there yet, a new branch of that name from `make.from` (the start point when absent),
+   * as a Fin's `workspace.branch` asks; without it, a branch that isn't there refuses the start.
+   */
+  | { kind: "branch"; branch: string; make?: { from?: string } }
   /** `cross`: from a fork, so its branch isn't on this repository's remote. */
   | { kind: "pull"; number: number; branch: string; cross: boolean }
 

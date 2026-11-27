@@ -130,26 +130,17 @@ const mako = async (args: string[], env?: NodeJS.ProcessEnv) => {
 }
 const HistoryLine = z.looseObject({ kind: z.string(), text: z.string().optional() })
 const history = async (conversation: string) => (await mako(["history", conversation])).map((line) => HistoryLine.parse(line))
-const Snapshot = z.looseObject({ requests: z.array(z.looseObject({ id: z.string(), status: z.string(), error: Json.optional() })).default([]) })
+const Block = z.looseObject({ type: z.string(), name: z.string().optional(), title: z.string().optional(), input: z.string().optional(), output: z.string().optional(), text: z.string().optional(), status: z.string().optional() })
+const Snapshot = z.looseObject({ requests: z.array(z.looseObject({ id: z.string(), status: z.string(), error: Json.optional() })).default([]), blocks: z.array(Block).default([]) })
 const snapshot = async (conversation: string) => Snapshot.parse(await call("mako:live-snapshot", [conversation]))
 const ENDED = new Set(["completed", "failed", "canceled", "interrupted", "uncertain"])
 
-/**
- * A module of about `count` functions that each do a little real work, a few of them wrong in a way only a careful read
- * finds (an off-by-one, a flipped comparison, a wrong unit): no search for one word answers a review of it.
- */
-function reviewModule(prefix: string, count = 220): string {
-  const body: string[] = [`// The ${prefix} module.`, ""]
-  for (let index = 0; index < count; index += 1) {
-    const wrong = index % 53 === 17
-    const kind = index % 4
-    if (kind === 0) body.push(`/** The sum of the first ${index + 2} entries of \`values\`, or of all when there are fewer. */`, `export function ${prefix}Head${index}(values: readonly number[]): number {`, "  let sum = 0", `  for (let at = 0; at ${wrong ? "<=" : "<"} Math.min(values.length, ${index + 2}); at += 1) sum += values[at]!`, "  return sum", "}", "")
-    else if (kind === 1) body.push(`/** Whether \`at\` (ms) is within ${index + 1} minutes of \`now\` (ms). */`, `export function ${prefix}Recent${index}(at: number, now: number): boolean {`, `  return now - at <= ${index + 1} * ${wrong ? "1_000" : "60_000"}`, "}", "")
-    else if (kind === 2) body.push(`/** \`amount\` less ${index % 30}% off, never below zero. */`, `export function ${prefix}Discount${index}(amount: number): number {`, `  return Math.max(0, amount * (1 ${wrong ? "+" : "-"} ${index % 30} / 100))`, "}", "")
-    else body.push(`/** The larger of \`a\` and \`b\`, plus ${index}. */`, `export function ${prefix}Larger${index}(a: number, b: number): number {`, `  return (a ${wrong ? "<" : ">"} b ? a : b) + ${index}`, "}", "")
-  }
-  return body.join("\n")
-}
+/** Real modules of this repository, each about 1,200 lines from its own domain: a review of one is careful reading, not a search. */
+const REVIEWED = [
+  { from: "packages/host/src/git/github.ts", to: "lib/github.ts" },
+  { from: "packages/host/src/workspaces/thread-recipe.ts", to: "lib/recipe.ts" },
+  { from: "packages/sessions/src/attachment-sweep.ts", to: "lib/sweep.ts" },
+]
 
 interface Task { id: string; prompt: string; files: Record<string, string> }
 const TASK_LIST: Task[] = [
@@ -161,13 +152,11 @@ const TASK_LIST: Task[] = [
   {
     id: "research",
     prompt: [
-      "Review three modules of this project for correctness bugs, no code changes. Each is about 1,300 lines of small functions, and every function has to be checked against its doc comment; the three reviews don't depend on each other:",
-      "1) lib/billing.ts",
-      "2) lib/search.ts",
-      "3) lib/auth.ts",
-      "For each module, list every function whose code doesn't do what its comment says, with the line.",
+      "Review three modules of this project for correctness bugs, no code changes. Each is about 1,200 lines of real code from its own part of the system, and a careful review of one takes about 20 minutes; the three reviews don't depend on each other:",
+      ...REVIEWED.map((module, index) => `${index + 1}) ${module.to}`),
+      "For each module, list the bugs you find, each with its line and why it's wrong, or say it has none you can show.",
     ].join("\n"),
-    files: { "lib/billing.ts": reviewModule("billing"), "lib/search.ts": reviewModule("search"), "lib/auth.ts": reviewModule("auth") },
+    files: Object.fromEntries(REVIEWED.map((module) => [module.to, readFileSync(join(repo, module.from), "utf8")])),
   },
   {
     id: "same-function",
@@ -280,6 +269,13 @@ async function runApex(harness: string, task: Task, env: NodeJS.ProcessEnv): Pro
   const words = await history(conversation).catch(() => [])
   const said = words.filter((line) => line.kind === "text").map((line) => line.text ?? "").join("\n").slice(-1_500)
   await writeFile(join(out, `${harness}-${task.id}.history.json`), JSON.stringify(words.map((line) => ({ kind: line.kind, text: (line.text ?? "").slice(0, 2_000) })), null, 2))
+  // Every call it made and what it thought, from the conversation's own blocks: whether it saw agents_start, looked for it, or chose not to.
+  const blocks = (await snapshot(conversation).catch(() => undefined))?.blocks ?? []
+  const kept = blocks.flatMap((block): Json[] => {
+    if (block.type === "tool") return [{ type: "tool", name: block.name ?? null, title: block.title ?? null, status: block.status ?? null, input: (block.input ?? "").slice(0, 1_500), output: (block.output ?? "").slice(0, 1_500) }]
+    return block.type === "thinking" || block.type === "text" ? [{ type: block.type, text: (block.text ?? "").slice(0, 3_000) }] : []
+  })
+  await writeFile(join(out, `${harness}-${task.id}.blocks.json`), JSON.stringify(kept, null, 2))
   const failure = (await snapshot(conversation).catch(() => undefined))?.requests.find((each) => each.id === request)?.error
   const result = { harness, task: task.id, ended: failure ? `${ended}: ${JSON.stringify(failure).slice(0, 300)}` : ended, fins: counted, queued, refused, proceeds, ...(times.length > 1 && { spread: Math.round((Math.max(...times) - Math.min(...times)) / 1_000) }), said }
   return { ...result, ...judge(task.id, result) }

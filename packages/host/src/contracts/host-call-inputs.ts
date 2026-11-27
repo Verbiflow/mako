@@ -1937,7 +1937,11 @@ const inputs = {
         worktreeStart: z
           .union([
             z.object({ kind: z.literal("from"), ref: z.string() }),
-            z.object({ kind: z.literal("branch"), branch: z.string() }),
+            z.object({
+              kind: z.literal("branch"),
+              branch: z.string(),
+              make: z.object({ from: z.string().optional() }).optional(),
+            }),
             z.object({
               kind: z.literal("pull"),
               number: z.number(),
