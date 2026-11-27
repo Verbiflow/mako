@@ -452,9 +452,11 @@ export interface ProviderLiveDriver extends ProviderCapability {
    * the person's words: Claude's appended system prompt, Codex's turn
    * context, OpenCode's instructions file. Absent, Mako's note before a
    * prompt carries them once, and again when they change, and every reader
-   * of history strips that note.
+   * of history strips that note. `holds`, where the slot is the agent's to
+   * offer per session (Antigravity's system prompt): whether this
+   * conversation's session took them; false sends them in the note.
    */
-  makoInstructions?: { via: string }
+  makoInstructions?: { via: string; holds?(conversationId: string): boolean }
   /**
    * Where the harness runs Mako's code before each of its agent's tools, every
    * tool that may write included, and waits for its answer: a turn's message

@@ -60,14 +60,17 @@ export const POLICY = [
 
 /**
  * What an agent reads about the `mako` server before calling any of its
- * tools. The Fins' rules come first: Grok shows a server's instructions only
- * up to about 2,047 characters. Routes the primer gives aren't repeated here.
+ * tools. Grok shows a server's instructions only up to about 2,047
+ * characters, so the rules agents worked around come first: waiting by
+ * ending the turn, then the Fins' and the Apexes' (`ORCHESTRATION_INSTRUCTIONS`).
+ * What's refused says why and the call to make when it's refused, so that line
+ * can fall past the cut. Routes the primer gives aren't repeated here.
  */
 export const MAKO_SERVER_INSTRUCTIONS = [
   "Mako's tools for the Thread this Session belongs to. Each acts on this Thread only.",
-  ORCHESTRATION_INSTRUCTIONS,
   "wait: to wait on your Fins, a pull request, an app check or a time, call wait and end your turn; Mako wakes you. Never poll or sleep.",
-  `Mako refuses git worktree add, a new branch in the main checkout and gh pr merge; ${NATIVE_OVERRIDE} before one runs it anyway, never a worktree, and only when the Mako tool failed. Other native routes run with a note naming the better tool. Commit, push, diff and log stay plain Git.`,
+  ORCHESTRATION_INSTRUCTIONS,
+  `Mako refuses git worktree add, a new branch in the main checkout, gh pr merge, agent CLIs and waiting by sleeping or gh --watch, naming the call to make; ${NATIVE_OVERRIDE} before one runs it anyway, never a worktree or a wait, and only when that call failed. Other native routes run with a note naming the better tool. Commit, push, diff and log stay plain Git.`,
   "thread_move: this Thread itself to the cloud, when the person asks. That's this Thread going on elsewhere, not new work for a Fin.",
   "Their words:",
   "- main checkout: the project's own folder, the user's.",

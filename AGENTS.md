@@ -2874,8 +2874,21 @@ drew nothing shows a quiet empty state at the minimum height, never a
 sliver. Every harness is told
 Mako's primer (`contracts/primer.ts`, whose `routes` block carries
 `SHOW_MEDIA_LINE`): Claude in its appended system prompt, Codex
-as turn context, OpenCode in an instructions file, the others in Mako's note before the prompt
-(`makoInstructions` on the live driver says which). That note
+as turn context, OpenCode in an instructions file, Antigravity in its system
+prompt where its `initialize` offers an append
+(`_meta.antigravity.systemPrompt.append`, sent on each `session/new` and
+`session/load`; `ProviderAcpSource.systemPrompt`), the others in Mako's note before the prompt
+(`makoInstructions` on the live driver says which, and `holds` whether a
+session took it). Codex shows each `additionalContext` value whole only up to
+4,000 bytes (1,000 tokens at 4 bytes each) and cuts the middle of a longer
+one ("…387 tokens truncated…") without a word to the client: Mako's routes,
+policy and server block went as one 5.9 KB entry until 2026-11-26, and 4 of
+10 Codex rollouts that week lost the policy, the Fins' report rule and the
+pull request wait rule. Each block is now an entry of its own, a longer one
+cut between lines, keyed `mako_01`, `mako_02` in Codex's order
+(`primerEntries`, `CONTEXT_ENTRY_BYTES`), and a rollout holds the primer only
+when the newest entry under every key says it (`rolloutHoldsPrimer`,
+`test-codex-primer-cadence.ts`). That note
 (`makoNote`, `conversations/control-cadence.ts`) has standing
 lines, each under a name (the cloud machine, Local Control, the Thread's
 environment, and on a harness without a slot the primer's `routes` and
@@ -2890,6 +2903,18 @@ failed send forgets it. `scripts/test-control-cadence.ts` covers it, and
 `scripts/test-primer-delivery.ts` the primer on it. The decode pairs draw
 each turn's media, so live and saved must find the same files;
 `scripts/test-turn-media.ts` covers each source and the host.
+
+The `mako` server's instructions reach the model only up to the shortest cut
+a harness makes: Claude Code's 4,096 characters, Grok's about 2,047. So they
+open with what agents worked around: waiting by ending the turn (`wait:`),
+then `ORCHESTRATION_INSTRUCTIONS`, a Fin's report first, then parallel work
+through `agents_start` and ending the turn after it; what's refused says why
+at the call, so that line may fall past Grok's cut
+(`test:mako-instructions`). Claude Code defers MCP tools behind its tool
+search, and an agent that never loaded `agents_start` or `wait` ran an agent
+CLI or a sleep instead: those two, `agents_report` and `agents_send` are
+listed with `_meta` `anthropic/alwaysLoad` (`ALWAYS_LOADED_TOOLS`,
+`toolMeta`), so they're in its prompt from the first turn.
 
 An Apex's turns that exist only because its Fins reported read as one row. `foldReportRuns`
 (`src/lib/report-runs.ts`) takes the transcript's turns as the timeline is about to draw them and makes each run of

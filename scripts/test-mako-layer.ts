@@ -7,11 +7,13 @@ import { conversationServers, launchBlocks, launchInstructions, type Conversatio
 import { layerOf } from "@mako/host/harnesses/mako-layer"
 import { claudeLayer, type ClaudeLayerFragment } from "@mako/host/harnesses/claude/layer"
 import { codexLayer } from "@mako/host/harnesses/codex/layer"
+import { primerEntries } from "@mako/host/harnesses/codex/primer-cadence"
 import { cursorLayer, type CursorLayerFragment } from "@mako/host/harnesses/cursor/layer"
 import { opencodeLayer } from "@mako/host/harnesses/opencode/layer"
 import { acpLayer } from "@mako/host/harnesses/acp-layer"
 import { GROK_LAYER } from "@mako/host/harnesses/grok/layer"
 import { DEVIN_LAYER } from "@mako/host/harnesses/devin/layer"
+import { antigravityAcp } from "@mako/host/harnesses/antigravity/acp"
 import { MAKO_TOOL_TIMEOUT_MS } from "@mako/host/tools/index"
 
 /**
@@ -51,7 +53,9 @@ for (const tools of grants) for (const routing of routings) {
   // With the primer on, Codex is served mako without its instructions and hears them once in its developer context.
   const carried = launchBlocks(options).some((block) => block.id === "routes") && servers.some((server) => server.name === MAKO_THREAD_SERVER)
   same(codex.servers, carried ? servers.map((server) => server.name === MAKO_THREAD_SERVER ? { ...server, url: withoutInstructions(server.url) } : server) : servers, "codex servers")
-  same(codex.instructions, carried ? `${launchInstructions(options)}\n\n${MAKO_SERVER_INSTRUCTIONS}` : launchInstructions(options), "codex instructions")
+  // Each block an entry of its own, which Codex shows whole.
+  const blocks = launchBlocks(options).map((block) => block.text)
+  same(codex.instructions, blocks.length ? primerEntries(carried ? [...blocks, MAKO_SERVER_INSTRUCTIONS] : blocks) : undefined, "codex instructions")
   same(codex.config(), off ? { "agents.enabled": false, "features.multi_agent_v2": false } : {}, "codex config")
 
   const cursor = cursorLayer.apply(layerOf(options), "c")
@@ -91,5 +95,15 @@ assert.deepEqual(declared.map(({ capabilities }) => replacementPath(capabilities
 for (const [native, { by }] of Object.entries(NATIVE_CAPABILITIES)) assert.ok(by in TOOL_FAMILIES, `${native} is replaced by a family`)
 const families = layerOf({ conversationTools: grants[2] }).servers.flatMap((server) => server.families)
 assert.deepEqual([...families].sort(), Object.keys(TOOL_FAMILIES).sort(), "the two servers serve every family")
+
+// Antigravity takes Mako's blocks into its own system prompt when its `initialize` offers it (1.5.16 does); an agent
+// that doesn't hears them in Mako's note, as any ACP agent does.
+const offers = { loadSession: true, _meta: { antigravity: { tier: true, systemPrompt: { append: true } } } }
+const prompt = antigravityAcp.systemPrompt!
+assert.equal(prompt.offered(offers), true, "1.5.16's initialize offers the append")
+assert.equal(prompt.offered({ loadSession: true }), false, "an agent that offers nothing gets the note")
+assert.equal(prompt.offered({ _meta: { antigravity: { systemPrompt: { append: false } } } }), false)
+same(prompt.meta("Mako's blocks"), { antigravity: { systemPrompt: { append: "Mako's blocks" } } }, "the append rides the session request's _meta")
+assert.equal(antigravityAcp.layer.instructions.kind, "native")
 
 console.log(`mako layer: ok (${cases} launches on every adapter)`)

@@ -10,7 +10,7 @@ import type { NativeAgentObservation } from "../contracts/native-agents.js"
 import type { SessionSettings } from "@mako/sessions/settings"
 import type { ProviderCapability } from "./registry.js"
 import type { DriverAbsent, DriverSideQuestion, NativeFork, NativeResume, ProviderLiveDriver, SteerLanding } from "./live-driver.js"
-import type { RequestPermissionRequest, NewSessionRequest, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk"
+import type { InitializeResponse, RequestPermissionRequest, NewSessionRequest, PromptRequest, PromptResponse } from "@agentclientprotocol/sdk"
 import type { AccessTier } from "../contracts/access.js"
 import type { AcpAccessPolicy } from "./acp-access.js"
 import type { NativeApprovalDecision, NativeApprovalIdentity } from "../contracts/approval-response.js"
@@ -281,6 +281,16 @@ export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<A
   nativeModes?: readonly AcpNativeMode[]
   launchOptionIds?: readonly string[]
   sessionMetadata?(tuning: SessionSettings): NewSessionRequest["_meta"]
+  /**
+   * Where the agent takes Mako's blocks into its own system prompt, when its `initialize` offers it: the session
+   * request's `_meta` carrying them (`systemPrompt.meta`), on every `session/new` and `session/load`, so Mako's note
+   * leaves them out. An agent that doesn't offer it hears them in the note, as any ACP agent does.
+   */
+  systemPrompt?: {
+    via: string
+    offered(capabilities: InitializeResponse["agentCapabilities"]): boolean
+    meta(text: string): NonNullable<NewSessionRequest["_meta"]>
+  }
   /** How the agent asks Mako before its tool calls, where it can: Mako answers each from the Thread's routing (`ProviderStartOptions.nativeCalls`). */
   callHooks?: AcpCallHooks
   /**

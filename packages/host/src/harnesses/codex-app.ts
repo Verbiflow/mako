@@ -15,7 +15,7 @@ import { ProviderStartupWatch } from "./provider-startup.js"
 import type { ProviderLaunchTrace } from "./provider-launch.js"
 import { CodexAgents } from "./codex/agents.js"
 import { CodexRolloutTail } from "./codex/rollout-tail.js"
-import { CodexPrimer, PRIMER_KEY, rolloutHoldsPrimer } from "./codex/primer-cadence.js"
+import { CodexPrimer, rolloutHoldsPrimer, type PrimerEntries } from "./codex/primer-cadence.js"
 import { codexServiceTier } from "@mako/sessions/model-catalog"
 import type { SessionSettings } from "@mako/sessions/settings"
 import { CODEX_CLIENT_CAPABILITIES, codexCollaborationMode, codexInteractiveConfig, codexWireSettings } from "./codex/settings.js"
@@ -116,8 +116,8 @@ type Live = {
   tuning?: Tuning
   /** Mako's own servers, opened with the token in `MAKO_CONVERSATIONS_TOKEN`. */
   makoServers: Array<{ name: string; url: string }>
-  /** Mako's instructions for the model, from the layer, handed to a turn as Codex's application context. */
-  instructions?: string
+  /** Mako's instructions for the model, from the layer, handed to a turn as Codex's application context, an entry each. */
+  instructions?: PrimerEntries
   /** When those go: only on a turn whose transcript lacks them (`CodexPrimer`), read once the thread opens. */
   primer?: CodexPrimer
   mcpSnapshot: McpRegistrySnapshot
@@ -435,7 +435,7 @@ export function createCodexEngine(context: Pick<HarnessContext, "dataRoot" | "st
             ...codexWireSettings(tuning),
             ...codexCollaborationMode(tuning, live.state.settings?.model),
             ...codexTurnAccess(live.access),
-            ...withPrimer && primer && { additionalContext: { [PRIMER_KEY]: { kind: "application" as const, value: primer.value } } },
+            ...withPrimer && primer && { additionalContext: Object.fromEntries(Object.entries(primer.entries).map(([key, value]) => [key, { kind: "application" as const, value }])) },
           })
         } catch (error) {
           primer?.failed(withPrimer)
