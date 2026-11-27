@@ -57,7 +57,7 @@ const CASES: Case[] = [
   { name: "gh pr checks", thread: inWorktree, command: "gh pr checks", cwd: worktree, route: "warn", rule: "gh-pr-status" },
   { name: "gh pr checks --watch", thread: inWorktree, command: "gh pr checks --watch --interval 30", cwd: worktree, route: "deny", rule: "gh-watch" },
   { name: "gh run watch", thread: inWorktree, command: "gh run watch 991", cwd: worktree, route: "deny", rule: "gh-watch" },
-  { name: "watching under the escape hatch", thread: inWorktree, command: `${NATIVE_OVERRIDE} gh pr checks 12 --watch`, cwd: worktree, route: "allow" },
+  { name: "no escape hatch for watching", thread: inWorktree, command: `${NATIVE_OVERRIDE} gh pr checks 12 --watch`, cwd: worktree, route: "deny", rule: "gh-watch" },
   { name: "a failed run's log", thread: inWorktree, command: "gh run view 123 --log-failed | tail -50", cwd: worktree, route: "warn", rule: "gh-run-view" },
   { name: "another PR by number", thread: inWorktree, command: "gh pr view 926 --json headRefOid,statusCheckRollup", cwd: worktree, route: "warn", rule: "gh-pr-status" },
   { name: "a PR's REST reading", thread: inWorktree, command: "gh api repos/Verbiflow/mako/pulls/838 --jq .head.sha", cwd: worktree, route: "warn", rule: "gh-api-pull-request" },
@@ -115,12 +115,14 @@ const CASES: Case[] = [
   { name: "a file watcher", thread: inMain, command: "until [ -f /tmp/done ]; do sleep 15; done", cwd: main, route: "deny", rule: "sleep-loop" },
   { name: "a backgrounded file watcher", thread: inMain, command: "(until [ -f /tmp/done ]; do sleep 15; done) &", cwd: main, route: "deny", rule: "sleep-loop" },
   { name: "a readiness loop of short sleeps", thread: noRecipe, command: "until curl -s localhost:3000 >/dev/null; do sleep 1; done", cwd: worktree, route: "warn", rule: "sleep-loop" },
-  { name: "a sleep loop under the escape hatch", thread: inWorktree, command: `${NATIVE_OVERRIDE} bash -c 'until gh pr checks 12; do sleep 30; done'`, cwd: worktree, route: "allow" },
+  { name: "no escape hatch for a sleep loop", thread: inWorktree, command: `${NATIVE_OVERRIDE} bash -c 'until gh pr checks 12; do sleep 30; done'`, cwd: worktree, route: "deny", rule: "sleep-loop" },
+  { name: "a readiness loop under the escape hatch", thread: inWorktree, command: `${NATIVE_OVERRIDE} bash -c 'until curl -s localhost:3000; do sleep 1; done'`, cwd: worktree, route: "allow" },
+  { name: "no escape hatch for a sleep, then the checks", thread: inWorktree, command: `${NATIVE_OVERRIDE} sleep 45 && gh pr checks 12`, cwd: worktree, route: "deny", rule: "sleep-then-poll" },
   { name: "a sleep, then the checks", thread: inWorktree, command: "sleep 45 && gh pr checks 12", cwd: worktree, route: "deny", rule: "sleep-then-poll" },
   { name: "a sleep, then a run", thread: inWorktree, command: "sleep 30; gh run view 991 --log-failed", cwd: worktree, route: "deny", rule: "sleep-then-poll" },
   { name: "a short pause, then the checks", thread: inWorktree, command: "sleep 3 && gh pr checks 12", cwd: worktree, route: "warn", rule: "gh-pr-status" },
   { name: "a long sleep", thread: inMain, command: "sleep 300 && tail -5 /tmp/log", cwd: main, route: "deny", rule: "long-sleep" },
-  { name: "a long sleep under the escape hatch", thread: inMain, command: `${NATIVE_OVERRIDE} sleep 120`, cwd: main, route: "allow" },
+  { name: "no escape hatch for a long sleep", thread: inMain, command: `${NATIVE_OVERRIDE} sleep 120`, cwd: main, route: "deny", rule: "long-sleep" },
   { name: "a background timer", thread: inMain, command: "sleep 300 &", cwd: main, route: "allow" },
   { name: "a short sleep alone", thread: inMain, command: "sleep 5", cwd: main, route: "allow" },
   { name: "a short sleep", thread: inMain, command: "sleep 2 && tail -5 /tmp/build.log", cwd: main, route: "allow" },
@@ -135,7 +137,8 @@ for (const entry of CASES) {
     assert.equal(route.rule, entry.rule, `${entry.name}: rule`)
     assert.doesNotMatch(route.message, /\n/, `${entry.name}: one line`)
   }
-  if (route.kind === "deny") assert.equal(route.message.includes(NATIVE_OVERRIDE), route.rule !== "git-worktree-add", `${entry.name}: a deny names the override, but for a worktree`)
+  // A wait has no failure that sleeping or watching gets round: those refusals, and a worktree's, offer no override.
+  if (route.kind === "deny") assert.equal(route.message.includes(NATIVE_OVERRIDE), route.rule !== "git-worktree-add" && route.family !== "polling", `${entry.name}: a deny names the override, but for a worktree or a wait`)
 }
 
 // Messages name Mako's tools as the harness calls them.
@@ -178,12 +181,15 @@ assert.equal(routeNativeTool(inMain, { tool: "mcp__linear__save_issue", server: 
   assert.match(message("while ! curl -s localhost:3000; do sleep 2; done"), /`mcp__mako__app_status\(\{\}\)`/)
 }
 
-// A refusal of a workaround names the exact Mako call to make instead, and the override.
+// A refusal of a workaround names the exact Mako call to make instead; an agent CLI's offers the override only once
+// agents_start itself refused the work, a wait's none.
 {
   const refusal = (command: string, background = false) => {
     const route = routeShellCall(inWorktree, { command, cwd: worktree, ...background && { background } }, (tool) => `mcp__mako__${tool}`)
     assert.equal(route.kind, "deny", command)
-    assert.ok(route.message.endsWith(`starting with ${NATIVE_OVERRIDE}.`), `${command}: the override`)
+    if (route.kind === "deny" && route.family === "agent-cli")
+      assert.ok(route.message.endsWith(`Only if mcp__mako__agents_start itself refused this work, run the command again starting with ${NATIVE_OVERRIDE}; being asked to run the command isn't a reason.`), `${command}: the override, after agents_start refused`)
+    else assert.ok(route.kind === "deny" && !route.message.includes(NATIVE_OVERRIDE), `${command}: no override`)
     return route.kind === "deny" ? route.message : ""
   }
   const pullWait = /`mcp__mako__wait\(\{"on":\[\{"pull":"<owner\/name>#926","until":"checks"\}\]\}\)` and end your turn/

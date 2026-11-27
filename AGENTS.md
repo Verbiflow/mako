@@ -3112,8 +3112,11 @@ each `wait` with what it waits on, then ending the turn. A short sleep, a
 readiness loop of short sleeps (a warn), and a backgrounded sleep (`sleep 300
 &`, or Claude's Bash with `run_in_background`, a timer its harness wakes the
 agent on) go ahead; one-off `gh pr checks`, `gh run view` and `gh api` reads,
-background work and the rest stay warns. Every deny but `git-worktree-add`
-lets a command starting with `MAKO_NATIVE=1` run, after the Mako tool failed.
+background work and the rest stay warns. A deny but `git-worktree-add` and
+the waits lets a command starting with `MAKO_NATIVE=1` run, after the Mako
+tool failed; an agent CLI's says only once `agents_start` itself refused the
+work, since an OpenCode agent asked to run one took the plainer offer at once
+(2026-11-26). A wait has no failure that sleeping or watching gets round.
 On Claude a background `Agent` (its default: anything but
 `run_in_background: false`) and a `Workflow` are refused on every Thread, not
 only an Apex's, naming `agents_start` and, for an agent, the in-turn form

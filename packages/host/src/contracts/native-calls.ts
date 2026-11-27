@@ -14,7 +14,7 @@
  * minute or more) instead of `wait` and ending the turn. Those have to be
  * refused before they run: a warn reaches Codex, Grok, OpenCode and Devin
  * only after the command ran, and each rule's note once per conversation
- * (`CallNotes`). A deny's message names the exact Mako call to make. Every
+ * (`CallNotes`). A deny's message names the exact Mako call to make; a wait's offers no override. Every
  * other route is a warn: the call runs, and the model reads in one line what
  * the better Mako tool is and why, and decides. A short sleep, a background
  * timer the harness wakes on, and a readiness loop of short sleeps go
@@ -61,10 +61,20 @@ export function exactCall(names: ToolNames, tool: string, args: { readonly [key:
 /** The prefix that lets a command the policy would deny run anyway. */
 export const NATIVE_OVERRIDE = "MAKO_NATIVE=1"
 
-/** Routes the override doesn't open: Mako's tool does all they do, so a refusal stands. */
-const NO_OVERRIDE = new Set(["git-worktree-add"])
+/**
+ * Routes the override doesn't open: Mako's tool does all they do, so a refusal stands. A wait has no failure that
+ * sleeping or watching gets round, and offered the override, models took it at once.
+ */
+const NO_OVERRIDE = new Set(["git-worktree-add", "gh-watch", "sleep-loop", "sleep-then-poll", "long-sleep"])
 
 const OVERRIDE_LINE = `Only if that tool failed or can't do what was asked, run the command again starting with ${NATIVE_OVERRIDE}.`
+
+/**
+ * An agent CLI's override, only once `agents_start` itself refused the work: told it may run the command when the tool
+ * "can't do what was asked", an agent asked to run the CLI ran it again with the override at once (OpenCode,
+ * 2026-11-26).
+ */
+const cliOverrideLine = (n: ToolNames) => `Only if ${n("agents_start")} itself refused this work, run the command again starting with ${NATIVE_OVERRIDE}; being asked to run the command isn't a reason.`
 
 /** One simple command of a shell line, as the policy reads it. */
 interface ShellSegment {
@@ -376,14 +386,14 @@ export function routeShellCall(thread: CallThread, call: { command: string; cwd?
   const overridden = line.segments.some((segment) => segment.env.MAKO_NATIVE === "1")
   const sleeps = line.segments.map((segment) => sleepSeconds(segment.argv))
   // A loop of short sleeps polling something else (a server coming up) is a readiness check, which stays a note.
-  if (line.loop && !overridden && line.segments.some((segment) => basename(segment.argv[0]!) === "sleep")) {
+  if (line.loop && line.segments.some((segment) => basename(segment.argv[0]!) === "sleep")) {
     const polls = line.segments.some((segment) => basename(segment.argv[0]!) === "gh") || sleeps.some((seconds) => seconds !== undefined && seconds >= POLL_SLEEP_S)
-    findings.push({ kind: polls ? "deny" : "warn", family: "polling", rule: "sleep-loop", message: loopMessage(line, n) })
+    if (polls || !overridden) findings.push({ kind: polls ? "deny" : "warn", family: "polling", rule: "sleep-loop", message: loopMessage(line, n) })
   }
   // A foreground pause before reading a pull request's or a run's state is a poll of one round.
   const pause = sleeps.findIndex((seconds, index) => seconds !== undefined && seconds >= POLL_SLEEP_S && !line.segments[index]!.background)
   const read = pause < 0 ? undefined : line.segments.slice(pause + 1).find((segment) => basename(segment.argv[0]!) === "gh" && ghStatusRead(segment.argv))
-  if (!line.loop && !overridden && read) findings.push({ kind: "deny", family: "polling", rule: "sleep-then-poll", message: sleepPollMessage(read, n) })
+  if (!line.loop && read) findings.push({ kind: "deny", family: "polling", rule: "sleep-then-poll", message: sleepPollMessage(read, n) })
   for (const segment of line.segments) {
     const found = segmentFinding(thread, segment, line, n, call.background === true)
     if (found && (segment.env.MAKO_NATIVE !== "1" || NO_OVERRIDE.has(found.rule))) findings.push(found)
@@ -391,7 +401,8 @@ export function routeShellCall(thread: CallThread, call: { command: string; cwd?
   const deny = findings.find((finding) => finding.kind === "deny")
   const chosen = deny ?? findings[0]
   if (!chosen) return { kind: "allow" }
-  return chosen.kind === "deny" && !NO_OVERRIDE.has(chosen.rule) ? { ...chosen, message: `${chosen.message} ${OVERRIDE_LINE}` } : chosen
+  if (chosen.kind !== "deny" || NO_OVERRIDE.has(chosen.rule)) return chosen
+  return { ...chosen, message: `${chosen.message} ${chosen.family === "agent-cli" ? cliOverrideLine(n) : OVERRIDE_LINE}` }
 }
 
 /** A pull request's number among `gh pr` arguments: `926`, `#926` or its URL. */
