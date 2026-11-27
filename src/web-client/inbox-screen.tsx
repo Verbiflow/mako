@@ -1,5 +1,5 @@
-import { useEffect, useMemo } from "react"
-import { checkWebAnswer, checkWebPlan, loadWebApexes, useWebPlanAsks } from "./apexes"
+import { useMemo } from "react"
+import { checkWebAnswer, checkWebPlan, useWebApexesOf, useWebPlanAsks } from "./apexes"
 import { QuestionLine } from "./apex-digest"
 import { planQuestion } from "@mako/host/contracts/apexes"
 import { useWebClient } from "./client"
@@ -34,10 +34,7 @@ export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefin
   const toRead = threads.filter((thread) => thread.standing === "failed" || (thread.standing === "idle" && isUnread(read, thread)))
   // The person's Apexes' plan lines that wait on them, read from each Mac their Threads are on.
   const client = useWebClient()
-  const macs = useMemo(() => [...new Set(threads.flatMap((thread) => thread.sessions.flatMap((session) => (session.owner.kind === "device" ? [session.owner.deviceId] : []))))], [threads])
-  useEffect(() => {
-    for (const mac of macs) void loadWebApexes(client, mac)
-  }, [client, macs])
+  useWebApexesOf(client, threads)
   const planAsks = useWebPlanAsks(client)
   const count = fins.length + waiting.length + planAsks.length
   const empty = !count && !toRead.length

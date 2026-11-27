@@ -3,6 +3,7 @@ import { apexDigest, parsePlan, routeFor, type ApexDigest, type ApexEntry, type 
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { createHook, createStore } from "@/state/store"
 import type { WebClient } from "./client"
+import type { WebThread } from "./threads"
 import { macCall } from "./start"
 
 /**
@@ -66,6 +67,17 @@ export async function checkWebAnswer(client: WebClient, deviceId: string, thread
 
 export function markWebSeen(client: WebClient, deviceId: string, thread: string): void {
   void macCall(client.gateway, client.deviceId, deviceId, "mako:apex-seen", [thread], { passive: true }).catch(() => undefined)
+}
+
+/**
+ * Reads the Apexes of every Mac these Threads are on, once each: the list and the Inbox ask as they show, so an Apex's
+ * digest is there with its conversation when it opens rather than arriving after, moving it down a line.
+ */
+export function useWebApexesOf(client: WebClient, threads: readonly WebThread[]): void {
+  const macs = useMemo(() => [...new Set(threads.flatMap((thread) => thread.sessions.flatMap((session) => (session.owner.kind === "device" ? [session.owner.deviceId] : []))))].sort().join("\n"), [threads])
+  useEffect(() => {
+    for (const mac of macs.split("\n")) if (mac) void loadWebApexes(client, mac)
+  }, [client, macs])
 }
 
 /** One Thread's deliberate Apex profile on its Mac, read once it's shown. */

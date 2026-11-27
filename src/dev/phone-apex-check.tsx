@@ -100,8 +100,9 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
 })
 
 // The scene's deliberate Apex, as its Mac's `mako:apexes` and plan read answer: the digest under its bar and the Inbox.
-void Promise.all([getMako().apexes(), getMako().apexPlan(APEX_THREAD)]).then(([apexes, plan]) =>
-  webApexesStore.set({ byDevice: { [DEVICE]: apexes }, plans: { [APEX_THREAD]: plan.text } }))
+// Read before anything is drawn, as the phone's list reads each Mac's Apexes before one is opened.
+const [sceneApexes, scenePlan] = await Promise.all([getMako().apexes(), getMako().apexPlan(APEX_THREAD)])
+webApexesStore.set({ byDevice: { [DEVICE]: sceneApexes }, plans: { [APEX_THREAD]: scenePlan.text } })
 
 // The owner's answer to a read takes `?answer=` ms, over the network (default: at once).
 const ANSWER_MS = Number(search.get("answer") ?? 0)
