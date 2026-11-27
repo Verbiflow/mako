@@ -582,11 +582,13 @@ async function check() {
   }
   // The crossing into a window, at every width, under a reader who's up and one at the end, with turns streaming: each
   // frame paints turns where the frame before had them. Read after the frame's paint, so nothing that lands a frame late
-  // passes for having been there.
+  // passes for having been there. A phone crosses at two heights: on a shorter one, the end of the pane holds only what
+  // follows the turns, and a crossing from there once went blank with every row far above it.
   for (const { form, path, width, height, mobile, open } of [
     { form: "desk", path: "/?mock&app=apex&turns=12&idle=1", width: 1440, height: 900, mobile: false, open: FORMS[0].open },
     { form: "a narrow window", path: "/scripts/web-desk.html?app=apex&thread=apex&turns=12&idle=1", width: 1100, height: 800, mobile: false },
     { form: "phone", path: "/scripts/phone-apex.html?app=apex&turns=12&idle=1", width: 390, height: 844, mobile: true, open: FORMS[2].open },
+    { form: "a short phone", path: "/scripts/phone-apex.html?app=apex&turns=12&idle=1", width: 390, height: 667, mobile: true, open: FORMS[2].open },
   ]) {
     for (const reader of ["up", "at the end", "scrolling"]) {
       guard.at(`${form}: crossing into a window, reader ${reader}`)
