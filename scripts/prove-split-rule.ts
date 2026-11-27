@@ -181,7 +181,14 @@ const TASK_LIST: Task[] = [
       "src/client.ts": "export interface NewTask { title: string }\n\nexport async function createTask(task: NewTask): Promise<Response> {\n  return fetch(\"/tasks\", { method: \"POST\", body: JSON.stringify({ title: task.title }) })\n}\n",
       "src/server.ts": "interface Task { id: number; title: string }\nconst tasks: Task[] = []\n\nexport function handleCreate(body: string): Task {\n  const { title } = JSON.parse(body) as { title: string }\n  const task = { id: tasks.length + 1, title }\n  tasks.push(task)\n  return task\n}\n",
     },
-  },]
+  },
+  {
+    // Not in the defaults: the person asks for two Fins on one function, so only the overlap check stands between them.
+    id: "forced-overlap",
+    prompt: "Start two Fins, one for each of these changes to the function `total` in src/cart.ts: 1) round the result to two decimal places; 2) skip items whose quantity is zero.",
+    files: { "src/cart.ts": "export interface Item { price: number; quantity: number }\n\nexport function total(items: Item[]): number {\n  let sum = 0\n  for (const item of items) sum += item.price * item.quantity\n  return sum\n}\n" },
+  },
+]
 const TASKS = new Map(TASK_LIST.map((task) => [task.id, task]))
 
 interface Outcome {
@@ -213,11 +220,12 @@ function judge(task: string, result: Omit<Outcome, "right" | "verdict">): Verdic
       if (started >= 3) return { right: false, verdict: `three Fins, but ${sequenced ? "sequenced" : `${result.spread}s apart`}` }
       return { right: false, verdict: started === 0 ? "did all three itself" : `started ${started} of three` }
     case "same-function":
+    case "forced-overlap":
     case "feature": {
-      if (started <= 1) return { right: true, verdict: started ? "one Fin" : "did it itself" }
-      if (started - sequenced <= 1) return { right: true, verdict: `${started} Fins, sequenced with after` }
-      if (result.refused.some((each) => each.refused === "overlap") && (result.proceeds.length === 0 || result.proceeds.every((each) => each.proceed.length > 20)))
-        return { right: true, verdict: `refused for overlap, then ${result.proceeds.length ? "proceeded with a reason" : "resolved"}` }
+      const refusedFirst = result.refused.some((each) => each.refused === "overlap") ? "refused for overlap, then " : ""
+      if (started <= 1) return { right: true, verdict: `${refusedFirst}${started ? "one Fin" : "did it itself"}` }
+      if (started - sequenced <= 1) return { right: true, verdict: `${refusedFirst}${started} Fins, sequenced with after` }
+      if (result.proceeds.length) return { right: false, verdict: `${refusedFirst}two Fins at once on one ${task === "feature" ? "feature" : "function"}, proceeding: ${result.proceeds.map((each) => JSON.stringify(each.proceed)).join("; ")}` }
       return { right: false, verdict: `${started} Fins in parallel on one ${task === "feature" ? "feature" : "function"}` }
     }
   }
