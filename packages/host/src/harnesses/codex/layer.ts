@@ -1,12 +1,13 @@
 import type { JsonObject } from "../../contracts/json.js"
-import { instructionText, type LayerAdapter, type MakoLayer } from "../../contracts/mako-layer.js"
+import type { LayerAdapter, MakoLayer } from "../../contracts/mako-layer.js"
 import { MAKO_THREAD_SERVER, withoutInstructions } from "../../contracts/mcp-reach.js"
 import { serverBlock } from "../../contracts/primer.js"
 import { spawnsRemoved } from "../mako-layer.js"
+import { primerEntries, type PrimerEntries } from "./primer-cadence.js"
 
 export interface CodexLayerFragment {
-  /** Handed to each turn as an application entry, which Codex gives the model as developer context. */
-  instructions?: string
+  /** Handed to a turn as application entries, which Codex gives the model as developer context, each whole (`primerEntries`). */
+  instructions?: PrimerEntries
   /** Mako's servers for `mcp_servers`; the grant rides in `MAKO_CONVERSATIONS_TOKEN`. */
   servers: Array<{ name: string; url: string }>
   /** What `thread/start`, `thread/resume` and `thread/fork` carry in `config` for the layer, read as the thread opens. */
@@ -36,7 +37,7 @@ function carriesServer(layer: MakoLayer): boolean {
 export const codexLayer: LayerAdapter<CodexLayerFragment> = {
   harness: "codex",
   capabilities: {
-    instructions: { kind: "native", via: "developer-context", how: "`turn/start` `additionalContext` as an application entry; `developerInstructions` on the thread would carry it once. Never `baseInstructions`, which replaces Codex's own", inUse: true },
+    instructions: { kind: "native", via: "developer-context", how: "`turn/start` `additionalContext` as application entries of at most 4,000 bytes each, which Codex shows whole; `developerInstructions` on the thread would carry it once. Never `baseInstructions`, which replaces Codex's own", inUse: true },
     toolServing: { kind: "native", via: "http-mcp", how: "`config.mcp_servers` on the thread, the grant read from the environment; `mako` without its instructions (`?instructions=0`) when the primer carries them", inUse: true },
     removal: { kind: "native", via: "config-switch", how: "`config` switches on the thread; today `agents.enabled` and `features.multi_agent_v2`, which take spawning out", inUse: true },
     interception: { kind: "native", via: "pre-tool-hook", how: "`PreToolUse` command hooks in the thread's config, trusted in the same layer, posting each shell or browser call to Mako (`codexCallsConfig`)", inUse: true },
@@ -46,9 +47,9 @@ export const codexLayer: LayerAdapter<CodexLayerFragment> = {
   },
   apply(layer, conversation) {
     const carried = carriesServer(layer)
-    const instructions = instructionText(carried ? { ...layer, instructions: [...layer.instructions, serverBlock()] } : layer)
+    const blocks = [...layer.instructions, ...carried ? [serverBlock()] : []]
     return {
-      ...instructions !== undefined && { instructions },
+      ...blocks.length && { instructions: primerEntries(blocks.map((block) => block.text)) },
       servers: layer.servers.map(({ name, url }) => ({ name, url: carried && name === MAKO_THREAD_SERVER ? withoutInstructions(url) : url })),
       config: () => spawnsRemoved(layer, "codex", "agents.enabled", conversation) ? SPAWNS_OFF : {},
     }

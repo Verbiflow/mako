@@ -410,6 +410,16 @@ handler, and reaches the agent three ways from the one projection
 commits the Fin's Thread, its edge, its Session and its first request (the
 brief, the Apex's words, not the person's) together
 (`LiveStartOptions.parent`), at an access tier no higher than its Apex's.
+A brief that names no `output` ends saying what its final report reads
+(`FINAL_REPORT`: Outcome / PR / Needs / Cost / Lesson), and a lead's carries
+how an Apex splits work (`APEX_BRIEF`), from the words `agents_start`'s
+description says too (`SPLIT_WORK`, `APEX_QUIET`): map the files each piece
+touches, start every independent piece in one turn, `after` for one that
+needs another's result, a piece on the same lines stacked on that Fin's
+branch and merged after it, and no word to the person on a report that
+changes nothing for them. In the 14 days to 2026-11-26 none of 23 Fins
+started with `after`. The person's card of a brief leaves those lines out
+(`agentWords`, `test:orch-comms`).
 A harness with no mode at or below the tier asked (Cursor's one mode is
 full) sends a Fin that named no harness, model or rule to the person's next
 harness that offers it, and otherwise runs it on the harness's nearest mode
@@ -938,7 +948,18 @@ turn, at its next step where its harness steers there, and what else its
 Fins report waits for the turn's end as one digest, unless the turn is still
 running `FOCUS_MS` (2 minutes) after the first of it, when that digest is
 steered in once (`asksApex`, `armFocus`); at most `WAKES_PER_MINUTE` digests
-an Apex (`agent-wakes.ts`): the Apex never polls. `npm run test:comms-storm`
+an Apex (`agent-wakes.ts`): the Apex never polls. What it reads says so
+where it reads it: `agents_list` with Fins at work and none waiting on it,
+`agents_read` of one at work, an `agents_wait` that held its window for
+nothing, and `pull_request_status` while its head's checks run carry a
+`next` (`contracts/poll-words.ts`: their reports wake you; the exact `wait`
+on the pull request's checks), and the same read again in the same turn,
+within ten minutes, its answer unchanged (`PollAnswers`,
+`base/poll-answers.ts`, one per `Agents` and per pull request tool set,
+bounded, no timer; a caller with no conversation here is never counted)
+says how long since it read the same, whole the first time and only that
+(`unchangedSince`, `next`) after, logged as `poll answered unchanged`
+(`test-fin-changes.ts`, `test-git-actions.ts`). `npm run test:comms-storm`
 holds both ways this can go wrong: a 30-Fin storm around a working Apex
 (steers per minute, the share of its turn left uninterrupted, its turns once
 free, the longest a result waits), a Fin's backlog after a long turn (the
@@ -2874,8 +2895,21 @@ drew nothing shows a quiet empty state at the minimum height, never a
 sliver. Every harness is told
 Mako's primer (`contracts/primer.ts`, whose `routes` block carries
 `SHOW_MEDIA_LINE`): Claude in its appended system prompt, Codex
-as turn context, OpenCode in an instructions file, the others in Mako's note before the prompt
-(`makoInstructions` on the live driver says which). That note
+as turn context, OpenCode in an instructions file, Antigravity in its system
+prompt where its `initialize` offers an append
+(`_meta.antigravity.systemPrompt.append`, sent on each `session/new` and
+`session/load`; `ProviderAcpSource.systemPrompt`), the others in Mako's note before the prompt
+(`makoInstructions` on the live driver says which, and `holds` whether a
+session took it). Codex shows each `additionalContext` value whole only up to
+4,000 bytes (1,000 tokens at 4 bytes each) and cuts the middle of a longer
+one ("…387 tokens truncated…") without a word to the client: Mako's routes,
+policy and server block went as one 5.9 KB entry until 2026-11-26, and 4 of
+10 Codex rollouts that week lost the policy, the Fins' report rule and the
+pull request wait rule. Each block is now an entry of its own, a longer one
+cut between lines, keyed `mako_01`, `mako_02` in Codex's order
+(`primerEntries`, `CONTEXT_ENTRY_BYTES`), and a rollout holds the primer only
+when the newest entry under every key says it (`rolloutHoldsPrimer`,
+`test-codex-primer-cadence.ts`). That note
 (`makoNote`, `conversations/control-cadence.ts`) has standing
 lines, each under a name (the cloud machine, Local Control, the Thread's
 environment, and on a harness without a slot the primer's `routes` and
@@ -2890,6 +2924,18 @@ failed send forgets it. `scripts/test-control-cadence.ts` covers it, and
 `scripts/test-primer-delivery.ts` the primer on it. The decode pairs draw
 each turn's media, so live and saved must find the same files;
 `scripts/test-turn-media.ts` covers each source and the host.
+
+The `mako` server's instructions reach the model only up to the shortest cut
+a harness makes: Claude Code's 4,096 characters, Grok's about 2,047. So they
+open with what agents worked around: waiting by ending the turn (`wait:`),
+then `ORCHESTRATION_INSTRUCTIONS`, a Fin's report first, then parallel work
+through `agents_start` and ending the turn after it; what's refused says why
+at the call, so that line may fall past Grok's cut
+(`test:mako-instructions`). Claude Code defers MCP tools behind its tool
+search, and an agent that never loaded `agents_start` or `wait` ran an agent
+CLI or a sleep instead: those two, `agents_report` and `agents_send` are
+listed with `_meta` `anthropic/alwaysLoad` (`ALWAYS_LOADED_TOOLS`,
+`toolMeta`), so they're in its prompt from the first turn.
 
 An Apex's turns that exist only because its Fins reported read as one row. `foldReportRuns`
 (`src/lib/report-runs.ts`) takes the transcript's turns as the timeline is about to draw them and makes each run of

@@ -429,6 +429,18 @@ try {
     totals: "54 passed, 12 skipped, 5 running",
     notPassed: [`gate (10, 11, 12, 13, 14): running ${urlOf("gate (10)")}`],
   }, "running only, queued ones with them: the family once")
+  // While checks run, the read says to wait on them; read again unchanged it says so, and the time after only that.
+  const whole = async () => parseYaml(text(await agent.callTool({ name: "pull_request_status", arguments: { logs: false } })))
+  const waitCall = '`wait({"on":[{"pull":"o/r#101","until":"checks"}]})`'
+  const pending = await whole()
+  assert.equal(pending.next, `Checks are still running. Call ${waitCall} and end your turn: Mako wakes you when they settle.`, "pending checks name the wait")
+  const repeated = await whole()
+  assert.ok(repeated.pullRequest && /^Nothing changed since your last pull_request_status \d+ s ago\. Checks are still running\. Call /.test(repeated.next), `the first repeat is whole, saying so: ${repeated.next}`)
+  const short = await whole()
+  assert.equal(short.pullRequest, undefined, "the next is only that it's unchanged")
+  assert.ok(Number.isFinite(short.unchangedSince), "and says since when")
+  assert.match(short.next, /^Nothing changed since your last pull_request_status/)
+  assert.ok((await statusOf({ checks: "all" })) !== undefined, "another call shape is read whole")
   rollup((checks) => { checks.find((check) => check.name === "mac-host")!.conclusion = "CANCELLED" })
   assert.deepEqual((await statusOf()).checks, {
     totals: "59 passed, 11 skipped, 1 cancelled",

@@ -18,6 +18,19 @@ export function withoutInstructions(url: string): string {
   return `${url}${url.includes("?") ? "&" : "?"}${INSTRUCTIONS_PARAM}=0`
 }
 
+/**
+ * The `mako` tools an agent must never have to look up to use: starting a Fin, reporting, sending the person's message
+ * on, and waiting to be woken. Claude Code defers MCP tools behind its tool search; an agent that hadn't loaded these
+ * ran an agent CLI, a background subagent or a sleep instead. Tagged `anthropic/alwaysLoad`, they're in its prompt
+ * from the first turn; other harnesses ignore the tag.
+ */
+export const ALWAYS_LOADED_TOOLS: ReadonlySet<string> = new Set(["agents_start", "agents_report", "agents_send", "wait"])
+
+/** The `_meta` a tool's listing carries when it's one of `ALWAYS_LOADED_TOOLS`. */
+export function toolMeta(name: string): { _meta?: { "anthropic/alwaysLoad": true } } {
+  return ALWAYS_LOADED_TOOLS.has(name) ? { _meta: { "anthropic/alwaysLoad": true } } : {}
+}
+
 const ALL_TRANSPORTS: readonly McpTransport[] = ["stdio", "http", "sse"]
 const LOCAL_AND_HTTP: readonly McpTransport[] = ["stdio", "http"]
 

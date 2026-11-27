@@ -113,6 +113,7 @@ import {
   type AgentsLinkInput,
   type AgentsLinkResult,
   type AgentsListInput,
+  type AgentsListed,
   type AgentsListResult,
   type AgentsReadInput,
   type AgentsReadResult,
@@ -197,6 +198,8 @@ import { TreeEdgeSchema, TreeNoticeDeliverySchema, treeEdgeRefusalText, type Tre
 import type { PullOutcome, PullReading, PullWaitUntil } from "../contracts/pull-waits.js"
 import type { PullTarget as ReadTarget } from "../git/index.js"
 import { localWords } from "@mako/protocol/computer-words"
+import { PollAnswers, turnOf } from "../base/poll-answers.js"
+import { AFTER_LIST, AFTER_READ, AFTER_WAIT_TIMEOUT, FINS_WAKE, unchangedNext } from "../contracts/poll-words.js"
 
 const NONE: readonly NativeAgent[] = []
 /** How long `agents_move` holds its answer for the switch to settle: within the door's window, and a failure later reports. */
@@ -397,6 +400,8 @@ export interface CloudFins {
 export type CloudAway = { start: CloudFinStart; repository: { url: string; branch?: string }; source: CommittedFinSource; folder?: string }
 
 export interface AgentsDeps {
+  /** Which reads of the agents tools repeat the caller's last answer (`PollAnswers`); one of its own when absent. */
+  polls?: PollAnswers
   /** `thread_history`'s tools, for `agents_read`'s `search` of one Fin; absent until the host builds them. */
   history?: () => ThreadHistoryTools | undefined
   store(): ThreadStore | undefined
@@ -846,6 +851,8 @@ export class Agents implements AgentOperations, ConversationChildren {
   private readonly rulesSaid = new Map<string, string>()
   /** When each Fin last changed for its Apex (`FinChanges`): `agents_list`'s marks and the front door's read it. */
   private readonly changes = new FinChanges()
+  /** Which reads repeat what the caller already read, unchanged (`PollAnswers`). */
+  private readonly polls: PollAnswers
   /** When each Apex conversation's front door last listed its Fins: one unchanged since is counted, not described again. */
   private readonly doorSaid = new Map<string, number>()
   private readonly waiters = new Set<() => void>()
@@ -988,6 +995,7 @@ export class Agents implements AgentOperations, ConversationChildren {
 
   constructor(deps: AgentsDeps) {
     this.deps = deps
+    this.polls = deps.polls ?? new PollAnswers()
     this.budget = { ...TREE_BUDGET, ...deps.budget }
     this.generation = Math.max(1, Math.floor(this.now()))
     const accounts = deps.accounts
@@ -2690,8 +2698,31 @@ export class Agents implements AgentOperations, ConversationChildren {
     }).length
     const unchanged = strips.length - changed.length + dropped.length - folded
     const marked = { tree, mark: this.changes.mark(tick), ...(since !== undefined && { unchanged }) }
-    if (input.scope === "all" || input.ended) return { children: changed, ...marked }
-    return { ...foldList(changed, now, undefined, folded), ...marked }
+    const listed: AgentsListed = input.scope === "all" || input.ended ? { children: changed, ...marked } : { ...foldList(changed, now, undefined, folded), ...marked }
+    return this.polled(apex, listed, input, strips, now)
+  }
+
+  /**
+   * A list's `next` while its Fins are at work and none waits on the caller: their reports wake it. Read again with
+   * nothing changed, it says so (`PollAnswers`); the time after, it's only that.
+   */
+  private polled(apex: Apex, listed: AgentsListed, input: AgentsListInput, strips: readonly AgentStrip[], now: number): AgentsListed {
+    const working = strips.filter((strip) => !strip.under && (strip.state.kind === "working" || strip.state.kind === "starting" || strip.state.kind === "queued")).map((strip) => strip.name)
+    if (!working.length || strips.some(needsApex)) return listed
+    const facts = JSON.stringify([listed.tree, listed.folded ?? null, listed.unchanged ?? null, listed.children.map((strip) => [strip.child, strip.changedAt ?? null, strip.state.kind])])
+    const reading = this.pollReading(apex, `agents_list ${input.scope ?? "children"} ${input.ended === true} ${input.since !== undefined}`, facts, now)
+    if (reading.since === undefined) return { ...listed, next: AFTER_LIST }
+    const next = unchangedNext("agents_list", reading.since, working, FINS_WAKE)
+    hostLog("agents", "poll answered unchanged", { conversation: apex.conversation, tool: "agents_list", repeats: reading.repeats, since: reading.since })
+    // The time after, every Fin is counted unchanged and none listed again.
+    return reading.repeats >= 2 ? { children: [], tree: listed.tree, ...(listed.mark && { mark: listed.mark }), unchanged: strips.length, unchangedSince: reading.since, next } : { ...listed, next }
+  }
+
+  /** How a read stands against the caller's last read of the same call, in the caller's current turn. */
+  private pollReading(apex: Apex, call: string, facts: string, now: number) {
+    const conversation = apex.away ? undefined : apex.conversation
+    const requests = conversation ? (this.deps.live.held(conversation) ?? this.deps.live.snapshot(conversation))?.requests : undefined
+    return this.polls.read(conversation, call, facts, turnOf(requests), now)
   }
 
   /**
@@ -2765,6 +2796,18 @@ export class Agents implements AgentOperations, ConversationChildren {
       : this.reportText(edge, state, selected ?? outcome)
     const text = away ? `${away}\n${local}` : local
     const truncated = text.length > limit
+    const atWork = state.kind === "working" || state.kind === "starting" || state.kind === "queued"
+    let next: string | undefined
+    if (atWork && !asks.length && !actions.items.length && input.report === undefined && input.view !== "pulls") {
+      // Its step too: a read that shows a Fin further on isn't unchanged, though it still hears its report wakes it.
+      const facts = JSON.stringify([state.kind, state.kind === "working" ? state.phase ?? state.step ?? null : null, reports.at(-1)?.id ?? null])
+      const reading = this.pollReading(apex, `agents_read ${edge.child} ${input.view ?? "report"}`, facts, this.now())
+      next = reading.since !== undefined ? unchangedNext(`agents_read of fin:${edge.name}`, reading.since, [edge.name], "Its report wakes you; end your turn.") : AFTER_READ
+      if (reading.since !== undefined) {
+        hostLog("agents", "poll answered unchanged", { conversation: apex.conversation, tool: "agents_read", child: edge.child, repeats: reading.repeats, since: reading.since })
+        if (reading.repeats >= 2) return { child: edge.child, name: edge.name, state, text: next, unchangedSince: reading.since, next }
+      }
+    }
     return {
       child: edge.child,
       name: edge.name,
@@ -2774,6 +2817,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(asks.length && { pending: { asks, ...(pending.length > asks.length && { more: pending.length - asks.length, next: asks.at(-1)!.id }) } }),
       text: truncated ? text.slice(text.length - limit) : text,
       ...(truncated && { truncated: true as const }),
+      ...(next && { next }),
       ...(input.view === "transcript" && { whole: `That's the last ${READ_ENTRIES} entries of its newest session at most. thread_history with thread: "${edge.child}" reads every turn of every harness it ran on (turns, read, search, payload), and action export writes it to a file.` }),
     }
   }
@@ -3971,11 +4015,17 @@ export class Agents implements AgentOperations, ConversationChildren {
         this.waiters.add(wake)
       })
     }
-    return {
+    const answer = {
       reports: found.map(({ edge, report }) => ({ child: edge.child, name: edge.name, status: report.status, line: reportPhase(report) ?? report.status, at: report.at })),
       cursor: found.at(-1)?.report.at ?? after,
       timedOut,
     }
+    if (found.length) return answer
+    // Its window held with nothing new: reports wake the caller without it. Again and again, it's told how long.
+    const reading = this.pollReading(apex, `agents_wait ${edges.map((edge) => edge.child).sort().join(",")}`, String(after), this.now())
+    if (reading.since === undefined) return { ...answer, next: AFTER_WAIT_TIMEOUT }
+    hostLog("agents", "poll answered unchanged", { conversation: apex.conversation, tool: "agents_wait", repeats: reading.repeats, since: reading.since })
+    return { ...answer, unchangedSince: reading.since, next: unchangedNext("agents_wait", reading.since, edges.filter((edge) => { const kind = this.stateOf(edge).kind; return kind === "working" || kind === "starting" || kind === "queued" }).map((edge) => edge.name), FINS_WAKE) }
   }
 
   /** The host's Fins and budgets, for Diagnostics. */
@@ -4395,7 +4445,7 @@ export class Agents implements AgentOperations, ConversationChildren {
       conversationId,
       ...(decided.rerouted?.to?.why === "account" && { account: decided.rerouted.to.account }),
       // An Apex of its own starts Fins too: it reads the person's rules with its brief.
-      initialRequest: { id: namedUuid(`${op}\nbrief`), ...await this.withContext([briefText(input.brief, name), ...(input.role === APEX_ROLE ? [this.policyLines().join("\n")] : [])].filter(Boolean).join("\n\n"), attached), attachments: [] },
+      initialRequest: { id: namedUuid(`${op}\nbrief`), ...await this.withContext([briefText(input.brief, name, input.role), ...(input.role === APEX_ROLE ? [this.policyLines().join("\n")] : [])].filter(Boolean).join("\n\n"), attached), attachments: [] },
       title: input.title ?? name,
       modeId: childMode(this.deps.modes(harness), tier)?.id ?? accessModeId(tier),
       ...(tuning && { tuning }),
