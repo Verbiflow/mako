@@ -1,4 +1,5 @@
 import { useHarnessIdentity } from "@/lib/harness-label"
+import { useApexes } from "@/state/apexes"
 import { clearPicked, offerPick, pickByClick, useRailSelection } from "@/state/rail-selection"
 import { railThreadRowKeys } from "@/components/rail/rail-keys"
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
@@ -27,7 +28,7 @@ import { useThreadPurposes } from "@/state/thread-purposes"
 import { renameThreadTitle, useThreadTitles } from "@/state/thread-titles"
 import { openFoldedThread } from "@/state/thread-sessions"
 import { onScreenSession } from "@/state/session-panes"
-import { pressTab } from "@/state/tab-drag"
+import { pressTab, useTabDrag } from "@/state/tab-drag"
 import { followCheckouts } from "@/state/checkout-heads"
 import { appMarkOf, useThreadApp } from "@/state/thread-app"
 import { useLeavingWorktrees, useWorktrees, useWorktreeSummaries, workingFolder, worktreeAt } from "@/state/worktrees"
@@ -185,6 +186,9 @@ export const ThreadRow = memo(function ThreadRow({
   const draftOpen = useThreadGroups((state) => state.open !== null && state.open === thread)
   const apex = useIsApex(thread)
   const fins = useApexFins(thread, apex)
+  // A deliberate Apex takes a Thread dragged onto it (Move into Apex), lit while one is over it.
+  const deliberate = useApexes((state) => (thread ? state.byThread[thread] !== undefined : false))
+  const dropping = useTabDrag((state) => Boolean(thread && state.zone && "apex" in state.zone && state.zone.apex === thread))
   const work = useThreadMarks((state) => (thread ? state.byThread[thread]?.status : undefined)) ?? null
   const markedUnread = useThreadMarks((state) => (thread ? state.byThread[thread]?.unreadAt != null : false))
   const working = status.kind === "working"
@@ -344,6 +348,8 @@ export const ThreadRow = memo(function ThreadRow({
         data-conversation-id={target.kind === "live" ? target.id : undefined}
         data-thread-indent={indent || undefined}
         data-apex-row={apex || undefined}
+        data-apex-drop={deliberate && thread ? thread : undefined}
+        data-apex-dropping={dropping || undefined}
         data-apex-open={apex ? fins.open : undefined}
         data-fin-counts={fins.label}
         data-thread-purpose={setup ? "setup" : undefined}
@@ -351,7 +357,7 @@ export const ThreadRow = memo(function ThreadRow({
         data-kept={ref.archived ? (ref.copyOnly ? "copy" : "records") : undefined}
         data-work-status={work ?? undefined}
         data-marked-unread={unreadMark || undefined}
-        className={ROW_SURFACE}
+        className={cn(ROW_SURFACE, dropping && "bg-fill-selected")}
       >
         {apex && thread ? (
           <ApexFold thread={thread} open={fins.open} label={threadStatusLabel(status, markHarness)}>{mark}</ApexFold>

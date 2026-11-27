@@ -20,6 +20,7 @@ import { lostVersions } from "@/state/lost-versions"
 import { RestoreVersions } from "@/components/rail/restore-versions"
 import { useWindowRoutes, windowRoutesStore } from "@/state/window-routes"
 import { automationFromThread } from "@/state/automations-view"
+import { ApexMenuItems } from "@/components/apexes/apex-menu-items"
 
 export interface ThreadMenuProps {
   target: ThreadTarget
@@ -180,6 +181,7 @@ function HostThreadMenuItems({ props, menu }: { props: ThreadMenuProps; menu: Re
           <WorkflowIcon className="size-3.5" />Make this an automation
         </MenuItem>
       ) : null}
+      {thread ? <ApexMenuItems thread={thread} title={title} {...(target.kind === "live" && { conversation: target.id })} /> : null}
       {menu.lost ? (
         <MenuItem data-thread-action="restore-version" onSelect={menu.restore}>
           <HistoryIcon className="size-3.5" />Restore a version from the last 14 days

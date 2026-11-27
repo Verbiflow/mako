@@ -13,6 +13,7 @@ import { goalContinuePrompt, goalStartPrompt } from "@mako/host/contracts/live-g
 import { usageLimitSources } from "@/state/usage-limit-wait"
 import { pullWakeWords } from "@mako/host/contracts/pull-waits"
 import { turnWaitWords } from "@mako/host/contracts/turn-waits"
+import { apexNoteLine } from "@mako/host/contracts/apexes"
 import { agentWords, type AgentWords } from "@mako/host/contracts/children"
 import { foldedParts } from "@mako/host/contracts/live-conversations"
 
@@ -85,6 +86,8 @@ export type MakoPrompt =
   | { kind: "pull"; line: string; url?: string }
   /** A turn's wait fired or ended (`turnWaitNote`, `turnWaitMovedNote`): its first line, and the rest. */
   | { kind: "wait"; line: string; detail?: string }
+  /** Mako told a deliberate Apex who joined its Shiver (`apexNoteLine`). */
+  | { kind: "apex"; line: string }
 
 /**
  * The prompts Mako sent itself, keyed by their request id, so the transcript
@@ -101,7 +104,8 @@ export function makoPrompts(requests: readonly LiveRequest[]): Map<string, MakoP
     else if (request.actor?.kind === "service" && request.actor.name === "pull-watch") {
       const pull = pullWakeWords(request.text)
       if (pull) prompts.set(request.id, { kind: "pull", ...pull })
-    } else if (request.actor?.kind === "service" && request.actor.name === "turn-wait")
+    } else if (request.actor?.kind === "service" && request.actor.name === "apex") prompts.set(request.id, { kind: "apex", line: apexNoteLine(request.text) })
+    else if (request.actor?.kind === "service" && request.actor.name === "turn-wait")
       prompts.set(request.id, { kind: "wait", ...turnWaitWords(request.text) ?? { line: request.text.trim().split("\n", 1)[0] ?? "" } })
   }
   return prompts

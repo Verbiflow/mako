@@ -2,6 +2,7 @@ import { rollup, rosterChildren } from "@mako/host/contracts/children"
 import { activeLiveAcp } from "@/state/acp"
 import { useRailAcp, type AcpState } from "@/state/acp-state"
 import { apexViewStore, threadRollup } from "@/state/apex-fins"
+import { apexesStore } from "@/state/apexes"
 
 /**
  * The conversation whose Fins are read and how they stand: the Thread's one rollup, or a Session's own roster. It's the
@@ -23,7 +24,8 @@ export function rosterOnScreen(state: AcpState, conversation?: string) {
  */
 export function apexOnScreen(state: AcpState, conversation?: string): string | undefined {
   const { counts, thread } = rosterOnScreen(state, conversation)
-  return counts.total > 0 ? thread : undefined
+  // A deliberate Apex has its Overview before its first Fin: its plan, its rules and what needs the person.
+  return counts.total > 0 || (thread !== undefined && apexesStore.get().byThread[thread] !== undefined) ? thread : undefined
 }
 
 /** What the Agents surface is called now: an Apex's is its Overview, and a Session's own work stays Agents. */
@@ -37,8 +39,8 @@ export const AGENTS_LABEL = "Agents"
 export function useAgentsOffered(conversation?: string): boolean {
   // The rail's store: a roster, a status and the conversation on screen are facts it says, and no token moves one.
   return useRailAcp((state) => {
-    const { live, counts } = rosterOnScreen(state, conversation)
+    const { live, counts, thread } = rosterOnScreen(state, conversation)
     // Its provider's own work, or its Thread's Fins, whichever of its Sessions is on screen (`conversationRoster`).
-    return counts.total > 0 || Boolean(live?.nativeAgents?.agents.some((agent) => !agent.child))
+    return counts.total > 0 || Boolean(live?.nativeAgents?.agents.some((agent) => !agent.child)) || (thread !== undefined && apexesStore.get().byThread[thread] !== undefined)
   })
 }
