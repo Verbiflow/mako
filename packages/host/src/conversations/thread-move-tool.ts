@@ -7,6 +7,7 @@ import type { AccessTier } from "../contracts/access.js"
 import type { AgentCaller } from "../contracts/agents.js"
 import type { ThreadContinueOutcome, ThreadHandOff, ThreadMoveOutcome, ThreadReturnOutcome } from "../contracts/cloud-threads.js"
 import { hostCallSchema } from "../contracts/host-call-inputs.js"
+import { toolMeta } from "../contracts/mcp-reach.js"
 import type { AgentAskWant } from "../contracts/agent-asks.js"
 import { AFTER_MOVE, THREAD_TOOLS, type ThreadMoveRefused, type ThreadToolDefinition, type ThreadsMoveInput, type ThreadsMoveResult } from "../contracts/thread-tools.js"
 import { namedUuid } from "./cloud-moves.js"
@@ -229,7 +230,7 @@ export function threadToolText(answer: ThreadMoveAnswer): string {
 export function registerThreadTools(server: McpServer, door: ThreadToolDoor): void {
   for (const tool of THREAD_TOOLS) {
     const { mcp } = tool
-    server.registerTool(mcp.name, { description: mcp.description, inputSchema: threadToolSchema(tool), annotations: mcp.annotations }, async (input) => {
+    server.registerTool(mcp.name, { description: mcp.description, inputSchema: threadToolSchema(tool), annotations: mcp.annotations, ...toolMeta(mcp.name) }, async (input) => {
       try {
         const answer = await door.invoke(tool.channel, [door.caller(), ToolArgumentsSchema.parse(input)])
         return { ...(answer.refused !== undefined && { isError: true }), content: [{ type: "text" as const, text: threadToolText(answer) }] }

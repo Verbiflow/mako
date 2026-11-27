@@ -171,6 +171,14 @@ const CREW_INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started 
 /** The intro's tail before a Fin could read its Shiver. */
 const EARLIER_INTRO_TAIL = `, a ${FIN_WORD}: another Thread, ${YOUR_APEX}, started you for one piece of work. It reads your reports, not this conversation.`
 export const BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells ${YOUR_APEX} how it ended.`
+/**
+ * What a Fin hears once when a turn of its ends with no report that stands and nothing that wakes it: as its harness's
+ * Stop hook's reason where the harness asks one before the turn ends (`FIN_STOP_ASK`), else as Mako's note, its next
+ * turn (`FIN_REPORT_ASK`). Its end after that is its report, as it was before it was asked.
+ */
+const REPORT_ASK_TAIL = `Your ${APEX_WORD} hears how your work stands only from it. Call agents_report now: done with what you did (and its pull request), failed with why, or blocked or needs-input with your question; waiting on a pull request's checks, progress with waitingOn. Then end your turn.`
+export const FIN_STOP_ASK = `You haven't called agents_report this turn. ${REPORT_ASK_TAIL}`
+export const FIN_REPORT_ASK = `Mako: your turn ended without agents_report. ${REPORT_ASK_TAIL}`
 /** A brief's lines as builds before the names wrote them, still left out of its card. */
 const LEGACY_INTRO = { head: "You're child:", tail: ", a Thread another Thread started to do one piece of work. It reads your reports, not this conversation." }
 const LEGACY_BRIEF_CLOSE = `When you finish, are blocked, or need a decision, call agents_report (from a shell, \`mako agents report\`). Ending your turn without one tells your ${LEGACY_APEX_WORD} how it ended.`

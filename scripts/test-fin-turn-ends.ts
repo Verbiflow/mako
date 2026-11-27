@@ -4,10 +4,11 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { NativeAgentObservation } from "@mako/host/contracts/native-agents"
 import { HELD_WORK_CEILING_MS } from "@mako/host/contracts/background-work"
-import { childWord } from "@mako/host/contracts/children"
+import { childWord, FIN_REPORT_ASK, FIN_STOP_ASK } from "@mako/host/contracts/children"
 import { readFinReports } from "@mako/host/contracts/fin-reports"
 import type { PullReading } from "@mako/host/contracts/pull-waits"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
+import { claudeFinStop } from "@mako/host/harnesses/claude/routing"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
 
 /**
@@ -26,6 +27,9 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
  *   whose word is progress hasn't said it's done: it reads "Ended without a result" in the list, its row and the
  *   digest, never done, and its Apex hears at once, with its last words, and sends it on or takes the reply. Nobody is
  *   asked, so nothing reaches the person's Inbox.
+ * - Before any such end is written, the Fin itself is asked once to report: Mako's note as its next turn, or, where its
+ *   harness asks before a turn ends (Claude Code's Stop hook), the hook's reason. A report then is its result; none,
+ *   and the end is written as before, from the turn it was asked about.
  */
 const root = mkdtempSync(join(tmpdir(), "mako-fin-turn-ends-"))
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
@@ -42,8 +46,8 @@ const monitor = (state: NativeAgentObservation["state"]): NativeAgentObservation
   ({ nativeId: "monitor-ci", title: "CI checks on #783", work: "monitor", ambient: true, background: true, stoppable: true, state })
 
 /** A world whose Fins run `script`, and what the Apex heard and how each Fin stands. */
-async function world(name: string, script: Script, options: { readPull?: () => Promise<PullReading | null>; apexAnswerMs?: number; now?: () => number; later?: (ms: number, run: () => void) => () => void } = {}) {
-  const w = new AgentsWorld({ root: join(root, name), script, backgroundOutlivesTurn: ["claude"], ...options })
+async function world(name: string, script: Script, options: { reportAsks?: boolean; readPull?: () => Promise<PullReading | null>; apexAnswerMs?: number; now?: () => number; later?: (ms: number, run: () => void) => () => void } = {}) {
+  const w = new AgentsWorld({ root: join(root, name), script, backgroundOutlivesTurn: ["claude"], reportAsks: true, ...options })
   const apex = await w.apex("claude", "full")
   const start = async (fin: string, objective: string) => {
     const started = await w.agents.start(apex.caller, { brief: { objective }, name: fin, harness: "claude", cwd: w.root, clientKey: fin })
@@ -310,6 +314,7 @@ async function unfinished(): Promise<void> {
   assert.deepEqual([report!.status, report!.unfinished], ["failed", true], "kept as failed, so an older build never reads it as done")
   assert.equal(report!.summary, `Nothing it waits on will wake it. Its last words: "I'll report when the local suites settle."`)
   assert.equal(report!.question, undefined, "a question would reach the person's Inbox once its Apex left it")
+  assert.equal(f.w.prompts.filter((prompt) => prompt.text.includes(FIN_REPORT_ASK)).length, 1, "it was asked to report once before its end was written")
   // Its Apex's digest says it apart from what finished, its card the same.
   assert.match(f.heard(), /1 ended without a result \(agents_send sends one on; or take its reply as its result\):\n {2}• "suites" \(Claude\): Nothing it waits on will wake it\. Its last words: "I'll report when the local suites settle\."/, "its Apex hears it at once, its last words with it")
   assert.doesNotMatch(f.heard(), /finished:|"suites" \(Claude\) (done|failed)/, "never as finished, done or failed")
@@ -335,13 +340,78 @@ async function finishedWithoutReport(): Promise<void> {
   const child = await f.start("labels", "Label everything")
   await f.w.settle()
   assert.deepEqual(f.reports(child).map((report) => [report.status, report.summary]), [["done", "Labels finished."]])
-  console.log("plain answer: still its result")
+  assert.equal(f.w.prompts.filter((prompt) => prompt.text.includes(FIN_REPORT_ASK)).length, 1, "it was asked to report, once")
+  console.log("plain answer: asked once, then still its result")
   await f.w.close()
+}
+
+async function askedReports(): Promise<void> {
+  // A Fin that ends a turn on its reply, asked to report, reports: that's its result, and Mako writes nothing for it.
+  const f = await world("asked", async (turn) => {
+    if (turn.text.includes("You're fin:")) return "Labels finished; opened #12."
+    if (turn.text.includes(FIN_REPORT_ASK)) {
+      await turn.world.agents.report(turn.caller, { status: "done", summary: "Labelled everything; #12 is open.", clientKey: "labels" })
+      return "Reported."
+    }
+    return "ok"
+  })
+  const child = await f.start("labels", "Label everything")
+  await f.w.settle()
+  assert.deepEqual(f.reports(child).map((report) => [report.status, report.implicit ?? false, report.summary]), [["done", false, "Labelled everything; #12 is open."]], "the report it made when asked")
+  assert.equal(f.w.prompts.filter((prompt) => prompt.text.includes(FIN_REPORT_ASK)).length, 1, "asked once")
+  assert.equal(f.heard().match(/"labels" \(Claude\) done/g)?.length, 1, "its Apex hears it once")
+  console.log("asked: the Fin asked to report reports, and that's its result")
+  await f.w.close()
+}
+
+async function askedAtStop(): Promise<void> {
+  // Where the harness asks before a turn ends, the host's answer sends the Fin back once, and Mako's note never goes.
+  const answers: (string | undefined)[] = []
+  const f = await world("at-stop", async (turn) => {
+    if (!turn.text.includes("You're fin:")) return "ok"
+    answers.push(turn.world.agents.finStop(turn.conversation), turn.world.agents.finStop(turn.conversation))
+    return "Labels finished."
+  })
+  const child = await f.start("labels", "Label everything")
+  await f.w.settle()
+  assert.deepEqual(answers, [FIN_STOP_ASK, undefined], "sent back once a turn")
+  assert.equal(f.w.prompts.filter((prompt) => prompt.text.includes(FIN_REPORT_ASK)).length, 0, "no note after a turn its harness asked in")
+  assert.deepEqual(f.reports(child).map((report) => [report.status, report.summary]), [["done", "Labels finished."]], "its end, as before")
+  // A turn that reported, or one whose harness holds work that wakes it, isn't sent back.
+  const g = await world("at-stop-reported", async (turn) => {
+    if (!turn.text.includes("You're fin:")) return "ok"
+    await turn.world.agents.report(turn.caller, { status: "done", summary: "Done.", clientKey: "done" })
+    answers.push(turn.world.agents.finStop(turn.conversation))
+    turn.world.live.observe({ type: "live-agent", id: turn.conversation, agent: monitor({ kind: "working" }) })
+    return "Done."
+  })
+  await g.start("done", "Do it")
+  await g.w.settle()
+  assert.equal(answers.at(-1), undefined, "a report that stands lets the turn end")
+  const h = await world("at-stop-held", async (turn) => {
+    if (!turn.text.includes("You're fin:")) return "ok"
+    turn.world.live.observe({ type: "live-agent", id: turn.conversation, agent: monitor({ kind: "working" }) })
+    answers.push(turn.world.agents.finStop(turn.conversation))
+    return "Monitor armed."
+  })
+  await h.start("watch", "Watch CI")
+  await h.w.settle()
+  assert.equal(answers.at(-1), undefined, "work its harness holds wakes it")
+  // The hook's answer: the reason as a block, never when Claude already sent the turn back or holds a wake.
+  const hook = claudeFinStop(() => FIN_STOP_ASK)
+  const base = { session_id: "s", transcript_path: "/t", cwd: "/", hook_event_name: "Stop" as const }
+  const signal = new AbortController().signal
+  assert.deepEqual(await hook({ ...base, stop_hook_active: false }, undefined, { signal }), { decision: "block", reason: FIN_STOP_ASK })
+  assert.deepEqual(await hook({ ...base, stop_hook_active: true }, undefined, { signal }), {}, "a turn sent back once ends")
+  assert.deepEqual(await hook({ ...base, stop_hook_active: false, session_crons: [{ id: "c", schedule: "0 9 * * *", recurring: false, prompt: "Check CI." }] }, undefined, { signal }), {}, "a scheduled wake lets it end")
+  assert.deepEqual(await claudeFinStop(() => undefined)({ ...base, stop_hook_active: false }, undefined, { signal }), {})
+  console.log("at stop: the harness's hook sends the Fin back once, never after a report or with a wake held, and no note follows")
+  await Promise.all([f.w.close(), g.w.close(), h.w.close()])
 }
 
 try {
   const only = process.argv.slice(2)
-  const cases = { monitorArmed, monitorDied, monitorDropped, lateNotification, oneCeilingTimer, monitorPastCeiling, promiseAfterWake, unfinished, unfinishedHoldsAfter, finishedWithoutReport }
+  const cases = { monitorArmed, monitorDied, monitorDropped, lateNotification, oneCeilingTimer, monitorPastCeiling, promiseAfterWake, unfinished, unfinishedHoldsAfter, finishedWithoutReport, askedReports, askedAtStop }
   for (const [name, run] of Object.entries(cases)) if (!only.length || only.includes(name)) await run()
 } finally {
   rmSync(root, { recursive: true, force: true })
