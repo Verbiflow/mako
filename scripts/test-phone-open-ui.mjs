@@ -207,6 +207,18 @@ async function checkOpen() {
         assert.ok(opened.newestMs <= budget, `${where}, ${label}: its newest turn was painted ${opened.newestMs} ms after the tap (at most ${budget})`)
         said.push(`${label} ${opened.newestMs} ms`)
         if (label === "cold") await capture(`opened-apex-${place}.png`)
+        // A deliberate Apex's digest sits under its bar as one line, its conversation below it; a tap opens what needs
+        // the person, and closes it again.
+        if (label === "cold" && place === "mac") {
+          const digest = "[data-phone-digest] > button"
+          await until(`document.querySelector(${JSON.stringify(digest)})?.getAttribute('aria-expanded') === 'false'`, `${where}: its digest, folded`)
+          assert.match(await evaluate(`document.querySelector(${JSON.stringify(digest)}).innerText`), /\d+ needs? you/, `${where}: its digest's line says what needs the person`)
+          await tap(digest)
+          await until(`document.querySelector(${JSON.stringify(digest)}).getAttribute('aria-expanded') === 'true' && document.querySelector('[data-phone-digest]').innerText.includes('Needs you')`, `${where}: its digest, opened`)
+          await capture(`apex-digest-open-${place}.png`)
+          await tap(digest)
+          await until(`document.querySelector(${JSON.stringify(digest)}).getAttribute('aria-expanded') === 'false'`, `${where}: its digest, folded again`)
+        }
         await tap('[aria-label="Back to threads"]')
         await until(`Boolean(document.querySelector(${JSON.stringify(row)})) && !document.querySelector('[data-thread-screen]')`, `${where}: back to the list`)
       }

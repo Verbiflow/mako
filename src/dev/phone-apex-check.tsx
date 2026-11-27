@@ -11,6 +11,7 @@ import type { ListedSession } from "@mako/protocol/thread-listing"
 import { WebClient, WebClientContext } from "@/web-client/client"
 import { accountListStore } from "@/web-client/account-list"
 import { syncingStore } from "@/web-client/syncing"
+import { webApexesStore } from "@/web-client/apexes"
 import { applyTheme } from "@/web-client/theme"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
@@ -97,6 +98,11 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
     },
   }),
 })
+
+// The scene's deliberate Apex, as its Mac's `mako:apexes` and plan read answer: the digest under its bar and the Inbox.
+// Read before anything is drawn, as the phone's list reads each Mac's Apexes before one is opened.
+const [sceneApexes, scenePlan] = await Promise.all([getMako().apexes(), getMako().apexPlan(APEX_THREAD)])
+webApexesStore.set({ byDevice: { [DEVICE]: sceneApexes }, plans: { [APEX_THREAD]: scenePlan.text } })
 
 // The owner's answer to a read takes `?answer=` ms, over the network (default: at once).
 const ANSWER_MS = Number(search.get("answer") ?? 0)
