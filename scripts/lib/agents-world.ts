@@ -25,6 +25,7 @@ import type { LivePermissionRequest, LivePermissionResponse, LiveSessionMode, Li
 import { NO_NATIVE_PROMPT_IDENTITY } from "@mako/host/contracts/native-prompt-identity"
 import type { ProcessReads } from "@mako/host/conversations/agent-runs"
 import { Agents, ROOM_WATCH_JOB, type AgentsDeps } from "@mako/host/conversations/agents"
+import { Apexes } from "@mako/host/conversations/apexes"
 import { continueOn, type ContinueOn } from "@mako/host/conversations/continue-on"
 import { carriedTuning } from "@mako/host/harnesses/harness-models"
 import { LiveConversations } from "@mako/host/conversations/live-conversations"
@@ -298,6 +299,7 @@ export class AgentsWorld {
   /** Every answer to an approval a driver was sent: its conversation, its harness's request, and the answer. */
   readonly answers: { conversation: string; request: string; response: LivePermissionResponse; at: number }[] = []
   readonly events: HostEvent[] = []
+  apexes!: Apexes
   /** Every launch admission resolved, in order, with the account it ran on (`WorldOptions.accounts`). */
   readonly launches: WorldLaunch[] = []
   private readonly inputs = new HostCallInputs()
@@ -469,6 +471,19 @@ export class AgentsWorld {
     }
     const agents = new Agents(deps)
     this.agents = agents
+    // Deliberate Apexes, as the host builds them beside the engine (`openConversations`): nothing for an Apex without a profile.
+    this.apexes = new Apexes({
+      store: () => this.store,
+      live,
+      agents: () => agents,
+      startLive: async (harness, cwd, options) => {
+        await live.start(harness, cwd, options)
+      },
+      archived: (conversation) => this.archived.has(conversation),
+      userRoot: join(this.root, "user"),
+      emit: (event) => this.events.push(event),
+    })
+    agents.apexes = this.apexes
     if (this.options.resumeInSlices) {
       // As the host does (`openConversations`), each conversation read in a slice at a time first.
       this.resumed = (async () => {

@@ -417,7 +417,7 @@ export interface AgentsSettleInput {
 export type AgentsSettleResult = { action: ReportAction; deduped?: true } | AgentRefused
 
 export interface AgentsSendInput {
-  /** Your own Fin's name or Thread ID, or another of the person's top-level Threads as `apex:<handle, title or Thread ID>`. Shiver siblings need a parent relay through agents_report; discovery grants no send authority. */
+  /** Your own Fin's name or Thread ID, or another of the person's top-level Threads as `apex:<handle, title or Thread ID>`. or another Fin of your own Apex by its name. */
   to: string
   /** Pass on the person's message this turn answers, word for word, as theirs: the host fills it in, so the call stays short. */
   forward?: boolean

@@ -133,23 +133,19 @@ async function shiver(): Promise<void> {
     const done = await world.agents.list(world.caller(docs), { scope: "shiver" })
     assert.ok("shiver" in done && done.apex.working === false && done.shiver.find((mate) => mate.name === "api")!.state.kind === "ended", "read again, it stands as they stand now")
 
-    // A message to a sibling it can't send goes to its Apex instead, waking it, and reaches the sibling only as the
-    // Apex passes it on. Before, the send was refused and the message went nowhere: handoffs stalled until someone
-    // relayed them by hand.
+    // A Fin messages its sibling directly, as its own words; its Apex isn't woken to pass it on. A repeat of its key
+    // goes once.
     const apexHeard = (said: string) => world.prompts.some((prompt) => prompt.conversation === apex.conversation && prompt.text.includes(said))
-    const apiHeard = world.prompts.filter((prompt) => prompt.conversation === api).length
-    const relayed = await world.agents.send(world.caller(docs), { to: "api", text: "The docs need the router's new error codes: please list them.", clientKey: "relay-codes" })
-    assert.ok("refused" in relayed && relayed.refused === "relayed", JSON.stringify(relayed))
-    assert.match(relayed.why, /api .*is your sibling.*went to your Apex instead.*nothing reached api directly/)
-    await until("the Apex to hear the relayed message", async () => apexHeard("The docs need the router's new error codes"))
-    const relay = world.prompts.filter((prompt) => prompt.conversation === apex.conversation).at(-1)!.text
-    assert.ok(relay.includes("hands work to another Fin:") && /"docs" \(Cursor\) → api \(a message it couldn't send\):/.test(relay), relay)
-    assert.ok(relay.includes("agents_send to each passes it on."), "and how to pass it on")
-    assert.equal(world.prompts.filter((prompt) => prompt.conversation === api).length, apiHeard, "nothing reached the sibling itself")
-    const again = await world.agents.send(world.caller(docs), { to: "api", text: "The docs need the router's new error codes: please list them.", clientKey: "relay-codes" })
-    assert.ok("refused" in again && again.refused === "relayed")
+    const codes = "The docs need the router's new error codes: please list them."
+    const direct = await world.agents.send(world.caller(docs), { to: "api", text: codes, clientKey: "direct-codes" })
+    assert.ok(!("refused" in direct) && direct.name === "api", JSON.stringify(direct))
+    await until("api to hear it", async () => world.prompts.some((prompt) => prompt.conversation === api && prompt.text.includes(codes) && prompt.text.includes("fin:docs, another Fin of your Apex")))
+    const again = await world.agents.send(world.caller(docs), { to: "api", text: codes, clientKey: "direct-codes" })
+    assert.ok(!("refused" in again) && again.deduped === true, JSON.stringify(again))
+    world.release(api)
     await world.settle(600, 20_000, "ignore")
-    assert.equal(world.prompts.filter((prompt) => prompt.text.includes("The docs need the router's new error codes")).length, 1, "a repeat of its key is relayed once")
+    assert.equal(world.prompts.filter((prompt) => prompt.text.includes(codes)).length, 1, "a repeat of its key goes once")
+    assert.ok(!apexHeard(codes), "the Apex isn't woken to pass it on")
 
     // Progress that hands work to another Fin is a handoff, and wakes the Apex; ordinary progress stays quiet, even
     // when it uses a word that's also a Fin's name.

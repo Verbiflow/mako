@@ -247,6 +247,12 @@ export type HostEventBody =
   | { type: "thread-titles"; titles: ThreadTitleEntry[] }
   /** Threads the person (or a merged pull request) marked: their whole marks as they now stand. */
   | { type: "thread-marks"; marks: ThreadMarkEntry[] }
+  /** Every deliberate Apex, whenever one is made, changed or let go (`Apexes.list`). */
+  | { type: "apexes"; apexes: import("./apexes.js").ApexEntry[] }
+  /** An Apex's plan was written, by the person or the Apex. */
+  | { type: "apex-plan"; thread: string; plan: string }
+  /** A layer of rules or a lesson changed: an Apex's (`thread`), or the person's own. */
+  | { type: "apex-rules"; thread?: string }
   /** Sessions were added to another Thread or split into a new one; window-wide. */
   | { type: "thread-removed"; path: string }
   | {

@@ -2,6 +2,7 @@ import type { HostCallReplay } from "./host-call-policy.js"
 import type { JsonValue } from "./json.js"
 import type { ReturnLanded } from "./cloud-threads.js"
 import { localWords } from "@mako/protocol/computer-words"
+import { APEX_PURPOSE_CHARS, PLAN_FILE, PLAN_SECTIONS, RULE_LAYER_CHARS } from "./apexes.js"
 
 /**
  * The Thread's own place as an agent or a shell moves it: Move to the cloud, Bring it back to this Mac and Continue in
@@ -172,7 +173,7 @@ export type TurnWaitResult =
 
 /** What the MCP door shows the model of an operation; its input schema is the host call's. */
 export interface ThreadToolDefinition {
-  channel: "mako:threads-move" | "mako:threads-act" | "mako:settings-act" | "mako:harnesses-act" | "mako:automations-act" | "mako:turn-wait"
+  channel: "mako:threads-move" | "mako:threads-act" | "mako:settings-act" | "mako:harnesses-act" | "mako:automations-act" | "mako:turn-wait" | "mako:apex-act" | "mako:memory-save"
   replay: HostCallReplay
   /** Inputs the MCP door leaves out: an agent moves its own Thread. */
   filled: readonly "conversation"[]
@@ -298,8 +299,56 @@ export const WAIT_TOOL: ThreadToolDefinition = {
   },
 }
 
+export const APEX_TOOL: ThreadToolDefinition = {
+  channel: "mako:apex-act",
+  replay: "replay",
+  filled: ["conversation"],
+  mcp: {
+    name: "apex",
+    description: [
+      "Apexes: Threads the person keeps for an area of work, each with Fins, a plan and rules.",
+      "create one when the person asks (name, purpose, message: what they said it's for); promote makes this Thread one, demote a Thread again; list and get read them.",
+      `As an Apex: plan reads ${PLAN_FILE} (sections ${PLAN_SECTIONS.join(", ")}; items "- [ ] fin:<name> what"; under Waiting on you, a question for the person ends in ? with answers as [A | B], and they answer it; anything else there is their to-do), plan_write replaces it, plan_edit swaps old for new, plan_check ticks section/item.`,
+      "rules reads every layer you and your Fins read; rules_write sets layer apex (yours) or fins (every Fin's).",
+      "gather moves Threads the person names into this Apex; hand gives one Fin to another Apex. One that would lose access waits for the person: then confirm.",
+    ].join(" "),
+    fields: {
+      action: "create, promote, demote, update, list, get, plan, plan_write, plan_edit, plan_check, rules, rules_write, gather or hand.",
+      name: "A short name, as the person said it.",
+      purpose: `What it covers, at most ${APEX_PURPOSE_CHARS} characters.`,
+      folder: "create: absent, this Thread's.",
+      message: "create: its first message, in the person's words.",
+      finsRun: "Where its Fins run: here or device:<name>, as the person said.",
+      text: `plan_write: the whole plan. rules_write: the layer, at most ${RULE_LAYER_CHARS} characters.`,
+      layer: "rules_write: apex or fins.",
+      threads: "gather: Threads by handle, title or ID. hand: the one Fin.",
+      to: "hand: the Apex that takes it. get: absent, this one.",
+      confirm: "true only after the person agreed to the access change named.",
+      clientKey: "Your own key: a repeat is the same action.",
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+}
+
+export const MEMORY_TOOL: ThreadToolDefinition = {
+  channel: "mako:memory-save",
+  replay: "replay",
+  filled: ["conversation"],
+  mcp: {
+    name: "memory_save",
+    description: "Keep a lesson so the person never says it twice: when they correct you or say how they want something. Every Thread in its scope reads it; saving a topic again replaces it, confirmed today.",
+    fields: {
+      scope: "you (everywhere), you-folder (you, in this folder) or folder (every Thread here).",
+      topic: "A few words to file it under.",
+      lesson: "A sentence or two.",
+      clientKey: "Your own key: a repeat is the same save.",
+    },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+  },
+}
+
 /** Every tool on a `mako` server that acts for the person through one host call. */
-export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, THREAD_ACT_TOOL, SETTINGS_TOOL, HARNESS_TOOL, AUTOMATION_TOOL, WAIT_TOOL]
+export const THREAD_TOOLS: readonly ThreadToolDefinition[] = [THREAD_MOVE_TOOL, THREAD_ACT_TOOL, SETTINGS_TOOL, HARNESS_TOOL, AUTOMATION_TOOL, WAIT_TOOL, APEX_TOOL, MEMORY_TOOL]
 
 /** What a wait's answer tells an agent to do next. */
 export const AFTER_WAIT = {

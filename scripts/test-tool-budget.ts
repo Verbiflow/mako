@@ -44,7 +44,9 @@ const everyAgentTool = AGENT_TOOLS.map((tool) => tool.mcp.name)
 const others = Object.keys(measured["fin-apex"].tools).filter((name) => !name.startsWith("agents_"))
 for (const role of AGENT_TOOL_ROLES) {
   const hidden = new Set(ROLE_HIDES[role].map((verb) => `agents_${verb}`))
-  assert.deepEqual(Object.keys(measured[role].tools).sort(), [...others, ...everyAgentTool.filter((name) => !hidden.has(name))].sort(), `${role}'s tools`)
+  // A Fin works for an Apex and is never listed `apex` (`registerThreadTools`).
+  const theirs = others.filter((name) => role !== "fin" || name !== "apex")
+  assert.deepEqual(Object.keys(measured[role].tools).sort(), [...theirs, ...everyAgentTool.filter((name) => !hidden.has(name))].sort(), `${role}'s tools`)
 }
 assert.deepEqual(ROLE_HIDES.thread, ["report"], "a top-level Thread never has an Apex to report to")
 assert.deepEqual(ROLE_HIDES.apex, ["report"], "nor does one with Fins")

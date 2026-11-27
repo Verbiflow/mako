@@ -273,6 +273,8 @@ export interface ConversationChildren {
   edgeWritten?(op: string): void
   /** The words that send a Fin back to report before its turn ends, where its harness asks (`Agents.finStop`), or undefined to let it end. */
   finStop?(conversation: string): string | undefined
+  /** A start made its Thread a deliberate Apex (`LiveStartOptions.apex`): its profile and files are written before it runs. */
+  apexMade?(thread: string, apex: import("../contracts/apexes.js").ApexStart): void
   /** The conversation's Fins as roster entries, the same array until one of them changes. */
   roster(conversation: string): readonly import("../contracts/native-agents.js").NativeAgent[]
   /** The conversation's armed wait as its waiting line reads (`turnWaitLine`), the same object until it changes. */
@@ -292,7 +294,7 @@ export interface ConversationChildren {
   /** The person's front door, or the precedence of newer instructions that overtook an agent's queued message. */
   frontDoor(conversation: string, request: Pick<LiveRequest, "actor"> & Partial<Pick<LiveRequest, "id">>, includeGuidance?: boolean, whole?: boolean, forgot?: boolean): string[]
   /** The person's standing rules the conversation reads, as standing lines of Mako's note by name (`roleRuleLines`). */
-  ruleLines(conversation: string): RoleRuleLines
+  ruleLines(conversation: string): RoleRuleLines & import("../contracts/apexes.js").ApexStandingLines
   /** Whether a turn of the conversation a usage limit cut may go on now: a Fin's takes a place as anything else does. */
   mayWake?(conversation: string): boolean
   /**
@@ -563,6 +565,7 @@ export interface LiveAccess {
   register(snapshot: LiveSnapshot, actor: Actor | undefined): void
   markPurpose(conversationId: string, purpose: StartPurpose, options: LiveStartOptions): void
   markParent(conversationId: string, parent: import("../contracts/agents.js").ChildStart): void
+  markApex(conversationId: string, apex: import("../contracts/apexes.js").ApexStart): void
   startingSession(session: string): string
   /** Whether an existing journal is the same Session as the row being opened; see `LiveThreads.sameSession`. */
   sameSession(conversationId: string, ref: SourceRef): boolean

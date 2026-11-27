@@ -2,7 +2,7 @@
   "CASES=degradedFseventsd tsx scripts/test-watch-backend.ts": 28,
   "CASES=idleTakesATurn,queueByDefault,steerAcrossHarnesses,refusedSteerQueues,cursorHoldsASteer,interruptGoesFirst,forwardTakesTheChoice npm run test:orch-deliver": 55,
   "CASES=sharedChildAndCrash,lateCanary tsx scripts/test-watch-backend.ts": 21,
-  "CASES=siblingRefusalNamesRelay,notificationDoesNotReportCompletion,notificationsAcrossApexes,oldQueuedKeepsNewerInstructions,aRowCountsItsTurn npm run test:orch-deliver": 42,
+  "CASES=siblingsMessageDirectly,notificationDoesNotReportCompletion,notificationsAcrossApexes,oldQueuedKeepsNewerInstructions,aRowCountsItsTurn npm run test:orch-deliver": 42,
   "CASES=silentCanary tsx scripts/test-watch-backend.ts": 59,
   "CASES=statesAndEntries,rosterAndLists,uploadsFollowParents,startsAndWakes,explicitReports,refusals,launchesBeforeTheirEdge,stopHoldsUntilCancelled,linkTellsUnreadableFromGone,followedStopStuck,harnessLadders,stopAllUnqueues,unreadableQueuedStarts,settingsFollowTheBinding,startedFinsOldQueueRow,stoppedApexHolds,listsReadNoJournal,finsMoveInTheNewestSession,aSessionNeedsYou,followsShellRuns,relinkedRuns,messagesReachLinkedRuns,finRules tsx scripts/test-background-agents.ts": 63,
   "CASES=storeKeeps,readOnlyStoreVersion,finLimit,afterOrder,slotsGoAtOnce,followedStopHoldsUntilExit,followedStopUnknownIdentity,followedStopStaleIdentity,queueProjection,edgeWriteMovesTheLine,accessFits,finReadingsLoadNothing,finsAtWorkByBinding,activityTellsNoOne,progressGoesWhereItsRead,anySessionAsks,finModels,limitedHarnesses,apexStops,staleEndsStayOut,waitingFins,ownSessionIsNoChild tsx scripts/test-background-agents.ts": 59,

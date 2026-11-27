@@ -51,6 +51,7 @@ import type { RetiredWorktree, ThreadWorktree } from "../contracts/thread-worktr
 import type { ThreadPurpose, ThreadPurposeKind } from "../contracts/thread-purposes.js"
 import type { ThreadTitleEntry } from "../contracts/thread-titles.js"
 import { WorkStatusSchema, type ThreadMarkChange, type ThreadMarkEntry } from "../contracts/thread-marks.js"
+import { ApexProfileSchema, type ApexProfile } from "../contracts/apexes.js"
 import { AppKeySchema, type AppKey, type ThreadEnvironmentValues } from "../contracts/thread-environments.js"
 import { FinTurnSchema, INTERNAL_RUN_CLOSE, LimitNoticeSchema, ReportSchema, ThreadParentSchema, internalDiscoveredRun, type FinRerouted, type FinTurn, type FollowedRun, type LimitNotice, type Placed, type Report, type ThreadParent } from "../contracts/agents.js"
 import { hostLog, hostWarn } from "../base/host-log.js"
@@ -125,7 +126,7 @@ export const HELD_BY_TABLE = new Map<string, "edges" | "threads" | "both" | "nei
   memberships: "both", threads: "both", sessions: "both",
   journals: "threads",
   agent_answers: "neither", agent_cancels: "neither", agent_notice_refusals: "neither", agent_placings: "neither", agent_pull_wakes: "neither", agent_report_action_ops: "neither",
-  agent_report_actions: "neither", agent_spawns: "neither", apex_messages: "neither", app_environments: "neither", executions: "neither", fin_moves: "neither",
+  agent_report_actions: "neither", agent_spawns: "neither", apex_messages: "neither", apexes: "neither", fin_messages: "neither", app_environments: "neither", executions: "neither", fin_moves: "neither",
   limit_notices: "neither", locators: "neither", moves: "neither", operations: "neither", placement_changes: "neither", principals: "neither",
   retired_worktrees: "neither", store_meta: "neither", store_migrations: "neither", thread_environments: "neither", thread_places: "neither",
   thread_marks: "neither", thread_purposes: "neither", thread_reports: "neither", thread_splits: "neither", thread_worktree_repositories: "neither",
@@ -593,6 +594,20 @@ CREATE TABLE IF NOT EXISTS thread_marks (
   thread_id TEXT PRIMARY KEY REFERENCES threads(id), status TEXT, status_at INTEGER, status_by TEXT, merged_pull TEXT,
   unread_at INTEGER, updated_at INTEGER NOT NULL);
 `
+/**
+ * Deliberate Apexes (`contracts/apexes.ts`): each one's profile, kept whole as JSON a newer build may add to, by its
+ * Thread. A Thread with no row is an Apex only by the Fins it leads. Added without a number. `fin_messages` counts the
+ * messages one Fin sends a sibling, at most `SIBLING_SENDS_PER_HOUR` an hour to one, as `apex_messages` counts Threads'.
+ */
+const APEX_TABLES = `
+CREATE TABLE IF NOT EXISTS apexes (
+  thread_id TEXT PRIMARY KEY REFERENCES threads(id), record TEXT NOT NULL, updated_at INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS fin_messages (
+  request TEXT PRIMARY KEY, sender_thread TEXT NOT NULL, thread TEXT NOT NULL, at INTEGER NOT NULL);
+CREATE INDEX IF NOT EXISTS fin_messages_pair ON fin_messages(sender_thread, thread, at);
+`
+const LooseRecordSchema = z.record(z.string(), z.unknown())
+const AtRowSchema = z.object({ at: z.number() })
 const MarkRowSchema = z.object({
   thread_id: z.string(),
   status: z.string().nullable(),
@@ -2553,6 +2568,70 @@ export class ThreadStore {
     })
   }
 
+  /** Every deliberate Apex's profile; a row a newer build wrote that this one can't read is passed over. */
+  apexes(): ApexProfile[] {
+    return this.sql("SELECT record FROM apexes ORDER BY updated_at").all().flatMap((row) => {
+      const parsed = ApexProfileSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record))
+      return parsed.success ? [parsed.data] : []
+    })
+  }
+
+  apex(thread: string): ApexProfile | undefined {
+    const row = this.sql("SELECT record FROM apexes WHERE thread_id = ?").get(thread)
+    return row ? ApexProfileSchema.safeParse(JSON.parse(RecordRowSchema.parse(row).record)).data : undefined
+  }
+
+  /** Keeps an Apex's profile, over the fields a newer build added to the row it replaces. */
+  keepApex(profile: ApexProfile): ApexProfile {
+    const parsed = ApexProfileSchema.parse(profile)
+    return this.write(() => {
+      if (!this.sql("SELECT id FROM threads WHERE id = ?").get(parsed.thread)) throw new Error("That Thread isn't in the Thread store")
+      const kept = this.sql("SELECT record FROM apexes WHERE thread_id = ?").get(parsed.thread)
+      const before = kept ? LooseRecordSchema.safeParse(JSON.parse(RecordRowSchema.parse(kept).record)).data : undefined
+      const record = JSON.stringify({ ...before, ...parsed })
+      this.sql(`INSERT INTO apexes (thread_id, record, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT (thread_id) DO UPDATE SET record = excluded.record, updated_at = excluded.updated_at`).run(parsed.thread, record, this.now())
+      return parsed
+    })
+  }
+
+  /** Back to a Thread: its profile goes; its history, its Fins and its files stay. */
+  dropApex(thread: string): boolean {
+    return this.write(() => this.sql("DELETE FROM apexes WHERE thread_id = ?").run(thread).changes > 0)
+  }
+
+  /**
+   * A Thread the person moved into an Apex goes back to being a Thread of its own (`origin: attached` only), or a Fin
+   * is handed to another Apex (`handed`, which a started one may be too): its edge goes, its reports stay. Nothing
+   * else removes an edge.
+   */
+  releaseEdge(child: string, handed = false): ThreadParent | undefined {
+    return this.write(() => {
+      const kept = this.sql("SELECT record FROM thread_parents WHERE child_thread = ?").get(child)
+      const edge = kept ? ThreadParentSchema.safeParse(JSON.parse(RecordRowSchema.parse(kept).record)).data : undefined
+      if (!edge || (edge.origin !== "attached" && !(handed && edge.origin === "started"))) return undefined
+      this.sql("DELETE FROM thread_parents WHERE child_thread = ?").run(child)
+      return edge
+    })
+  }
+
+  /** Whether this message was counted already, and the times of the messages from one Fin to a sibling in the window, oldest first. */
+  finSendsSince(input: { request: string; sender: string; thread: string; at: number; since: number }): { existed: boolean; recent: number[] } {
+    return this.write(() => {
+      this.sql("DELETE FROM fin_messages WHERE at < ?").run(input.since - 24 * 60 * 60_000)
+      const existed = Boolean(this.sql("SELECT request FROM fin_messages WHERE request = ?").get(input.request))
+      const recent = this.sql("SELECT at FROM fin_messages WHERE sender_thread = ? AND thread = ? AND at >= ? ORDER BY at").all(input.sender, input.thread, input.since)
+        .map((row) => AtRowSchema.parse(row).at)
+      return { existed, recent }
+    })
+  }
+
+  addFinMessage(input: { request: string; sender: string; thread: string; at: number }): void {
+    this.write(() => {
+      this.sql("INSERT INTO fin_messages (request, sender_thread, thread, at) VALUES (?, ?, ?, ?) ON CONFLICT (request) DO NOTHING").run(input.request, input.sender, input.thread, input.at)
+    })
+  }
+
   /**
    * Each of these Threads' marks, as a report of many reads them (`marksOf`): one read of the marks table, which holds
    * only the Threads the person marked, never a lookup per Thread.
@@ -3957,6 +4036,7 @@ export class ThreadStore {
     this.db.exec(PURPOSE_TABLE)
     this.db.exec(MARK_TABLE)
     this.db.exec(EDGE_TABLES)
+    this.db.exec(APEX_TABLES)
     this.closeInternalRuns()
     // Delegate, retired, made forks with a task; their Sessions are forks.
     this.db.exec("UPDATE sessions SET origin = 'fork' WHERE origin = 'delegation'")

@@ -30,6 +30,7 @@ import { worktreeSlug, type ThreadWorktree, type WorktreeStart, type WorktreeRev
 import { RAIL_PURPOSES, RAIL_RUNS, RAIL_SUMMARIES, RAIL_THREAD_GROUPS, RAIL_WORKTREES, railInventory, railRef, railSuiteRemoval } from "./mock-rail-worktrees"
 import { mockStorage } from "./mock-storage"
 import { mockProjects } from "./mock-projects"
+import { mockApexes } from "./mock-apexes"
 import type { ThreadPurpose } from "@mako/host/contracts/thread-purposes"
 import type { ThreadTitleEntry } from "@mako/host/contracts/thread-titles"
 import type { ThreadMarkChange, ThreadMarkEntry } from "@mako/host/contracts/thread-marks"
@@ -1180,6 +1181,7 @@ export function installMockBridge() {
   let mockTelemetry = { usage: true, errors: true }
   const projects = mockProjects(emit)
   window.mako = {
+    ...mockApexes(emit),
     boot: async () => boot,
     threadArchives: async () => ({
       revision: archiveRevision,

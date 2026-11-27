@@ -26,6 +26,12 @@ const ALLOWED: readonly string[] = [
   "mako:thread-archive",
   "mako:thread-rename",
   "mako:thread-mark",
+  // An Apex's digest and plan on the phone and iPad: read, and a plan line checked off.
+  "mako:apexes",
+  "mako:apex-plan-read",
+  "mako:apex-plan-check",
+  "mako:apex-plan-answer",
+  "mako:apex-seen",
   "mako:thread-move",
   "mako:thread-return",
   "mako:worktrees",
@@ -105,6 +111,8 @@ const ALLOWED: readonly string[] = [
   "mako:threads-act",
   "mako:settings-act",
   "mako:automations-act",
+  "mako:apex-act",
+  "mako:memory-save",
   // The person's Mac reads a cloud run's agent's proposals from its cloud Thread's host, and says how each went there
   // (`AutomationCloud`): the project's file, and so the decision, is the Mac's.
   "mako:automations-forwarded",

@@ -119,6 +119,7 @@ import type { ProviderResidencySnapshot } from "./provider-residency.js"
 import type { AgentsAnswered } from "./agent-tools.js"
 import type { AgentRefused, AgentsDiagnostics, AgentsDirected, AgentsDirectInput, AgentsRedirected, AgentsRedirectInput, AgentsRespondInput } from "./agents.js"
 import type { NativeRoutingReading } from "./native-routing.js"
+import type { ApexChange, ApexCreateInput, ApexCreateResult, ApexEntry, ApexGatherResult, ApexPlanReading, ApexProfileResult, ApexRefused, ApexRulesReading, Memory, RuleLayer } from "./apexes.js"
 import type { SessionReaderHistory } from "./session-reader.js"
 import type { AccountHarness, AccountLogin, AccountLoginResult, AccountProvider, AccountRemovalOutcome, AccountRemovalPlan, AccountUsage, AccountCatalog, ResetCreditOutcome } from "./accounts.js"
 
@@ -299,6 +300,28 @@ export function createMakoBridge(transport: BridgeTransport) {
     setPreference: (name: PreferenceName, value: JsonValue | null) => invokeTrustedHost<PreferenceValues>("mako:preference-set", name, value),
     /** What a window kept before the account kept it, offered once with when it was edited (0: unknown). */
     offerPreference: (name: PreferenceName, value: JsonValue, at: number) => invokeTrustedHost<PreferenceValues>("mako:preference-offer", name, value, at),
+    /** Every deliberate Apex (`contracts/apexes.ts`), as the rail, the Overview and the addressee picker read them. */
+    apexes: () => invokeTrustedHost<ApexEntry[]>("mako:apexes"),
+    /** A new Apex, its Thread started in its folder on its harness: from the New Apex form or the palette. */
+    createApex: (input: ApexCreateInput) => invokeTrustedHost<ApexCreateResult>("mako:apex-create", input),
+    /** Make this an Apex: the conversation's top-level Thread, with its history. */
+    promoteApex: (conversation: string, change: ApexChange) => invokeTrustedHost<ApexProfileResult>("mako:apex-promote", conversation, change),
+    updateApex: (thread: string, change: ApexChange) => invokeTrustedHost<ApexProfileResult>("mako:apex-update", thread, change),
+    /** Back to a Thread: it keeps everything; Threads moved into it go back to being their own. */
+    demoteApex: (thread: string) => invokeTrustedHost<{ released: string[] } | ApexRefused>("mako:apex-demote", thread),
+    /** Move into Apex: existing Threads become its Fins; `confirm` once the person agreed to lower their access. */
+    gatherIntoApex: (apex: string, threads: string[], confirm?: boolean) => invokeTrustedHost<ApexGatherResult>("mako:apex-gather", apex, threads, confirm),
+    apexSeen: (thread: string) => invokeTrustedHost<void>("mako:apex-seen", thread),
+    apexPlan: (thread: string) => invokeTrustedHost<ApexPlanReading>("mako:apex-plan-read", thread),
+    saveApexPlan: (thread: string, text: string) => invokeTrustedHost<ApexPlanReading | ApexRefused>("mako:apex-plan-save", thread, text),
+    /** The person answers a question the Apex's plan asks them: their words go to the Apex, and the line leaves Needs you. */
+    answerApexPlan: (thread: string, section: string, item: number, answer: string) => invokeTrustedHost<ApexPlanReading | ApexRefused>("mako:apex-plan-answer", thread, section, item, answer),
+    checkApexPlan: (thread: string, section: string, item: number, done: boolean) => invokeTrustedHost<ApexPlanReading | ApexRefused>("mako:apex-plan-check", thread, section, item, done),
+    /** Every layer of rules as the Apex reads them, or as one of its Fins does: the context preview. */
+    apexRules: (thread: string, as: "apex" | "fin") => invokeTrustedHost<ApexRulesReading | ApexRefused>("mako:apex-rules-read", thread, as),
+    saveRuleLayer: (layer: RuleLayer, text: string, at: { thread?: string; folder?: string }) => invokeTrustedHost<{ chars: number } | ApexRefused>("mako:apex-rule-save", layer, text, at),
+    ruleLayers: (folder?: string) => invokeTrustedHost<{ you: string; youFolder: string; folder: string; memories: Memory[] }>("mako:rule-layers", folder),
+    forgetMemory: (id: string) => invokeTrustedHost<boolean>("mako:memory-forget", id),
     /** Settings › Fins by harness, and the model the person last used on each (`contracts/fin-tuning.ts`). */
     finDefaults: () => invokeTrustedHost<FinChoicesReading>("mako:fin-defaults"),
     /** Fins on `harness` run on `settings`, or with null, on what the person uses there. */

@@ -827,6 +827,156 @@ const inputs = {
         after: z.number().optional(),
       }),
     ]),
+  "mako:apex-act": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+          records: z.literal(true).optional(),
+        }),
+      ]),
+      z.object({
+        action: z.union([
+          z.literal("plan"),
+          z.literal("list"),
+          z.literal("update"),
+          z.literal("create"),
+          z.literal("get"),
+          z.literal("promote"),
+          z.literal("demote"),
+          z.literal("gather"),
+          z.literal("hand"),
+          z.literal("rules"),
+          z.literal("plan_write"),
+          z.literal("plan_edit"),
+          z.literal("plan_check"),
+          z.literal("rules_write"),
+        ]),
+        name: z.string().optional(),
+        purpose: z.string().optional(),
+        folder: z.string().optional(),
+        harness: z.string().optional(),
+        model: z.string().optional(),
+        message: z.string().optional(),
+        finsRun: z.string().optional(),
+        threads: z.array(z.string()).optional(),
+        to: z.string().optional(),
+        confirm: z.boolean().optional(),
+        text: z.string().optional(),
+        old: z.string().optional(),
+        new: z.string().optional(),
+        section: z.string().optional(),
+        item: z.number().optional(),
+        done: z.boolean().optional(),
+        layer: z.union([z.literal("apex"), z.literal("fins")]).optional(),
+        conversation: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
+  "mako:apex-create": () =>
+    z.tuple([
+      z.object({
+        name: z.string(),
+        purpose: z.string().optional(),
+        cwd: z.string(),
+        harness: z.string(),
+        model: z.string().optional(),
+        options: z
+          .record(z.string(), z.union([z.boolean(), z.string()]))
+          .optional(),
+        fins: z
+          .object({
+            harness: z.string().optional(),
+            model: z.string().optional(),
+            run: z.string().optional(),
+          })
+          .optional(),
+        message: z.string().optional(),
+        modeId: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
+  "mako:apex-demote": () => z.tuple([z.string()]),
+  "mako:apex-gather": () =>
+    z.tuple([z.string(), z.array(z.string()), z.boolean().optional()]),
+  "mako:apex-plan-answer": () =>
+    z.tuple([z.string(), z.string(), z.number(), z.string()]),
+  "mako:apex-plan-check": () =>
+    z.tuple([z.string(), z.string(), z.number(), z.boolean()]),
+  "mako:apex-plan-read": () => z.tuple([z.string()]),
+  "mako:apex-plan-save": () => z.tuple([z.string(), z.string()]),
+  "mako:apex-promote": () =>
+    z.tuple([
+      z.string(),
+      z.object({
+        name: z.string().optional(),
+        purpose: z.union([z.null(), z.string()]).optional(),
+        fins: z
+          .union([
+            z.null(),
+            z.object({
+              harness: z.string().optional(),
+              model: z.string().optional(),
+              run: z.string().optional(),
+            }),
+          ])
+          .optional(),
+      }),
+    ]),
+  "mako:apex-rule-save": () =>
+    z.tuple([
+      z.union([
+        z.literal("apex"),
+        z.literal("folder"),
+        z.literal("you"),
+        z.literal("you-folder"),
+        z.literal("apex-fins"),
+      ]),
+      z.string(),
+      z.object({
+        thread: z.string().optional(),
+        folder: z.string().optional(),
+      }),
+    ]),
+  "mako:apex-rules-read": () =>
+    z.tuple([z.string(), z.union([z.literal("apex"), z.literal("fin")])]),
+  "mako:apex-seen": () => z.tuple([z.string()]),
+  "mako:apex-update": () =>
+    z.tuple([
+      z.string(),
+      z.object({
+        name: z.string().optional(),
+        purpose: z.union([z.null(), z.string()]).optional(),
+        fins: z
+          .union([
+            z.null(),
+            z.object({
+              harness: z.string().optional(),
+              model: z.string().optional(),
+              run: z.string().optional(),
+            }),
+          ])
+          .optional(),
+      }),
+    ]),
+  "mako:apexes": () => z.tuple([]),
   "mako:appshot-capture": () =>
     z.tuple([z.object({ pid: z.number(), windowId: z.number() })]),
   "mako:appshot-feedback": () =>
@@ -914,10 +1064,10 @@ const inputs = {
           z.literal("list"),
           z.literal("update"),
           z.literal("create"),
+          z.literal("get"),
           z.literal("enable"),
           z.literal("delete"),
           z.literal("proposal"),
-          z.literal("get"),
           z.literal("runs"),
           z.literal("disable"),
           z.literal("run_now"),
@@ -1352,8 +1502,8 @@ const inputs = {
       z.object({
         action: z.union([
           z.literal("update"),
-          z.literal("install"),
           z.literal("read"),
+          z.literal("install"),
         ]),
         harness: z.string().optional(),
         clientKey: z.string(),
@@ -1882,6 +2032,7 @@ const inputs = {
               z.object({
                 kind: z.literal("service"),
                 name: z.union([
+                  z.literal("apex"),
                   z.literal("handoff"),
                   z.literal("workspace"),
                   z.literal("turn-wait"),
@@ -1929,9 +2080,9 @@ const inputs = {
                   z.literal("apex"),
                   z.literal("harness"),
                   z.literal("rule"),
+                  z.literal("fins"),
                   z.literal("mako"),
                   z.literal("asked"),
-                  z.literal("fins"),
                   z.literal("used"),
                   z.literal("connection"),
                 ]),
@@ -1992,6 +2143,21 @@ const inputs = {
                   .optional(),
                 recorded: z.literal(true).optional(),
                 heardAt: z.number().optional(),
+              })
+              .optional(),
+          })
+          .optional(),
+        apex: z
+          .object({
+            name: z.string(),
+            from: z.union([z.literal("thread"), z.literal("new")]),
+            by: z.union([z.literal("agent"), z.literal("person")]),
+            purpose: z.string().optional(),
+            fins: z
+              .object({
+                harness: z.string().optional(),
+                model: z.string().optional(),
+                run: z.string().optional(),
               })
               .optional(),
           })
@@ -2162,6 +2328,44 @@ const inputs = {
       }),
     ]),
   "mako:measure-update-again": () => z.tuple([]),
+  "mako:memory-forget": () => z.tuple([z.string()]),
+  "mako:memory-save": () =>
+    z.tuple([
+      z.union([
+        z.object({ kind: z.literal("agent"), session: z.string() }),
+        z.object({ kind: z.literal("person") }),
+        z.object({
+          kind: z.literal("apex"),
+          device: z.string(),
+          thread: z.string(),
+          session: z.string(),
+          conversation: z.string().optional(),
+          access: z.union([
+            z.literal("ask"),
+            z.literal("auto"),
+            z.literal("full"),
+            z.literal("deny"),
+            z.literal("plan"),
+            z.literal("edits"),
+            z.literal("chat"),
+          ]),
+          forwards: z.string().optional(),
+          epoch: z.number().optional(),
+          records: z.literal(true).optional(),
+        }),
+      ]),
+      z.object({
+        scope: z.union([
+          z.literal("folder"),
+          z.literal("you"),
+          z.literal("you-folder"),
+        ]),
+        topic: z.string(),
+        lesson: z.string(),
+        conversation: z.string().optional(),
+        clientKey: z.string(),
+      }),
+    ]),
   "mako:merge-pull": () =>
     z.tuple([
       z.union([z.literal("merge"), z.literal("squash"), z.literal("rebase")]),
@@ -2725,6 +2929,7 @@ const inputs = {
   "mako:restore-version": () => z.tuple([z.string(), z.number()]),
   "mako:reveal": () => z.tuple([z.string()]),
   "mako:reveal-plugins": () => z.tuple([]),
+  "mako:rule-layers": () => z.tuple([z.string().optional()]),
   "mako:run-command": () => z.tuple([z.string(), z.string().optional()]),
   "mako:search": () =>
     z.tuple([
@@ -3741,6 +3946,20 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:agents-start", "conversations"],
   ["mako:agents-stop", "conversations"],
   ["mako:agents-wait", "conversations"],
+  ["mako:apex-act", "conversations"],
+  ["mako:apex-create", "conversations"],
+  ["mako:apex-demote", "conversations"],
+  ["mako:apex-gather", "conversations"],
+  ["mako:apex-plan-answer", "conversations"],
+  ["mako:apex-plan-check", "conversations"],
+  ["mako:apex-plan-read", "conversations"],
+  ["mako:apex-plan-save", "conversations"],
+  ["mako:apex-promote", "conversations"],
+  ["mako:apex-rule-save", "conversations"],
+  ["mako:apex-rules-read", "conversations"],
+  ["mako:apex-seen", "conversations"],
+  ["mako:apex-update", "conversations"],
+  ["mako:apexes", "conversations"],
   ["mako:appshot-capture", "control"],
   ["mako:appshot-front", "control"],
   ["mako:appshot-windows", "control"],
@@ -3959,6 +4178,8 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:mcp-sync-apply", "tools"],
   ["mako:mcp-sync-preview", "tools"],
   ["mako:measure-update-again", "application"],
+  ["mako:memory-forget", "conversations"],
+  ["mako:memory-save", "conversations"],
   ["mako:merge-pull", "git"],
   ["mako:model-connection-add", "harnesses"],
   ["mako:model-connection-check", "harnesses"],
@@ -4023,6 +4244,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:restore-version", "attribution"],
   ["mako:reveal", "workspaces"],
   ["mako:reveal-plugins", "tools"],
+  ["mako:rule-layers", "conversations"],
   ["mako:run-command", "workspaces"],
   ["mako:search", "workspaces"],
   ["mako:select-update-source", "application"],

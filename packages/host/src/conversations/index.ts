@@ -38,6 +38,8 @@ import { decodeRuntimeValue, EncodedAnswer } from "../contracts/runtime-value.js
 import { SessionHeldError, discardChatFolder, newChatFolder, standsForNoProject, type Threads, type ThreadLifecycle } from "../threads/index.js"
 import { NativeRuns } from "./native-runs.js"
 import { declareAgentMethods } from "./agent-tools.js"
+import { declareApexMethods } from "./apex-methods.js"
+import { Apexes } from "./apexes.js"
 import { placeLink } from "./place-link.js"
 import { accountNotices, deviceTree, type NoticeLink } from "./notice-post.js"
 import { PlacedCheckouts } from "./placed-checkouts.js"
@@ -138,6 +140,8 @@ export interface Conversations {
   continueOn: ContinueOn
   /** The Threads each Thread leads, and the runs they follow; none where the Thread store didn't open. */
   agents?: Agents
+  /** Deliberate Apexes, their plans and rules, and the person's layered rules; none where the Thread store didn't open. */
+  apexes?: Apexes
   native: NativeRequests
   continuation: ContinuationPlanner<unknown>
   /** Replies with their history as pages, for clients that page it. */
@@ -285,6 +289,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
   })
   const assessResume = resumingUnder(memory ?? undefined, restoring)
   let agents: Agents | undefined
+  let apexes: Apexes | undefined
   /**
    * Makes again the worktree Mako retired from under a finished Fin, for conversation `id` about to run in `cwd`, and
    * says in its transcript how that went, once: the person reading the Fin's Thread sees where it works now, or why it
@@ -524,6 +529,28 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       ...(deps.cloudFinProof && { cloudFins: proofCloudFins(deps.git, () => deps.cloudFinProof?.()) }),
     })
     deps.finCapacity?.subscribe(() => agents?.capacityChanged())
+    const engine = agents
+    apexes = new Apexes({
+      store: () => threads.store ?? undefined,
+      live,
+      agents: () => engine,
+      startLive: async (harness, cwd, options) => {
+        await deps.invoke("mako:live-start", [harness, cwd, options])
+      },
+      ...(deps.archived && { archived: deps.archived }),
+      userRoot: environment.userRoot,
+      emit,
+      // The name a conversation's row shows from its harness's own record (its summary), as the rail reads it.
+      sessionTitle: (conversation) => {
+        const path = live.session(conversation)?.nativePath
+        return path ? catalog.ref(path)?.title : undefined
+      },
+      roleRules: (as) => {
+        const policy = deps.finDefaults?.reading().policy
+        return (as === "apex" ? policy?.forApexes : policy?.forFins) || undefined
+      },
+    })
+    agents.apexes = apexes
     await agents.resumeInSlices()
   }
   const native = new NativeRequests(join(dataRoot, "native-requests"), {
@@ -574,6 +601,7 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
     continueOn,
     runs,
     ...(agents && { agents }),
+    ...(apexes && { apexes }),
     native,
     continuation,
     history,
@@ -661,6 +689,7 @@ export function declareConversationMethods(methods: MethodTable, deps: Conversat
     return conversations.snapshotBudget.preview()
   })
   declareAgentMethods(methods, () => conversations.agents)
+  declareApexMethods(methods, () => conversations.apexes)
   methods.handle("mako:thread-continuation-resolve", (path: string) => continuation.resolve(path))
   methods.handle("mako:conversation-settings", () => live.conversationSettings())
   methods.handle("mako:conversation-settings-set", (settings: ConversationSettings) => live.setConversationSettings(settings))

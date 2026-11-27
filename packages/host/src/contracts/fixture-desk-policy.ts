@@ -50,6 +50,10 @@ const fixtureReads = [
   "mako:thread-groups",
   "mako:thread-purposes",
   "mako:thread-marks",
+  "mako:apexes",
+  "mako:apex-plan-read",
+  "mako:apex-rules-read",
+  "mako:rule-layers",
   "mako:thread-titles",
   "mako:worktrees",
   /** Reads and watches HEAD files; runs no git. Finds worktrees made outside Mako. */
