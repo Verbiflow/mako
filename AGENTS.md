@@ -2884,6 +2884,18 @@ failed send forgets it. `scripts/test-control-cadence.ts` covers it, and
 each turn's media, so live and saved must find the same files;
 `scripts/test-turn-media.ts` covers each source and the host.
 
+The `mako` server's instructions reach the model only up to the shortest cut
+a harness makes: Claude Code's 4,096 characters, Grok's about 2,047. So they
+open with what agents worked around: waiting by ending the turn (`wait:`),
+then `ORCHESTRATION_INSTRUCTIONS`, a Fin's report first, then parallel work
+through `agents_start` and ending the turn after it; what's refused says why
+at the call, so that line may fall past Grok's cut
+(`test:mako-instructions`). Claude Code defers MCP tools behind its tool
+search, and an agent that never loaded `agents_start` or `wait` ran an agent
+CLI or a sleep instead: those two, `agents_report` and `agents_send` are
+listed with `_meta` `anthropic/alwaysLoad` (`ALWAYS_LOADED_TOOLS`,
+`toolMeta`), so they're in its prompt from the first turn.
+
 An Apex's turns that exist only because its Fins reported read as one row. `foldReportRuns`
 (`src/lib/report-runs.ts`) takes the transcript's turns as the timeline is about to draw them and makes each run of
 report turns one exchange (`Exchange.run`): two or more in a row, between two of the person's messages, whose
@@ -3107,18 +3119,6 @@ Mako's writes to the harness's own. `npm run harness:doctor -- <harness>
 `scripts/fixtures/native-authoring`, `test-harness-concepts.ts` holds every
 source to a place the harness reads, and `test:native-authoring-live` reads
 back what Mako wrote with Codex, Grok and Devin in scratch homes.
-
-The `mako` server's instructions reach the model only up to the shortest cut
-a harness makes: Claude Code's 4,096 characters, Grok's about 2,047. So they
-open with what agents worked around: waiting by ending the turn (`wait:`),
-then `ORCHESTRATION_INSTRUCTIONS`, a Fin's report first, then parallel work
-through `agents_start` and ending the turn after it; what's refused says why
-at the call, so that line may fall past Grok's cut
-(`test:mako-instructions`). Claude Code defers MCP tools behind its tool
-search, and an agent that never loaded `agents_start` or `wait` ran an agent
-CLI or a sleep instead: those two, `agents_report` and `agents_send` are
-listed with `_meta` `anthropic/alwaysLoad` (`ALWAYS_LOADED_TOOLS`,
-`toolMeta`), so they're in its prompt from the first turn.
 
 ## Browser and computer control
 
