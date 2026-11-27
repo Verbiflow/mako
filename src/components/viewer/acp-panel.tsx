@@ -1,3 +1,4 @@
+import { COMPOSER_COLUMN } from "@/components/composer/composer-frame"
 import { useHarnessIdentity, useHarnessLabels } from "@/lib/harness-label"
 import { everyWhileShown } from "@/lib/window-shown"
 import { quietly } from "@/lib/quiet-retry"
@@ -97,14 +98,19 @@ export function AcpPanel({ asks = true, compact = false }: { asks?: boolean; com
   return (
     <div data-live-conversation={session.id} className="flex min-h-0 flex-1 flex-col bg-surface">
       <Blocks continued={continued} compact={compact} />
-      {scope ? (
-        <PaneWaiting />
-      ) : !asks ? null : (
-        <>
-          <Permission />
-          <SessionQuestion />
-        </>
-      )}
+      {/* What the agent asks sits over the composer in its column, edge to edge with its box, not across the pane. */}
+      <div className={COMPOSER_COLUMN}>
+        <div className="mx-3">
+          {scope ? (
+            <PaneWaiting />
+          ) : !asks ? null : (
+            <>
+              <Permission />
+              <SessionQuestion />
+            </>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
@@ -566,10 +572,13 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
       </p>
       {permission.detail ? (
         <p data-request-detail className="max-w-prose pt-0.5 pb-2 text-label text-muted-foreground">{permission.detail}</p>
+      ) : permission.kind === "authentication" ? (
+        <p className="pt-0.5 pb-2 text-label text-faint">Continue with the provider's sign-in flow. Your prompt waits until sign-in succeeds.</p>
+      ) : permission.options.some((option) => option.kind === "allow_always") ? (
+        // Said only where there is a "how long" to choose: a plain Allow or Deny says it all.
+        <p className="pt-0.5 pb-2 text-label text-faint">Choose how long to allow it.</p>
       ) : (
-        <p className="pt-0.5 pb-2 text-label text-faint">
-          {permission.kind === "authentication" ? "Continue with the provider's sign-in flow. Your prompt waits until sign-in succeeds." : "Choose how long to allow it."}
-        </p>
+        <div className="h-2" />
       )}
       <div className="flex flex-wrap gap-1.5">
         {permission.options.map((option) => {
