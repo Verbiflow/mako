@@ -25,18 +25,19 @@ const thread: RoutedThread = { role: "thread" }
 
 /** 4.1's table, as Claude's `Agent` calls: who decides, what the call carries, and where it goes. */
 const CLAUDE_CASES: { name: string; tool: string; input: JsonObject; teams?: boolean; apex: "allow" | "deny"; thread: "allow" | "deny" }[] = [
-  { name: "a background agent, Claude's default", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d" }, apex: "deny", thread: "allow" },
-  { name: "a background agent, said outright", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", run_in_background: true }, apex: "deny", thread: "allow" },
+  { name: "a background agent, Claude's default", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d" }, apex: "deny", thread: "deny" },
+  { name: "a background agent, said outright", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", run_in_background: true }, apex: "deny", thread: "deny" },
   { name: "a foreground agent that isn't Explore", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", run_in_background: false }, apex: "deny", thread: "allow" },
   { name: "Explore in the turn", tool: "Agent", input: { subagent_type: "Explore", prompt: "p", description: "d", run_in_background: false }, apex: "allow", thread: "allow" },
-  { name: "Explore in the background by default", tool: "Agent", input: { subagent_type: "Explore", prompt: "p", description: "d" }, apex: "deny", thread: "allow" },
+  { name: "Explore in the background by default", tool: "Agent", input: { subagent_type: "Explore", prompt: "p", description: "d" }, apex: "deny", thread: "deny" },
   { name: "Explore in a worktree", tool: "Agent", input: { subagent_type: "Explore", prompt: "p", description: "d", run_in_background: false, isolation: "worktree" }, apex: "deny", thread: "deny" },
   { name: "an agent in a worktree", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", isolation: "worktree" }, apex: "deny", thread: "deny" },
   { name: "a remote agent", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", isolation: "remote" }, apex: "deny", thread: "deny" },
   { name: "a named agent with agent teams on: a teammate", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", name: "reviewer" }, teams: true, apex: "deny", thread: "deny" },
-  { name: "a named agent with agent teams off", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", name: "reviewer" }, apex: "deny", thread: "allow" },
-  { name: "Task, the tool's name before Claude Code 2.1", tool: "Task", input: { subagent_type: "general-purpose", prompt: "p", description: "d" }, apex: "deny", thread: "allow" },
-  { name: "a workflow, a script of agents", tool: "Workflow", input: { script: "x" }, apex: "deny", thread: "allow" },
+  { name: "a named agent with agent teams off, in the turn", tool: "Agent", input: { subagent_type: "general-purpose", prompt: "p", description: "d", name: "reviewer", run_in_background: false }, apex: "deny", thread: "allow" },
+  { name: "Task, the tool's name before Claude Code 2.1", tool: "Task", input: { subagent_type: "general-purpose", prompt: "p", description: "d" }, apex: "deny", thread: "deny" },
+  { name: "Task in the turn", tool: "Task", input: { subagent_type: "general-purpose", prompt: "p", description: "d", run_in_background: false }, apex: "deny", thread: "allow" },
+  { name: "a workflow, a script of agents", tool: "Workflow", input: { script: "x" }, apex: "deny", thread: "deny" },
 ]
 
 for (const entry of CLAUDE_CASES) {
@@ -49,12 +50,15 @@ for (const entry of CLAUDE_CASES) {
 for (const tool of ["Bash", "Read", "SendMessage", "TaskStop", "mcp__mako__agents_start"])
   assert.equal(claudeSpawn(tool, {}, true), undefined, `${tool} starts no native subagent`)
 
-// The flags, for any harness: in an Apex only an exploration in the turn stays; elsewhere only isolation and teammates go to Mako.
+// The flags, for any harness: in an Apex only an exploration in the turn stays; elsewhere isolation, teammates, a
+// background run and a workflow go to Mako.
 assert.equal(routeNativeSpawn(apex, { tool: "spawn_agent", start: "agents_start" }).kind, "deny")
 assert.equal(routeNativeSpawn(thread, { tool: "spawn_agent", start: "agents_start" }).kind, "allow")
 assert.equal(routeNativeSpawn(apex, { tool: "x", start: "agents_start", inTurnExplore: true }).kind, "allow")
 assert.equal(routeNativeSpawn(thread, { tool: "x", start: "agents_start", isolated: true }).kind, "deny")
 assert.equal(routeNativeSpawn(thread, { tool: "x", start: "agents_start", teammate: true }).kind, "deny")
+assert.equal(routeNativeSpawn(thread, { tool: "x", start: "agents_start", background: true }).kind, "deny")
+assert.equal(routeNativeSpawn(thread, { tool: "x", start: "agents_start", workflow: true }).kind, "deny")
 assert.equal(routeNativeSpawn(apex, { tool: "x", start: "agents_start", inTurnExplore: true, isolated: true }).kind, "deny", "isolation goes to Mako even for an exploration in the turn")
 assert.equal(nativeSpawnsOff(apex), true, "an Apex's harness launches with its spawning off")
 assert.equal(nativeSpawnsOff(thread), false, "an ordinary Thread's harness keeps its spawning")
@@ -67,6 +71,10 @@ assert.ok(message.endsWith(AFTER_START), "the message ends as agents_start's res
 assert.doesNotMatch(message, /\n/, "one line")
 const denied = routeNativeSpawn(apex, claudeSpawn("Agent", { subagent_type: "general-purpose" }, false)!)
 assert.deepEqual(denied, { kind: "deny", message })
+// On an ordinary Thread or a Fin, a spawn denied only for running in the background hears how to run it in the turn.
+const inTurn = `${message} For a quick look you wait for, run it in your turn instead (run_in_background: false).`
+assert.deepEqual(routeNativeSpawn(thread, claudeSpawn("Agent", { subagent_type: "general-purpose" }, false)!), { kind: "deny", message: inTurn })
+assert.deepEqual(routeNativeSpawn(thread, claudeSpawn("Workflow", {}, false)!), { kind: "deny", message }, "a workflow has no in-turn form")
 
 // Claude's PreToolUse: the deny carries the message, and a denied call never reaches the call bounds, so it leaves nothing behind.
 {
@@ -76,8 +84,8 @@ assert.deepEqual(denied, { kind: "deny", message })
   })
   let role: RoutedThread["role"] = "thread"
   const routing = { thread: () => ({ role }), teams: false, conversation: "c" }
-  const answer = claudeRoutedCall(routing, call("Agent", { subagent_type: "general-purpose" }, "a"))
-  assert.equal(answer, undefined, "an ordinary Thread keeps its background agents")
+  assert.equal(claudeRoutedCall(routing, call("Agent", { subagent_type: "general-purpose", run_in_background: false }, "a")), undefined, "an ordinary Thread keeps the agents its turn waits for")
+  assert.equal(HookDecision.parse(claudeRoutedCall(routing, call("Agent", { subagent_type: "general-purpose" }, "a2"))).hookSpecificOutput?.permissionDecision, "deny", "and starts a background one as a Fin")
   role = "apex"
   assert.deepEqual(claudeRoutedCall(routing, call("Agent", { subagent_type: "general-purpose" }, "b")), {
     hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: message },

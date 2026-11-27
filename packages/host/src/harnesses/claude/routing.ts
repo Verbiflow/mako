@@ -35,9 +35,11 @@ export const CLAUDE_FIN_DEFINITION = {
 
 /**
  * A Claude tool call as a native spawn, or undefined for any other tool. An
- * `Explore` agent the turn waits for (`run_in_background: false`; Claude runs
- * agents in the background by default) reads and ends in the turn. With agent
- * teams on, a named agent is a teammate that `SendMessage` reaches.
+ * agent the turn waits for says `run_in_background: false`: Claude runs agents
+ * in the background by default, so any other is a background spawn. An
+ * `Explore` one the turn waits for reads and ends in the turn. `Workflow` runs
+ * a script of agents. With agent teams on, a named agent is a teammate that
+ * `SendMessage` reaches.
  */
 export function claudeSpawn(tool: string, input: ClaudeAgentInput, teams: boolean): NativeSpawn | undefined {
   if (!SPAWN_TOOLS.has(tool)) return undefined
@@ -47,6 +49,7 @@ export function claudeSpawn(tool: string, input: ClaudeAgentInput, teams: boolea
     tool,
     start: CLAUDE_START_TOOL,
     ...(agent.subagent_type === "Explore" && agent.run_in_background === false && { inTurnExplore: true }),
+    ...(tool === "Workflow" ? { workflow: true } : agent.run_in_background !== false && { background: true, inTurn: "run_in_background: false" }),
     ...(agent.isolation !== undefined && { isolated: true }),
     ...(teams && agent.name !== undefined && { teammate: true }),
   }
@@ -67,13 +70,13 @@ export interface ClaudeRouting {
 /** Mako's tools as Claude names an MCP server's tool. */
 const claudeNames = (tool: string) => `mcp__${MAKO_THREAD_SERVER}__${tool}`
 
-const BashInput = z.object({ command: z.string() }).partial().catch({})
+const BashInput = z.object({ command: z.string(), run_in_background: z.boolean() }).partial().catch({})
 
 /** A Claude tool call's route among Mako's tools: Bash by its command, `mcp__<server>__<tool>` by its server. */
 function claudeCallRoute(thread: CallThread, input: PreToolUseHookInput): CallRoute {
   if (input.tool_name === "Bash") {
-    const command = BashInput.parse(input.tool_input).command
-    return command ? routeShellCall(thread, { command, cwd: input.cwd }, claudeNames) : { kind: "allow" }
+    const { command, run_in_background: background } = BashInput.parse(input.tool_input)
+    return command ? routeShellCall(thread, { command, cwd: input.cwd, ...background && { background } }, claudeNames) : { kind: "allow" }
   }
   const mcp = mcpToolName(input.tool_name)
   return routeNativeTool(thread, { tool: input.tool_name, ...mcp && { server: mcp.server } }, claudeNames)
