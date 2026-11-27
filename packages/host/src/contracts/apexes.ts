@@ -51,6 +51,30 @@ export type ApexStart = z.input<typeof ApexStartSchema>
  */
 export const RULE_LAYERS = ["you", "you-folder", "folder", "apex", "apex-fins"] as const
 export type RuleLayer = (typeof RULE_LAYERS)[number]
+/**
+ * Calls of Mako's own tools that are an Apex's bookkeeping, never the person's to approve under any access: reading
+ * Apexes, plans and rules, and an Apex writing its own plan, rules and lessons. Making, promoting, demoting an Apex and
+ * moving Threads ask as any act for the person does.
+ */
+export const APEX_BOOKKEEPING = new Set(["list", "get", "plan", "plan_write", "plan_edit", "plan_check", "rules", "rules_write"])
+
+/**
+ * What a tree says inside itself through Mako's tools, which nobody approves either: a Fin's report to its Apex, a
+ * message within the tree (never to another top-level Thread, `apex:`), and reading how the Fins stand. Starting,
+ * moving, stopping and answering Fins ask as before.
+ */
+const WITHIN_THE_TREE = new Set(["agents_report", "agents_list", "agents_read", "agents_wait"])
+
+/** The part of a Mako tool call's input that says whether it asks: an `apex` action, an `agents_send` addressee. */
+export const AskedCallSchema = z.lazy(() => z.object({ action: z.string().optional(), to: z.string().optional() }).loose())
+export type AskedCall = z.infer<typeof AskedCallSchema>
+
+export function asksNobody(tool: string, call: AskedCall): boolean {
+  if (tool === "memory_save" || WITHIN_THE_TREE.has(tool)) return true
+  if (tool === "agents_send") return call.to !== undefined && !call.to.startsWith("apex:")
+  return tool === "apex" && call.action !== undefined && APEX_BOOKKEEPING.has(call.action)
+}
+
 /** Who writes each: the person in the Overview or Settings, and an Apex its own two through `apex rules_write`. */
 export const RULE_LAYER_CHARS = 8_000
 /** What every layer together adds to one agent's note: past it, the most general are cut, then left out. */
@@ -317,6 +341,28 @@ export function planNote(name: string, markdown: string | undefined): string | u
   return `${head}\n${text.slice(0, PLAN_TURN_CHARS)}…\n[${text.length - PLAN_TURN_CHARS} more characters: apex plan]`
 }
 
+/**
+ * A plan line that asks the person something, rather than a thing for them to do: it ends with a question mark, and
+ * may offer its answers in brackets, "Include usage examples? [Yes | No]". Answered, not ticked: the answer goes to the
+ * Apex as the person's words (`Apexes.answerPlan`) and the line leaves Needs you.
+ */
+export interface PlanQuestion {
+  question: string
+  options: string[]
+}
+
+export function planQuestion(text: string): PlanQuestion | undefined {
+  const offered = /\s*\[([^\]]+)\]\s*$/.exec(text)
+  const options = offered ? offered[1]!.split("|").map((option) => option.trim()).filter(Boolean) : []
+  const question = (offered ? text.slice(0, offered.index) : text).trim()
+  return question.endsWith("?") ? { question, options } : undefined
+}
+
+/** A question line once the person answered it: checked, with what they said. */
+export function answeredLine(question: string, answer: string): string {
+  return `${question} You: ${answer.replace(/\s+/g, " ").trim()}`
+}
+
 // ── The digest ──
 
 export const DIGEST_SECTIONS = ["needs", "new", "progress"] as const
@@ -329,7 +375,11 @@ export interface DigestItem {
   /** The Fin it's about, by its Thread, name and title; absent for a line of the Apex's own plan. */
   fin?: { thread: string; name?: string; title: string }
   line: string
-  kind: "ask" | "approval" | "decision" | "plan" | "done" | "failed" | "working" | "queued" | "waiting"
+  kind: "ask" | "approval" | "decision" | "plan" | "question" | "done" | "failed" | "working" | "queued" | "waiting"
+  /** A plan line's section and place in it, to answer or check it where it stands. */
+  planAt?: { section: string; index: number }
+  /** A plan question's answers, as the Apex offered them. */
+  options?: string[]
   /** When it came to stand so, where that's known. */
   at?: number
 }
@@ -378,7 +428,17 @@ export function apexDigest(fins: readonly NativeAgent[], plan: string | undefine
   if (plan) {
     for (const section of parsePlan(plan).sections) {
       if (!waitsOnPerson(section.name)) continue
-      for (const item of section.items) if (!item.done) digest.needs.push({ key: `plan:${section.name}:${item.text}`, line: item.text, kind: "plan" })
+      section.items.forEach((item, index) => {
+        if (item.done) return
+        const asked = planQuestion(item.text)
+        digest.needs.push({
+          key: `plan:${section.name}:${item.text}`,
+          line: asked?.question ?? item.text,
+          kind: asked ? "question" : "plan",
+          planAt: { section: section.name, index },
+          ...(asked?.options.length && { options: asked.options }),
+        })
+      })
     }
   }
   digest.new.sort((a, b) => (b.at ?? 0) - (a.at ?? 0))
@@ -550,7 +610,8 @@ export interface ApexCreateInput {
   cwd: string
   harness: string
   model?: string
-  reasoning?: string
+  /** The model's options as the picker set them (reasoning, speed), by their ids. */
+  options?: Record<string, string | boolean>
   fins?: { harness?: string; model?: string; run?: string }
   /** Its first message: what it's for and what to start on. Absent, it greets the person and asks. */
   message?: string

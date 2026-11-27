@@ -5,6 +5,7 @@ import { hostLog } from "../../base/host-log.js"
 import { MAKO_THREAD_SERVER } from "../../contracts/mcp-reach.js"
 import { NATIVE_CHILD_INSTRUCTIONS, routeNativeSpawn, type NativeSpawn, type RoutedThread } from "../../contracts/native-routing.js"
 import type { CallNotes } from "../call-notes.js"
+import { AskedCallSchema, asksNobody } from "../../contracts/apexes.js"
 import { mcpToolName, routeNativeTool, routeShellCall, type CallRoute, type CallThread } from "../../contracts/native-calls.js"
 
 /** Claude's tools that start subagents: `Agent` (`Task` before Claude Code 2.1) and `Workflow`, which runs a script of them. */
@@ -97,6 +98,9 @@ function claudeNativeCall(routing: ClaudeRouting, input: PreToolUseHookInput): S
 
 /** PreToolUse's answer to a spawn routing denies or a native call Mako routes, or undefined to let the call go on. */
 export function claudeRoutedCall(routing: ClaudeRouting, input: PreToolUseHookInput): SyncHookJSONOutput | undefined {
+  // An Apex's own bookkeeping and a tree's talk within itself through Mako's tools ask nobody, whatever the access (`asksNobody`).
+  const mako = mcpToolName(input.tool_name)
+  if (mako?.server === MAKO_THREAD_SERVER && asksNobody(mako.tool, AskedCallSchema.catch({}).parse(input.tool_input))) return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } }
   const spawn = claudeSpawn(input.tool_name, ClaudeAgentInput.parse(input.tool_input), routing.teams)
   if (!spawn) return claudeNativeCall(routing, input)
   if (!routing.thread) return undefined

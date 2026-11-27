@@ -18,7 +18,11 @@ import {
   RULES_BUDGET_CHARS,
   ApexStartSchema,
   apexDigest,
+  answeredLine,
   checkPlanItem,
+  parsePlan,
+  planQuestion,
+  planText,
   digestNote,
   gatherWords,
   needsChanged,
@@ -97,6 +101,8 @@ export interface ApexesDeps {
   /** The person's data: each Apex's files are in `apexes/<thread>`, the layered rules in `rule-layers.json`. */
   userRoot: string
   emit(event: HostEvent): void
+  /** The title a conversation's harness gave its session, as its row shows it; none where the catalog has none. */
+  sessionTitle?(conversation: string): string | undefined
   /** The person's rules for every Apex or every Fin (Settings › Fins), which the preview shows as their own line. */
   roleRules?(as: "apex" | "fin"): string | undefined
   now?(): number
@@ -241,7 +247,7 @@ export class Apexes {
         title: name,
         apex,
         ...(text && { initialRequest: { id: namedUuid(`${op}:first`), text, attachments: [] } }),
-        ...((input.model || input.reasoning) && { tuning: { ...(input.model && { model: input.model }), ...(input.reasoning && { reasoning: input.reasoning }) } }),
+        ...((input.model || input.options) && { tuning: { ...(input.model && { model: input.model }), ...(input.options && { options: input.options }) } }),
         ...(input.modeId && { modeId: input.modeId }),
       })
     } catch (error) {
@@ -426,8 +432,15 @@ export class Apexes {
     return { thread: found.thread, to: target.thread }
   }
 
+  /** A Fin's name from its Thread's title: its first few words, whole, as short as names its Apex's Fins go. */
   private uniqueName(store: ThreadStore, apex: string, title: string): string {
-    const base = title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 40) || "thread"
+    const words = title.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim().split(" ").filter((word) => word && !NAME_STOP.has(word))
+    let base = ""
+    for (const word of words) {
+      if (base && `${base}-${word}`.length > 24) break
+      base = base ? `${base}-${word}` : word.slice(0, 24)
+    }
+    base ||= "thread"
     const taken = new Set(store.edges().children(apex).map((edge) => edge.name))
     if (!taken.has(base)) return base
     for (let n = 2; ; n += 1) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`
@@ -457,11 +470,13 @@ export class Apexes {
     if (!record) return undefined
     const conversation = this.deps.agents()?.conversationFor(thread)
     const summary = conversation ? summaries.find((each) => each.session.id === conversation) : undefined
-    // The name its row shows: the person's, else the one Mako gave it, else its first words.
-    const named = store.titleEntry(ThreadIdSchema.parse(thread))?.title ?? undefined
+    // The name its row shows: the person's, else the one its session was given (Mako's or its harness's), else its first words.
+    const entry = store.titleEntry(ThreadIdSchema.parse(thread))
+    const chosen = entry?.title && entry.source !== "auto" ? entry.title : undefined
+    const session = (conversation && (this.deps.sessionTitle?.(conversation) || this.deps.live.session(conversation)?.title)) || summary?.session.title || undefined
     return {
       thread,
-      title: named ?? record.title ?? summary?.session.title ?? (conversation && this.deps.live.session(conversation)?.title) ?? "Untitled Thread",
+      title: chosen ?? session ?? entry?.title ?? record.title ?? "Untitled Thread",
       ...(conversation && { conversation }),
       ...(summary?.elsewhere && { elsewhere: summary.elsewhere }),
     }
@@ -526,6 +541,30 @@ export class Apexes {
     const next = checkPlanItem(this.plan(thread).text, section, index, done)
     if (next === undefined) return { refused: "invalid", why: `${section} has no item ${index}.` }
     return this.savePlan(thread, next)
+  }
+
+  /**
+   * The person answers a question the Apex's plan asked them: the line is checked with their answer, and the answer
+   * goes to the Apex as their own words, as a message they typed would, so it acts on it at once.
+   */
+  answerPlan(thread: string, section: string, index: number, answer: string): ApexPlanReading | ApexRefused {
+    const words = answer.trim()
+    if (!words) return { refused: "invalid", why: "An answer needs words." }
+    const plan = parsePlan(this.plan(thread).text)
+    const item = plan.sections.find((each) => each.name === section)?.items[index]
+    const asked = item && !item.done ? planQuestion(item.text) : undefined
+    if (!item || !asked) return { refused: "invalid", why: "That question was answered or changed meanwhile." }
+    const conversation = this.deps.agents()?.conversationFor(thread)
+    if (!conversation) return { refused: "unavailable", why: `This ${APEX_WORD}'s conversation isn't on this device.` }
+    item.done = true
+    item.text = answeredLine(asked.question, words)
+    delete item.note
+    const saved = this.savePlan(thread, planText(plan))
+    if ("refused" in saved) return saved
+    const request = namedUuid(`apex-answer:${thread}:${asked.question}:${words}`)
+    if (!this.deps.live.held(conversation)?.requests.some((each) => each.id === request))
+      this.deps.live.submit(conversation, request, `About “${asked.question}”: ${words}`, [])
+    return saved
   }
 
   /** A plan changed: every window reads it again, and a line it checked may leave Needs you. */
@@ -871,6 +910,9 @@ export class Apexes {
 
 const SHIVER = "Shiver"
 
+/** Words a Fin's name leaves out of its Thread's title. */
+const NAME_STOP = new Set(["a", "an", "the", "and", "of", "in", "on", "to", "for", "with", "me", "my", "this", "that", "it", "please"])
+
 /** A hand-over's refusal as the tool says it: the gathering's reasons, in the tool's fewer words. */
 function apexRefusal(reason: GatherRefused["refused"] | ApexRefused["refused"]): ApexRefused["refused"] {
   switch (reason) {
@@ -899,6 +941,7 @@ function accessWords(tier: AccessTier): string {
 function apexRole(name: string, purpose: string | undefined): string {
   return [
     `You're ${name}, an ${APEX_WORD} the person keeps${purpose ? ` for: ${purpose}` : ""}. You own this area: you break work into ${FIN_WORD}s (agents_start, in parallel where they don't depend on each other, with after for one that does), keep your plan true (apex plan_write, plan_edit), and keep the person's lasting instructions in your rules (apex rules_write) and lessons in memory_save, so they never repeat themselves.`,
+    `What only the person can give goes under Waiting on you in your plan: a question ends with ? and offers its answers as [A | B]; they answer it from your Overview, their Inbox or their phone, and their answer reaches you as their message. Anything else there is a to-do of theirs they tick.`,
     `Speak to the person only when what needs them changed; a report that changes nothing for them ends your turn with a line in your plan, or nothing. When you do speak, lead with the decision, then what you recommend.`,
     `Your ${FIN_WORD}s report to you; they may message each other directly. apex gather takes Threads the person points you to; apex hand gives one to another ${APEX_WORD}.`,
   ].join(" ")

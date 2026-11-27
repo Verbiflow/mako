@@ -898,7 +898,9 @@ const inputs = {
         cwd: z.string(),
         harness: z.string(),
         model: z.string().optional(),
-        reasoning: z.string().optional(),
+        options: z
+          .record(z.string(), z.union([z.boolean(), z.string()]))
+          .optional(),
         fins: z
           .object({
             harness: z.string().optional(),
@@ -914,6 +916,8 @@ const inputs = {
   "mako:apex-demote": () => z.tuple([z.string()]),
   "mako:apex-gather": () =>
     z.tuple([z.string(), z.array(z.string()), z.boolean().optional()]),
+  "mako:apex-plan-answer": () =>
+    z.tuple([z.string(), z.string(), z.number(), z.string()]),
   "mako:apex-plan-check": () =>
     z.tuple([z.string(), z.string(), z.number(), z.boolean()]),
   "mako:apex-plan-read": () => z.tuple([z.string()]),
@@ -3946,6 +3950,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:apex-create", "conversations"],
   ["mako:apex-demote", "conversations"],
   ["mako:apex-gather", "conversations"],
+  ["mako:apex-plan-answer", "conversations"],
   ["mako:apex-plan-check", "conversations"],
   ["mako:apex-plan-read", "conversations"],
   ["mako:apex-plan-save", "conversations"],

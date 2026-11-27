@@ -47,6 +47,8 @@ export function declareApexMethods(methods: MethodTable, apexes: () => Apexes | 
   methods.handle("mako:apex-seen", (thread: string): void => apexes()?.seen(ThreadIdSchema.parse(thread)))
   methods.handle("mako:apex-plan-read", (thread: string): ApexPlanReading => apexes()?.plan(ThreadIdSchema.parse(thread)) ?? { text: "", chars: 0 })
   methods.handle("mako:apex-plan-save", (thread: string, text: string): ApexPlanReading | ApexRefused => apexes()?.savePlan(ThreadIdSchema.parse(thread), TextSchema.parse(text)) ?? UNAVAILABLE)
+  methods.handle("mako:apex-plan-answer", (thread: string, section: string, item: number, answer: string): ApexPlanReading | ApexRefused =>
+    apexes()?.answerPlan(ThreadIdSchema.parse(thread), section, ItemSchema.parse(item), TextSchema.parse(answer)) ?? UNAVAILABLE)
   methods.handle("mako:apex-plan-check", (thread: string, section: string, item: number, done: boolean): ApexPlanReading | ApexRefused =>
     apexes()?.checkPlan(ThreadIdSchema.parse(thread), section, ItemSchema.parse(item), done) ?? UNAVAILABLE)
   methods.handle("mako:apex-rules-read", (thread: string, as: "apex" | "fin"): ApexRulesReading | ApexRefused => apexes()?.rules(ThreadIdSchema.parse(thread), ReaderSchema.parse(as)) ?? UNAVAILABLE)

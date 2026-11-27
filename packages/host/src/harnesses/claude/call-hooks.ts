@@ -25,6 +25,12 @@ const ToolInputSchema = z.object({
 })
 
 /** Whether PreToolUse's answer stops the call, so it never runs. */
+/** Whether a PreToolUse answer lets the call go past the permission prompt: an Apex's own bookkeeping. */
+function allows(answer: SyncHookJSONOutput): boolean {
+  const specific = answer.hookSpecificOutput
+  return specific?.hookEventName === "PreToolUse" && specific.permissionDecision === "allow"
+}
+
 function denies(output: SyncHookJSONOutput): boolean {
   const specific = output.hookSpecificOutput
   return specific?.hookEventName === "PreToolUse" && specific.permissionDecision === "deny"
@@ -60,11 +66,12 @@ export function claudeCallHooks(bounds: CallBounds, routing?: ClaudeRouting, bef
       await beforeTool?.(signal, !NEVER_WRITE.has(input.tool_name))
       // A call routing only warns of still runs (a `git switch -c`, a server's tool Mako has its own for): it waited
       // for the checkpoint as any other does. Answered before the wait, it once wrote ahead of it.
-      if (routed) return routed
+      if (routed && !allows(routed)) return routed
       const tool = ToolInputSchema.safeParse(input.tool_input).data
       const path = FILE_TOOLS.has(input.tool_name) ? (tool?.file_path ?? tool?.notebook_path) : undefined
       bounds.before(input.tool_use_id, path && isAbsolute(path) ? [path] : [])
-      return {}
+      // An Apex's bookkeeping is allowed past the person's approval, and still bounded as any call (`asksNobody`).
+      return routed ?? {}
     },
     post: async (input) => {
       if (input.hook_event_name !== "PostToolUse" && input.hook_event_name !== "PostToolUseFailure") return {}

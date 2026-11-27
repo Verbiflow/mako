@@ -308,7 +308,7 @@ export const APEX_TOOL: ThreadToolDefinition = {
     description: [
       "Apexes: Threads the person keeps for an area of work, each with Fins, a plan and rules.",
       "create one when the person asks (name, purpose, message: what they said it's for); promote makes this Thread one, demote a Thread again; list and get read them.",
-      `As an Apex: plan reads ${PLAN_FILE} (sections ${PLAN_SECTIONS.join(", ")}; items "- [ ] fin:<name> what"; Waiting on you is the person's Needs you), plan_write replaces it, plan_edit swaps old for new, plan_check ticks section/item.`,
+      `As an Apex: plan reads ${PLAN_FILE} (sections ${PLAN_SECTIONS.join(", ")}; items "- [ ] fin:<name> what"; under Waiting on you, a question for the person ends in ? with answers as [A | B], and they answer it; anything else there is their to-do), plan_write replaces it, plan_edit swaps old for new, plan_check ticks section/item.`,
       "rules reads every layer you and your Fins read; rules_write sets layer apex (yours) or fins (every Fin's).",
       "gather moves Threads the person names into this Apex; hand gives one Fin to another Apex. One that would lose access waits for the person: then confirm.",
     ].join(" "),

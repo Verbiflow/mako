@@ -441,6 +441,7 @@ const replays = [
   "mako:apex-seen",
   "mako:apex-plan-save",
   "mako:apex-plan-check",
+  "mako:apex-plan-answer",
   "mako:apex-rule-save",
   "mako:memory-forget",
   "mako:apex-act",

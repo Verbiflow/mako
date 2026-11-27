@@ -314,6 +314,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     apexSeen: (thread: string) => invokeTrustedHost<void>("mako:apex-seen", thread),
     apexPlan: (thread: string) => invokeTrustedHost<ApexPlanReading>("mako:apex-plan-read", thread),
     saveApexPlan: (thread: string, text: string) => invokeTrustedHost<ApexPlanReading | ApexRefused>("mako:apex-plan-save", thread, text),
+    /** The person answers a question the Apex's plan asks them: their words go to the Apex, and the line leaves Needs you. */
+    answerApexPlan: (thread: string, section: string, item: number, answer: string) => invokeTrustedHost<ApexPlanReading | ApexRefused>("mako:apex-plan-answer", thread, section, item, answer),
     checkApexPlan: (thread: string, section: string, item: number, done: boolean) => invokeTrustedHost<ApexPlanReading | ApexRefused>("mako:apex-plan-check", thread, section, item, done),
     /** Every layer of rules as the Apex reads them, or as one of its Fins does: the context preview. */
     apexRules: (thread: string, as: "apex" | "fin") => invokeTrustedHost<ApexRulesReading | ApexRefused>("mako:apex-rules-read", thread, as),

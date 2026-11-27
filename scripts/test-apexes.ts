@@ -9,6 +9,8 @@ import {
   RULES_BUDGET_CHARS,
   apexDigest,
   apexNoteLine,
+  asksNobody,
+  planQuestion,
   checkPlanItem,
   digestNote,
   needsChanged,
@@ -26,6 +28,8 @@ import type { LiveStartOptions } from "@mako/host/contracts/live-conversations"
 import { Apexes, type ApexLive, type ApexesDeps } from "@mako/host/conversations/apexes"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { HELD_BY_TABLE, ThreadStore, type JournalFacts } from "@mako/host/threads/store"
+import { claudeRoutedCall } from "@mako/host/harnesses/claude/routing"
+import { callGateAnswer } from "@mako/host/harnesses/call-gate"
 
 /**
  * Deliberate Apexes (`contracts/apexes.ts`, `conversations/apexes.ts`): the plan read and written back, the digest
@@ -100,6 +104,25 @@ try {
   assert.ok(!needsChanged(digest.needs.map((item) => item.key), digest), "the same Needs you hasn't changed")
   assert.match(digestNote(digest, false), /unchanged since your last turn[\s\S]*Don't message the person/)
   assert.match(digestNote(digest, true), /changed since your last turn[\s\S]*Tell the person/)
+
+  // A plan line that asks is a question with its offered answers; one that doesn't is the person's to-do.
+  assert.deepEqual(planQuestion("Include usage examples? [Yes | No]"), { question: "Include usage examples?", options: ["Yes", "No"] })
+  assert.equal(planQuestion("Merge word for acme/app#12"), undefined)
+  const asks = apexDigest([], "## Waiting on you\n\n- [ ] Ship on Friday? [Yes | Wait]\n- [ ] Rotate the staging key\n", undefined)
+  assert.deepEqual(asks.needs.map((item) => [item.kind, item.line, item.options, item.planAt]), [
+    ["question", "Ship on Friday?", ["Yes", "Wait"], { section: "Waiting on you", index: 0 }],
+    ["plan", "Rotate the staging key", undefined, { section: "Waiting on you", index: 1 }],
+  ])
+  assert.ok(asksNobody("apex", { action: "plan_write" }) && asksNobody("apex", { action: "list" }) && asksNobody("memory_save", {}), "an Apex's bookkeeping asks nobody")
+  // Claude's PreToolUse answer lets it past the prompt; any other harness's hook reads the same answer.
+  // SAFETY: claudeRoutedCall reads only the event name, tool name and tool input of a PreToolUse payload, which this holds.
+  const pre = (tool: string, action: string) => ({ hook_event_name: "PreToolUse", tool_name: tool, tool_input: { action }, tool_use_id: "t", session_id: "s", transcript_path: "", cwd: "/" }) as never
+  assert.equal(claudeRoutedCall({ teams: false, conversation: "c" }, pre("mcp__mako__apex", "plan_write"))?.hookSpecificOutput?.hookEventName, "PreToolUse")
+  assert.equal(claudeRoutedCall({ teams: false, conversation: "c" }, pre("mcp__mako__apex", "create")), undefined, "creating an Apex goes to the person's approval as before")
+  // SAFETY: the gate reads only the call's folder for a bookkeeping call it allows before any policy.
+  assert.deepEqual(callGateAnswer("pre", { tool_name: "mcp__mako__memory_save", tool_input: {} }, { folder: "/" } as never, "c"), { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "allow" } })
+  assert.ok(!asksNobody("apex", { action: "create" }) && !asksNobody("apex", { action: "gather" }) && !asksNobody("agents_start", {}), "making Apexes and moving Threads still ask")
+  assert.ok(asksNobody("agents_report", {}) && asksNobody("agents_send", { to: "fin:math" }) && !asksNobody("agents_send", { to: "apex:mako-7f3k" }), "a tree's own reports and messages ask nobody; a message to another Thread asks")
 
   // ── Layers ──
   const big = "x".repeat(RULES_BUDGET_CHARS)
@@ -220,6 +243,18 @@ try {
   const read = accepted(service.rulesAct(caller, { clientKey: "read" }))
   assert.ok(read.outcome === "read" && read.apex.some((part) => part.text === "Never merge without a word.") && !read.fins.some((part) => part.text.includes("Never merge")))
 
+  // A question in its plan is answered, not ticked: the line is checked with the answer, which reaches the Apex as the person's words.
+  accepted(service.planAct(caller, { action: "edit", old: "## Waiting on you\n\n", new: "## Waiting on you\n\n- [ ] Ship the fix behind a flag? [Flag | Straight]\n", clientKey: "q" }))
+  const before = submitted.length
+  const question = service.digest(mobile.conversation, store.apex(mobile.thread)!).needs.find((item) => item.kind === "question")!
+  assert.deepEqual(question.options, ["Flag", "Straight"])
+  accepted(service.answerPlan(mobile.thread, question.planAt!.section, question.planAt!.index, "Flag"))
+  assert.equal(submitted.length, before + 1)
+  assert.equal(submitted.at(-1)!.text, "About “Ship the fix behind a flag?”: Flag")
+  assert.equal(submitted.at(-1)!.actor, undefined, "the person's own words")
+  assert.ok(!service.digest(mobile.conversation, store.apex(mobile.thread)!).needs.some((item) => item.kind === "question"), "answered, it leaves Needs you")
+  assert.match(service.plan(mobile.thread).text, /- \[x\] Ship the fix behind a flag\? You: Flag/)
+
   // A lesson, saved twice under one topic, is one lesson confirmed again.
   const saved = service.memoryAct(caller, { scope: "folder", topic: "Tests", lesson: "Run npm test first.", clientKey: "m1" })
   assert.equal(accepted(saved).outcome, "saved")
@@ -246,7 +281,7 @@ try {
   assert.equal(words.archived, "“Old spike” is archived. Restore it first, then move it in.")
   assert.equal(words["is-apex"], "“Docs” is an Apex itself. An Apex doesn't work for another: message it instead.")
   assert.ok(result.stayed.find((each) => each.refused === "access-wider")?.confirmable)
-  assert.match(submitted.at(-1)!.text, /fin:fix-the-login-crash \(“Fix the login crash”\) joined your Shiver/, "the Apex hears who joined, as Mako's note")
+  assert.match(submitted.at(-1)!.text, /fin:fix-login-crash \(“Fix the login crash”\) joined your Shiver/, "the Apex hears who joined, as Mako's note")
   assert.equal(submitted.at(-1)!.actor?.kind, "service")
   assert.equal(apexNoteLine(submitted.at(-1)!.text), "Fix the login crash joined the Shiver", "the person reads it as a line")
   const confirmed = accepted(await service.gather(mobile.thread, [wide.thread], true, "person"))

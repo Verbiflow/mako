@@ -30,6 +30,7 @@ const ALLOWED: readonly string[] = [
   "mako:apexes",
   "mako:apex-plan-read",
   "mako:apex-plan-check",
+  "mako:apex-plan-answer",
   "mako:apex-seen",
   "mako:thread-move",
   "mako:thread-return",

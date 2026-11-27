@@ -540,6 +540,11 @@ export async function openConversations(deps: ConversationsDeps): Promise<Conver
       ...(deps.archived && { archived: deps.archived }),
       userRoot: environment.userRoot,
       emit,
+      // The name a conversation's row shows from its harness's own record (its summary), as the rail reads it.
+      sessionTitle: (conversation) => {
+        const path = live.session(conversation)?.nativePath
+        return path ? catalog.ref(path)?.title : undefined
+      },
       roleRules: (as) => {
         const policy = deps.finDefaults?.reading().policy
         return (as === "apex" ? policy?.forApexes : policy?.forFins) || undefined

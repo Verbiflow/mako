@@ -1,5 +1,5 @@
 import type { HostEvent } from "@mako/host/contracts/host-events-boot"
-import { checkPlanItem, ruleParts, RULES_BUDGET_CHARS, type ApexEntry, type ApexRulesReading, type Memory, type PersonLayers, type RuleLayer } from "@mako/host/contracts/apexes"
+import { answeredLine, checkPlanItem, parsePlan, planQuestion, planText, ruleParts, RULES_BUDGET_CHARS, type ApexEntry, type ApexRulesReading, type Memory, type PersonLayers, type RuleLayer } from "@mako/host/contracts/apexes"
 import type { MakoBridge } from "@mako/host/contracts/renderer-bridge"
 import { APEX_CONVERSATION, APEX_CWD, APEX_THREAD, APEX_TITLE } from "./mock-apex-thread"
 
@@ -26,7 +26,7 @@ The phone and iPad polish pass before 0.9: the quiet-hours notice, the iPad shee
 ## Waiting on you
 
 - [ ] Merge word for you/mako#371 once the phone case is green
-- [ ] Pick the TestFlight group for the 0.9 build
+- [ ] Which TestFlight group gets the 0.9 build? [Internal | Beta testers]
 
 ## Blocked
 
@@ -62,7 +62,7 @@ const NEW_PLAN = `# ${APEX_TITLE}
 ## Revisit
 `
 
-export function mockApexes(emit: (event: HostEvent) => void): Pick<MakoBridge, "apexes" | "createApex" | "promoteApex" | "updateApex" | "demoteApex" | "gatherIntoApex" | "apexSeen" | "apexPlan" | "saveApexPlan" | "checkApexPlan" | "apexRules" | "saveRuleLayer" | "ruleLayers" | "forgetMemory"> {
+export function mockApexes(emit: (event: HostEvent) => void): Pick<MakoBridge, "apexes" | "createApex" | "promoteApex" | "updateApex" | "demoteApex" | "gatherIntoApex" | "apexSeen" | "apexPlan" | "saveApexPlan" | "checkApexPlan" | "answerApexPlan" | "apexRules" | "saveRuleLayer" | "ruleLayers" | "forgetMemory"> {
   const now = Date.now()
   let apexes: ApexEntry[] = SCENE
     ? [{
@@ -156,6 +156,18 @@ export function mockApexes(emit: (event: HostEvent) => void): Pick<MakoBridge, "
       plans.set(thread, text)
       emit({ type: "apex-plan", thread, plan: text })
       return { text, chars: text.length }
+    },
+    answerApexPlan: async (thread, section, item, answer) => {
+      const plan = parsePlan(plans.get(thread) ?? "")
+      const line = plan.sections.find((each) => each.name === section)?.items[item]
+      const asked = line ? planQuestion(line.text) : undefined
+      if (!line || !asked) return { refused: "invalid", why: "That question was answered or changed meanwhile." }
+      line.done = true
+      line.text = answeredLine(asked.question, answer)
+      const next = planText(plan)
+      plans.set(thread, next)
+      emit({ type: "apex-plan", thread, plan: next })
+      return { text: next, chars: next.length }
     },
     checkApexPlan: async (thread, section, item, done) => {
       const next = checkPlanItem(plans.get(thread) ?? "", section, item, done)
