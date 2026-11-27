@@ -34,9 +34,10 @@ export function PhoneApexDigest({ thread, session, onOpenFin }: { thread: WebThr
   const since = useSeenSince(apex?.thread, apex?.seenAt, seen)
   const digest = useWebDigest(client, deviceId, apex, fins, since)
   const plan = useWebApexes((state) => (apex ? state.plans[apex.thread] : undefined))
-  const [open, setOpen] = useState<boolean | null>(null)
+  // Folded to its line ("4 need you · 2 new · 7 in progress") until tapped: open, it took two thirds of a phone's
+  // screen above the conversation. What needs the person is also in the Inbox.
+  const [shown, setOpen] = useState(false)
   if (!apex) return null
-  const shown = open ?? digest.needs.length > 0
   const rest = [digest.new.length ? `${digest.new.length} new` : undefined, digest.progress.length ? `${digest.progress.length} in progress` : undefined].filter(Boolean).join(" · ")
   const check = (item: DigestItem) => {
     if (!deviceId || !plan) return
