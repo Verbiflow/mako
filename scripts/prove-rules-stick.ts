@@ -111,8 +111,6 @@ function store<T>(read: (db: DatabaseSync) => T): T {
 }
 const SessionRow = z.object({ session_id: z.string() })
 const ThreadRow = z.object({ thread_id: z.string() })
-const Edges = z.array(Edge)
-const Reports = z.array(Report)
 const ReportRecord = z.record(z.string(), Json)
 const ConversationRows = z.array(z.object({ conversation_id: z.string() }))
 const sessionOf = (conversation: string) => store((db) => SessionRow.safeParse(db.prepare("SELECT session_id FROM journals WHERE conversation_id = ?").get(conversation)).data?.session_id)
@@ -121,6 +119,8 @@ const Edge = z.object({ child_thread: z.string(), name: z.string(), record: z.st
 const edgesUnder = (thread: string) => store((db) => Edges.parse(db.prepare("SELECT child_thread, name, record, created_at FROM thread_parents WHERE parent_thread = ? ORDER BY created_at").all(thread)))
 const EdgeRecord = z.looseObject({ asked: z.looseObject({ after: Json.optional() }).optional() })
 const Report = z.object({ id: z.string(), record: z.string(), at: z.number() })
+const Edges = z.array(Edge)
+const Reports = z.array(Report)
 const reportsOf = (child: string) => store((db) => Reports.parse(db.prepare("SELECT id, record, at FROM thread_reports WHERE child_thread = ? ORDER BY at").all(child))).map((row): Record<string, Json> & { id: string; at: number } => ({ ...ReportRecord.parse(JSON.parse(row.record)), id: row.id, at: row.at }))
 const conversationsOfThread = (thread: string) => store((db) => ConversationRows.parse(db.prepare("SELECT j.conversation_id FROM journals j JOIN memberships m ON m.session_id = j.session_id WHERE m.thread_id = ? ORDER BY j.created_at").all(thread))).map((row) => row.conversation_id)
 
