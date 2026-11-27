@@ -225,6 +225,8 @@ function judge(task: string, result: Omit<Outcome, "right" | "verdict">): Verdic
       const refusedFirst = result.refused.some((each) => each.refused === "overlap") ? "refused for overlap, then " : ""
       if (started <= 1) return { right: true, verdict: `${refusedFirst}${started ? "one Fin" : "did it itself"}` }
       if (started - sequenced <= 1) return { right: true, verdict: `${refusedFirst}${started} Fins, sequenced with after` }
+      // Asked for two Fins, an Apex that was refused and started anyway saying why heard the check and answered it.
+      if (task === "forced-overlap" && refusedFirst && result.proceeds.every((each) => each.proceed.length > 20)) return { right: true, verdict: `${refusedFirst}proceeded as the person asked: ${result.proceeds.map((each) => JSON.stringify(each.proceed)).join("; ")}` }
       if (result.proceeds.length) return { right: false, verdict: `${refusedFirst}two Fins at once on one ${task === "feature" ? "feature" : "function"}, proceeding: ${result.proceeds.map((each) => JSON.stringify(each.proceed)).join("; ")}` }
       return { right: false, verdict: `${started} Fins in parallel on one ${task === "feature" ? "feature" : "function"}` }
     }

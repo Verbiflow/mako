@@ -190,7 +190,7 @@ const LEGACY_BRIEF_CLOSE = `When you finish, are blocked, or need a decision, ca
  * each loading the same context and meeting the others at merge. So it says when not to split as well as how, and
  * asks for `touches`, which `agents_start` checks against the Fins already at work (`startOverlap`).
  */
-export const SPLIT_WORK = "Split only what's independent and big: pieces that don't need each other's decisions, each worth 15+ minutes. Breadth splits (separate questions, repos, modules, harness proofs, reviews); depth doesn't (one feature, one bug or one refactor is one Fin, or yours). Smaller than its brief would be: do it yourself. Start independent pieces in the same turn, never one after another; use after only when one needs another's output. Name the files each will edit in touches: two pieces on the same files are one piece."
+export const SPLIT_WORK = "Split only what's independent and big: pieces that don't need each other's decisions, each worth 15+ minutes. Breadth splits (separate questions, repos, modules, harness proofs, reviews); depth doesn't (one feature, one bug or one refactor is one Fin, or yours). Smaller than its brief would be: do it yourself. Start independent pieces in the same turn, never one after another; use after only when one needs another's output. Name the files each will edit in touches: two pieces on the same files are one piece. When the person asks for Fins, start them as asked."
 /** How an Apex answers its Fins' reports: the person hears what needs them, together, and nothing else. */
 export const APEX_QUIET = "On a report that changes nothing for the person, end your turn without a word; tell them what needs them in one message."
 /** Beneath a lead Fin's brief, for it alone: it's an Apex of its own. */
