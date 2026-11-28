@@ -503,7 +503,16 @@ export class CloudSignInSync {
   ): Promise<CloudSignInRow> {
     try {
       const launch = await this.#accounts.launch(harness, childProcessEnv(process.env), { trackCredential: false })
-      if (isApiKeyAccount(launch.account.name)) return { harness, status: "signed-out", label: null, expiresAt: null }
+      if (isApiKeyAccount(launch.account.name)) {
+        // A key account is selected: its key goes as it is, and a chain the cloud kept for this Mac's sign-in before
+        // goes, or machines would run on it rather than the key.
+        if (send && kept?.source === "shared" && kept.mine) {
+          await this.#store.disconnect(harness)
+          delete this.#inStep[harness]
+          hostLog("cloud", "a key account is selected; Mako Cloud no longer keeps this Mac's sign-in", { harness, token: kept.token ?? null })
+        }
+        return await this.#sync(harness, send, sentBefore)
+      }
       const env = launch.env
       // A read that fails (a locked keychain, a file mid-write) is a problem to show, never a sign-out to pass on.
       const local = await adapter.chain(env)
@@ -683,7 +692,10 @@ export class CloudSignInSync {
     try {
       const read = async () => {
         const launch = await this.#accounts.launch(harness, childProcessEnv(process.env), { trackCredential: false })
-        return { name: launch.account.name, exported: isApiKeyAccount(launch.account.name) ? null : await adapter.export(launch.env) }
+        const name = launch.account.name
+        // A key account's key, the way every key-taking harness shares; one whose harness keeps it in its own store
+        // (Codex's auth.json in the account's home) is read there, as any of its sign-ins.
+        return { name, exported: isApiKeyAccount(name) && adapter.keySignIn ? await adapter.keySignIn(name) : await adapter.export(launch.env) }
       }
       // A read that fails (a locked keychain, a file mid-write) is a problem to show, never a sign-out to pass on.
       let { name, exported } = await read()
@@ -699,9 +711,11 @@ export class CloudSignInSync {
           await this.#store.remove(harness)
           this.#sent.delete(harness)
         }
-        return { harness, status: "signed-out", label: null, expiresAt: null }
+        const out: CloudSignInRow = { harness, status: "signed-out", label: null, expiresAt: null }
+        if (adapter.unshared) out.note = adapter.unshared
+        return out
       }
-      const label = exported.label ?? (await this.#email(harness, name))
+      const label = exported.label ?? (await this.#email(harness, name)) ?? (isApiKeyAccount(name) ? "API key" : null)
       const signIn = CloudSignInSchema.parse({ harness, ...exported, label })
       const row: CloudSignInRow = { harness, status: send ? "sent" : "waiting", label, expiresAt: signIn.expiresAt }
       if (!send) return row

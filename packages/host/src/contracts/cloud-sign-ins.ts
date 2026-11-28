@@ -110,6 +110,8 @@ export type CloudSignInRow = {
   sentAt?: string
   /** Why it failed, in words for people. */
   problem?: string
+  /** Signed out for the cloud only: the sign-in this Mac has stays here, said in words for people, and what goes instead. */
+  note?: string
   /** This harness's sign-in rotates, so it's one sign-in for this Mac and the cloud, which refreshes it for both. */
   rotates?: boolean
   /** The sign-in Mako Cloud keeps for it, which machines run with instead of this Mac's. */

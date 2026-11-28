@@ -372,7 +372,7 @@ const SIGN_IN_CHIPS = {
 /** A key, sent as it is. */
 function keyView(row: CloudSignInRow): RowView {
   if (row.status === "failed") return { detail: row.problem, negative: true }
-  if (row.status === "signed-out") return { detail: localWords("Not signed in on this Mac"), signIn: true }
+  if (row.status === "signed-out") return { detail: row.note ?? localWords("Not signed in on this Mac"), signIn: true }
   return { chip: SIGN_IN_CHIPS[row.status], detail: [row.label, lasts(row.expiresAt)].filter(Boolean).join(" · ") }
 }
 

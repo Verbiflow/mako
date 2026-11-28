@@ -1,8 +1,27 @@
 import { homedir } from "node:os"
 import { basename, join } from "node:path"
-import { withApiKeyAccounts } from "../api-key-accounts.js"
+import { cloudKeyPayload, withApiKeyAccounts } from "../api-key-accounts.js"
 import { credentialFingerprint, KeyTokens, type AccountRoot } from "../accounts-common.js"
 import type { Secrets } from "../../base/secrets.js"
+import type { CloudSignInCapability } from "../cloud-sign-in.js"
+import { localWords } from "@mako/protocol/computer-words"
+
+/**
+ * Antigravity in the cloud runs on a Gemini API key: a key account's, through the path every key-taking harness shares
+ * (`withApiKeyAccounts`), or the `GEMINI_API_KEY` this Mac's own sign-in runs under. agy keeps a Google sign-in in the
+ * system keychain, which Mako doesn't read, so that one stays on this Mac.
+ */
+export const antigravityCloudSignIn: CloudSignInCapability = {
+  async export(env) {
+    const key = env.GEMINI_API_KEY?.trim()
+    return key ? { label: null, expiresAt: null, payload: cloudKeyPayload(key) } : null
+  },
+  async install() {
+    throw new Error("Antigravity's sign-in on a machine is a Gemini API key")
+  },
+  remove: async () => false,
+  unshared: localWords("Cloud Threads run Antigravity on a Gemini API key; a Google sign-in stays on this Mac."),
+}
 
 /** OAuth remains in the official agent. Key sessions use their own ACP data directory. */
 export function antigravityAccounts(root: AccountRoot, secrets: Secrets) {
@@ -22,6 +41,7 @@ export function antigravityAccounts(root: AccountRoot, secrets: Secrets) {
     credentialRevision: async (_name, env = process.env) => credentialFingerprint([env.GEMINI_HOME ?? null, keyTokens.of(env.GEMINI_API_KEY)]),
     accountUsage: async () => ({ status: "unavailable", detail: "Antigravity manages this account's limits." }),
     async removeAccount() { throw new Error("The terminal owns this sign-in.") },
+    cloudSignIn: antigravityCloudSignIn,
   }, root, secrets, async (key, env, dir) => {
     // A saved Gemini Developer API credential is scoped to Google.
     for (const name of Object.keys(env)) {

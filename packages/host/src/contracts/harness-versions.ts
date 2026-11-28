@@ -81,6 +81,12 @@ export interface HarnessVersions {
    * whose target starts with `~/` points into the home.
    */
   kept?: { targets: string[]; unpack: string; links: Record<string, string>; files?: Record<string, string> }
+  /**
+   * The vendor's file and SHA-512 for each target of `tested`, which a pinned install downloads and checks (agy's
+   * `builds.ts`): read by the bump from the per-target manifest (`{target}` in `manifests`) and written to `file`, a
+   * path under the harness's folder, with the version, so `tested` never moves without the files it installs.
+   */
+  digests?: { manifests: string; targets: string[]; file: string }
 }
 
 /** Where an installed version stands against its harness's declaration. */
