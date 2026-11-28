@@ -25,6 +25,11 @@ export class AcpPromptTurn {
     return this.pending > 0 && !this.closed && !this.canceled
   }
 
+  /** The client cancelled the turn and it hasn't ended yet: what the agent reports meanwhile is the stop's. */
+  get stopping(): boolean {
+    return this.canceled && !this.closed
+  }
+
   cancel(): void {
     if (this.acceptsSteering) this.canceled = true
   }

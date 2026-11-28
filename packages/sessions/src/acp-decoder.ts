@@ -153,6 +153,8 @@ export interface AcpUpdateContext {
   toolName?: string
   /** The harness counts this finished tool as failed though its status does not say so. */
   toolFailed?: boolean
+  /** The tool was stopped though its status says `failed`: the client had cancelled its turn (`AcpUpdateDecoder.update`). */
+  toolCanceled?: boolean
   toolReading?: AcpToolReading
   /** The session's running tools, so an update keeps the details or links it doesn't resend; without it an update shows only its own. */
   tools?: AcpToolCalls
@@ -190,6 +192,7 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
     case "tool_call": {
       const parsed = AcpToolUpdateSchema.parse(raw)
       const fields = acpToolFields(parsed, context.toolReading)
+      if (context.toolCanceled) fields.status = "canceled"
       const { details, status } = context.tools ? context.tools.read(raw.toolCallId, fields) : shownAlone(fields)
       update = {
         kind: "tool",
@@ -210,6 +213,7 @@ export function decodeAcpUpdate(raw: SessionUpdate, context: AcpUpdateContext = 
     case "tool_call_update": {
       const parsed = AcpToolUpdateSchema.parse(raw)
       const fields = acpToolFields(parsed, context.toolReading)
+      if (context.toolCanceled) fields.status = "canceled"
       const { details, status } = context.tools ? context.tools.read(raw.toolCallId, fields) : shownAlone(fields)
       update = {
         kind: "tool-update",
@@ -306,8 +310,15 @@ export class AcpUpdateDecoder<Plans extends AcpPlanDecoder = AcpPlanDecoder> {
     return true
   }
 
-  /** A `session/update`. An unknown kind is `session/update/<kind>`, with the notification kept. */
-  update(notification: SessionNotification): AcpDecoded[] {
+  /**
+   * A `session/update`. An unknown kind is `session/update/<kind>`, with the notification kept.
+   *
+   * `stopping`: the client has cancelled the prompt the update belongs to. ACP has no status for a call stopped that
+   * way, so an agent reports it `failed` (agy 1.5.16 does, for the command it was running and each call queued behind
+   * it, while its store keeps them `CANCELED`). ACP lets the client mark every unfinished call of a cancelled turn
+   * cancelled, so a call reported `failed` then reads `canceled`, as a stopped call does from every harness.
+   */
+  update(notification: SessionNotification, stopping = false): AcpDecoded[] {
     if (this.hooks?.transient?.(notification)) return []
     const restated = this.hooks?.restated?.(notification.update, this.tools)
     if (restated === null) return []
@@ -320,7 +331,8 @@ export class AcpUpdateDecoder<Plans extends AcpPlanDecoder = AcpPlanDecoder> {
     }
     const toolName = update.sessionUpdate === "tool_call" ? this.hooks?.toolName?.(update) : undefined
     const toolFailed = update.sessionUpdate === "tool_call_update" && update.status === "completed" && this.hooks?.toolFailed?.(update)
-    const out = decodeAcpUpdate(update, { settings: this.settings(), toolName, toolFailed, toolReading: this.hooks?.toolReading, tools: this.tools, effects: this.effects }).map((item) =>
+    const toolCanceled = stopping && (update.sessionUpdate === "tool_call" || update.sessionUpdate === "tool_call_update") && update.status === "failed"
+    const out = decodeAcpUpdate(update, { settings: this.settings(), toolName, toolFailed, toolCanceled, toolReading: this.hooks?.toolReading, tools: this.tools, effects: this.effects }).map((item) =>
       item.kind === "unknown" ? unknown(`session/update/${item.type}`, RawSchema.parse(notification)) : item)
     for (const plan of this.plans?.update(update, notification.sessionId) ?? []) out.push(content(plan))
     return out

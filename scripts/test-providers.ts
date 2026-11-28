@@ -2,6 +2,9 @@ import { antigravityAcp } from "@mako/host/harnesses/antigravity/acp"
 import { antigravityCatalog } from "@mako/host/harnesses/antigravity/profile"
 import { acpAnsweredRequest, acpInitialSelection, acpModeChange, acpReportedMode, acpSessionModes } from "@mako/host/harnesses/acp-access"
 import { AcpPromptTurn, type AcpTurnResult } from "@mako/host/harnesses/acp-prompt-turn"
+import { AcpDecoder } from "@mako/host/harnesses/acp-decoder"
+import { reduceLiveUpdates } from "@mako/sessions/live-content"
+import { liveToolEntry } from "../packages/sessions/src/live-entries.ts"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
 import { agyStepEntries, AGY_STEP, AntigravityProvider } from "@mako/sessions"
 import { resolveSessionSettings } from "@mako/sessions/settings"
@@ -26,7 +29,7 @@ import {
 import { tmpdir } from "node:os"
 import { DatabaseSync } from "node:sqlite"
 import { join } from "node:path"
-import type { SessionConfigOption } from "@agentclientprotocol/sdk"
+import type { SessionConfigOption, SessionNotification } from "@agentclientprotocol/sdk"
 import { z } from "zod"
 import { resolveAcpConfigValue } from "@mako/host/harnesses/acp-config"
 import {
@@ -656,6 +659,50 @@ assert.deepEqual(
   await steer
   await new Promise((resolve) => setImmediate(resolve))
   assert.deepEqual(ended, { kind: "completed", stopReason: "end_turn" })
+}
+{
+  // A stopped turn's calls: agy 1.5.16 reports the command it was running and each call queued behind it `failed`
+  // once Mako cancels the prompt (ACP has no status for it), and keeps them `CANCELED` (6) in its store. Read live
+  // while the turn is stopping, they are stopped calls, as every harness shows one; a call that fails on its own stays failed.
+  const session = "9f8e7d6c-1111-4222-8333-444455556666"
+  const notify = (update: SessionNotification["update"]): SessionNotification => ({ sessionId: session, update })
+  const command = (id: string, line: string) => ({ toolCallId: id, kind: "execute" as const, title: line, rawInput: { CommandLine: line, WaitMsBeforeAsync: 10000 } })
+  const stopped = { status: "failed" as const, content: [{ type: "content" as const, content: { type: "text" as const, text: "" } }], rawOutput: { output: "" } }
+  const turn = new AcpPromptTurn(() => {})
+  const prompt = Promise.withResolvers<{ stopReason: "cancelled" }>()
+  const running = turn.send(() => prompt.promise)
+  const decoder = new AcpDecoder(antigravityAcp)
+  const read = (update: SessionNotification["update"]) => decoder.update(notify(update), turn.stopping).flatMap((item) => item.kind === "update" ? [item.update] : [])
+  const updates = [
+    ...read({ sessionUpdate: "tool_call", ...command("call_1", "make fail"), status: "in_progress" }),
+    ...read({ sessionUpdate: "tool_call_update", toolCallId: "call_1", status: "failed", content: [{ type: "content", content: { type: "text", text: "make: *** No rule to make target 'fail'." } }] }),
+    ...read({ sessionUpdate: "tool_call", ...command("call_2", "make status"), status: "in_progress" }),
+  ]
+  assert.equal(turn.stopping, false, "a running turn isn't stopping")
+  turn.cancel()
+  assert.equal(turn.stopping, true, "Stop, or a steer that restarts the turn, cancels it")
+  updates.push(
+    ...read({ sessionUpdate: "tool_call_update", toolCallId: "call_2", kind: "execute", ...stopped }),
+    ...read({ sessionUpdate: "tool_call", ...command("call_3", "make logs"), ...stopped }),
+  )
+  prompt.resolve({ stopReason: "cancelled" })
+  await running
+  await new Promise((resolve) => setImmediate(resolve))
+  assert.equal(turn.stopping, false, "the stopped turn has ended")
+  const tools = reduceLiveUpdates([], updates).flatMap((block) => block.type === "tool" ? [block] : [])
+  assert.deepEqual(tools.map((tool) => [tool.id, tool.status]), [["call_1", "failed"], ["call_2", "canceled"], ["call_3", "canceled"]])
+  assert.deepEqual(tools.map((tool) => { const saved = liveToolEntry(tool); return [saved.error === true, saved.canceled === true] }), [[true, false], [false, true], [false, true]],
+    "saved as the turn left them: the failed call an error, the stopped ones canceled")
+  const after = new AcpDecoder(antigravityAcp).update(notify({ sessionUpdate: "tool_call", ...command("call_4", "make logs"), ...stopped }))
+  assert.deepEqual(after.flatMap((item) => item.kind === "update" && item.update.kind === "tool" ? [item.update.status] : []), ["failed"], "outside a stop, failed is failed")
+  // Its store says the same of both: CANCELED (6) and INTERRUPTED (12) are stopped calls, ERROR (7) a failed one.
+  const step = (status: number) => {
+    const writer = new BinaryWriter()
+    const call = new BinaryWriter().uint32(10).string("call_9").uint32(18).string("run_command").uint32(26).string("{}").finish()
+    writer.uint32(8).int32(AGY_STEP.generic).uint32(32).int32(status).uint32(42).bytes(new BinaryWriter().uint32(34).bytes(call).finish())
+    return agyStepEntries(9, AGY_STEP.generic, writer.finish()).map((entry) => entry.type === "tool" ? entry.status : entry.type)
+  }
+  assert.deepEqual([6, 12, 7].map(step), [["cancelled"], ["cancelled"], ["failed"]])
 }
 {
   // Access: agy lists Default, Accept edits and Plan. Full access runs in Accept edits and Mako approves each tool's

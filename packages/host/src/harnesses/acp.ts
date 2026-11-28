@@ -634,7 +634,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
             live.turnReceipt?.()
           const frame = record({ method: "session/update", params })
           recorded = true
-          withFrame(frame, () => deliverDecoded(decoder.update(params), sink))
+          withFrame(frame, () => deliverDecoded(decoder.update(params, live.turn?.stopping === true), sink))
         } finally {
           if (!recorded) record({ method: "session/update", params })
         }
