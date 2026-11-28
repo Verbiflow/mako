@@ -461,12 +461,16 @@ export class LiveConversations {
     await this.reclaims.settled()
   }
 
-  /** The host's sweep, now; `pauseMs` between journals. */
-  settleHistoryCopies(pauseMs?: number): Promise<SettledBases> {
-    return this.sources.settleBases(pauseMs)
+  /** The host's sweep, now; `pauseMs` between journals, waiting at most `waitMs` for work to end before each. */
+  settleHistoryCopies(pauseMs?: number, waitMs?: number): Promise<SettledBases> {
+    return this.sources.settleBases(pauseMs, waitMs)
   }
 
-  hasActiveWork(): boolean { return this.lifecycleWork().length > 0 }
+  /**
+   * Whether any conversation runs, starts or stops anything. One that only waits on the person (an approval, or a
+   * native agent asking: `waiting`) does nothing until they answer, which can be hours: the sweep waited 14 h behind one.
+   */
+  hasActiveWork(): boolean { return this.lifecycleWork().some((item) => item.status !== "waiting") }
 
   residency(): ProviderResidencySnapshot {
     return this.hibernation.snapshot(this.records.memory())

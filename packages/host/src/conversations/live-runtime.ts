@@ -614,7 +614,7 @@ export interface LiveAccess {
   readBase(resident: Resident): Promise<void>
   /** Lets go of a conversation now when nothing is using it (`LiveRecords.release`). */
   release(id: string): boolean
-  /** Whether any conversation runs, starts or stops anything (`LiveConversations.lifecycleWork`). */
+  /** Whether any conversation runs, starts or stops anything, not only waits on the person (`LiveConversations.hasActiveWork`). */
   hasActiveWork(): boolean
   /** `discoverNativePath`, then the driver's own lookup by native ID when the catalog doesn't list the session. */
   locateNativePath(resident: Resident): Promise<void>

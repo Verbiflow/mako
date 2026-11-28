@@ -2018,7 +2018,12 @@ history changed (`scripts/test-window-first-page.ts`). A conversation a
 window shows stays in memory (`LiveHistoryReader.shown`, pinned). The host's
 sweep (`LiveSources.settleBases`) moves existing journals' copies onto their
 sessions' records, named as host work (`SETTLE_WORK`), and reads none in
-while a window reads a conversation. `npm run conversations:doctor` shows each journal's
+while a window reads a conversation. It waits for a turn at work to end at
+most `SETTLE_WAIT_MS` before each journal, then ends and leaves the rest to
+the next sweep (`deferred`); a conversation waiting only on the person (an
+approval) doesn't hold it (`hasActiveWork`). A journal it found keeping its copy
+is skipped until it changes, an empty write-ahead log (which a read-only
+reader leaves) being no change (`journalStamp`). `npm run conversations:doctor` shows each journal's
 history source, why a copy is kept and what would compact, from local files
 only. `npm run benchmark:base-source` measures the sweep and the opens on
 clones of real journals. A conversation that went on in several sessions
