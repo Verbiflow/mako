@@ -225,8 +225,8 @@ async function checkOpen() {
       console.log(`Opening ${where}: newest painted ${said.join(", ")}; no frame with an empty body`)
     }
     // An Apex opened while its Mac is off, the page holding nothing it read there: its digest is what the account lists
-    // on its row, marked as the last its Mac said, with nothing in it to act on; the Mac back, its row's word replaces
-    // it in place and the marks go.
+    // on its row, as its Mac last said it, with nothing in it to act on and nothing but the bar's moon and the composer
+    // saying the Mac is off; the Mac back, its row's word replaces it in place and the moon goes.
     {
       const where = "the Apex, its Mac off"
       await window.loadURL(`${new URL("scripts/phone-apex.html", process.env.MAKO_OPEN_URL).href}?app=apex&listed=off&answer=${ANSWER_MS}`)
@@ -235,8 +235,8 @@ async function checkOpen() {
       const row = `[data-thread="${APEX_THREAD}"]`
       await open(`${where}, cold`, row, APEX_NEWEST, false)
       const digest = "[data-phone-digest] > button"
-      await until(`Boolean(document.querySelector('[data-phone-digest][data-last-known]'))`, `${where}: its digest, from the account's list, marked as last known`)
-      assert.match(await evaluate(`document.querySelector('[data-apex-last-known]').innerText`), /^Last known · Studio off for 2\dm$/, `${where}: says whose and how long`)
+      await until(`Boolean(document.querySelector('[data-phone-digest][data-last-known]'))`, `${where}: its digest, from the account's list`)
+      assert.equal(await evaluate(`Boolean(document.querySelector('[data-place="quiet"]'))`), true, `${where}: the bar's moon says its Mac is off`)
       const offLine = await evaluate(`document.querySelector(${JSON.stringify(digest)}).innerText`)
       const offNeeds = Number(/(\d+) needs? you/.exec(offLine)?.[1])
       assert.ok(offNeeds >= 2, `${where}: its line says what needs the person, its plan's two lines among them: ${offLine}`)
@@ -251,14 +251,20 @@ async function checkOpen() {
       const answers = [...document.querySelectorAll("[data-fin-answer], [data-plan-answer], [data-phone-answer], [data-phone-plan-done], [data-plan-item=open], [data-plan-item=done]")].filter(visible).length
       const named = [...document.querySelectorAll("button")].filter(visible).map((button) => (button.getAttribute("aria-label") || button.innerText || "").trim()).filter((words) => /^(Allow once|Allow always|Refuse|Stop all|Stop)$/.test(words))
       const composer = [...document.querySelectorAll("textarea")].filter(visible).map((node) => node.getAttribute("placeholder") || "").find(Boolean) ?? null
-      return { answers, named, composer }
+      const notices = [...document.querySelectorAll("[data-apex-last-known], [data-quiet-strip], [data-diagnosis], [data-continue]")].filter(visible).length
+      const said = ["Last known", "asleep or offline", "waits in your account", "continue in the cloud"].filter((words) => document.body.innerText.includes(words))
+      return { answers, named, composer, notices, said }
     })()`)
       assert.equal(offControls.answers, 0, `Mac off: no answer or check: ${JSON.stringify(offControls)}`)
       assert.deepEqual(offControls.named, [], `Mac off: no approval, Stop all or Stop: ${JSON.stringify(offControls)}`)
       assert.equal(offControls.composer, "Message — waits until it's back", `Mac off: the composer says its message waits: ${JSON.stringify(offControls)}`)
+      // The bar's moon and the composer say the Mac is off; nothing else does: no "Last known", no asleep line or card,
+      // no message-waits line, no "can't continue in the cloud" card.
+      assert.equal(offControls.notices, 0, `Mac off: no notice says it again: ${JSON.stringify(offControls)}`)
+      assert.deepEqual(offControls.said, [], `Mac off: no notice's words on screen: ${JSON.stringify(offControls)}`)
       await capture("apex-digest-mac-off.png")
       await evaluate("window.phoneApex.back(), true")
-      await until(`!document.querySelector('[data-phone-digest][data-last-known]') && !document.querySelector('[data-apex-last-known]')`, `${where}: back, no longer marked`)
+      await until(`!document.querySelector('[data-phone-digest][data-last-known]') && !document.querySelector('[data-place="quiet"]')`, `${where}: back, the moon gone`)
       await until(`document.querySelectorAll('[data-phone-plan-done]').length === 0 && document.querySelectorAll('[data-phone-answer]').length > 0`, `${where}: back, its question answerable and the to-do its Mac checked off gone`)
       const backNeeds = Number(/(\d+) needs? you/.exec(await evaluate(`document.querySelector(${JSON.stringify(digest)}).innerText`))?.[1])
       // Back, its line is its Mac's word again: the to-do it checked off meanwhile gone, its Fins' live asks counted.
@@ -275,7 +281,7 @@ async function checkOpen() {
       assert.ok(backControls.answers > 0 && backControls.named.length > 0, `Mac back: its asks are answerable again: ${JSON.stringify(backControls)}`)
       assert.notEqual(backControls.composer, "Message — waits until it's back", "Mac back: the composer sends to it again")
       await capture("apex-digest-mac-back.png")
-      console.log(`Opening ${where}: its digest from the account's list, last known (${offNeeds} need you, nothing to act on); back, ${backNeeds} need you, live`)
+      console.log(`Opening ${where}: its digest from the account's list, as last said (${offNeeds} need you, nothing to act on); back, ${backNeeds} need you, live`)
     }
   } finally {
     clearTimeout(watchdog)

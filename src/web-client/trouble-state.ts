@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from "react"
 import { useAccountList, type AccountListState } from "./account-list"
 import { useWebClient, type WebClient } from "./client"
-import { diagnose, type Diagnosis, type HopState, type ReachInput } from "./diagnosis"
+import { toast } from "sonner"
+import { diagnose, diagnosisText, type Diagnosis, type HopState, type ReachInput } from "./diagnosis"
 import { CLOUD, useReach, type Reached } from "./reach"
 import { useForm, type WebForm } from "./route"
 
@@ -106,4 +107,12 @@ export function useNow(everyMs = 30_000): number {
 /** What this end of a diagnosis is called, by the form the browser takes. */
 export function hereOf(form: WebForm): string {
   return form === "phone" ? "This phone" : form === "tablet" ? "This tablet" : "This browser"
+}
+
+/** A diagnosis copied whole, each hop and its raw reason, for a bug report: from a card, or a Thread's menu while its Mac is off. */
+export function copyDiagnostics(diagnosis: Diagnosis): void {
+  void navigator.clipboard.writeText(diagnosisText(diagnosis)).then(
+    () => toast.success("Copied", { description: "Diagnostics, with no secrets in them." }),
+    () => toast.error("Not copied", { description: "This browser didn't allow it." })
+  )
 }
