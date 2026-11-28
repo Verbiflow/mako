@@ -535,6 +535,28 @@ describe("borrowing: exact cases", () => {
     assert.throws(() => base({ lifetime: { until: "thread-ends" } }))
   })
 
+  test("a Thread in no project borrows what its account and the Thread grant, never a project's", () => {
+    const projectless = BorrowerSchema.parse({ account: ACCOUNT, thread: "t-loose", place: { kind: "machine", machine: "m1" } })
+    const ask = need({ kind: "credential", ref: "github-person", for: projectless, why: "a pull request" })
+    assert.equal(NeedSchema.safeParse(ask).success, true)
+    const account = base({ id: "person", resource: { kind: "credential", ref: "github-person" }, scope: { level: "account", account: ACCOUNT } })
+    const project = base({ id: "shop", resource: { kind: "credential", ref: "github-person" }, scope: { level: "project", account: ACCOUNT, repository: "acme/web" } })
+    const thread = base({ id: "own", resource: { kind: "file", ref: ".env" }, scope: { level: "thread", account: ACCOUNT, thread: "t-loose" } })
+    assert.equal(reachesBorrower(account, projectless), true)
+    assert.equal(reachesBorrower(thread, projectless), true)
+    assert.equal(reachesBorrower(project, projectless), false)
+    let state = emptyBroker(ACCOUNT)
+    state = step(state, { type: "grant", grant: project, at: 1 }).state
+    const before = step(state, { type: "borrow", need: ask, at: 2, lease: "l0", ask: "a0", content: { version: sha("x"), size: 1 } })
+    assert.equal(before.answer.refusal.refused, "out-of-scope", "a project's grant doesn't reach it")
+    state = step(before.state, { type: "grant", grant: account, at: 3 }).state
+    const { answer } = step(state, { type: "borrow", need: { ...ask, correlationId: "c2" }, at: 4, lease: "l1", ask: "a1", content: { version: sha("x"), size: 1 } })
+    assert.equal(answer.lease.grant, "person")
+    assert.equal(answer.lease.borrower.repository, undefined)
+    // Its key is its own, apart from any project's Thread of the same ID.
+    assert.notEqual(needKey(projectless, "c1"), needKey({ ...projectless, repository: "acme/web" }, "c1"))
+  })
+
   test("the narrowest grant wins a name", () => {
     let state = emptyBroker(ACCOUNT)
     state = step(state, { type: "grant", grant: base({ id: "wide", scope: { level: "account", account: ACCOUNT }, grantedAt: 5 }), at: 5 }).state

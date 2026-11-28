@@ -339,10 +339,13 @@ export function grantForAnswer(
 ): Grant | undefined {
   if (ask.kind !== "borrow" || (answer !== "allow-thread" && answer !== "allow-project")) return undefined
   const { offer } = ask
+  const repository = offer.borrower.repository
+  // A Thread in no project can be allowed only as itself: there's no project to allow it for.
+  if (answer === "allow-project" && repository === undefined) return undefined
   const scope: Scope =
-    answer === "allow-thread"
+    answer === "allow-thread" || repository === undefined
       ? { level: "thread", account: made.account, thread: offer.borrower.thread }
-      : { level: "project", account: made.account, repository: offer.borrower.repository }
+      : { level: "project", account: made.account, repository }
   const source: Grant["source"] = githubRef(offer.resource.kind, offer.resource.ref) ? { kind: "mint", service: "github" } : made.source
   return {
     id: made.id,
@@ -849,8 +852,8 @@ export function accountSetupView(input: {
   const { now, project, snapshot } = input
   const named = [
     ...snapshot.grants.flatMap((grant) => (grant.scope.level === "project" ? [grant.scope.repository] : [])),
-    ...snapshot.leases.map((lease) => lease.borrower.repository),
-    ...snapshot.asks.map((waiting) => waiting.ask.borrower.repository),
+    ...snapshot.leases.flatMap((lease) => lease.borrower.repository ?? []),
+    ...snapshot.asks.flatMap((waiting) => waiting.ask.borrower.repository ?? []),
   ]
   const repository = named.find((name) => name.split("/").at(-1) === project) ?? null
   const places: PlaceReading[] = [
@@ -865,7 +868,7 @@ export function accountSetupView(input: {
       return { place, rows: [] }
     }),
   ]
-  const ours = (borrower: { repository: string }) => repository !== null && borrower.repository === repository
+  const ours = (borrower: { repository?: string }) => repository !== null && borrower.repository === repository
   const asks = snapshot.asks
     .filter((waiting) => waiting.ask.askPerson && ours(waiting.ask.borrower))
     .map((waiting) => {

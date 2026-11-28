@@ -48,9 +48,10 @@ export const PROTOCOL_VERSION = 1
  30 says the gateway holds a Fin's reports for its Apex's Session, wherever that runs (`tree-notices.ts`,
  `TREE_NOTICES_LINK_VERSION`). 31 lets a `sessions` row say its deliberate Apex: its name, what it covers, when the
  person last read its digest and its plan (`apex`, `APEX_LISTED_VERSION`), so every device shows it while its owner is
- off. Every envelope stays at `PROTOCOL_VERSION` on every link version.
+ off. 32 lets a borrower be a Thread in no project, in a `source-ask` or `lent` frame
+ (`PROJECTLESS_BORROWER_LINK_VERSION`). Every envelope stays at `PROTOCOL_VERSION` on every link version.
  */
-export const LINK_VERSION = 31
+export const LINK_VERSION = 32
 
 /** The first link version a runtime may send `activity` on; a gateway that agreed less never sees one. */
 export const ACTIVITY_VERSION = 2
@@ -219,6 +220,13 @@ export const TREE_NOTICES_LINK_VERSION = 30
  * that agreed less gets the row without it, and its devices read the Apex from its owner while that answers.
  */
 export const APEX_LISTED_VERSION = 31
+
+/**
+ * The first link version whose device reads a borrower with no project (a cloud Thread in no repository, `borrow.ts`)
+ * in a `source-ask` or `lent` frame. A gateway sends a device that agreed less no frame naming one: that device's
+ * parser required a project, and a frame it can't read is no answer. Its reads over HTTP say it with `PROJECTLESS_READER`.
+ */
+export const PROJECTLESS_BORROWER_LINK_VERSION = 32
 
 /**
  * The link versions this build can speak. A gateway keeps older versions working for runtimes that wake

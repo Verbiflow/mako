@@ -70,7 +70,9 @@ type Placed = { lease: string; checkout: string; root: string; entry: string; li
 
 /** What the source says of an entry of a main checkout: a version from what it is now, never what it holds. */
 export async function checkoutSource(ask: SourceAsk): Promise<SourceAnswer> {
+  // A main checkout's entry is its project's: a Thread in no project has none to read.
   const root = ask.borrower.repository
+  if (root === undefined) return { answer: "unavailable", reason: "not-found" }
   const real = await realpath(join(root, ask.ref)).catch(() => undefined)
   if (!real) return { answer: "unavailable", reason: "not-found" }
   const inner = relative(await realpath(root).catch(() => root), real)
