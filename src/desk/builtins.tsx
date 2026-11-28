@@ -20,6 +20,7 @@ import {
   GitCompareIcon,
   SmartphoneIcon,
   TerminalSquareIcon,
+  GitPullRequestIcon,
 } from "lucide-react"
 import { planFeedbackOf } from "@mako/sessions/harnesses"
 import { registerSlot, registerToolKindView, type ToolCall } from "@/extend/slots"
@@ -29,6 +30,8 @@ import { quoteSelectionCommand } from "@/components/transcript/quote-reply-selec
 import { registerSurface } from "@/extend/surfaces"
 import { IdentityRow } from "@/components/identity/identity-row"
 import { ChangesPanel } from "@/components/inspector/changes-lazy"
+import { PullsPanel, PullsReading } from "@/components/pulls/pulls-panel"
+import { usePullsOffered } from "@/components/pulls/pulls-offered"
 import { AgentsReading, ControlReading } from "@/components/stage/side-readings"
 import { AGENTS_LABEL, useAgentsLabel, useAgentsOffered } from "@/state/agents-offered"
 import { ApexMark } from "@/components/ui/apex-mark"
@@ -64,6 +67,16 @@ export function installBuiltins(): () => void {
       icon: GitCompareIcon,
       render: ChangesPanel,
       order: 0,
+    }),
+    // The project's pull requests and issues across its repositories, beside Changes; offered with a GitHub remote.
+    registerSurface({
+      id: "pulls",
+      label: "Pull requests",
+      icon: GitPullRequestIcon,
+      render: PullsPanel,
+      order: 0.5,
+      reading: PullsReading,
+      useOffered: usePullsOffered,
     }),
     registerSurface({
       id: "files",

@@ -550,6 +550,14 @@ const DESK_COMMANDS: DeskCommand[] = [
     run: () => stage.toggle("changes"),
   },
   {
+    id: "view.pulls",
+    title: "Show pull requests",
+    section: "View",
+    keys: "mod+alt+p",
+    hint: "The project's pull requests and issues, beside Changes",
+    run: () => stage.toggle("pulls"),
+  },
+  {
     id: "view.terminal",
     title: "Toggle terminal dock",
     section: "View",

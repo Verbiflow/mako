@@ -1,6 +1,7 @@
 import { useEffect, useMemo } from "react"
 import { getMako, hasBridge } from "@/lib/bridge"
 import { createHook, createStore } from "@/state/store"
+import { everyWhileShown } from "@/lib/window-shown"
 import {
   repositoryKey,
   type Board,
@@ -104,16 +105,15 @@ export function useBoardWatch(folders: readonly string[], kind: BoardKind, mode:
     const watched = key.split("\0")
     const every = mode === "shown" ? SHOWN_EVERY_MS : GLANCE_EVERY_MS
     const due = () => Date.now() - boardAge(boardStore.get(), watched, kind) >= every
-    const front = () => document.visibilityState === "visible" && document.hasFocus()
-    if (mode === "shown" || due()) void readBoard(watched, kind)
+    // Opening a view reads unless a reading is moments old; a glance reads only when it's due.
+    if (mode === "shown" ? Date.now() - boardAge(boardStore.get(), watched, kind) >= 30_000 : due()) void readBoard(watched, kind)
     const onFocus = () => { if (due()) void readBoard(watched, kind) }
     window.addEventListener("focus", onFocus)
-    document.addEventListener("visibilitychange", onFocus)
-    const timer = mode === "shown" ? window.setInterval(() => { if (front() && due()) void readBoard(watched, kind) }, 15_000) : undefined
+    // Shown, it reads again when due while the window is in front; a hidden window's timer is gone (`everyWhileShown`).
+    const stop = mode === "shown" ? everyWhileShown(30_000, () => { if (document.hasFocus()) onFocus() }) : undefined
     return () => {
       window.removeEventListener("focus", onFocus)
-      document.removeEventListener("visibilitychange", onFocus)
-      if (timer !== undefined) window.clearInterval(timer)
+      stop?.()
     }
   }, [key, kind, mode])
 }
