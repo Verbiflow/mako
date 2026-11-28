@@ -1,11 +1,11 @@
 import { randomUUID } from "node:crypto"
-import { readFile, rm, stat } from "node:fs/promises"
+import { readFile, rm } from "node:fs/promises"
 import { homedir } from "node:os"
 import { join } from "node:path"
 import { z } from "zod"
 import type { Secrets } from "../base/secrets.js"
 import type { SelectableAccountCapability } from "./account-capability.js"
-import type { AccountRoot } from "./accounts-common.js"
+import { KeyTokens, type AccountRoot } from "./accounts-common.js"
 import { placeSecret, removeSecret, type CloudSignInCapability, type CloudSignInPayload, type CloudSignInPlace } from "./cloud-sign-in.js"
 
 export const isApiKeyAccount = (name: string) => /^key\.[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/.test(name)
@@ -24,13 +24,15 @@ const cloudKeyPath = (provider: string) => join(".mako", "cloud-keys", provider)
 /** The account folder a cloud key's harness keeps its own state in, as a saved key's does on the Mac. */
 const CLOUD_KEY_ACCOUNT = "cloud-key"
 
-/** The key a machine was given for `provider`, or null on a Mac and on a machine given none. Read as the harness launches. */
-async function cloudKey(provider: string): Promise<{ key: string; revision: string } | null> {
-  const path = join(homedir(), cloudKeyPath(provider))
-  const [text, stamp] = await Promise.all([readFile(path, "utf8").catch(() => null), stat(path).catch(() => null)])
-  if (!text || !stamp) return null
-  // The file's own times stand for the key in the revision: a key is never fingerprinted.
-  return { key: text.trim(), revision: `cloud-key:${stamp.mtimeMs}:${stamp.ino}` }
+/**
+ * The key a machine was given for `provider`, or null on a Mac and on a machine given none. Read as the harness launches.
+ * Its revision is the key's equality token (`KeyTokens`): the same key is the same revision however often it's installed
+ * again, a different key a different one, and the key itself is never hashed or handed on.
+ */
+async function cloudKey(provider: string, tokens: KeyTokens): Promise<{ key: string; revision: string } | null> {
+  const key = (await readFile(join(homedir(), cloudKeyPath(provider)), "utf8").catch(() => null))?.trim()
+  if (!key) return null
+  return { key, revision: `cloud-key:${tokens.of(key)}` }
 }
 
 /**
@@ -78,6 +80,7 @@ export function withApiKeyAccounts(
   const prefix = `provider/${native.provider}/`
   const records = async () => (await secrets.list("saved-key")).filter((r) => r.name.startsWith(prefix))
   const keyUsage = async () => ({ status: "unavailable" as const, detail: "Usage is billed to your API key." })
+  const cloudKeyTokens = new KeyTokens()
   return {
     ...native,
     usedElsewhere: native.usedElsewhere && { ...native.usedElsewhere, read: (name) =>
@@ -97,7 +100,7 @@ export function withApiKeyAccounts(
     async accountEnv(name, base) {
       if (!name || !isApiKeyAccount(name)) {
         // A cloud machine given a key runs its default account on it, as the Mac runs the key account it came from.
-        const given = !name || name === "default" ? await cloudKey(native.provider) : null
+        const given = !name || name === "default" ? await cloudKey(native.provider, cloudKeyTokens) : null
         return given ? configure(given.key, { ...base }, root.dir(native.provider, CLOUD_KEY_ACCOUNT)) : native.accountEnv(name, base)
       }
       // The device reads its own saved key for a launch, as Cursor's are read. `base` is the host's environment: a
@@ -109,7 +112,7 @@ export function withApiKeyAccounts(
     selectedAccount: (name, env) => name && isApiKeyAccount(name) ? { name, dir: root.dir(native.provider, name) } : native.selectedAccount(name, env),
     credentialRevision: async (name, env, hold) => {
       if (isApiKeyAccount(name)) return (await records()).find((r) => r.name === prefix + name)?.version ?? "missing"
-      const given = name === "default" ? await cloudKey(native.provider) : null
+      const given = name === "default" ? await cloudKey(native.provider, cloudKeyTokens) : null
       return given ? given.revision : native.credentialRevision(name, env, hold)
     },
     accountUsage: (name) => isApiKeyAccount(name) ? keyUsage() : native.accountUsage(name),

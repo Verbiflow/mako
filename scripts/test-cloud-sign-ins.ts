@@ -188,6 +188,17 @@ else process.exit(1);
   assert.equal(state.oauthAccount.emailAddress, "claude@example.invalid")
   console.log("ok  each harness reads on the machine the sign-in the Mac sent, kept in memory and linked from home")
 
+  // The same sign-ins installed again, as the machine does on every hello: no harness's file is rewritten, so nothing a
+  // credential revision reads moves and a launch under way keeps its turn.
+  const placedFiles = [".claude/.credentials.json", ".codex/auth.json", ".grok/auth.json", ".local/share/devin/credentials.toml", ".cursor/sdk/auth.json", ".local/share/opencode/auth.json"].map((path) => join(machine.secrets, path))
+  placedFiles.push(join(machine.home, ".claude.json"))
+  const stamp = async () => Promise.all(placedFiles.map(async (path) => { const info = await lstat(path); return `${info.ino}:${info.mtimeMs}:${await readFile(path, "utf8")}` }))
+  const firstPlaced = await stamp()
+  await new Promise((resolve) => setTimeout(resolve, 20))
+  await installCloudSignIns(registry, signIns, machine)
+  assert.deepEqual(await stamp(), firstPlaced, "the same sign-in installed again leaves every harness's file as it was")
+  console.log("ok  the same sign-ins installed again rewrite nothing")
+
   // OpenCode ran and made its database: a later sign-in is written there, where it reads it. It keeps the database
   // open in WAL mode, and its own update of a login large enough to need pages of its own leaves the earlier value
   // in pages it frees.
