@@ -6,7 +6,7 @@ import { AcpDecoder } from "@mako/host/harnesses/acp-decoder"
 import { reduceLiveUpdates } from "@mako/sessions/live-content"
 import { liveToolEntry } from "../packages/sessions/src/live-entries.ts"
 import { workDefault } from "@mako/host/contracts/harness-defaults"
-import { agyStepEntries, AGY_STEP, AntigravityProvider } from "@mako/sessions"
+import { agyStepEntries, AGY_STEP, AntigravityProvider, RecordStore, SessionCatalog } from "@mako/sessions"
 import { resolveSessionSettings } from "@mako/sessions/settings"
 import { BinaryWriter } from "@bufbuild/protobuf"
 import { claudeRuntime } from "@mako/host/harnesses/claude/runtime"
@@ -801,6 +801,36 @@ assert.deepEqual(
   assert.ok(session)
   assert.equal(session.entries.filter((entry) => entry.type === "unread").length, 0, "no unread record in a long session of tool steps")
   assert.equal(session.entries.filter((entry) => entry.type === "tool").length, kinds.filter((kind) => kind === 132).length)
+
+  // A conversation under a saved key's own folder (`mako-antigravity-key.<id>`, as `agy acp --app-data-dir` keeps it),
+  // in the shape of a stopped session of agy 1.5.16 (asked, replies, system messages, a cancelled tool), made up: its
+  // records go into the store whole. The folder's dot once made its root's name one the store refused, so every
+  // Session under a saved key stayed out of the cloud, said as "couldn't read it on this Mac".
+  const profile = "mako-antigravity-key.0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"
+  const keyed = join(home, profile, "conversations")
+  await mkdir(keyed, { recursive: true })
+  const keyedId = "1b2c3d4e-5f60-4718-892a-3b4c5d6e7f80"
+  const keyedDb = new DatabaseSync(join(keyed, keyedId + ".db"))
+  keyedDb.exec("CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer NOT NULL DEFAULT 0, status integer NOT NULL DEFAULT 0, step_payload blob, metadata blob)")
+  const keyedRows: Array<[number, number, Uint8Array]> = [[14, 3, rows[0]![1]], [15, 3, rows[1]![1]], [132, 3, rows[2]![1]], [132, 6, rows[3]![1]], [101, 3, rows[5]![1]], [15, 3, rows[6]![1]]]
+  const keyedInsert = keyedDb.prepare("INSERT INTO steps (idx, step_type, status, step_payload) VALUES (?, ?, ?, ?)")
+  keyedRows.forEach(([kind, status, payload], idx) => keyedInsert.run(idx, kind, status, payload))
+  keyedDb.close()
+  const keyedSummaries = new DatabaseSync(join(home, profile, "conversation_summaries.db"))
+  keyedSummaries.exec("CREATE TABLE conversation_summaries (conversation_id text, title text, preview text, workspace_uris text, last_modified_time text, step_count integer)")
+  keyedSummaries.prepare("INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?, ?)").run(keyedId, "Nightly import", "", JSON.stringify(["file:///work/app"]), "2026-11-27T13:24:12Z", keyedRows.length)
+  keyedSummaries.close()
+  const keyedPath = join(keyed, keyedId + ".db")
+  const keyedRead = await provider.read(keyedPath)
+  assert.equal(keyedRead?.entries.filter((entry) => entry.type === "unread").length, 0, "nothing unread under a saved key's folder")
+  assert.deepEqual((await provider.records(keyedPath))?.roots.map((root) => root.name), ["mako-antigravity-key-0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"], "its root named as the store names roots")
+  const recordsPath = join(home, "mako-records")
+  const catalog = new SessionCatalog([new AntigravityProvider(nativeStores, home)], { recordsPath, recordsHome: home })
+  await catalog.scan()
+  assert.equal(await catalog.hold(keyedPath), true, "taken into the records whole, so it can be sent")
+  await catalog.stop()
+  const kept = new RecordStore(recordsPath, nativeStores).units("antigravity", keyedId)
+  assert.equal(kept.filter((unit) => unit.key.includes("\trow\tsteps\t")).length, keyedRows.length, "every step's row held")
   await rm(home, { recursive: true, force: true })
 }
 {

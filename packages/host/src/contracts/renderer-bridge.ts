@@ -614,6 +614,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     /* How this device's Sessions stand in the account: what's there, what's catching up, and what failed. */
     syncStatus: () => invokeTrustedHost<SyncStatus>("mako:sync-status"),
     syncReadings: () => invokeTrustedHost<SyncReadings>("mako:sync-readings"),
+    /** Reads a Session this Mac couldn't read into its records again, now: whether it was read. */
+    syncReadAgain: (harness: string, nativeId: string) => invokeTrustedHost<boolean>("mako:sync-read-again", harness, nativeId),
     /** What Mako itself costs this Mac now: its processes, its file watching and its rescans, for Diagnostics. */
     makoFootprint: () => invokeTrustedHost<MakoFootprint>("mako:mako-footprint"),
     /** macOS's file-change service as this host reads it; the host pushes `file-events-service` as it changes. */

@@ -178,7 +178,11 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
   return {
     ...turnOn,
     cloudAccount: async () => account,
-    syncStatus: async () => (account.state.status === "signed-in" ? (person.entitlements.includes("cloud") ? sync() : { state: "off", reason: "no-cloud" }) : { state: "off", reason: "signed-out" }) satisfies SyncStatus,
+    syncStatus: async () => (account.state.status === "signed-in" ? (person.entitlements.includes("cloud") ? sync.status() : { state: "off", reason: "no-cloud" }) : { state: "off", reason: "signed-out" }) satisfies SyncStatus,
+    syncReadAgain: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 400))
+      return sync.readAgain()
+    },
     cloudSignIns: async () => signIns,
     cloudSignInsShare: async (sharing: boolean) => {
       await new Promise((resolve) => setTimeout(resolve, 500))
@@ -222,9 +226,16 @@ export function mockCloudAccount(emit: (event: HostEvent) => void) {
 /**
  * This Mac's sync in each state Settings shows (`sync=`): catching up (the default), a little more each read, as a
  * first upload goes, the Thread at work and today's first; `synced`; `paused` on a low battery; `failing`, with the
- * cloud's words and correlation IDs, and `failing-one`, its first alone; `starting`.
+ * cloud's words and correlation IDs, and `failing-one`, its first alone; `unread`, a Session this Mac couldn't read into
+ * its records, which reading it again (`syncReadAgain`) heals; `starting`.
  */
-function mockSyncStatus(state: string | null): () => SyncStatus {
+function mockSyncStatus(state: string | null) {
+  let healed = false
+  const status = mockSyncStates(state, () => healed)
+  return { status, readAgain: (): boolean => (healed = state === "unread") }
+}
+
+function mockSyncStates(state: string | null, healed: () => boolean): () => SyncStatus {
   const minutesAgo = (minutes: number) => Date.now() - minutes * 60_000
   const tier = (name: SyncTier["tier"], threads: number, sessions: number, readable: number, whole: number, held = sessions): SyncTier => {
     const inCloud = Math.min(readable, whole)
@@ -236,6 +247,13 @@ function mockSyncStatus(state: string | null): () => SyncStatus {
     return () => ({ state: "synced", sessions: 75, tiers: whole, sending: 0, stale: 0, lastSuccessAt: minutesAgo(0.2), failures: [], backfill: { sessions: 5_012, done: 5_012, startedAt: minutesAgo(40), endedAt: minutesAgo(12) } })
   if (state === "paused")
     return () => ({ state: "paused", sessions: 75, tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 41, 12, 50)], sending: 0, stale: 2, lastSuccessAt: minutesAgo(3), failures: [] })
+  if (state === "unread")
+    return () => healed()
+      ? { state: "synced", sessions: 75, tiers: whole, sending: 0, stale: 0, lastSuccessAt: minutesAgo(0), failures: [] }
+      : {
+        state: "failing", sessions: 75, tiers: [whole[0]!, tier("day", 9, 14, 14, 13, 13), whole[2]!], sending: 0, stale: 0, lastSuccessAt: minutesAgo(6),
+        failures: [{ at: minutesAgo(1), since: minutesAgo(60 * 20), harness: "antigravity", nativeId: "5e6f7a8b-1c2d-4e3f-8a9b-0c1d2e3f4a5b", title: "Trace the nightly import job", kind: "unread", message: "Mako couldn't read this Session into its records: The record root name \"mako-antigravity-key.1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d\" isn't a lowercase name" }],
+      }
   if (state === "failing" || state === "failing-one")
     return () => ({
       state: "failing", sessions: 75, tiers: [whole[0]!, whole[1]!, tier("week", 31, 58, 57, 50)], sending: 1, stale: 0, lastSuccessAt: minutesAgo(6),

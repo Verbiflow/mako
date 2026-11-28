@@ -13,6 +13,12 @@ const readers = new Map<number, number>()
 
 /** The rail and Settings share one read; supported hosts push invalidations, older ones retain visible polling. */
 export const syncStatus = {
+  /** Reads a Session this Mac couldn't read into its records again, then the status: whether it was read. */
+  async readAgain(harness: string, nativeId: string): Promise<boolean> {
+    const read = await getMako().syncReadAgain(harness, nativeId)
+    syncStatusStore.set({ status: await getMako().syncStatus(), readAt: Date.now() })
+    return read
+  },
   watch(everyMs = 2_000): () => void {
     if (!hasBridge()) return () => {}
     const owner = deskRefetch()

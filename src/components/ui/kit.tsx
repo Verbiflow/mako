@@ -98,6 +98,7 @@ export function Keys({ keys, inverted }: { keys: string[]; inverted?: boolean })
   )
 }
 
+/** A status pill: fill and text only, never an outline. */
 export function Chip({
   className,
   tone = "neutral",
@@ -105,16 +106,16 @@ export function Chip({
   ...props
 }: ComponentProps<"span"> & { tone?: "neutral" | "positive" | "negative" | "caution" | "attention" }) {
   const palette = {
-    neutral: "bg-raised text-muted-foreground ring-hairline",
-    positive: "bg-positive/12 text-positive ring-positive/25",
-    negative: "bg-negative/12 text-negative ring-negative/25",
-    caution: "bg-caution/12 text-caution ring-caution/25",
-    attention: "bg-attention/12 text-attention ring-attention/25",
+    neutral: "bg-raised text-muted-foreground",
+    positive: "bg-positive/12 text-positive",
+    negative: "bg-negative/12 text-negative",
+    caution: "bg-caution/12 text-caution",
+    attention: "bg-attention/12 text-attention",
   }[tone]
   return (
     <span
       className={cn(
-        "inline-flex h-[18px] items-center gap-1 px-1.5 text-label font-medium ring-1 ring-inset",
+        "inline-flex h-[18px] items-center gap-1 px-1.5 text-label font-medium",
         palette,
         className
       )}
