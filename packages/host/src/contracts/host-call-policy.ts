@@ -59,6 +59,8 @@ const reads = [
   /** Asks GitHub and keeps its answer for 30 seconds; changes nothing GitHub or Mako holds. */
   "mako:pull-request-search",
   "mako:pull-branches",
+  /** Lists of projects' pull requests or issues, conditional GETs kept a minute; changes nothing on GitHub. */
+  "mako:project-board",
   "mako:lifecycle-state",
   "mako:installation-state",
   /** Fetches the update source's upstream into its remote-tracking branch and reads the checkout; asked twice, the same answer. */

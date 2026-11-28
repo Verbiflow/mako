@@ -2825,6 +2825,14 @@ const inputs = {
   "mako:preferences": () => z.tuple([]),
   "mako:preferences-file": () => z.tuple([]),
   "mako:project-app-setup": () => z.tuple([z.string()]),
+  "mako:project-board": () =>
+    z.tuple([
+      z.object({
+        folders: z.array(z.string()),
+        kind: z.union([z.literal("pulls"), z.literal("issues")]),
+        why: z.union([z.literal("refresh"), z.literal("look")]).optional(),
+      }),
+    ]),
   "mako:project-clone": () =>
     z.tuple([
       z.object({ id: z.string(), repository: z.string(), into: z.string() }),
@@ -4228,6 +4236,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:preferences", "harnesses"],
   ["mako:preferences-file", "harnesses"],
   ["mako:project-app-setup", "workspaces"],
+  ["mako:project-board", "git"],
   ["mako:project-clone", "workspaces"],
   ["mako:project-clone-cancel", "workspaces"],
   ["mako:project-create", "workspaces"],

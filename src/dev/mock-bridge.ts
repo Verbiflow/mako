@@ -1,4 +1,5 @@
 import { getMako } from "@/lib/bridge"
+import { mockBoard } from "@/dev/mock-board"
 import type { LimitNoticeChoice } from "@mako/host/contracts/agents"
 import { fixtureHarnesses } from "./harness-fixtures"
 import type { ToolStep } from "@mako/host/contracts/tool-steps"
@@ -1965,6 +1966,7 @@ export function installMockBridge() {
       pulls: matchPullRequests(MOCK_PULLS, request.query).slice(0, pullSearchLimit(request.limit)),
     }),
     pullBranches: async () => ["main", "release"],
+    projectBoard: async (request) => mockBoard(request),
     createPull: async (options) => {
       if (!sinceWorktree) return null
       await new Promise((resolve) => setTimeout(resolve, 600))
