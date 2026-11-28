@@ -9,7 +9,7 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * Opening a Thread on a phone, by trusted touch at an iPhone's size on the phone's live Session
  * (`src/dev/phone-open-check.tsx`), dark and light, in a transcript of 40 turns and in a windowed one of 260, on a Mac
  * and on a machine of the person's own; and opening an Apex from the phone's list through its Thread's screen
- * (`src/dev/phone-apex-check.tsx`), on a Mac and on a machine:
+ * (`src/dev/phone-apex-check.tsx`), on a Mac and on a machine, and with its Mac off, from the account's list:
  *
  * - From the tap, its newest turn is painted at the end: at once from what the page holds, and as soon as its owner
  *   answers when the page let it go (as a reload does).
@@ -223,6 +223,37 @@ async function checkOpen() {
         await until(`Boolean(document.querySelector(${JSON.stringify(row)})) && !document.querySelector('[data-thread-screen]')`, `${where}: back to the list`)
       }
       console.log(`Opening ${where}: newest painted ${said.join(", ")}; no frame with an empty body`)
+    }
+    // An Apex opened while its Mac is off, the page holding nothing it read there: its digest is what the account lists
+    // on its row, marked as the last its Mac said, with nothing in it to act on; the Mac back, its row's word replaces
+    // it in place and the marks go.
+    {
+      const where = "the Apex, its Mac off"
+      await window.loadURL(`${new URL("scripts/phone-apex.html", process.env.MAKO_OPEN_URL).href}?app=apex&listed=off&answer=${ANSWER_MS}`)
+      await until("Boolean(document.querySelector('[data-thread]'))", `${where}: the list`)
+      await evaluate("document.fonts.ready.then(() => true)")
+      const row = `[data-thread="${APEX_THREAD}"]`
+      await open(`${where}, cold`, row, APEX_NEWEST, false)
+      const digest = "[data-phone-digest] > button"
+      await until(`Boolean(document.querySelector('[data-phone-digest][data-last-known]'))`, `${where}: its digest, from the account's list, marked as last known`)
+      assert.match(await evaluate(`document.querySelector('[data-apex-last-known]').innerText`), /^Last known · Studio off for 2\dm$/, `${where}: says whose and how long`)
+      const offLine = await evaluate(`document.querySelector(${JSON.stringify(digest)}).innerText`)
+      const offNeeds = Number(/(\d+) needs? you/.exec(offLine)?.[1])
+      assert.ok(offNeeds >= 2, `${where}: its line says what needs the person, its plan's two lines among them: ${offLine}`)
+      await tap(digest)
+      await until(`document.querySelector('[data-phone-digest]').innerText.includes('Needs you')`, `${where}: its digest, opened`)
+      assert.equal(await evaluate(`document.querySelectorAll('[data-phone-digest-item="plan"]').length`), 1, `${where}: its to-do stands`)
+      assert.equal(await evaluate(`document.querySelectorAll('[data-phone-plan-done], [data-phone-answer]').length`), 0, `${where}: nothing in it to act on while the Mac is off`)
+      await capture("apex-digest-mac-off.png")
+      await evaluate("window.phoneApex.back(), true")
+      await until(`!document.querySelector('[data-phone-digest][data-last-known]') && !document.querySelector('[data-apex-last-known]')`, `${where}: back, no longer marked`)
+      await until(`document.querySelectorAll('[data-phone-plan-done]').length === 0 && document.querySelectorAll('[data-phone-answer]').length > 0`, `${where}: back, its question answerable and the to-do its Mac checked off gone`)
+      const backNeeds = Number(/(\d+) needs? you/.exec(await evaluate(`document.querySelector(${JSON.stringify(digest)}).innerText`))?.[1])
+      assert.equal(backNeeds, offNeeds - 1, `${where}: back, its line counts what its Mac says now`)
+      await evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))")
+      await wait(200)
+      await capture("apex-digest-mac-back.png")
+      console.log(`Opening ${where}: its digest from the account's list, last known (${offNeeds} need you, nothing to act on); back, ${backNeeds} need you, live`)
     }
   } finally {
     clearTimeout(watchdog)

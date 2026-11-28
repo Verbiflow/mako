@@ -1,8 +1,8 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import * as migrationForms from "../dist/live-form.js"
-import { SESSION_ORDER_VERSION, ADVERTISE_LINK_VERSION, LEND_LINK_VERSION, QUIET_PROJECT_LINK_VERSION, QUIET_OTHERS_LINK_VERSION, EPHEMERAL_LIVE_VERSION, PASSING_THREAD_VERSION, THREAD_MARKS_VERSION, TREE_NOTICES_LINK_VERSION, LINK_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate, decodeRuntimeFrame, encodeRuntimeFrame, WireError, serveRuntime } from "../dist/index.js"
-import { ReportedSessionSchema, ListedSessionSchema, rowsForLink, sameListed } from "../dist/thread-listing.js"
+import { SESSION_ORDER_VERSION, ADVERTISE_LINK_VERSION, LEND_LINK_VERSION, QUIET_PROJECT_LINK_VERSION, QUIET_OTHERS_LINK_VERSION, EPHEMERAL_LIVE_VERSION, PASSING_THREAD_VERSION, THREAD_MARKS_VERSION, TREE_NOTICES_LINK_VERSION, APEX_LISTED_VERSION, LINK_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate, decodeRuntimeFrame, encodeRuntimeFrame, WireError, serveRuntime } from "../dist/index.js"
+import { ReportedSessionSchema, ListedSessionSchema, LISTED_PLAN_CHARS, newerApex, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 describe("Session order and borrowing version migration", () => {
   const row = { session: "00000000-0000-4000-8000-000000000001", thread: "00000000-0000-4000-8000-000000000002", conversation: "wire-migration", harness: "codex", state: "idle", createdAt: "2026-11-09T00:00:00.000Z", activityAt: "2026-11-09T00:00:00.000Z", generation: 1, order: 0 }
@@ -16,10 +16,11 @@ describe("Session order and borrowing version migration", () => {
     assert.equal(PASSING_THREAD_VERSION, 28)
     assert.equal(THREAD_MARKS_VERSION, 29)
     assert.equal(TREE_NOTICES_LINK_VERSION, 30)
-    assert.equal(LINK_VERSION, 30)
+    assert.equal(APEX_LISTED_VERSION, 31)
+    assert.equal(LINK_VERSION, 31)
     assert.equal(PROTOCOL_VERSION, 1)
     assert.equal(SUPPORTED_VERSIONS.min, 1)
-    for (const maximum of [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]) assert.equal(negotiate(SUPPORTED_VERSIONS, { min: 1, max: maximum }), maximum)
+    for (const maximum of [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]) assert.equal(negotiate(SUPPORTED_VERSIONS, { min: 1, max: maximum }), maximum)
   })
   test("order survives strict row, report and wire parsing from 22, and is stripped before 22 without mutating the owner", () => {
     for (const version of [20, 21, 22, 23, 24]) {
@@ -45,6 +46,33 @@ describe("Session order and borrowing version migration", () => {
     const listed = { ...row, runsOn: { kind: "device", deviceId: "00000000-0000-4000-8000-000000000003" }, listedAt: row.createdAt }
     assert.equal(sameListed(listed, { ...listed, workStatus: "done" }), false)
     assert.equal(sameListed(listed, { ...listed, markedUnread: true }), false)
+  })
+  test("a deliberate Apex survives strict parsing from 31, is stripped before 31 without mutating the owner, and the newer of two is kept", () => {
+    const apex = { name: "Release", purpose: "Ships 6.2", seenAt: 1_700_000_000_000, plan: "## Now\n- [ ] Cut the branch\n## Waiting on you\n- [ ] Approve the notes\n", at: 1_700_000_100_000 }
+    const listedApex = { ...row, workStatus: "in-progress", apex }
+    assert.deepEqual(ReportedSessionSchema.parse(listedApex), listedApex)
+    for (const version of [29, 30, 31]) {
+      const [sent] = rowsForLink([listedApex], version)
+      assert.equal(Object.hasOwn(sent, "apex"), version >= 31, `apex at ${version}`)
+      assert.equal(sent.workStatus, "in-progress", `what 29 knows stays at ${version}`)
+      assert.deepEqual(decodeRuntimeFrame(encodeRuntimeFrame({ type: "sessions", report: { listed: [sent], gone: [] } })).report.listed, [sent])
+    }
+    assert.deepEqual(listedApex.apex, apex)
+    assert.equal(ReportedSessionSchema.safeParse({ ...row, apex: { ...apex, plan: "x".repeat(LISTED_PLAN_CHARS + 1) } }).success, false, "a row carries at most LISTED_PLAN_CHARS of a plan")
+    assert.equal(ReportedSessionSchema.safeParse({ ...row, apex: { ...apex, rules: "the Apex's own rules" } }).success, false, "its rules stay with its owner")
+    assert.equal(ReportedSessionSchema.safeParse({ ...row, apex: { ...apex, at: undefined } }).success, false, "it says when it changed")
+    const listed = { ...row, runsOn: { kind: "device", deviceId: "00000000-0000-4000-8000-000000000003" }, listedAt: row.createdAt, apex }
+    assert.equal(sameListed(listed, { ...listed, apex: { ...apex } }), true)
+    assert.equal(sameListed(listed, { ...listed, apex: { ...apex, plan: `${apex.plan}- [ ] One more\n`, at: apex.at + 1 } }), false, "a plan that moved is news")
+    assert.equal(sameListed(listed, { ...listed, apex: undefined }), false, "and so is a Thread that's no longer an Apex")
+    const newer = ListedSessionSchema.parse({ ...listed, apex: { ...apex, at: "later" } })
+    assert.equal(newer.apex, undefined, "an Apex said in a way this build can't read is passed over")
+    assert.equal(newer.session, row.session, "and the row is read all the same")
+    const later = { ...apex, plan: "## Now\n- [x] Cut the branch\n", at: apex.at + 5 }
+    assert.equal(newerApex(later, apex), later, "one that arrives late never replaces what came after it")
+    assert.equal(newerApex(apex, later), later)
+    assert.equal(newerApex(apex, undefined), undefined, "a report saying none takes it off")
+    assert.equal(newerApex(undefined, apex), apex)
   })
   test("wire schemas keep refusing unknown fields, invalid order and unknown frames", () => {
     for (const order of [-1, 1.5, 100001, "0", null]) assert.equal(ReportedSessionSchema.safeParse({ ...row, order }).success, false)

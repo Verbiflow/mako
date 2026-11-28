@@ -1,4 +1,5 @@
 import { z } from "zod"
+import { LISTED_PLAN_CHARS, type ListedApex } from "@mako/protocol/thread-listing"
 import { APEX_WORD, FIN_WORD } from "./agents.js"
 import { askWords, childGroup, childLine, childStateOf, openAsk } from "./children.js"
 import type { NativeAgent } from "./native-agents.js"
@@ -34,11 +35,13 @@ export const ApexProfileSchema = z.object({
   seenAt: z.number().optional(),
   /** The Needs you the Apex last saw at a turn's start, by item key: its next turn's note says whether it changed. */
   needsSaid: z.array(z.string().max(300)).max(64).optional(),
+  /** When its name, purpose or Fins' defaults last changed: what its row's `apex.at` counts from (`listedApex`). */
+  changedAt: z.number().optional(),
 })
 export type ApexProfile = z.infer<typeof ApexProfileSchema>
 
 /** What a start that makes an Apex says of it (`LiveStartOptions.apex`): its profile less the Thread the start makes. */
-export const ApexStartSchema = ApexProfileSchema.omit({ thread: true, createdAt: true, seenAt: true, needsSaid: true })
+export const ApexStartSchema = ApexProfileSchema.omit({ thread: true, createdAt: true, seenAt: true, needsSaid: true, changedAt: true })
 export type ApexStart = z.input<typeof ApexStartSchema>
 
 // ── Rules, in layers ──
@@ -254,6 +257,29 @@ export const PLAN_CHARS = 24_000
 export const PLAN_TURN_CHARS = 6_000
 export const PLAN_FILE = "PLAN.md"
 export const PLAN_LINE = "apex-plan"
+
+/**
+ * A deliberate Apex as its row lists it for every other device (`ListedApex`, link version 31 on): its name, purpose,
+ * when its digest was last read and its plan, cut at a line to what a row carries, and when any of them last changed
+ * (`at`), from its profile's times and its plan file's (`planAt`), so a list keeps the newer of two.
+ */
+export function listedApex(profile: ApexProfile, plan: string | undefined, planAt: number | undefined): ListedApex {
+  const at = Math.max(profile.createdAt, profile.seenAt ?? 0, profile.changedAt ?? 0, planAt ?? 0)
+  const listed: ListedApex = { name: profile.name.slice(0, APEX_NAME_CHARS), at: Math.max(0, Math.floor(at)) }
+  if (profile.purpose) listed.purpose = profile.purpose.slice(0, APEX_PURPOSE_CHARS)
+  if (profile.seenAt !== undefined) listed.seenAt = profile.seenAt
+  if (plan) {
+    if (plan.length <= LISTED_PLAN_CHARS) listed.plan = plan
+    else {
+      // Cut at the last line that fits: the sections that need the person come first in a plan (`PLAN_SECTIONS`).
+      const cut = plan.slice(0, LISTED_PLAN_CHARS)
+      const end = cut.lastIndexOf("\n")
+      listed.plan = end > 0 ? cut.slice(0, end + 1) : cut
+      listed.planCut = true
+    }
+  }
+  return listed
+}
 
 export interface PlanItem {
   done: boolean

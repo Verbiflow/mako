@@ -19,6 +19,7 @@ import { testScratch } from "./lib/test-scratch.mjs"
  * - The strip's tabs are the desktop's; a tab opens its Session, a rail row its Thread, each at its address.
  * - A Session another device starts shows in the rail as it's listed.
  * - ⌘B hides the rail and brings it back.
+ * - An Apex whose Mac is off opens Agents on its Overview from the account's list, as last known; back, it's live.
  *
  * Screenshots go to the printed directory, or to the directory given as the first argument; `--port` serves the page
  * on that port (default: any free one).
@@ -186,6 +187,27 @@ async function checkDesk() {
     assert.equal(await evaluate("getComputedStyle(document.querySelector('main [role=switch]')).borderRadius !== '0px' && Math.round(document.querySelector('main [role=switch]').getBoundingClientRect().width)"), 28, "the desktop's own Toggle")
     await capture("settings-1280-dark.png")
     console.log("Settings: the desktop's panes and Toggle, with what a browser reaches")
+
+    // 7. An Apex whose Mac is off, this page having read nothing from it: Agents opens on its Overview from the account's
+    //    list, its name, purpose, plan and Fins as its Mac last said them, marked as last known and read-only; the Mac
+    //    back, its row's word replaces it and the plan's lines check again, its rules and plan text still its Mac's.
+    await window.loadURL(`${new URL("scripts/web-desk.html", process.env.MAKO_DESK_URL).href}?app=apex&thread=apex&listed=off&theme=dark`)
+    await until("Boolean(document.querySelector('[data-thread-screen]'))", "the Apex's Thread")
+    await evaluate("window.webDeskCheck.agents(), true")
+    await until("Boolean(document.querySelector('[data-apex-header][data-apex-elsewhere]'))", "its Overview, from the account's list")
+    assert.match(await evaluate("document.querySelector('[data-apex-last-known]').innerText"), /^Last known · Studio off for 2\dm$/, "marked as the last its Mac said")
+    assert.ok(await evaluate("Number(document.querySelector('[data-apex-fins]').dataset.apexFins) >= 10"), "its Fins, counted as its Mac listed them")
+    assert.ok(await evaluate("document.querySelector('[data-overview-section=\"plan\"]').innerText.includes('Now')"), "its plan, as its Mac listed it")
+    const offChecks = await evaluate("document.querySelectorAll('[data-plan-item=\"open\"], [data-plan-item=\"done\"], [data-plan-answer]').length")
+    assert.equal(offChecks, 0, "nothing in it to check or answer while its Mac is off")
+    assert.equal(await evaluate("document.querySelectorAll('[data-plan-edit], [data-apex-header] input, [data-overview-section=\"rules\"]').length"), 0, "its name, plan text and rules are its Mac's to change")
+    await capture("apex-agents-mac-off-1280-dark.png")
+    await evaluate("window.webDeskCheck.back(), true")
+    await until("!document.querySelector('[data-apex-last-known]')", "the Mac back, no longer marked")
+    await until("document.querySelectorAll('[data-plan-item=\"open\"]').length > 0", "its plan's lines check again")
+    assert.equal(await evaluate("document.querySelectorAll('[data-plan-edit], [data-apex-header] input').length"), 0, "and its plan text and name stay its Mac's")
+    await capture("apex-agents-mac-back-1280-dark.png")
+    console.log("Apex: its Overview from the account's list while its Mac is off, last known and read-only; live again once it's back")
 
     await desk("light")
     await until("Boolean(document.querySelector('[data-background-work]'))", "the busy Session, light")

@@ -30,6 +30,7 @@ import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { HELD_BY_TABLE, ThreadStore, type JournalFacts } from "@mako/host/threads/store"
 import { claudeRoutedCall } from "@mako/host/harnesses/claude/routing"
 import { callGateAnswer } from "@mako/host/harnesses/call-gate"
+import { LISTED_PLAN_CHARS, ListedApexSchema } from "@mako/protocol/thread-listing"
 
 /**
  * Deliberate Apexes (`contracts/apexes.ts`, `conversations/apexes.ts`): the plan read and written back, the digest
@@ -295,6 +296,32 @@ try {
   assert.ok(!("refused" in handed))
   assert.equal(store.edges().of(plain.thread)?.parent, docs.thread)
 
+  // Listed for every other device, on the row of its own conversation alone: its name, purpose and plan as they
+  // stand, said again whole as any of them changes, and when (`at`), so the account keeps the newer of two.
+  const listed = service.listed(mobile.thread, mobile.conversation)!
+  assert.deepEqual(ListedApexSchema.parse(listed), listed, "what a row carries")
+  assert.equal(listed.name, "Mobile")
+  assert.equal(listed.plan, readFileSync(join(root, "user", "apexes", mobile.thread, "PLAN.md"), "utf8"))
+  assert.equal(service.listed(mobile.thread, randomUUID()), undefined, "another Session of its Thread carries none of it")
+  assert.equal(service.listed(plain.thread, plain.conversation), undefined, "nor does a Thread that isn't a deliberate Apex")
+  const replanned = "## Now\n- [ ] Ship the onboarding fix\n\n## Waiting on you\n- [ ] Approve the release notes\n"
+  accepted(service.savePlan(mobile.thread, replanned))
+  assert.ok(events.some((event) => event.type === "apex-plan" && event.thread === mobile.thread), "a plan saved is said, which reports its row")
+  const replannedListed = service.listed(mobile.thread, mobile.conversation)!
+  assert.equal(replannedListed.plan, replanned)
+  assert.ok(replannedListed.at >= listed.at, "it says when it changed")
+  accepted(service.update(mobile.thread, { purpose: "The iOS, Android and iPad apps" }))
+  const renamed = service.listed(mobile.thread, mobile.conversation)!
+  assert.equal(renamed.purpose, "The iOS, Android and iPad apps")
+  assert.ok(renamed.at >= replannedListed.at)
+  assert.ok(store.apex(mobile.thread)?.changedAt !== undefined, "a change of its profile is kept with when")
+  const longPlan = `## Now\n${Array.from({ length: 400 }, (_, index) => `- [ ] Step ${index} of the long migration`).join("\n")}\n`
+  accepted(service.savePlan(mobile.thread, longPlan))
+  const cut = service.listed(mobile.thread, mobile.conversation)!
+  assert.equal(cut.planCut, true, "a plan longer than a row carries is cut, and says so")
+  assert.ok(cut.plan!.length <= LISTED_PLAN_CHARS && cut.plan!.endsWith("\n") && longPlan.startsWith(cut.plan!), "at a whole line")
+  accepted(service.savePlan(mobile.thread, replanned))
+
   // Promote and demote: a Thread made an Apex keeps its title; demoted, the Threads moved in are their own again.
   const promoted = service.promote(far.conversation, { purpose: "Other things" }, "person")
   assert.ok(!("refused" in promoted))
@@ -313,7 +340,7 @@ try {
   const reopened = new ThreadStore(join(root, "threads.sqlite"), { now })
   assert.deepEqual(reopened.apexes().map((apex) => apex.name).sort(), ["Docs", "Other folder work"])
   reopened.close()
-  console.log("apexes: plan, digest, layers, routing, create, promote, demote, gather, hand, rules and lessons hold")
+  console.log("apexes: plan, digest, layers, routing, create, listing, promote, demote, gather, hand, rules and lessons hold")
 } finally {
   rmSync(root, { recursive: true, force: true })
 }

@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs"
+import type { ListedApex } from "@mako/protocol/thread-listing"
 import { basename, join } from "node:path"
 import { z } from "zod"
 import { hostLog } from "../base/host-log.js"
@@ -20,6 +21,7 @@ import {
   apexDigest,
   answeredLine,
   checkPlanItem,
+  listedApex,
   parsePlan,
   planQuestion,
   planText,
@@ -134,6 +136,8 @@ const FIN_RULES_FILE = "FIN-RULES.md"
  */
 export class Apexes {
   private readonly created = new Map<string, ApexCreateResult>()
+  /** Each Apex's plan as its row last listed it, by the file's time and size: read again only once the file moved. */
+  private readonly listedPlans = new Map<string, { mtimeMs: number; size: number; text: string | undefined }>()
   private readonly deps: ApexesDeps
 
   constructor(deps: ApexesDeps) {
@@ -177,6 +181,33 @@ export class Apexes {
       ...(folder && { folder }),
       ...(session?.harness && { harness: session.harness }),
     }
+  }
+
+  /**
+   * A deliberate Apex as its row lists it for every other device (`listedApex`), on the row of its own conversation
+   * only (the one `conversationFor` names), so a Thread's other Sessions don't carry its plan again. Undefined for any
+   * other row. It reads the plan file only when the file's time or size moved since the last row.
+   */
+  listed(thread: string, conversation: string): ListedApex | undefined {
+    const profile = this.store()?.apex(thread)
+    if (!profile || this.deps.agents()?.conversationFor(thread) !== conversation) return undefined
+    const path = join(this.folder(thread), PLAN_FILE)
+    let stat: { mtimeMs: number; size: number } | undefined
+    try {
+      stat = statSync(path)
+    } catch {
+      stat = undefined
+    }
+    if (!stat) {
+      this.listedPlans.delete(thread)
+      return listedApex(profile, undefined, undefined)
+    }
+    let held = this.listedPlans.get(thread)
+    if (!held || held.mtimeMs !== stat.mtimeMs || held.size !== stat.size) {
+      held = { mtimeMs: stat.mtimeMs, size: stat.size, text: this.read(thread, PLAN_FILE) }
+      this.listedPlans.set(thread, held)
+    }
+    return listedApex(profile, held.text, stat.mtimeMs)
   }
 
   /** The project folder a conversation works in: its main checkout for a worktree. */
@@ -283,7 +314,7 @@ export class Apexes {
     const name = (change.name?.trim() || before?.name || record?.title || this.deps.live.session(conversation)?.title || APEX_WORD).slice(0, APEX_NAME_CHARS)
     const purpose = change.purpose === null ? undefined : change.purpose?.trim() || before?.purpose
     if (purpose && purpose.length > APEX_PURPOSE_CHARS) return { refused: "invalid", why: `A purpose is at most ${APEX_PURPOSE_CHARS} characters; this one is ${purpose.length}.` }
-    const next: ApexProfile = { from: before?.from ?? "thread", by: before?.by ?? by, createdAt: before?.createdAt ?? this.now(), thread, name }
+    const next: ApexProfile = { from: before?.from ?? "thread", by: before?.by ?? by, createdAt: before?.createdAt ?? this.now(), thread, name, changedAt: this.now() }
     if (before?.seenAt !== undefined) next.seenAt = before.seenAt
     if (before?.needsSaid) next.needsSaid = before.needsSaid
     if (purpose) next.purpose = purpose

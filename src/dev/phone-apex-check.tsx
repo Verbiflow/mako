@@ -17,6 +17,7 @@ import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
 import { apexFins, apexSnapshots, placedSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE, PLACED_ASKS, PLACED_CONVERSATION, PLACED_DEVICE, PLACED_SCENE, PLACED_SESSION, PLACED_THREAD, PLACED_TITLE, PLACED_WHERE } from "./mock-apex-thread"
 import { listedFins } from "@mako/host/contracts/children"
+import { checkPlanItem, listedApex } from "@mako/host/contracts/apexes"
 import { PhoneApexScreen } from "./phone-apex-screen"
 import "../web-client/style.css"
 
@@ -51,10 +52,20 @@ function row(session: string, thread: string, conversation: string, title: strin
 
 const apexRow = row(APEX_SESSION, APEX_THREAD, APEX_CONVERSATION, APEX_TITLE, "claude", "working", 1)
 if (PLACED_SCENE) apexRow.fins = listedFins(apexFins())
+// `?listed=off`: a page opened while the Apex's Mac is off, which has read nothing from it: its digest is the one the
+// account lists on its row (`apex`, with its Fins), as last known; `phoneApex.back()` brings the Mac back, its row
+// saying the plan a line on.
+const LISTED = search.get("listed")
+const [sceneApexes, scenePlan] = await Promise.all([getMako().apexes(), getMako().apexPlan(APEX_THREAD)])
+const sceneApex = sceneApexes.find((apex) => apex.thread === APEX_THREAD)
+if (LISTED && sceneApex) {
+  apexRow.apex = listedApex(sceneApex, scenePlan.text, Date.now() - 30 * 60_000)
+  apexRow.fins = listedFins(apexFins())
+}
 const placedRow: ListedSession = { ...row(PLACED_SESSION, PLACED_THREAD, PLACED_CONVERSATION, PLACED_TITLE, "opencode", "waiting", 3), folder: "/home/you/.mako/projects/mako/.mako/worktrees/docs-sweep", runsOn: { kind: "device", deviceId: PLACED_DEVICE }, waitingOn: PLACED_ASKS, waitingFor: "approval" }
 accountListStore.set({
   phase: "live",
-  ...(PLACED_SCENE === "off" && { quiet: new Map([[DEVICE, new Date(Date.now() - 25 * 60_000).toISOString()]]) }),
+  ...((PLACED_SCENE === "off" || LISTED === "off") && { quiet: new Map([[DEVICE, new Date(Date.now() - 25 * 60_000).toISOString()]]) }),
   rows: [
     apexRow,
     ...(placed ? [placedRow] : []),
@@ -100,9 +111,9 @@ const client: WebClient = Object.assign(Object.create(WebClient.prototype), {
 })
 
 // The scene's deliberate Apex, as its Mac's `mako:apexes` and plan read answer: the digest under its bar and the Inbox.
-// Read before anything is drawn, as the phone's list reads each Mac's Apexes before one is opened.
-const [sceneApexes, scenePlan] = await Promise.all([getMako().apexes(), getMako().apexPlan(APEX_THREAD)])
-webApexesStore.set({ byDevice: { [DEVICE]: sceneApexes }, plans: { [APEX_THREAD]: scenePlan.text } })
+// Read before anything is drawn, as the phone's list reads each Mac's Apexes before one is opened. A page that opened
+// with the Mac off has read neither.
+if (!LISTED) webApexesStore.set({ byDevice: { [DEVICE]: sceneApexes }, plans: { [APEX_THREAD]: scenePlan.text } })
 
 // The owner's answer to a read takes `?answer=` ms, over the network (default: at once).
 const ANSWER_MS = Number(search.get("answer") ?? 0)
@@ -113,7 +124,16 @@ mako.liveSnapshot = async (id) => {
   return answered(id)
 }
 /** `forget()`: the Apex's transcript let go, as a reload leaves it, so its next open reads it from its owner. */
-Reflect.set(window, "phoneApex", { forget: () => unloadLive(APEX_CONVERSATION) })
+Reflect.set(window, "phoneApex", {
+  forget: () => unloadLive(APEX_CONVERSATION),
+  // The Mac back: no longer quiet, and its row says its plan as it stands now, its merge word given meanwhile.
+  back: () => {
+    const list = accountListStore.get()
+    const plan = checkPlanItem(scenePlan.text, "Waiting on you", 0, true) ?? scenePlan.text
+    const rows = list.rows.map((each) => (each.thread === APEX_THREAD && each.apex && sceneApex ? { ...each, apex: listedApex(sceneApex, plan, Date.now()) } : each))
+    accountListStore.set({ quiet: new Map(), rows })
+  },
+})
 
 createRoot(document.getElementById("root")!).render(
   <TooltipProvider>

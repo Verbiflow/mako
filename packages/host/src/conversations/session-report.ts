@@ -1,6 +1,6 @@
 import type { RemoteAppHint } from "../contracts/remote-app.js"
 import type { ThreadMarkEntry } from "../contracts/thread-marks.js"
-import { LISTED_ASK_OPTIONS, LISTED_LINEAGE, LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, rowsForLink, sameHead, type ListedAsking, type ListedHead, type ListedMove, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
+import { LISTED_ASK_OPTIONS, LISTED_LINEAGE, LISTED_PER_FRAME, LISTED_PER_OWNER, ReportedSessionSchema, rowsForLink, sameApex, sameHead, type ListedAsking, type ListedHead, type ListedMove, type ListedState, type ReportedSession, type SessionsReport } from "@mako/protocol/thread-listing"
 import type { ThreadRef } from "@mako/sessions"
 import { finAskWaiting } from "../contracts/children.js"
 import type { FinAsk } from "../contracts/native-agents.js"
@@ -99,6 +99,8 @@ export type ReportSources = {
   asked?(conversationId: string): Waiting | undefined
   /** A conversation's Fins, as its roster lists them for every other device (`listedFins`). */
   fins?(conversationId: string): ReportedSession["fins"]
+  /** The deliberate Apex a conversation is the Apex's own conversation of, as its row lists it (`Apexes.listed`). */
+  apex?(thread: ThreadId, conversationId: string): ReportedSession["apex"]
   now(): number
 }
 
@@ -341,6 +343,8 @@ export function ownedSessions(sources: ReportSources): ReportedSession[] {
     if (session.nativeId) row.nativeId = session.nativeId
     const forkOf = forks?.get(placed.session)
     if (forkOf) row.forkOf = forkOf
+    const apex = sources.apex?.(placed.thread, session.id)
+    if (apex) row.apex = apex
     const order = sources.sessionOrder?.(placed)
     if (order !== undefined) row.order = order
     Object.assign(row, rail(session.cwd || undefined, undefined, (summary.nativeIds ?? []).map((id) => id.provider), session.harness))
@@ -425,7 +429,8 @@ function sameShown(left: ReportedSession, right: ReportedSession): boolean {
     left.project?.folder === right.project?.folder && sameHead(left.project?.head, right.project?.head) &&
     left.worktree?.branch === right.worktree?.branch && (left.lineage ?? []).join("\0") === (right.lineage ?? []).join("\0") &&
     left.promptedAt === right.promptedAt && left.openElsewhere === right.openElsewhere && left.forkOf === right.forkOf && left.order === right.order &&
-    (left.asking === right.asking || JSON.stringify(left.asking) === JSON.stringify(right.asking)) && (left.fins === right.fins || JSON.stringify(left.fins) === JSON.stringify(right.fins))
+    (left.asking === right.asking || JSON.stringify(left.asking) === JSON.stringify(right.asking)) && (left.fins === right.fins || JSON.stringify(left.fins) === JSON.stringify(right.fins)) &&
+    sameApex(left.apex, right.apex)
 }
 
 /**
@@ -1105,6 +1110,9 @@ export class SessionPublisher {
     if (event.type === "thread-archives" || event.type === "thread-titles" || event.type === "thread-marks") return this.showsChanged()
     // A project's checkout moved to another branch, or a rebase began or ended: its rows say so beside the project.
     if (event.type === "checkout-heads") return this.changed()
+    // A deliberate Apex was made, renamed, read or let go, or its plan changed: its row says it whole, so every device
+    // shows it as it stands, its owner off or not.
+    if (event.type === "apexes" || event.type === "apex-plan") return this.changed()
     // A move's steps go to whoever watches the conversation it was asked from, as its window hears them: a device that
     // has it open follows the move as it goes, each upload's bytes included. The way back's too, to a device that
     // follows this host for the conversation coming back.

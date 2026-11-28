@@ -1,5 +1,5 @@
 import { RemoteAppHintSchema, type RemoteAppHint } from "@mako/host/contracts/remote-app"
-import type { Owner } from "./start"
+import { macCall, type Owner } from "./start"
 import { LinkClosedError, NothingArrivedError, PROBE_ANSWER_MS, SILENT_WHILE_WORKING_MS, StreamCursor, followAgainInMs, sessionStream, type Actor, type Json, type Subscription } from "@mako/protocol"
 import { answerClientCall, isClientCall, openableLink, UNOPENABLE_LINK, type ClientAnswers } from "@mako/host/contracts/client-calls"
 import { HostCallInputs } from "@mako/host/contracts/host-call-inputs"
@@ -31,6 +31,7 @@ import type { WebSession } from "./threads"
 import { webHarnessDescriptors } from "./descriptors"
 import type { CopyAnswer } from "@mako/host/contracts/copy-history"
 import { WebCopies } from "./copies"
+import { heardWebPlan, webApexesStore, webPlanOf } from "./apexes"
 
 /** What `mako:resolve-file-references` names first: the conversation whose transcript's words are being resolved. */
 const FileReferencesSourceSchema = z.object({ liveId: z.string().optional() })
@@ -48,6 +49,8 @@ const FILES_KEPT_MS = 30 * 60_000
 const RECENT_TRANSCRIPTS = { bytes: 32 * 1024 * 1024, recent: 4 }
 /** A Mac found off by a call it couldn't take is read from its copy this long before it's asked again, as a Mac's window does. */
 const ASLEEP_MS = 15_000
+/** What a browser asks a Mac of an Apex it keeps, by its Thread: only what any device may ask another of one (`gateway-allowed.ts`). */
+const APEX_CALLS: ReadonlySet<string> = new Set(["mako:apex-plan-read", "mako:apex-plan-check", "mako:apex-plan-answer", "mako:apex-seen"])
 
 /** A move's step as its owner's stream carries it (`thread-move-step`, `thread-return-step`): read as far as its kind. */
 /** A running js call's steps as its owner relays them (`SessionReport`'s `#relaySteps`); `steps: null` once it answered. */
@@ -133,6 +136,7 @@ export class WebConversations {
         if (!shown || !this.#row(shown)) return args[0] instanceof Array ? args[0].map(() => ({ kind: "dropped", reason: "No conversation is open" })) : []
         return this.#answerFor(shown, "mako:live-turn-media", [shown, ...args])
       }
+      if (APEX_CALLS.has(channel)) return this.#apexCall(channel, args)
       const conversation = conversationCallId(channel, args) ?? this.#ownerAsked(channel, args)
       if (conversation) return this.#answerFor(conversation, channel, args)
       // No owner to ask: the null the bridge declares, so links are drawn as they are, unchecked (`file-references.ts`).
@@ -258,6 +262,31 @@ export class WebConversations {
    * which files a transcript's words name (by the conversation they're from), and its harness's models and settings in
    * its folder (by the conversation open, the one its composer sends to). A phone has neither files nor harnesses.
    */
+  /**
+   * A call about a deliberate Apex the account lists, by its Thread: asked of the device that keeps it, as the phone's
+   * digest asks it (only what a device may ask another of an Apex: `APEX_CALLS`). Its
+   * device quiet, its plan is read from the list and nothing else reaches it, said as a refusal the Overview never
+   * offers to make, since it draws those lines to read only.
+   */
+  async #apexCall(channel: string, args: readonly unknown[]): Promise<Json | undefined> {
+    const thread = typeof args[0] === "string" ? args[0] : undefined
+    const listed = thread ? webApexesStore.get().listed[thread] : undefined
+    if (!thread || !listed) throw new Error("That isn't offered in the browser.")
+    if (listed.quietSince || this.#isOff(listed.deviceId)) {
+      if (channel === "mako:apex-plan-read") {
+        const text = webPlanOf(webApexesStore.get(), thread) ?? ""
+        return { text, chars: text.length }
+      }
+      if (channel === "mako:apex-seen") return undefined
+      return { refused: "unavailable", why: "Its Mac is off; this is what it said last." }
+    }
+    const reads = channel === "mako:apex-plan-read" || channel === "mako:apex-seen"
+    const answer = await macCall<Json | undefined>(this.#gateway, this.#deviceId, listed.deviceId, channel, args, { passive: reads })
+    const text = (answer as { text?: unknown } | undefined)?.text
+    if (channel !== "mako:apex-seen" && typeof text === "string") heardWebPlan(thread, text)
+    return answer
+  }
+
   #ownerAsked(channel: string, args: readonly unknown[]): string | undefined {
     const listed = (conversation: string | null | undefined) => (conversation && this.#row(conversation) ? conversation : undefined)
     if (channel === "mako:resolve-file-references") return listed(FileReferencesSourceSchema.safeParse(args[0]).data?.liveId)

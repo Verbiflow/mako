@@ -812,6 +812,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       asking: (id) => finAsking(late.conversations?.agents?.personAsk(id)),
       asked: (id) => live.askWaiting(id),
       fins: (id) => listedFins(late.conversations?.agents?.roster(id)),
+      apex: (thread, id) => late.conversations?.apexes?.listed(thread, id),
       now: Date.now,
     })
     // The folders a whole making asks for are the ones read again (`listing`); a few rows' making leaves them as they are.
