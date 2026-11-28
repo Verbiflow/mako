@@ -244,14 +244,36 @@ async function checkOpen() {
       await until(`document.querySelector('[data-phone-digest]').innerText.includes('Needs you')`, `${where}: its digest, opened`)
       assert.equal(await evaluate(`document.querySelectorAll('[data-phone-digest-item="plan"]').length`), 1, `${where}: its to-do stands`)
       assert.equal(await evaluate(`document.querySelectorAll('[data-phone-plan-done], [data-phone-answer]').length`), 0, `${where}: nothing in it to act on while the Mac is off`)
+      // Nothing on screen acts on the Mac while it's off: no answer, approval, Stop all or Stop, and the composer says its
+      // message waits for it, as it does for any conversation read from a quiet Mac's copy.
+      const offControls = await evaluate(`(() => {
+      const visible = (node) => node.getClientRects().length > 0
+      const answers = [...document.querySelectorAll("[data-fin-answer], [data-plan-answer], [data-phone-answer], [data-phone-plan-done], [data-plan-item=open], [data-plan-item=done]")].filter(visible).length
+      const named = [...document.querySelectorAll("button")].filter(visible).map((button) => (button.getAttribute("aria-label") || button.innerText || "").trim()).filter((words) => /^(Allow once|Allow always|Refuse|Stop all|Stop)$/.test(words))
+      const composer = [...document.querySelectorAll("textarea")].filter(visible).map((node) => node.getAttribute("placeholder") || "").find(Boolean) ?? null
+      return { answers, named, composer }
+    })()`)
+      assert.equal(offControls.answers, 0, `Mac off: no answer or check: ${JSON.stringify(offControls)}`)
+      assert.deepEqual(offControls.named, [], `Mac off: no approval, Stop all or Stop: ${JSON.stringify(offControls)}`)
+      assert.equal(offControls.composer, "Message — waits until it's back", `Mac off: the composer says its message waits: ${JSON.stringify(offControls)}`)
       await capture("apex-digest-mac-off.png")
       await evaluate("window.phoneApex.back(), true")
       await until(`!document.querySelector('[data-phone-digest][data-last-known]') && !document.querySelector('[data-apex-last-known]')`, `${where}: back, no longer marked`)
       await until(`document.querySelectorAll('[data-phone-plan-done]').length === 0 && document.querySelectorAll('[data-phone-answer]').length > 0`, `${where}: back, its question answerable and the to-do its Mac checked off gone`)
       const backNeeds = Number(/(\d+) needs? you/.exec(await evaluate(`document.querySelector(${JSON.stringify(digest)}).innerText`))?.[1])
-      assert.equal(backNeeds, offNeeds - 1, `${where}: back, its line counts what its Mac says now`)
+      // Back, its line is its Mac's word again: the to-do it checked off meanwhile gone, its Fins' live asks counted.
+      assert.ok(backNeeds > 0 && backNeeds !== offNeeds, `${where}: back, its line counts what its Mac says now: ${offNeeds} then ${backNeeds}`)
       await evaluate("new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve(true))))")
       await wait(200)
+      const backControls = await evaluate(`(() => {
+      const visible = (node) => node.getClientRects().length > 0
+      const answers = [...document.querySelectorAll("[data-fin-answer], [data-plan-answer], [data-phone-answer], [data-phone-plan-done], [data-plan-item=open], [data-plan-item=done]")].filter(visible).length
+      const named = [...document.querySelectorAll("button")].filter(visible).map((button) => (button.getAttribute("aria-label") || button.innerText || "").trim()).filter((words) => /^(Allow once|Allow always|Refuse|Stop all|Stop)$/.test(words))
+      const composer = [...document.querySelectorAll("textarea")].filter(visible).map((node) => node.getAttribute("placeholder") || "").find(Boolean) ?? null
+      return { answers, named, composer }
+    })()`)
+      assert.ok(backControls.answers > 0 && backControls.named.length > 0, `Mac back: its asks are answerable again: ${JSON.stringify(backControls)}`)
+      assert.notEqual(backControls.composer, "Message — waits until it's back", "Mac back: the composer sends to it again")
       await capture("apex-digest-mac-back.png")
       console.log(`Opening ${where}: its digest from the account's list, last known (${offNeeds} need you, nothing to act on); back, ${backNeeds} need you, live`)
     }

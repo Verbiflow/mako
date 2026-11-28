@@ -626,6 +626,27 @@ export function apexSnapshot(): LiveSnapshot {
   }
 }
 
+/**
+ * The Apex's conversation as a browser holds it while its Mac is off (`copySnapshot`, `WebConversations`): read from
+ * the copy its Mac keeps in the account, from `at`, with nothing at work, no approval and no roster, since nothing runs
+ * or answers there until the Mac is back. Its Fins are what the account lists on its row.
+ */
+export function apexCopySnapshot(where: string, at: number): LiveSnapshot {
+  const live = apexSnapshot()
+  delete live.nativeAgents
+  delete live.turnWait
+  return {
+    ...live,
+    session: { ...live.session, status: "ready", connection: "hibernated" },
+    epoch: `copy-${at}`,
+    copy: { at },
+    elsewhere: where,
+    permissions: [],
+    // Its history's prompts, every one settled: a copy holds no turn under way.
+    requests: live.requests.map((request) => (request.status === "completed" ? request : { ...request, status: "completed" as const })),
+  }
+}
+
 /** A started Fin's own conversation: its brief from the Apex, its work, and for one an approval waiting. */
 export function finSnapshot(index: number): LiveSnapshot {
   const fixture = CHILDREN[index]!

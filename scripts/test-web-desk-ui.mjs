@@ -201,11 +201,32 @@ async function checkDesk() {
     const offChecks = await evaluate("document.querySelectorAll('[data-plan-item=\"open\"], [data-plan-item=\"done\"], [data-plan-answer]').length")
     assert.equal(offChecks, 0, "nothing in it to check or answer while its Mac is off")
     assert.equal(await evaluate("document.querySelectorAll('[data-plan-edit], [data-apex-header] input, [data-overview-section=\"rules\"]').length"), 0, "its name, plan text and rules are its Mac's to change")
+    // Nothing on screen acts on the Mac while it's off: no answer, approval, Stop all or Stop, and the composer says its
+    // message waits for it, as it does for any conversation read from a quiet Mac's copy.
+    const offControls = await evaluate(`(() => {
+      const visible = (node) => node.getClientRects().length > 0
+      const answers = [...document.querySelectorAll("[data-fin-answer], [data-plan-answer], [data-phone-answer], [data-phone-plan-done], [data-plan-item=open], [data-plan-item=done]")].filter(visible).length
+      const named = [...document.querySelectorAll("button")].filter(visible).map((button) => (button.getAttribute("aria-label") || button.innerText || "").trim()).filter((words) => /^(Allow once|Allow always|Refuse|Stop all|Stop)$/.test(words))
+      const composer = [...document.querySelectorAll("textarea")].filter(visible).map((node) => node.getAttribute("placeholder") || "").find(Boolean) ?? null
+      return { answers, named, composer }
+    })()`)
+    assert.equal(offControls.answers, 0, `Mac off: no answer or check: ${JSON.stringify(offControls)}`)
+    assert.deepEqual(offControls.named, [], `Mac off: no approval, Stop all or Stop: ${JSON.stringify(offControls)}`)
+    assert.equal(offControls.composer, "Message — waits until it's back", `Mac off: the composer says its message waits: ${JSON.stringify(offControls)}`)
     await capture("apex-agents-mac-off-1280-dark.png")
     await evaluate("window.webDeskCheck.back(), true")
     await until("!document.querySelector('[data-apex-last-known]')", "the Mac back, no longer marked")
     await until("document.querySelectorAll('[data-plan-item=\"open\"]').length > 0", "its plan's lines check again")
     assert.equal(await evaluate("document.querySelectorAll('[data-plan-edit], [data-apex-header] input').length"), 0, "and its plan text and name stay its Mac's")
+    const backControls = await evaluate(`(() => {
+      const visible = (node) => node.getClientRects().length > 0
+      const answers = [...document.querySelectorAll("[data-fin-answer], [data-plan-answer], [data-phone-answer], [data-phone-plan-done], [data-plan-item=open], [data-plan-item=done]")].filter(visible).length
+      const named = [...document.querySelectorAll("button")].filter(visible).map((button) => (button.getAttribute("aria-label") || button.innerText || "").trim()).filter((words) => /^(Allow once|Allow always|Refuse|Stop all|Stop)$/.test(words))
+      const composer = [...document.querySelectorAll("textarea")].filter(visible).map((node) => node.getAttribute("placeholder") || "").find(Boolean) ?? null
+      return { answers, named, composer }
+    })()`)
+    assert.ok(backControls.answers > 0 && backControls.named.length > 0, `Mac back: its asks are answerable again: ${JSON.stringify(backControls)}`)
+    assert.notEqual(backControls.composer, "Message — waits until it's back", "Mac back: the composer sends to it again")
     await capture("apex-agents-mac-back-1280-dark.png")
     console.log("Apex: its Overview from the account's list while its Mac is off, last known and read-only; live again once it's back")
 

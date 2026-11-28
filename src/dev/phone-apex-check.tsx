@@ -15,7 +15,7 @@ import { webApexesStore } from "@/web-client/apexes"
 import { applyTheme } from "@/web-client/theme"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { installMockBridge } from "./mock-bridge"
-import { apexFins, apexSnapshots, placedSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE, PLACED_ASKS, PLACED_CONVERSATION, PLACED_DEVICE, PLACED_SCENE, PLACED_SESSION, PLACED_THREAD, PLACED_TITLE, PLACED_WHERE } from "./mock-apex-thread"
+import { apexCopySnapshot, apexFins, apexSnapshot, apexSnapshots, placedSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE, PLACED_ASKS, PLACED_CONVERSATION, PLACED_DEVICE, PLACED_SCENE, PLACED_SESSION, PLACED_THREAD, PLACED_TITLE, PLACED_WHERE } from "./mock-apex-thread"
 import { listedFins } from "@mako/host/contracts/children"
 import { checkPlanItem, listedApex } from "@mako/host/contracts/apexes"
 import { PhoneApexScreen } from "./phone-apex-screen"
@@ -37,8 +37,9 @@ for (const snapshot of apexSnapshots()) applyLiveSnapshot(snapshot)
 const placed = placedSnapshot()
 if (placed) applyLiveSnapshot(placed)
 // The Apex's host moving its Fins on (an answer, a stop), as the gateway brings its batches to the phone.
+// A Mac that's off sends nothing: its conversation stands as its copy says until it's back (`?listed=off`).
 getMako().onEvent((event) => {
-  if (event.type === "live-batch") applyLiveBatch(event.batch)
+  if (event.type === "live-batch" && !(LISTED === "off" && event.batch.id === APEX_CONVERSATION && accountListStore.get().quiet.has(DEVICE))) applyLiveBatch(event.batch)
 })
 
 const DEVICE = "00000000-0000-4000-8000-0000000000d1"
@@ -61,6 +62,8 @@ const sceneApex = sceneApexes.find((apex) => apex.thread === APEX_THREAD)
 if (LISTED && sceneApex) {
   apexRow.apex = listedApex(sceneApex, scenePlan.text, Date.now() - 30 * 60_000)
   apexRow.fins = listedFins(apexFins())
+  // As the browser holds a conversation whose Mac is quiet: read from the copy it keeps in the account.
+  if (LISTED === "off") applyLiveSnapshot(apexCopySnapshot("Studio", Date.now() - 26 * 60_000))
 }
 const placedRow: ListedSession = { ...row(PLACED_SESSION, PLACED_THREAD, PLACED_CONVERSATION, PLACED_TITLE, "opencode", "waiting", 3), folder: "/home/you/.mako/projects/mako/.mako/worktrees/docs-sweep", runsOn: { kind: "device", deviceId: PLACED_DEVICE }, waitingOn: PLACED_ASKS, waitingFor: "approval" }
 accountListStore.set({
@@ -132,6 +135,8 @@ Reflect.set(window, "phoneApex", {
     const plan = checkPlanItem(scenePlan.text, "Waiting on you", 0, true) ?? scenePlan.text
     const rows = list.rows.map((each) => (each.thread === APEX_THREAD && each.apex && sceneApex ? { ...each, apex: listedApex(sceneApex, plan, Date.now()) } : each))
     accountListStore.set({ quiet: new Map(), rows })
+    // Read live from the Mac again, as `WebConversations` does once it's back: its roster, its turn, its asks.
+    applyLiveSnapshot({ ...apexSnapshot(), epoch: `back-${Date.now()}` })
   },
 })
 

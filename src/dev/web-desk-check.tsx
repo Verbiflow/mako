@@ -22,7 +22,7 @@ import { applyTheme } from "@/web-client/theme"
 import type { WebSession } from "@/web-client/threads"
 import { fixtureHarnesses } from "./harness-fixtures"
 import { BUSY_CWD, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE, busyActivity, busySnapshot } from "./mock-busy-thread"
-import { apexFins, apexSnapshot, placedSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE, PLACED_ASKS, PLACED_CONVERSATION, PLACED_DEVICE, PLACED_SCENE, PLACED_SESSION, PLACED_THREAD, PLACED_TITLE, PLACED_WHERE } from "./mock-apex-thread"
+import { apexCopySnapshot, apexFins, apexSnapshot, placedSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE, PLACED_ASKS, PLACED_CONVERSATION, PLACED_DEVICE, PLACED_SCENE, PLACED_SESSION, PLACED_THREAD, PLACED_TITLE, PLACED_WHERE } from "./mock-apex-thread"
 import { listedFins } from "@mako/host/contracts/children"
 import { checkPlanItem, listedApex } from "@mako/host/contracts/apexes"
 import "@/web-client/apexes"
@@ -130,7 +130,8 @@ const busy = BUSY_SESSIONS.map((entry, index) => {
 
 // The Apex's host answering, as its owner's batches reach the browser: a message sent to it gets its turn.
 getMako().onEvent((event) => {
-  if (event.type === "live-batch" && event.batch.id === APEX_CONVERSATION) applyLiveBatch(event.batch)
+  // A Mac that's off sends nothing: its conversation stands as its copy says until it's back (`?listed=off`).
+  if (event.type === "live-batch" && event.batch.id === APEX_CONVERSATION && !(LISTED === "off" && accountListStore.get().quiet.has(STUDIO))) applyLiveBatch(event.batch)
 })
 const apex = row({ session: APEX_SESSION, thread: APEX_THREAD, threadTitle: APEX_TITLE, conversation: APEX_CONVERSATION, harness: "claude", title: APEX_TITLE, folder: APEX_CWD, createdAt: now, activityAt: now })
 
@@ -164,7 +165,8 @@ accountListStore.set({
 function opened(session: WebSession): LiveSnapshot {
   const index = BUSY_SESSIONS.findIndex((entry) => entry.conversation === session.row.conversation)
   if (index >= 0) return busySnapshot(index)
-  if (session.row.conversation === APEX_CONVERSATION) return apexSnapshot()
+  // Its Mac off (`?listed=off`), the Apex is read from the copy its Mac keeps in the account, as `WebConversations` reads it.
+  if (session.row.conversation === APEX_CONVERSATION) return LISTED === "off" && accountListStore.get().quiet.has(STUDIO) ? apexCopySnapshot("Studio", Date.now() - 26 * 60_000) : apexSnapshot()
   const placed = placedSnapshot()
   if (placed && session.row.conversation === PLACED_CONVERSATION) return placed
   const request = { id: uuid(session.row.conversation, 4), text: session.row.title ?? "Go on", attachments: [], status: "completed" as const }
@@ -251,6 +253,10 @@ Reflect.set(window, "webDeskCheck", {
     const plan = checkPlanItem(scenePlan.text, "Now", 0, true) ?? scenePlan.text
     const rows = accountListStore.get().rows.map((each) => (each.thread === APEX_THREAD && each.apex && sceneApex ? { ...each, apex: listedApex(sceneApex, plan, Date.now()) } : each))
     accountListStore.set({ quiet: new Map(), rows })
+    // Read live from the Mac again, as `WebConversations` does once it's back: its roster, its turn, its asks.
+    const live = { ...apexSnapshot(), epoch: `back-${Date.now()}` }
+    mock.setLiveSnapshot(live)
+    applyLiveSnapshot(live)
   },
 })
 
