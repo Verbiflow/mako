@@ -1,8 +1,9 @@
-import { useEffect } from "react"
-import { CheckIcon, ChevronRightIcon, CopyIcon } from "lucide-react"
+import { useEffect, useState } from "react"
+import { CheckIcon, CopyIcon, EllipsisIcon, RotateCwIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import { syncFailureWords, type SyncFailureView, type SyncStatus, type SyncTier, type SyncTierName } from "@mako/host/contracts/sync-status"
-import { Action, Chip, Eyebrow, ListCard, ListCardRow, Meter } from "@/components/ui/kit"
+import { Action, Chip, Eyebrow, IconAction, ListCard, ListCardRow, Meter } from "@/components/ui/kit"
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { syncStatus, useSyncStatus } from "@/state/sync-status"
 import { formatDay, formatRelative, formatTime } from "@/lib/format"
 import { useThreads } from "@/state/thread-store"
@@ -137,59 +138,65 @@ function footer(status: Running): string {
 }
 
 /**
- * The Sessions not synced, as the sync daemon says (a failure that lasted, never one the next try healed): each in a
- * person's words, what Mako does next, and one disclosure away the account's own words with the correlation ID.
+ * The Sessions not synced, as the sync daemon says (a failure that lasted, never one the next try healed): a quiet line
+ * each, in a person's words with what Mako does next, the one action that can fix it where there is one (reading a
+ * Session this Mac couldn't read, again), and the account's own words with the correlation ID copied from its menu.
  */
 function Failures({ status }: { status: Running }) {
   const name = useSessionName()
   const [first] = status.failures
   if (!first) return null
   const notSynced = status.notSynced ?? status.failures.length
-  const details = status.failures.map(detailLine).join("\n")
   return (
-    <div role="alert" className="flex flex-col gap-2 bg-negative/8 px-3 py-2.5 ring-1 ring-negative/20 ring-inset" data-sync-failures>
-      <div className="flex items-start justify-between gap-4">
-        <p className="min-w-0 text-ui font-medium text-negative">
-          {notSynced === 1 ? `${name(first).text} isn't synced` : `${count(notSynced, "Session")} aren't synced`}
+    <div role="status" className="flex flex-col px-3" data-sync-failures>
+      {notSynced === 1 ? null : <p className="py-1 text-label font-medium text-negative">{count(notSynced, "Session")} aren't synced</p>}
+      {status.failures.map((failure) => (
+        <FailureLine key={`${failure.harness}:${failure.nativeId}`} failure={failure} named={name(failure).text} alone={notSynced === 1} />
+      ))}
+      {notSynced > status.failures.length ? <p className="py-1 text-label text-faint">And {count(notSynced - status.failures.length, "more Session")}.</p> : null}
+    </div>
+  )
+}
+
+function FailureLine({ failure, named, alone }: { failure: SyncFailureView; named: string; alone: boolean }) {
+  const [reading, setReading] = useState(false)
+  const words = syncFailureWords(failure.kind)
+  const readAgain = () => {
+    setReading(true)
+    void syncStatus.readAgain(failure.harness, failure.nativeId)
+      .then((read) => (read ? toast("Read, and going up") : toast.error(localWords("Mako still couldn't read it on this Mac"))), () => toast.error(localWords("Mako still couldn't read it on this Mac")))
+      .finally(() => setReading(false))
+  }
+  return (
+    <div className="flex items-center gap-3 py-1.5" data-sync-failure={failure.nativeId}>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-label text-foreground" title={`${named} isn't synced`}>
+          {named}
+          {alone ? <span className="text-negative"> isn't synced</span> : null}
         </p>
-        <Action tone="outline" size="xs" className="shrink-0" onClick={() => copy(details)}>
-          <CopyIcon />
-          Copy details
-        </Action>
+        <p className="text-label text-faint">
+          {words.what} · since {sinceAt(failure.since ?? failure.at)}. {words.next}
+        </p>
       </div>
-      {status.failures.map((failure) => {
-        const words = syncFailureWords(failure.kind)
-        return (
-          <div key={`${failure.harness}:${failure.nativeId}`} className="min-w-0" data-sync-failure={failure.nativeId}>
-            <p className="text-label text-foreground">
-              {notSynced === 1 ? null : <span className="font-medium">{name(failure).text}: </span>}
-              {words.what} · since {sinceAt(failure.since ?? failure.at)}
-            </p>
-            <p className="text-label text-muted-foreground">{words.next}</p>
-            <details className="group/failure mt-0.5">
-              <summary className="pressable -mx-1 flex w-fit cursor-pointer list-none items-center gap-1 px-1 py-0.5 text-label text-faint hover:bg-fill-hover hover:text-foreground [&::-webkit-details-marker]:hidden">
-                <ChevronRightIcon aria-hidden className="size-3 shrink-0 transition-transform duration-150 ease-(--ease-out) group-open/failure:rotate-90" />
-                Details
-              </summary>
-              <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 pl-4 text-label">
-                <dt className="text-faint">The account said</dt>
-                <dd className="min-w-0 break-words font-mono text-muted-foreground select-text">{failure.message}</dd>
-                {failure.correlationId ? (
-                  <>
-                    <dt className="text-faint">Correlation</dt>
-                    <dd className="min-w-0 truncate font-mono text-muted-foreground select-text">{failure.correlationId}</dd>
-                  </>
-                ) : null}
-                <dt className="text-faint">Session</dt>
-                <dd className="min-w-0 truncate font-mono text-muted-foreground select-text">{failure.harness} {failure.nativeId}</dd>
-                <dt className="text-faint">Last tried</dt>
-                <dd className="text-muted-foreground">{ago(failure.at)}</dd>
-              </dl>
-            </details>
-          </div>
-        )
-      })}
-      {notSynced > status.failures.length ? <p className="text-label text-faint">And {count(notSynced - status.failures.length, "more Session")}.</p> : null}
+      {failure.kind === "unread" ? (
+        <Action size="xs" className="shrink-0" disabled={reading} onClick={readAgain} data-sync-read-again>
+          {reading ? <Spinner className="size-3" /> : <RotateCwIcon />}
+          {reading ? "Reading…" : "Read again"}
+        </Action>
+      ) : null}
+      <Menu modal={false}>
+        <MenuTrigger asChild>
+          <IconAction size="xs" label="More" className="shrink-0" data-sync-failure-menu>
+            <EllipsisIcon />
+          </IconAction>
+        </MenuTrigger>
+        <MenuContent align="end" className="min-w-40">
+          <MenuItem onSelect={() => copy(detailLine(failure))}>
+            <CopyIcon />
+            Copy details
+          </MenuItem>
+        </MenuContent>
+      </Menu>
     </div>
   )
 }
@@ -200,10 +207,9 @@ function Failures({ status }: { status: Running }) {
  */
 function Unreachable({ since }: { since: number }) {
   return (
-    <div role="alert" className="flex flex-col gap-0.5 bg-negative/8 px-3 py-2.5 ring-1 ring-negative/20 ring-inset" data-sync-unreachable>
-      <p className="text-ui font-medium text-negative">{syncFailureWords("unreachable").what}</p>
-      <p className="text-label text-foreground">Since {sinceAt(since)}</p>
-      <p className="text-label text-muted-foreground">Mako sends what's waiting on its own as soon as the account answers.</p>
+    <div role="status" className="flex flex-col px-3 py-1.5" data-sync-unreachable>
+      <p className="text-label font-medium text-negative">{syncFailureWords("unreachable").what}</p>
+      <p className="text-label text-faint">Since {sinceAt(since)}. Mako sends what's waiting on its own as soon as the account answers.</p>
     </div>
   )
 }

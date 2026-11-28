@@ -18,6 +18,11 @@ export const AGY_ACP_DATA = "antigravity-acp"
 export const AGY_CLI_DATA = "antigravity-cli"
 const DATA_DIRECTORIES = [AGY_ACP_DATA, AGY_CLI_DATA, AGY_KEY_DATA]
 const keyProfile = /^mako-antigravity-key\.[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/
+/**
+ * The record root a data folder is kept under. A saved key's folder is named with a dot (`mako-antigravity-key.<id>`),
+ * which a root's name can't hold, so its root is the same name with a dash: refused, every Session under it went unheld.
+ */
+const rootName = (directory: string) => directory.replace(".", "-")
 /** Each saved credential gets a separate native session store. The terminal can also supply its own key. */
 export function agyDataDirectory(env: NodeJS.ProcessEnv): string {
   if (!env.GEMINI_API_KEY) return AGY_ACP_DATA
@@ -193,7 +198,7 @@ export class AntigravityProvider implements SessionProvider {
   constructor(private readonly stores: NativeStores, private readonly home = process.env.GEMINI_HOME || join(homedir(), ".gemini")) {}
   recordRoots() {
     const profiles = existsSync(this.home) ? readdirSync(this.home).filter(name => keyProfile.test(name)) : []
-    return [...DATA_DIRECTORIES, ...profiles].map((name) => ({ name, path: join(this.home, name) }))
+    return [...DATA_DIRECTORIES, ...profiles].map((name) => ({ name: rootName(name), path: join(this.home, name) }))
   }
   roots() { return this.recordRoots().map(({ path }) => join(path, "conversations")) }
   private root(path: string) {
@@ -201,7 +206,7 @@ export class AntigravityProvider implements SessionProvider {
     const directory = dirname(dirname(path))
     const name = basename(directory)
     if (!DATA_DIRECTORIES.includes(name) && !keyProfile.test(name)) return undefined
-    return join(this.home, name, "conversations") === dirname(path) ? { name, path: directory } : undefined
+    return join(this.home, name, "conversations") === dirname(path) ? { name: rootName(name), path: directory } : undefined
   }
   watchTarget(path: string) {
     const db = path.replace(/-(?:wal|shm)$/, "")

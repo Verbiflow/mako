@@ -44,6 +44,8 @@ export type UploadSources = {
   copies(link: RecordsLink | null): Promise<void>
   originals(link: RecordsLink | null): Promise<void>
   status(): Promise<CatalogSyncStatus | null>
+  /** Takes the Session at `path` into the record store now (`HostCatalog.hold`): whether the store then holds it. */
+  hold?(path: string): Promise<boolean>
   /** The record store's backfill, as its last pass wrote it beside the store; undefined before the first. */
   backfill(): Promise<Backfill | undefined>
   now(): number
@@ -126,6 +128,18 @@ export class SessionUploads {
   /** How this device's sync stands, as of the last tick. */
   status(): SyncStatus {
     return this.#status
+  }
+
+  /**
+   * Reads a Session this Mac couldn't read into its records again, now, as the person asks from Settings: whether it
+   * was read, and the status said again either way, so a Session read is no longer said as not synced.
+   */
+  async readAgain(harness: string, nativeId: string): Promise<boolean> {
+    const path = this.#sources.path(harness, nativeId)
+    const held = path && this.#sources.hold ? await this.#sources.hold(path).catch(() => false) : false
+    hostLog("sync", held ? "a Session was read into its records again" : "a Session still couldn't be read into its records", { harness, nativeId })
+    await this.tick().catch(() => undefined)
+    return held
   }
 
   /** Whether the last look left something undone (a link the catalog didn't take): it's looked at again on a backoff. */
@@ -332,7 +346,8 @@ export async function readBackfill(records: string): Promise<Backfill | undefine
  * How this device's Sessions stand in the account, for Settings (`SessionUploads.status`), off where nothing uploads;
  * and how its sync goes, for Diagnostics (`SyncRecorder.readings`).
  */
-export function declareSyncMethods(methods: MethodTable, uploads: Pick<SessionUploads, "status"> | undefined, readings: Pick<SyncRecorder, "readings">): void {
+export function declareSyncMethods(methods: MethodTable, uploads: Pick<SessionUploads, "status" | "readAgain"> | undefined, readings: Pick<SyncRecorder, "readings">): void {
   methods.handle("mako:sync-status", () => uploads?.status() ?? { state: "off", reason: "signed-out" })
+  methods.handle("mako:sync-read-again", (harness: string, nativeId: string) => uploads?.readAgain(harness, nativeId) ?? false)
   methods.handle("mako:sync-readings", () => readings.readings())
 }

@@ -945,6 +945,7 @@ export async function openCore(shell: CoreShell): Promise<Core> {
       copies: (link) => catalog.syncCopies(link),
       originals: (link) => catalog.syncOriginals(link),
       status: () => catalog.syncStatus(),
+      hold: (path) => catalog.hold(path),
       backfill: () => readBackfill(records),
       now: Date.now,
       statusChanged: () => {
