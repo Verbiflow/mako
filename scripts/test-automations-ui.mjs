@@ -129,45 +129,28 @@ async function checkWindow() {
   await open(`${base}?mock&app=automations`)
 
   // 1. The rail's row: a decision waits, so its reading is the attention count; pressing it opens the view, not Settings.
-  assert.equal(await evaluate(`document.querySelector('[data-rail-top-row="automations"]')?.dataset.automationsProposed ?? null`), "2", "two proposals wait")
+  assert.equal(await text('[data-rail-top-row="automations"] [data-automations-proposed]'), "2", "two proposals wait")
   await capture("rail-row.png")
   await click('[data-rail-top-row="automations"]')
   await until(`document.querySelector('[data-automations="list"] [data-automation-row]') !== null`, "the list")
   assert.equal(await evaluate(`Boolean(document.querySelector('[aria-label="Search settings"]'))`), false, "not Settings")
-  // Grouped by what each needs: Needs you (a proposal, a pause, a failure, a refused registration), Up next by its next
-  // run, then what's off or paused; one line each, the project a cell of its own.
-  const groups = await evaluate(`[...document.querySelectorAll('[data-automations-group]')].map((node) => ({ group: node.dataset.automationsGroup, rows: [...node.querySelectorAll('[data-automation-row]')].map((row) => row.dataset.automationRow.split('#')[1]) }))`)
-  assert.deepEqual(groups.map((group) => group.group), ["needs", "next", "paused", "templates"], `the groups: ${jsString(groups)}`)
-  assert.equal(groups.reduce((sum, group) => sum + group.rows.length, 0), 12, `every automation once: ${jsString(groups)}`)
-  assert.ok(["nightly-ci-triage", "weekly-deps", "slack-questions"].every((id) => groups[0].rows.includes(id)), `what needs you: ${jsString(groups[0])}`)
-  const heights = await evaluate(`[...document.querySelectorAll('[data-automations-group="next"] [data-automation-row]')].map((row) => Math.round(row.getBoundingClientRect().height))`)
-  assert.ok(heights.length > 0 && heights.every((height) => height === 40), `Up next rows are one 40px line: ${heights}`)
-  const soonest = await evaluate(`[...document.querySelectorAll('[data-automations-group="next"] [data-automation-row]')].map((row) => row.querySelector('[data-automation-next]').title)`)
-  console.log("UP NEXT", jsString(soonest))
+  const groups = await evaluate(`[...document.querySelectorAll('[data-automations-project]')].map((node) => ({ project: node.dataset.automationsProject, rows: node.querySelectorAll('[data-automation-row]').length }))`)
+  assert.deepEqual(groups.map((group) => group.rows), [6, 3, 3], `rows by project: ${jsString(groups)}`)
   const standings = await evaluate(`[...new Set([...document.querySelectorAll('[data-automation-standing]')].map((node) => node.dataset.automationStanding))].sort()`)
   assert.deepEqual(standings, ["off", "on", "paused", "running", "unsupported"], "every standing drawn")
-  // When it runs in a few words, the sentence its tip.
-  const when = (id) => evaluate(`(() => { const node = document.querySelector('[data-automation-key$="#${id}"] [data-automation-when]'); return { text: node.innerText, title: node.title } })()`)
-  assert.equal((await when("nightly-ci-triage")).text, "Weekdays 7:00")
-  assert.match((await when("nightly-ci-triage")).title, /Every weekday at 7:00 in Europe\/London/)
-  assert.equal((await when("release-notes")).text, "On release")
-  assert.match((await when("release-notes")).title, /When a release is published in Verbiflow\/mako/)
-  assert.equal(await evaluate(`document.querySelector('[data-automation-key$="#nightly-ci-triage"] [data-automation-last="fired"]')?.innerText`), "Running")
-  assert.match(await text(`[data-automation-key$="#weekly-deps"] [data-automation-fix]`), /Paused after 3 failed runs[\s\S]*Turn on/, "a pause says why, with Turn on")
-  // What waits on the cloud resolves by itself: its tip, never a line.
-  assert.match((await when("check-failed-fix")).title, /waits for the cloud account to register it/)
-  assert.equal(await evaluate(`document.querySelector('[data-automation-key$="#check-failed-fix"] [data-automation-fix]')`), null)
-  // A pending change: why on its row, and Review proposal opens it there.
-  assert.match(await text(`[data-automation-key$="#nightly-ci-triage"] [data-automation-fix]`), /Proposes a change[\s\S]*Review proposal/)
-  assert.equal(await evaluate(`document.querySelectorAll('[data-automation-key$="#nightly-ci-triage"] [data-proposal-status="pending"]').length`), 0, "closed until reviewed")
+  assert.match(await text(`[data-automation-key$="#nightly-ci-triage"]`), /Every weekday at 7:00 in Europe\/London/)
+  assert.match(await text(`[data-automation-key$="#release-notes"]`), /When a release is published in Verbiflow\/mako/)
+  assert.match(await text(`[data-automation-key$="#nightly-ci-triage"]`), /Running since/)
+  assert.match(await text(`[data-automation-key$="#weekly-deps"]`), /Paused after 3 failed runs/)
+  assert.match(await text(`[data-automation-key$="#check-failed-fix"]`), /waits for the cloud account to register it/)
+  assert.equal(await evaluate(`document.querySelectorAll('[data-automation-key$="#nightly-ci-triage"] [data-proposal-status="pending"]').length`), 1, "the pending change opens on its row")
   assert.equal(await evaluate(`document.querySelectorAll('[data-automation-proposed="pr-review-digest"]').length`), 1, "a proposed new one is a row of its own")
-  // A file in the first shape still reads: that's the log's, not a note on the list.
-  assert.equal(await evaluate(`document.querySelector('[data-automations-file]')`), null, "no note for a file that reads")
+  assert.match(await text('[data-automations-file="legacy"]'), /first shape/)
   await capture("list-all.png")
-  console.log("PASS: the rail opens the list: grouped by what each needs, one line each, short schedules, one fix per row")
+  console.log("PASS: the rail opens the list: three projects, every standing, sentences, the pending proposal on its row")
 
   // 1b. Cloud registration refused says why on its row; a Thread whose run this window never heard of asks the host.
-  assert.match(await text(`[data-automation-key$="#slack-questions"] [data-automation-fix]`), /didn’t register it: Slack isn't connected to Mako's cloud yet/)
+  assert.match(await text(`[data-automation-key$="#slack-questions"] [data-automation-note]`), /didn’t register it: Slack isn't connected to Mako's cloud yet/)
   assert.equal(await store(`'a7000000-0003-4000-8000-0000000000a3' in state.byConversation`), false, "the Tuesday run isn't one this window heard of")
   await evaluate(`import('/src/state/acp.ts').then(({ acp }) => { acp.open('a7000000-0003-4000-8000-0000000000a3'); return true })`)
   await until(`document.querySelector('[data-automation-run-line="nightly-ci-triage"]') !== null`, "the host's run-of answers for an older run")
@@ -187,13 +170,13 @@ async function checkWindow() {
     await until(`document.querySelector('[data-automations="list"]') !== null`, "Escape back to the list")
     await until(`document.activeElement?.matches('[data-automation-row]')`, "focus back on a row")
     await press(key)
-    await until(`document.querySelector('[data-list-view="${filter}"][aria-selected="true"]') !== null`, `${filter} by its key`)
+    await until(`document.querySelector('[data-automations-filter="${filter}"][aria-selected="true"]') !== null`, `${filter} by its key`)
     await capture(`list-${filter}.png`)
   }
-  assert.deepEqual(await evaluate(`[...document.querySelectorAll('[data-automation-row]')].map((node) => node.dataset.automationRow.split('#')[1]).sort()`), ["broken-links", "flaky-tests", "nightly-ci-triage", "token-rotation", "weekly-deps"], "Scheduled: those with a schedule")
-  await click('[data-list-view="paused"]')
+  assert.deepEqual(await evaluate(`[...document.querySelectorAll('[data-automation-row]')].map((node) => node.dataset.automationRow.split('#')[1])`), ["nightly-ci-triage", "weekly-deps", "flaky-tests", "broken-links", "token-rotation"], "Scheduled: those with a schedule")
+  await click('[data-automations-filter="paused"]')
   assert.deepEqual(await evaluate(`[...document.querySelectorAll('[data-automation-row]')].map((node) => node.dataset.automationRow.split('#')[1]).sort()`), ["broken-links", "weekly-deps"], "Paused: by failures and by a changed file")
-  await click('[data-list-view="all"]')
+  await click('[data-automations-filter="all"]')
   await press("/")
   await until(`document.activeElement?.matches('[data-automations-search]')`, "/ to search")
   await type("sentry")
@@ -202,25 +185,6 @@ async function checkWindow() {
   await press("Escape")
   await until(`document.querySelectorAll('[data-automation-row]').length === 12`, "Escape clears the search")
   console.log("PASS: filters by click and key, search, Escape clears then goes back")
-
-  // 2b. The list's keys: j and k walk the rows across the groups, x checks rows to turn off together.
-  await press("Escape")
-  await until(`document.activeElement?.matches('[data-automation-row]')`, "a row holds the keyboard")
-  const order = await evaluate(`[...document.querySelectorAll('[data-list-row]')].filter((row) => !row.closest('[inert]')).map((row) => row.dataset.listRow)`)
-  const at = order.indexOf(await evaluate(`document.activeElement.dataset.listRow`))
-  await press("j")
-  assert.equal(await evaluate(`document.querySelector('[data-list-row][data-selected]').dataset.listRow`), order[at + 1], "j moves down")
-  await press("k")
-  assert.equal(await evaluate(`document.querySelector('[data-list-row][data-selected]').dataset.listRow`), order[at], "k moves up")
-  await evaluate(`document.querySelector('${ROW("release-notes")}').focus()`)
-  await press("x")
-  await evaluate(`document.querySelector('${ROW("sentry-triage")}').focus()`)
-  await press("x")
-  await until(`document.querySelector('[data-automations-checked="2"]') !== null`, "two rows checked")
-  await capture("list-checked.png")
-  await evaluate(`document.querySelector('[data-automations-checked] button').parentElement.querySelector('[data-automations-bulk="off"]').click(); true`)
-  await until(`import('/src/state/automations.ts').then(({ automationsStore, automationView }) => automationView(automationsStore.get(), '/Users/you/mako', 'release-notes')?.local.enabled === false) && document.querySelector('[data-automations-checked]') === null`, "Turn off turns both off and clears the check")
-  console.log("PASS: j/k walk the groups, x checks rows, Turn off acts on the checked")
 
   // 3. Keys on a row: arrows move, T switches it, R runs it now.
   await evaluate(`document.querySelector('${ROW("flaky-tests")}').focus()`)
@@ -316,9 +280,7 @@ async function checkWindow() {
   await press("Escape")
   console.log("PASS: event causes with links, runWhen passes and skips, stale, expired, declined and approved proposals")
 
-  // 7. Approve the pending change from the view: Review proposal opens it on its row, its diff, then the definition it writes.
-  await click('[data-automation-key$="#nightly-ci-triage"] [data-automation-fix-action="review"]')
-  await until(`document.querySelectorAll('[data-automation-key$="#nightly-ci-triage"] [data-proposal-status="pending"]').length === 1`, "the pending change opens on its row")
+  // 7. Approve the pending change from the view: its diff, then the definition it writes.
   const diff = await evaluate(`[...document.querySelectorAll('[data-automation-key$="#nightly-ci-triage"] [data-diff-field]')].map((node) => node.dataset.diffField)`)
   assert.deepEqual(diff, ["prompt", "triggers", "start", "limits"], "the diff names what changes, in order")
   assert.ok(await evaluate(`document.querySelectorAll('[data-automation-key$="#nightly-ci-triage"] [data-diff-line="add"]').length > 0 && document.querySelectorAll('[data-automation-key$="#nightly-ci-triage"] [data-diff-line="remove"]').length > 0`), "the prompt's lines added and removed")
@@ -329,12 +291,10 @@ async function checkWindow() {
   await click('[data-automation-key$="#nightly-ci-triage"] [data-proposal-answer="approve"]')
   await until(`import('/src/state/automations.ts').then(({ automationsStore, automationView }) => automationView(automationsStore.get(), '/Users/you/mako', 'nightly-ci-triage')?.definition.start.model === 'claude-sonnet-5')`, "the approved change written")
   assert.equal(await evaluate(`document.querySelectorAll('[data-automation-key$="#nightly-ci-triage"] [data-proposal-status="pending"]').length`), 0, "no longer pending on its row")
-  await click('[data-automation-proposed="pr-review-digest"] [data-automation-fix-action="review"]')
-  await until(`Boolean(document.querySelector('[data-automation-proposed="pr-review-digest"] [data-proposal-answer="decline"]'))`, "the proposed create opens")
   await click('[data-automation-proposed="pr-review-digest"] [data-proposal-answer="decline"]')
   await until(`document.querySelector('[data-automation-proposed]') === null`, "the declined create leaves")
   assert.equal(await store(`state.projects[0].proposals.find((each) => each.id === 'p-pr-digest').status`), "declined")
-  assert.equal(await evaluate(`document.querySelector('[data-rail-top-row="automations"]')?.dataset.automationsProposed ?? null`), null, "the rail's count clears")
+  assert.equal(await evaluate(`document.querySelector('[data-rail-top-row="automations"] [data-automations-proposed]')`), null, "the rail's count clears")
   console.log("PASS: approve and decline from the view; the rail's count follows")
 
   // 8. The Inbox's card: a fresh scene, the proposal's diff, declined and approved from the card (its ask settles with it).
@@ -497,16 +457,11 @@ async function checkWindow() {
   await press("Escape")
   console.log("PASS: Make this an automation from a Thread's menu")
 
-  // 14. Nothing yet: what should run on its own, in the person's words, which starts a Thread asking for it; templates under it.
+  // 14. Nothing yet: the empty state with its templates.
   await evaluate(`Promise.all([import('/src/state/automations.ts'), import('/src/state/automations-view.ts')]).then(([{ automationsStore }, { openAutomations }]) => { openAutomations(); setTimeout(() => automationsStore.set({ projects: [] }), 300) })`)
-  await until(`document.querySelector('[data-automations-empty] [data-template="ci-triage"]') !== null && document.querySelector('[data-automations-empty] [data-template="describe"]') !== null`, "the empty state")
-  assert.equal(await evaluate(`document.querySelector('[data-list-toolbar]')`), null, "no toolbar with nothing to filter")
-  await until(`document.activeElement?.matches('[data-automations-describe]')`, "the field takes the keyboard")
+  await until(`document.querySelector('[data-automations-empty] [data-template="ci-triage"]') !== null`, "the empty state")
   await capture("empty.png")
-  await type("every morning, summarise yesterday's merged pull requests")
-  await press("Enter")
-  await until(`!document.querySelector('[data-automations]') && document.querySelector('.composer-input')?.value === "Make an automation that every morning, summarise yesterday's merged pull requests"`, "a new Thread asking for it")
-  console.log("PASS: the empty state asks what should run on its own and starts a Thread with it; templates under it")
+  console.log("PASS: the empty state offers templates")
 
   // 15. A routed window (the web desk) draws no Automations: no row, no view.
   await window.loadURL(`${base}scripts/web-desk.html?app=busy`)

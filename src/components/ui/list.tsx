@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, type ComponentProps, type ReactNode, type RefObject } from "react"
+import type { ComponentProps, ReactNode, RefObject } from "react"
 import { ChevronDownIcon, SearchIcon } from "lucide-react"
 import { Collapse } from "@/components/ui/collapse"
 import { Keys } from "@/components/ui/kit"
@@ -38,23 +38,10 @@ export function ListPage({
   toolbar?: ReactNode
   scrollRef?: RefObject<HTMLDivElement | null>
 }) {
-  const header = useRef<HTMLElement>(null)
-  // A row scrolled into view (the keyboard's walk, a click on one half hidden) lands under the sticky header, not behind it.
-  useLayoutEffect(() => {
-    const top = header.current
-    if (!top) return
-    const box = top.closest<HTMLElement>("[data-list-scroller]")
-    if (!box) return
-    const pad = () => box.style.setProperty("scroll-padding-top", `${top.offsetHeight}px`)
-    pad()
-    const watch = new ResizeObserver(pad)
-    watch.observe(top)
-    return () => watch.disconnect()
-  }, [])
   return (
-    <div ref={scrollRef} data-list-scroller className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain", className)} {...props}>
+    <div ref={scrollRef} className={cn("min-h-0 flex-1 overflow-y-auto overscroll-contain", className)} {...props}>
       <div className="@container/list mx-auto flex w-full max-w-[760px] flex-col px-6 pb-16">
-        <header ref={header} data-list-header className="sticky top-0 z-10 flex flex-col bg-surface pt-4 pb-1">
+        <header data-list-header className="sticky top-0 z-10 flex flex-col bg-surface pt-4 pb-1">
           <div className="flex min-h-8 items-center gap-3 px-2">
             <h1 className="min-w-0 flex-1 truncate text-title font-semibold text-foreground">{title}</h1>
             {actions}

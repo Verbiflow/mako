@@ -28,15 +28,9 @@ interface AutomationsViewState {
   query: string
   /** The row the keyboard was on, so coming back to the list lands there. */
   focused?: string
-  /** Rows checked (`x`) for turning on or off together. */
-  checked: readonly string[]
-  /** The row whose pending proposals are open under it, by Review proposal or Enter on a proposed one. */
-  reviewing?: string
-  /** The Templates section, opened or folded by the person; unset, it's folded once there are automations. */
-  templatesOpen?: boolean
 }
 
-export const automationsViewStore = createStore<AutomationsViewState>({ route: { kind: "list" }, filter: "all", query: "", checked: [] })
+export const automationsViewStore = createStore<AutomationsViewState>({ route: { kind: "list" }, filter: "all", query: "" })
 export const useAutomationsView = createHook(automationsViewStore)
 
 export function rowKey(project: string, id: string): string {
