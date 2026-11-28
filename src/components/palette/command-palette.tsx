@@ -1,11 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { Dialog as DialogPrimitive } from "radix-ui"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { Eyebrow, Keys } from "@/components/ui/kit"
 import {
-  commands,
   formatChord,
   keysFor,
-  matchesChord,
   useCommands,
   type DeskCommand,
 } from "@/extend/commands"
@@ -15,7 +12,7 @@ import { asksForProject } from "@/lib/project-query"
 import { githubRepository } from "@mako/host/contracts/projects"
 import { openProjectPalette } from "@/state/open-project"
 import { threads, useThreads } from "@/state/threads"
-import { modelKey, noteModelUse, prefsStore, usePrefs } from "@/state/prefs"
+import { modelKey, noteModelUse, usePrefs } from "@/state/prefs"
 import { useWorkspaceFiles } from "@/state/files"
 import { workspaceFiles } from "@/state/file-tree"
 import type { FileFindResults } from "@mako/host/contracts/file-index"
@@ -35,34 +32,11 @@ interface Entry {
 }
 
 /**
- * While the palette is open, every key pressed is the palette's: this listener is on the window's capture phase and
- * added as this module loads, before any component's, so a listener the page underneath holds (Settings' Escape and
- * focus trap, the composer's @ list, an editor's ⌘↩, a view's Escape) never hears a key typed into the palette. A
- * chord another desk command owns still runs it, and closes the palette.
- */
-let paletteKeys: ((event: KeyboardEvent) => void) | null = null
-globalThis.addEventListener?.("keydown", (event) => paletteKeys?.(event), true)
-
-const PALETTE_COMMAND = "view.command-palette"
-const QUICK_OPEN_COMMAND = "view.quick-open"
-
-/** The desk command a chord runs, if any; what the keyboard layer would run for it. */
-function commandFor(event: KeyboardEvent): DeskCommand | undefined {
-  if (!event.metaKey && !event.ctrlKey && !event.altKey) return undefined
-  const overrides = prefsStore.get().keybindings
-  return commands.list().find((command) => {
-    const keys = keysFor(command, overrides)
-    return keys !== undefined && matchesChord(event, keys) && command.when?.() !== false
-  })
-}
-
-/**
- * The command palette: a layer over whatever is open, Settings and dialogs included. It's Radix's dialog so it takes
- * its place in the stack of layers: the one beneath keeps its state but gives up focus, the pointer and Escape until
- * this closes, and focus goes back to where it was (the composer, a Settings field) unless what ran put it elsewhere.
+ * The command palette.
  *
- * The caret is in the field on the frame the chord lands; the panel arrives and leaves on the menu's motion tokens
- * without delaying it.
+ * Deliberately unanimated. This is opened dozens of times a day by keyboard,
+ * and any entrance transition — however tasteful — puts a delay between the
+ * chord and the caret. Raycast gets this right by having no animation at all.
  */
 export function CommandPalette() {
   const [open, setOpen] = useState(false)
@@ -78,30 +52,24 @@ export function CommandPalette() {
   const [query, setQuery] = useState("")
   const [cursor, setCursor] = useState(0)
   const listRef = useRef<HTMLDivElement>(null)
-  const inputRef = useRef<HTMLInputElement>(null)
-  const contentRef = useRef<HTMLDivElement>(null)
-  /** Whether it closed by running something, which then owns focus, or by being dismissed, which gives focus back. */
-  const ranRef = useRef(false)
-  /** Where focus was when it opened: Radix gives focus back to a dialog's trigger, and the palette has none. */
-  const returnRef = useRef<HTMLElement | null>(null)
 
   const fileIndex = useWorkspaceFiles(open && mode === "files")
   const { files } = fileIndex
   // Typed, a file is found by the host's index of the workspace, as the Files panel finds it.
   const cwd = useSession((state) => state.meta?.cwd)
   const finder = useMemo(() => (cwd ? workspaceFiles(cwd) : undefined), [cwd])
-  const [found, setFound] = useState<FileFindResults & { root: string }>()
+  const [found, setFound] = useState<FileFindResults>()
   const term = query.trim()
   useEffect(() => {
-    if (!open || mode !== "files" || !term || !finder || !cwd) return
+    if (!open || mode !== "files" || !term || !finder) return
     let current = true
     void finder.find(term, 60).then((next) => {
-      if (current) setFound({ ...next, root: cwd })
+      if (current) setFound(next)
     }, () => undefined)
     return () => {
       current = false
     }
-  }, [open, mode, term, finder, cwd])
+  }, [open, mode, term, finder])
   const deskCommands = useCommands()
   const keybindings = usePrefs((prefs) => prefs.keybindings)
   const favoriteModels = usePrefs((prefs) => prefs.favoriteModels)
@@ -112,34 +80,18 @@ export function CommandPalette() {
   const activeModel = useSession((state) => state.meta?.model)
   const canChooseFolder = useCanChooseFolder()
 
-  const close = useCallback((ran = false) => {
-    ranRef.current = ran
+  const close = useCallback(() => {
     setOpen(false)
+    setQuery("")
+    setCursor(0)
   }, [])
 
-  const openRef = useRef({ open, mode })
-  // Before paint, so a chord pressed the frame after a switch reads the mode it switched to.
-  useLayoutEffect(() => {
-    openRef.current = { open, mode }
-  })
   useEffect(() => {
     const show = (next: "commands" | "files") => () => {
-      const now = openRef.current
-      // The chord that opened it closes it; the other mode's chord switches to it, keeping what's typed.
-      if (now.open && now.mode === next) {
-        close()
-        return
-      }
-      if (!now.open) {
-        setQuery("")
-        setCursor(0)
-        setFound(undefined)
-        ranRef.current = false
-        returnRef.current = document.activeElement instanceof HTMLElement && document.activeElement !== document.body ? document.activeElement : null
-      }
+      setQuery("")
+      setCursor(0)
       setMode(next)
       setOpen(true)
-      inputRef.current?.focus()
     }
     const commands = show("commands")
     const quickOpen = show("files")
@@ -149,7 +101,7 @@ export function CommandPalette() {
       window.removeEventListener("mako:palette", commands)
       window.removeEventListener("mako:quick-open", quickOpen)
     }
-  }, [close])
+  }, [])
 
   /**
    * Files, ranked.
@@ -159,10 +111,8 @@ export function CommandPalette() {
    * useful rather than arbitrary.
    */
   const fileEntries = useMemo<Entry[]>(() => {
-    // The host's hits for exactly this query in this project; until they come, the list read here, never the hits for
-    // a shorter query, which name files that don't match what's typed.
     const ordered = term
-      ? found && found.root === cwd && found.query === term
+      ? found && (found.query === term || term.startsWith(found.query))
         ? found.hits.map((hit) => ({ path: hit.path }))
         : rank(files, term, (file) => file.path).slice(0, 60)
       : [...files].sort((a, b) => Number(Boolean(b.changed)) - Number(Boolean(a.changed))).slice(0, 60)
@@ -173,18 +123,11 @@ export function CommandPalette() {
       hint: file.path,
       run: () => void viewer.open(file.path),
     }))
-  }, [files, found, term, cwd])
+  }, [files, found, term])
 
-  // Read as it opens, and kept while it leaves, so the list fades out as it was: closed, the palette asks no command
-  // whether it applies.
-  const [opening, setOpening] = useState(0)
-  const [wasOpen, setWasOpen] = useState(open)
-  if (wasOpen !== open) {
-    setWasOpen(open)
-    if (open) setOpening((value) => value + 1)
-  }
+  // Read as it opens: closed, the palette lists nothing, and asks no command whether it applies.
   const entries = useMemo<Entry[]>(() => {
-    if (opening === 0) return []
+    if (!open) return []
     const list: Entry[] = deskCommands
       .filter((command) => command.when?.() !== false)
       .map((command) => toEntry(command, keybindings))
@@ -230,7 +173,7 @@ export function CommandPalette() {
 
     return list
   }, [
-    opening,
+    open,
     activeModel,
     deskCommands,
     favoriteModels,
@@ -274,138 +217,109 @@ export function CommandPalette() {
     setCursor(0)
   }
 
+  if (!open) return null
+
   const move = (delta: number) => {
     setCursor((value) => {
-      const next = (Math.min(value, results.length - 1) + delta + results.length) % Math.max(results.length, 1)
+      const next = (value + delta + results.length) % Math.max(results.length, 1)
       listRef.current?.querySelector(`[data-index="${next}"]`)?.scrollIntoView({ block: "nearest" })
       return next
     })
   }
 
-  const runEntry = (entry: Entry, alternate: boolean) => {
-    close(true)
-    // ⌘↩ on a file puts it in the composer rather than opening it — the
-    // other reason you went looking for it.
-    if (mode === "files" && alternate && entry.hint) {
-      window.dispatchEvent(new CustomEvent("mako:insert", { detail: `@${entry.hint} ` }))
-      return
-    }
-    entry.run()
-  }
-
-  const onKey = (event: KeyboardEvent) => {
-    if (event.isComposing) return
-    const command = commandFor(event)
-    if (command) {
-      // ⌘K closes it and ⌘P switches it, through their commands; any other command closes it and runs.
-      if (command.id !== PALETTE_COMMAND && command.id !== QUICK_OPEN_COMMAND) close(true)
-      return
-    }
-    // Immediate: the composer's @ list listens on the window's capture phase too, after this.
-    event.stopImmediatePropagation()
+  const onKeyDown = (event: React.KeyboardEvent) => {
     if (event.key === "Escape") {
       event.preventDefault()
       close()
-    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+    }
+    if (event.key === "ArrowDown") {
       event.preventDefault()
-      move(event.key === "ArrowDown" ? 1 : -1)
-    } else if (event.key === "Enter") {
+      move(1)
+    }
+    if (event.key === "ArrowUp") {
       event.preventDefault()
-      const entry = results[Math.min(cursor, results.length - 1)]
-      if (entry) runEntry(entry, event.metaKey || event.ctrlKey)
+      move(-1)
+    }
+    if (event.key === "Enter") {
+      event.preventDefault()
+      const entry = results[cursor]
+      if (!entry) return
+      close()
+      // ⌘↩ on a file puts it in the composer rather than opening it — the
+      // other reason you went looking for it.
+      if (mode === "files" && (event.metaKey || event.ctrlKey) && entry.hint) {
+        window.dispatchEvent(new CustomEvent("mako:insert", { detail: `@${entry.hint} ` }))
+        return
+      }
+      entry.run()
     }
   }
-  const onKeyRef = useRef(onKey)
-  useLayoutEffect(() => {
-    onKeyRef.current = onKey
-  })
-  useEffect(() => {
-    if (!open) return
-    const handle = (event: KeyboardEvent) => onKeyRef.current(event)
-    paletteKeys = handle
-    return () => {
-      if (paletteKeys === handle) paletteKeys = null
-    }
-  }, [open])
 
   let lastSection = ""
 
   return (
-    <DialogPrimitive.Root open={open} onOpenChange={(next) => !next && close()}>
-      <DialogPrimitive.Portal>
-        <DialogPrimitive.Overlay
-          data-palette-scrim
-          className="fixed inset-0 z-50 bg-background/55 backdrop-blur-[2px] data-open:animate-in data-open:fade-in-0 data-open:duration-(--duration-menu) data-open:ease-(--ease-out) data-closed:animate-out data-closed:fade-out-0 data-closed:duration-(--duration-menu-out) data-closed:ease-(--ease-swift) motion-reduce:animate-none"
-        />
-        <DialogPrimitive.Content
-          ref={contentRef}
-          aria-label="Command palette"
-          aria-describedby={undefined}
-          data-command-palette
-          onOpenAutoFocus={(event) => {
-            event.preventDefault()
-            inputRef.current?.focus()
-          }}
-          onCloseAutoFocus={(event) => {
-            // What ran and put focus somewhere keeps it there; dismissed, or what ran left focus nowhere, it goes back.
-            event.preventDefault()
-            const at = document.activeElement
-            if (ranRef.current && at && at !== document.body && !contentRef.current?.contains(at)) return
-            const back = returnRef.current
-            returnRef.current = null
-            if (back?.isConnected) back.focus({ preventScroll: true })
-          }}
-          className="overlay-panel fixed top-[14vh] left-1/2 z-50 w-[calc(100%_-_2rem)] max-w-dialog -translate-x-1/2 overflow-hidden outline-hidden data-open:animate-in data-open:fade-in-0 data-open:zoom-in-[0.98] data-open:slide-in-from-top-1 data-open:duration-(--duration-menu) data-open:ease-(--ease-out) data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-[0.98] data-closed:duration-(--duration-menu-out) data-closed:ease-(--ease-swift) motion-reduce:animate-none"
-        >
-          <DialogPrimitive.Title className="sr-only">Command palette</DialogPrimitive.Title>
-          <div className="flex h-11 items-center gap-2.5 border-b border-hairline px-3.5">
-            <SearchIcon className="size-3.5 shrink-0 text-faint" aria-hidden />
-            <input
-              ref={inputRef}
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder={mode === "files" ? "Open a file by name" : "Search commands, models, sessions…"}
-              className="h-full min-w-0 flex-1 bg-transparent text-ui placeholder:text-faint focus:outline-none"
-            />
-          </div>
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-label="Command palette"
+      className="fixed inset-0 z-50 flex items-start justify-center bg-background/55 pt-[14vh] backdrop-blur-[2px]"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) close()
+      }}
+    >
+      <div
+        onKeyDown={onKeyDown}
+        className="overlay-panel w-full max-w-dialog overflow-hidden"
+      >
+        <div className="flex h-11 items-center gap-2.5 border-b border-hairline px-3.5">
+          <SearchIcon className="size-3.5 shrink-0 text-faint" aria-hidden />
+          <input
+            autoFocus
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder={mode === "files" ? "Open a file by name" : "Search commands, models, sessions…"}
+            className="h-full min-w-0 flex-1 bg-transparent text-ui placeholder:text-faint focus:outline-none"
+          />
+        </div>
 
-          <div ref={listRef} className="max-h-[22rem] overflow-y-auto overscroll-contain p-1.5">
-            {results.length === 0 ? (
-              <p className="px-2 py-8 text-center text-ui text-faint">
-                {mode === "files" && fileIndex.kind === "loading" ? "Reading the project…" : mode === "files" && fileIndex.kind === "failed" ? fileIndex.error : "No matches"}
-              </p>
-            ) : (
-              results.map((entry, index) => {
-                const header = entry.section !== lastSection ? entry.section : null
-                lastSection = entry.section
-                return (
-                  <div key={entry.id}>
-                    {header ? <Eyebrow className="px-1.5 pt-2 pb-1">{header}</Eyebrow> : null}
-                    <button
-                      type="button"
-                      tabIndex={-1}
-                      data-index={index}
-                      onMouseMove={() => setCursor(index)}
-                      onClick={(event) => runEntry(entry, event.metaKey || event.ctrlKey)}
-                      className={cn(
-                        "flex w-full items-center gap-2 px-2 py-1.5 text-left",
-                        index === cursor && "bg-fill-selected"
-                      )}
-                    >
-                      <span className="min-w-0 flex-1 truncate text-ui">{entry.title}</span>
-                      {entry.hint ? (
-                        <span className="shrink-0 truncate text-label text-faint">{entry.hint}</span>
-                      ) : null}
-                      {entry.keys?.length ? <Keys keys={entry.keys} /> : null}
-                    </button>
-                  </div>
-                )
-              })
-            )}
-          </div>
-        </DialogPrimitive.Content>
-      </DialogPrimitive.Portal>
-    </DialogPrimitive.Root>
+        <div ref={listRef} className="max-h-[22rem] overflow-y-auto overscroll-contain p-1.5">
+          {results.length === 0 ? (
+            <p className="px-2 py-8 text-center text-ui text-faint">
+              {mode === "files" && fileIndex.kind === "loading" ? "Reading the project…" : mode === "files" && fileIndex.kind === "failed" ? fileIndex.error : "No matches"}
+            </p>
+          ) : (
+            results.map((entry, index) => {
+              const header = entry.section !== lastSection ? entry.section : null
+              lastSection = entry.section
+              return (
+                <div key={entry.id}>
+                  {header ? <Eyebrow className="px-1.5 pt-2 pb-1">{header}</Eyebrow> : null}
+                  <button
+                    type="button"
+                    data-index={index}
+                    onMouseMove={() => setCursor(index)}
+                    onClick={() => {
+                      close()
+                      entry.run()
+                    }}
+                    className={cn(
+                      "flex w-full items-center gap-2 px-2 py-1.5 text-left",
+                      index === cursor && "bg-fill-selected"
+                    )}
+                  >
+                    <span className="min-w-0 flex-1 truncate text-ui">{entry.title}</span>
+                    {entry.hint ? (
+                      <span className="shrink-0 truncate text-label text-faint">{entry.hint}</span>
+                    ) : null}
+                    {entry.keys?.length ? <Keys keys={entry.keys} /> : null}
+                  </button>
+                </div>
+              )
+            })
+          )}
+        </div>
+      </div>
+    </div>
   )
 }
 
