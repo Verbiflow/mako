@@ -41,6 +41,14 @@ import { scriptedModel, type ScriptedReply } from "./scripted-model.ts"
  * - `offline`: the Mac drops off the network, as one whose lid closed is gone to the cloud: its link and every call cut,
  *   none let through, the host left running so it stays signed in. `OFFLINE`
  * - `online`: its network back on the same address; the host finds the cloud again by itself. `ONLINE`
+ * - `apex <conversation> <name>`: that conversation's Thread made a deliberate Apex of that name, as the person makes
+ *   one. `APEX {"thread": …}`
+ * - `gather <apex thread> <conversation>…`: those conversations' Threads made its Fins, as the person moves them in.
+ *   `GATHERED {"moved": …}`
+ * - `plan <apex thread> <plan as a JSON string>`: the Apex's plan saved whole, as the person saves it. `PLAN {"chars": …}`
+ * - `sleep`: the host stopped where it stands (SIGSTOP), as a Mac asleep: nothing of it runs or answers, its link goes
+ *   silent and the cloud finds it quiet. `ASLEEP`
+ * - `wake`: the host running again (SIGCONT); it finds the cloud again by itself. `AWAKE`
  * - `quit` (or stdin's end): signs the host out, so its device leaves the account, stops it, and removes the root unless `--keep`.
  *
  * No harness runs on anything of the person's: the home is the scratch one, Codex's sign-in an API key the stand-in takes.
@@ -397,6 +405,8 @@ function cut(): Promise<void> {
 }
 
 const stop = async () => {
+  // A host left asleep runs again to sign out and stop.
+  host.kill("SIGCONT")
   // Its sign-out reaches the cloud, so its device leaves the account.
   if (!relay.listening) await listen(relayPort)
   // Its app is a process of its own: stopped here, or it outlives the host.
@@ -417,6 +427,10 @@ const SnapshotSchema = z.object({ session: z.object({ currentMode: z.string().nu
 /** What `mako:live-start` and `mako:thread-create-session` answer that a start reads: the Thread, and the new Session. */
 const StartedSchema = z.object({ threadId: z.string() }).loose()
 const PlacedSchema = z.object({ session: z.string() }).loose()
+/** What the Apex commands read of their answers: the Apex made, the Threads moved in, the plan saved. */
+const ApexMadeSchema = z.object({ apex: z.object({ thread: z.string() }).loose() }).loose()
+const GatheredSchema = z.object({ moved: z.array(z.unknown()).optional() }).loose()
+const PlanSavedSchema = z.object({ chars: z.number() }).loose()
 const SyncSchema = z.object({ state: z.string(), stale: z.number().optional(), sending: z.number().optional(), tiers: z.array(z.object({ sessions: z.number(), readable: z.number() }).loose()).optional() }).loose()
 /** Every Session in the sync window readable by another device, its copy up to date: so long as `ms` allows. */
 async function copiesUp(ms: number): Promise<{ readable: number; sessions: number; ms: number }> {
@@ -462,7 +476,27 @@ for await (const line of createInterface({ input: process.stdin })) {
     console.log(`HEARD ${JSON.stringify({ model: heardRequests.findLast((request) => request.heard.includes(words))?.model ?? null })}`)
   }
   else if (line.startsWith("copies")) console.log(`COPIES ${JSON.stringify(await copiesUp(Number(line.trim().split(/\s+/)[1]) || 2 * 60_000))}`)
-  else if (line.trim() === "offline") {
+  else if (line.startsWith("apex ")) {
+    const [, conversation, ...name] = line.trim().split(/\s+/)
+    const made = ApexMadeSchema.parse(await call("mako:apex-promote", [conversation, { name: name.join(" "), purpose: "The payments service's reliability work" }]))
+    console.log(`APEX ${JSON.stringify({ thread: made.apex.thread })}`)
+  } else if (line.startsWith("gather ")) {
+    const [, apex, ...conversations] = line.trim().split(/\s+/)
+    const threads = await Promise.all(conversations.map(async (conversation) => StartedSchema.parse(await call("mako:live-snapshot", [conversation])).threadId))
+    const gathered = GatheredSchema.parse(await call("mako:apex-gather", [apex, threads, true]))
+    console.log(`GATHERED ${JSON.stringify({ moved: gathered.moved?.length ?? 0, answer: gathered })}`)
+  } else if (line.startsWith("plan ")) {
+    const [, apex] = line.trim().split(/\s+/)
+    const text = z.string().parse(JSON.parse(line.trim().slice(`plan ${apex} `.length)))
+    const saved = PlanSavedSchema.parse(await call("mako:apex-plan-save", [apex, text]))
+    console.log(`PLAN ${JSON.stringify({ chars: saved.chars })}`)
+  } else if (line.trim() === "sleep") {
+    host.kill("SIGSTOP")
+    console.log("ASLEEP")
+  } else if (line.trim() === "wake") {
+    host.kill("SIGCONT")
+    console.log("AWAKE")
+  } else if (line.trim() === "offline") {
     await cut()
     console.log("OFFLINE")
   } else if (line.trim() === "online") {

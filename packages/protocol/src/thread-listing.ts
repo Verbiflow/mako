@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { ThreadIdSchema } from "./ids.js"
 import { ContinueRepositorySchema, ListedContinueSchema } from "./continue-rows.js"
-import { ASKING_VERSION, CONTINUE_VERSION, FINS_VERSION, FIN_STATES_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, SESSION_ORDER_VERSION, THREAD_MARKS_VERSION, WAITING_FOR_VERSION } from "./version.js"
+import { APEX_LISTED_VERSION, ASKING_VERSION, CONTINUE_VERSION, FINS_VERSION, FIN_STATES_VERSION, FORKS_VERSION, MOVES_VERSION, NATIVE_SESSIONS_VERSION, NUMBERED_LIVE_VERSION, PROMPTED_VERSION, RAIL_VERSION, SESSION_ORDER_VERSION, THREAD_MARKS_VERSION, WAITING_FOR_VERSION } from "./version.js"
 import { WaitingMessageSchema } from "./waiting.js"
 import { WaitingForSchema } from "./attention.js"
 
@@ -192,6 +192,45 @@ export const ListedFinSchema = z.lazy(() => z
   .strict())
 export type ListedFin = z.infer<typeof ListedFinSchema>
 
+/** The most of an Apex's plan a row carries; a longer one is cut at a line, and says so (`planCut`). */
+export const LISTED_PLAN_CHARS = 8_000
+
+/**
+ * A deliberate Apex as its row says it (link version 31 on): its name, what it covers, when the person last read its
+ * digest and its plan as it stands (its file, cut to `LISTED_PLAN_CHARS`), so every device draws its digest and
+ * Overview while its owner is off, as last known. Said only on the row of the Apex's own conversation, by its owner
+ * alone, whole each time anything of it changes. `at` is when it last changed, on the owner's clock: a list keeps the
+ * newer of two it hears from the same owner at the same generation, so one that arrives late never takes the place of
+ * what came after it. Its rules, memories and Fins' briefs stay with the owner.
+ */
+export const ListedApexSchema = z.lazy(() => z
+  .object({
+    name: z.string().min(1).max(60),
+    purpose: z.string().max(140).optional(),
+    /** When the person last read its digest, ms on the owner's clock: what came after is new. */
+    seenAt: z.number().nonnegative().optional(),
+    plan: z.string().max(LISTED_PLAN_CHARS).optional(),
+    /** The plan was longer than a row carries: the rest is read from the owner. */
+    planCut: z.literal(true).optional(),
+    at: z.number().int().nonnegative(),
+  })
+  .strict())
+export type ListedApex = z.infer<typeof ListedApexSchema>
+
+/** Whether two rows say the same Apex. */
+export function sameApex(left: ListedApex | undefined, right: ListedApex | undefined): boolean {
+  return left === right || (left !== undefined && right !== undefined && left.at === right.at && JSON.stringify(left) === JSON.stringify(right))
+}
+
+/**
+ * The Apex a row takes when its owner reports it again, at the same owner and generation: the one it holds while
+ * that's newer (`at`) than what arrived, else what arrived. A report that says none takes it off (it's a Thread again).
+ */
+export function newerApex(held: ListedApex | undefined, arrived: ListedApex | undefined): ListedApex | undefined {
+  if (!held || !arrived) return arrived
+  return arrived.at < held.at ? held : arrived
+}
+
 /** The harnesses a Session ran in before its current one, oldest first, as its rail row wears them: at most this many. */
 export const LISTED_LINEAGE = 8
 const GenerationSchema = z.number().int().positive()
@@ -295,6 +334,8 @@ export const ReportedSessionSchema = z
     workStatusAt: z.number().int().nonnegative().optional(),
     /** The person marked its Thread to read again (link version 29 on); opening it on any device reads it. */
     markedUnread: z.literal(true).optional(),
+    /** Its deliberate Apex, on the row of the Apex's own conversation (`ListedApexSchema`, link version 31 on). */
+    apex: ListedApexSchema.optional(),
   })
   .strict()
 export type ReportedSession = z.infer<typeof ReportedSessionSchema>
@@ -318,6 +359,8 @@ export const ListedSessionSchema = ReportedSessionSchema.extend({
   continued: ListedContinueSchema.optional(),
   /** Read leniently: Fins a newer build says in a way this one can't read are passed over, never the row. */
   fins: z.array(ListedFinSchema).min(1).max(LISTED_FINS).optional().catch(undefined),
+  /** Read leniently too: an Apex a newer build says in a way this one can't read is passed over, never the row. */
+  apex: ListedApexSchema.optional().catch(undefined),
 }).strip()
 export type ListedSession = z.infer<typeof ListedSessionSchema>
 
@@ -419,16 +462,22 @@ function finStateOf19(state: ListedFinState): ListedFinState {
 }
 
 /**
- * The rows a link of `version` takes, each with only the fields that version knows: from link version 22, every one
+ * The rows a link of `version` takes, each with only the fields that version knows: from link version 31, every one
  * whole; before 6 a gateway knows neither `capture` nor `nativeId`, so a Session Mako hasn't opened isn't listed there
  * and the rest go without their native IDs.
  */
 export function rowsForLink(rows: readonly ReportedSession[], version: number): ReportedSession[] {
-  if (version >= THREAD_MARKS_VERSION) return [...rows]
+  if (version >= APEX_LISTED_VERSION) return [...rows]
   const kept: ReportedSession[] = []
   for (const row of rows) {
     if (row.capture && version < NATIVE_SESSIONS_VERSION) continue
     const older: ReportedSession = { ...row }
+    // Before version 31 a gateway knows no listed Apex: the row goes without it.
+    delete older.apex
+    if (version >= THREAD_MARKS_VERSION) {
+      kept.push(older)
+      continue
+    }
     // Before version 29 a gateway knows no Thread marks: the row goes without them.
     delete older.workStatus
     delete older.workStatusAt
@@ -571,6 +620,7 @@ export function sameListed(left: ListedSession | undefined, right: ListedSession
     left.workStatus === right.workStatus &&
     left.workStatusAt === right.workStatusAt &&
     left.markedUnread === right.markedUnread &&
+    sameApex(left.apex, right.apex) &&
     left.continued?.op === right.continued?.op &&
     left.continued?.phase === right.continued?.phase &&
     left.continued?.reason === right.continued?.reason &&

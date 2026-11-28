@@ -32,9 +32,23 @@ export interface ApexesState {
   plans: Readonly<Record<string, string>>
   /** Rules changed since a preview was read: it reads them again. */
   rulesAt: number
+  /** Apexes this window shows as another device lists them (a browser's), by Thread: none in a Mac's own window. */
+  elsewhere: Readonly<Record<string, ApexElsewhere>>
 }
 
-export const apexesStore = createStore<ApexesState>({ byThread: {}, loaded: false, plans: {}, rulesAt: 0 })
+/**
+ * An Apex another device keeps, as this window shows it from the account's list: its profile and rules are that
+ * device's to change, and while it's quiet (`quietSince`) what's shown is the last it said, read-only.
+ */
+export interface ApexElsewhere {
+  /** The device's name, as the account lists it. */
+  device: string
+  quietSince?: string
+  /** The list carries only the start of its plan. */
+  planCut?: true
+}
+
+export const apexesStore = createStore<ApexesState>({ byThread: {}, loaded: false, plans: {}, rulesAt: 0, elsewhere: {} })
 export const useApexes = createHook(apexesStore)
 
 function keyed(apexes: readonly ApexEntry[]): Record<string, ApexEntry> {
@@ -61,6 +75,11 @@ export async function loadApexes(): Promise<void> {
 /** A Thread's deliberate Apex profile, or undefined for a Thread that isn't one. */
 export function useApex(thread: string | undefined): ApexEntry | undefined {
   return useApexes((state) => (thread ? state.byThread[thread] : undefined))
+}
+
+/** Whose an Apex is when another device keeps it, and whether that device is quiet; undefined for one of this Mac's. */
+export function useApexElsewhere(thread: string | undefined): ApexElsewhere | undefined {
+  return useApexes((state) => (thread ? state.elsewhere[thread] : undefined))
 }
 
 /** Every deliberate Apex, by name. */

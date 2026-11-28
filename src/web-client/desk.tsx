@@ -47,6 +47,7 @@ import { agentsOpenStore, closeAgents, closeDeskFin, deskFinStore, openDeskFin, 
 import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
 import { FinOfApexContext, childSession, placedSessionOf } from "./fin-of-apex"
+import { PhoneApexDigest } from "./apex-digest"
 import { webHarnessLabel } from "./labels"
 import { StartForm, StartSheet, type AddingTo, type StartIn } from "./new-thread"
 import { CLOUD_PLACE } from "./places"
@@ -544,6 +545,8 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
         {tabs.length ? <SessionTabList tabs={tabs} here={{ thread: thread.id, session: session.row.session }} paneId="main" agentActive={!opened} /> : null}
         {child && opened ? <FinTab agent={child} onClose={closeDeskFin} /> : null}
       </WorkbenchStrip>
+      {/* Its Mac off, Agents has no live conversation to open on: the Apex's digest, from the account's list, stands here. */}
+      {session.quietSince && !opened && !thread.archived ? <PhoneApexDigest thread={thread} session={session} onOpenFin={openChild} /> : null}
       <RoutedOpenContext value={openChild}>
         <FinOfApexContext value={opened ? thread.title : undefined}>
           <ThreadBody key={opened?.row.conversation} thread={thread} session={opened ?? session} desk />

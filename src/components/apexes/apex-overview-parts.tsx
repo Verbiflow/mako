@@ -6,12 +6,13 @@ import { APEX_PURPOSE_CHARS, DIGEST_HEADINGS, RULE_LAYER_CHARS, parsePlan, planQ
 import { stoodFor } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { OverviewHeading } from "@/components/inspector/apex-overview"
+import { LastKnownLine } from "@/components/apexes/last-known"
 import { useTickingText } from "@/components/ui/second-clock"
 import { FIELD, Segmented } from "@/components/ui/kit"
 import { roughTokens } from "@/lib/role-rules"
 import { cn } from "@/lib/utils"
 import { useRailAcp, threadChildren } from "@/state/acp-state"
-import { checkPlan, forgetMemory, markSeen, readPlan, readRules, savePlan, saveRule, updateApex, useApexDigest, useApexes, useSeenSince } from "@/state/apexes"
+import { checkPlan, forgetMemory, markSeen, readPlan, readRules, savePlan, saveRule, updateApex, useApexDigest, useApexElsewhere, useApexes, useSeenSince, type ApexElsewhere } from "@/state/apexes"
 import { toggleOverviewFold, toggleOverviewOpened, useOverviewFolds, foldKey } from "@/state/apex-overview"
 
 /** Escape puts back what's saved; ⌘↩ saves. */
@@ -33,9 +34,28 @@ function editKeys(save: () => void, cancel: () => void) {
  * Enter or leaving it, Escape putting it back.
  */
 export function ApexHeader({ apex }: { apex: ApexEntry }) {
+  const elsewhere = useApexElsewhere(apex.thread)
+  if (elsewhere) return <ApexElsewhereHeader apex={apex} elsewhere={elsewhere} />
   // Each field starts over from what the host says once it says something new.
   return <ApexFields key={`${apex.name}\n${apex.purpose ?? ""}`} apex={apex} />
 }
+
+/**
+ * An Apex another device keeps, as a browser shows it: its name and purpose as that device lists them, which are its
+ * to change, and while it's quiet, that this is the last it said and since when.
+ */
+function ApexElsewhereHeader({ apex, elsewhere }: { apex: ApexEntry; elsewhere: ApexElsewhere }) {
+  const folder = apex.folder?.split("/").filter(Boolean).at(-1)
+  return (
+    <div data-apex-header data-apex-elsewhere={elsewhere.device} className="flex flex-col gap-0.5 px-2 pt-2 pb-3">
+      <span data-apex-name className="min-w-0 truncate text-title font-semibold text-foreground">{apex.name}</span>
+      {apex.purpose ? <span data-apex-purpose className="text-ui leading-snug text-muted-foreground">{apex.purpose}</span> : null}
+      <span className="pt-1 text-label text-faint">{[folder, `on ${elsewhere.device}`].filter(Boolean).join(" · ")}</span>
+      {elsewhere.quietSince ? <LastKnownLine device={elsewhere.device} since={elsewhere.quietSince} /> : null}
+    </div>
+  )
+}
+
 
 function ApexFields({ apex }: { apex: ApexEntry }) {
   const [name, setName] = useState(apex.name)
@@ -107,6 +127,8 @@ const isWaiting = (name: string) => /^waiting on\b/i.test(name)
 /** A plan line that waits on the person, under Needs you: checked off here, it leaves the digest at once. */
 export function PlanNeeds({ apex }: { apex: ApexEntry }) {
   const plan = usePlan(apex)
+  // Its device quiet, nothing here reaches it: the lines stand as it last said them, to read.
+  const quiet = useApexElsewhere(apex.thread)?.quietSince !== undefined
   const lines = useMemo(() => {
     if (!plan) return []
     return parsePlan(plan).sections.filter((section) => isWaiting(section.name)).flatMap((section) => section.items.map((item, index) => ({ section: section.name, index, item }))).filter((each) => !each.item.done)
@@ -122,10 +144,10 @@ export function PlanNeeds({ apex }: { apex: ApexEntry }) {
               <span className="flex h-5 w-[1.125rem] shrink-0 items-center justify-center text-attention"><MessageCircleQuestionIcon className="size-3.5" /></span>
               <span className="min-w-0 flex-1 text-ui leading-snug font-medium text-foreground">{finWords(asked.question)}</span>
             </span>
-            <PlanQuestionAnswers thread={apex.thread} apexName={apex.name} section={section} index={index} options={asked.options} className="pl-[1.625rem]" />
+            {quiet ? null : <PlanQuestionAnswers thread={apex.thread} apexName={apex.name} section={section} index={index} options={asked.options} className="pl-[1.625rem]" />}
           </div>
         ) : (
-          <PlanRow key={`${section}:${index}`} text={item.text} done={false} onCheck={(done) => void checkPlan(apex.thread, section, index, done)} needs />
+          <PlanRow key={`${section}:${index}`} text={item.text} done={false} {...(!quiet && { onCheck: (done: boolean) => void checkPlan(apex.thread, section, index, done) })} needs />
         )
       })}
     </>
@@ -219,6 +241,8 @@ function NewRow({ item, agent, onOpen }: { item: DigestItem; agent?: NativeAgent
  */
 export function PlanSection({ apex }: { apex: ApexEntry }) {
   const plan = usePlan(apex)
+  // Another device's plan is its to write: a browser checks its lines while that device answers, and edits none.
+  const elsewhere = useApexElsewhere(apex.thread)
   const [editing, setEditing] = useState<string | null>(null)
   const key = foldKey(apex.thread, "plan")
   const folded = useOverviewFolds((state) => Boolean(state.folded[key]))
@@ -235,7 +259,7 @@ export function PlanSection({ apex }: { apex: ApexEntry }) {
         <div className="min-w-0 flex-1">
           <OverviewHeading id="plan" label="Plan" count={sections.reduce((sum, section) => sum + section.items.filter((item) => !item.done).length, 0)} folded={folded} onToggle={() => toggleOverviewFold(key)} />
         </div>
-        {editing === null ? (
+        {editing === null && !elsewhere ? (
           <button type="button" data-plan-edit title="Edit the plan" onClick={() => setEditing(plan ?? "")} className="pressable mr-1 flex size-6 items-center justify-center text-faint hover:bg-fill-hover hover:text-foreground">
             <PencilLineIcon className="size-3" />
           </button>
@@ -259,8 +283,9 @@ export function PlanSection({ apex }: { apex: ApexEntry }) {
       ) : empty ? (
         <p data-plan-empty className="px-2 pb-2 text-label text-faint">{apex.name} writes its plan as it works: what's on now, what waits on you, what's decided.</p>
       ) : (
-        sections.map((section) => <PlanSectionRows key={section.name} thread={apex.thread} section={section} />)
+        sections.map((section) => <PlanSectionRows key={section.name} thread={apex.thread} section={section} checks={!elsewhere?.quietSince} />)
       )}
+      {elsewhere?.planCut && !folded ? <p data-plan-cut className="px-2 pb-2 text-label text-faint">The rest of the plan is on {elsewhere.device}.</p> : null}
     </div>
   )
 }
@@ -269,7 +294,7 @@ export function PlanSection({ apex }: { apex: ApexEntry }) {
  * One section of the plan, every section alike: what's open, prominent, then what's done folded into a quiet "N done"
  * that opens in place, as the Fins' list folds its finished ones. Notes (a file, a decision) are bullets.
  */
-function PlanSectionRows({ thread, section }: { thread: string; section: Plan["sections"][number] }) {
+function PlanSectionRows({ thread, section, checks = true }: { thread: string; section: Plan["sections"][number]; checks?: boolean }) {
   const key = foldKey(thread, `plan:${section.name}`)
   const opened = useOverviewFolds((state) => Boolean(state.opened[key]))
   // What's decided is a record, never a to-do: every line of it stands, as a note, ticked or not.
@@ -282,7 +307,7 @@ function PlanSectionRows({ thread, section }: { thread: string; section: Plan["s
       key={`${index}:${item.text}`}
       text={item.text}
       done={item.done}
-      {...(!item.note && { onCheck: (next: boolean) => void checkPlan(thread, section.name, index, next) })}
+      {...(!item.note && checks && { onCheck: (next: boolean) => void checkPlan(thread, section.name, index, next) })}
     />
   )
   return (
@@ -315,6 +340,12 @@ const FIT_WORDS = { cut: "Cut to fit", "left-out": "Left out to fit" } as const
  * rules and never its own.
  */
 export function RulesSection({ apex }: { apex: ApexEntry }) {
+  // An Apex's rules stay on the device that keeps it: another device's window has none of them to show.
+  if (useApexElsewhere(apex.thread)) return null
+  return <OwnRulesSection apex={apex} />
+}
+
+function OwnRulesSection({ apex }: { apex: ApexEntry }) {
   const [as, setAs] = useState<"apex" | "fin">("apex")
   const [reading, setReading] = useState<ApexRulesReading | undefined>()
   const changed = useApexes((state) => state.rulesAt)

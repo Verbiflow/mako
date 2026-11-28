@@ -12,6 +12,7 @@ import { store } from "@/state/session"
 import { threadsStore } from "@/state/thread-store"
 import { setSetupSource } from "@/state/setup"
 import { openSetup } from "@/web-client/setup-open"
+import { openAgents } from "@/web-client/agents-open"
 import { accountListStore } from "@/web-client/account-list"
 import { WebClient, WebClientContext } from "@/web-client/client"
 import { WebApp } from "@/web-client/app"
@@ -23,6 +24,8 @@ import { fixtureHarnesses } from "./harness-fixtures"
 import { BUSY_CWD, BUSY_SESSIONS, BUSY_THREAD, BUSY_TITLE, busyActivity, busySnapshot } from "./mock-busy-thread"
 import { apexFins, apexSnapshot, placedSnapshot, APEX_CONVERSATION, APEX_CWD, APEX_SESSION, APEX_THREAD, APEX_TITLE, PLACED_ASKS, PLACED_CONVERSATION, PLACED_DEVICE, PLACED_SCENE, PLACED_SESSION, PLACED_THREAD, PLACED_TITLE, PLACED_WHERE } from "./mock-apex-thread"
 import { listedFins } from "@mako/host/contracts/children"
+import { checkPlanItem, listedApex } from "@mako/host/contracts/apexes"
+import "@/web-client/apexes"
 import { decodeRuntimeArgs, RuntimeArgsSchema } from "@mako/host/contracts/runtime"
 import { z } from "zod"
 import { installMockBridge, MOCK_HEADS } from "./mock-bridge"
@@ -134,12 +137,21 @@ const apex = row({ session: APEX_SESSION, thread: APEX_THREAD, threadTitle: APEX
 // `?placed=loft|off`: a Fin of the Apex's placed on Loft, which lists it to the account under its Apex; `off` leaves the
 // Apex's own device quiet, the Fin's row still saying what it asks.
 if (PLACED_SCENE) apex.fins = listedFins(apexFins())
+// `?listed=off`: the Apex's Mac is off and this page read nothing from it: its row says its deliberate Apex (`apex`)
+// and its Fins, as last known, and the Overview in Agents draws them; `webDeskCheck.back()` brings the Mac back.
+const LISTED = search.get("listed")
+const [sceneApexes, scenePlan] = LISTED && macBridge ? await Promise.all([macBridge.apexes(), macBridge.apexPlan(APEX_THREAD)]) : [[], { text: "" }]
+const sceneApex = sceneApexes.find((each) => each.thread === APEX_THREAD)
+if (sceneApex) {
+  apex.apex = listedApex(sceneApex, scenePlan.text, Date.now() - 30 * 60_000)
+  apex.fins = listedFins(apexFins())
+}
 const placedRow = row({ session: PLACED_SESSION, thread: PLACED_THREAD, conversation: PLACED_CONVERSATION, harness: "opencode", title: PLACED_TITLE, state: "waiting", waitingOn: PLACED_ASKS, waitingFor: "approval", runsOn: { kind: "device", deviceId: PLACED_DEVICE }, createdAt: now, activityAt: now })
 threadsStore.set({ composerHarness: "claude", descriptors: fixtureHarnesses })
 store.set({ messages: [], stream: null })
 accountListStore.set({
   phase: "live",
-  ...(PLACED_SCENE === "off" && { quiet: new Map([[STUDIO, new Date(Date.now() - 25 * 60_000).toISOString()]]) }),
+  ...((PLACED_SCENE === "off" || LISTED === "off") && { quiet: new Map([[STUDIO, new Date(Date.now() - 25 * 60_000).toISOString()]]) }),
   rows: [...busy, apex, ...(placedSnapshot() ? [placedRow] : []), ...native],
   // `?machine`: the Threads run on a machine of the person's own, so the rail, the strip and the chip wear its server.
   devices: new Map([
@@ -229,6 +241,16 @@ Reflect.set(window, "webDeskCheck", {
   list(title: string, folder: string) {
     const listed = row({ session: uuid(title, 1), thread: uuid(title, 2), conversation: uuid(title, 3), harness: "codex", title, folder, createdAt: new Date().toISOString(), activityAt: new Date().toISOString(), state: "working" })
     accountListStore.set({ rows: [listed, ...accountListStore.get().rows] })
+  },
+  /** Agents in the right rail, as its button in the side rail opens it. */
+  agents() {
+    openAgents()
+  },
+  /** The Apex's Mac back (`?listed=off`): no longer quiet, its row saying its plan as it stands now. */
+  back() {
+    const plan = checkPlanItem(scenePlan.text, "Now", 0, true) ?? scenePlan.text
+    const rows = accountListStore.get().rows.map((each) => (each.thread === APEX_THREAD && each.apex && sceneApex ? { ...each, apex: listedApex(sceneApex, plan, Date.now()) } : each))
+    accountListStore.set({ quiet: new Map(), rows })
   },
 })
 
