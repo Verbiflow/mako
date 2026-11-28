@@ -2873,6 +2873,28 @@ any component's, stops each key (`stopImmediatePropagation`) so nothing
 underneath hears it; a chord another command owns closes it and runs.
 `npm run test:palette-ui` opens it from every screen.
 
+The palette is the window's one search, over rows its sources make
+(`palette-sources.ts`): every Thread and Fin in the catalog (one row a
+Thread), what needs the person, projects, pull requests, automations,
+Settings' sections and the words each is found by, the desk's commands,
+models and the agent's `/` commands. A row is searched by its own fields,
+never by its group's name: the title in full, the rest (a project, an agent)
+on word starts only, at half. `palette-rank.ts` ranks a match in tiers
+(exact, prefix, word, substring, scattered letters, a typo) and a row's boost
+(recency, and what the person picked for that query before, kept per device
+in `palette-memory.ts`) orders rows within a tier but never across one.
+`palette-search.ts` groups them, heads each group once, and orders groups by
+their best row's class, so a letter more seldom moves anything; pull
+requests and files come from the host after the rest and always go last.
+Tabs (All, Threads, Pull requests, Automations, Actions, Files; ←/→ with
+nothing typed), prefixes (`>` actions, `#` pull requests, `@` Threads, `/`
+agent commands) and scopes (Tab or → on a project looks inside it, ⌘⇧M opens
+the models; Escape backs out, then closes) narrow it. A field is prepared once
+and kept while its text is the same, so 5,000 Threads search in a few
+milliseconds a key (`npm run test:palette-rank` times it); the laptop's
+browser and the phone's and iPad's Search pass their own Threads
+(`web-client/palette-threads.ts`) instead of registering a command each.
+
 ## The transcript is grouped by exchange
 
 Built-in sessions, native-store threads, and live ACP/app-server sessions all

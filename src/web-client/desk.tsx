@@ -7,6 +7,7 @@ import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { LinkIcon, MoonIcon, PanelRightIcon, PlusIcon, SearchIcon, SquareIcon, XIcon, ArchiveIcon } from "lucide-react"
 import { toast } from "sonner"
 import { CommandPalette } from "@/components/palette/command-palette"
+import { loadWebSettings, paletteThreads, useThreadOpener } from "./palette-threads"
 import { InboxView } from "@/components/inbox/inbox-view"
 import { inboxShortcut } from "@/components/inbox/open-inbox"
 import { inboxView } from "@/state/inbox"
@@ -50,7 +51,6 @@ import { useWebClient } from "./client"
 import { followListing } from "./desk-listing"
 import { FinOfApexContext, childSession, placedSessionOf } from "./fin-of-apex"
 import { PhoneApexDigest } from "./apex-digest"
-import { webHarnessLabel } from "./labels"
 import { StartForm, StartSheet, type AddingTo, type StartIn } from "./new-thread"
 import { CLOUD_PLACE } from "./places"
 import type { ScreenRoute, WebRoute } from "./route"
@@ -160,6 +160,10 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   useEffect(() => (under.kind === "inbox" ? inboxView.open() : inboxView.close()), [route, under.kind])
   const place = under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
+  // Every Thread by its title, project, agents and place: the palette's way to any of them from the keyboard.
+  useThreadOpener((thread) => open({ kind: "thread", thread: thread.id }))
+  const paletteRows = useMemo(() => paletteThreads(threads), [threads])
+
   // Of the desk's notices above its composer, those a laptop's browser needs: a send to an old Session asks first, and
   // what an agent asked is answered here as on the desk.
   useEffect(() => registerNotice("stale-send", useStaleSendNotice, -11), [])
@@ -212,7 +216,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           <SetupLayer place={place} onAll={(project) => open({ kind: "setup", project })} />
         </DeskSide>
       </div>
-      <CommandPalette />
+      <CommandPalette threads={paletteRows} settings={loadWebSettings} />
       <ConfirmHost />
     </div>
     </TooltipProvider>
@@ -289,8 +293,8 @@ function toggleFiles(): void {
 
 /**
  * The desk's commands, in its own registry, so its palette lists them with their keys and the keyboard layer runs them:
- * the palette, New, Settings, the rail, the composer, Stop, the next Thread that needs you, the next and previous
- * Thread, and every Thread by its title.
+ * the palette, New, Settings, the rail, the composer, Stop, the next Thread that needs you, and the next and previous
+ * Thread. Every Thread is the palette's own rows (`listedThreadItems`), not a command each.
  */
 function useDeskKeys({ threads, selected, open, newThread, settings }: { threads: WebThread[]; selected: string | undefined; open: (route: ScreenRoute) => void; newThread: () => void; settings: () => void }) {
   const latest = useRef({ threads, selected, open, newThread, settings })
@@ -339,21 +343,6 @@ function useDeskKeys({ threads, selected, open, newThread, settings }: { threads
       { id: "thread.previous", title: "Previous thread", section: "Session", keys: "alt+arrowup", run: step(-1) },
     ])
   }, [])
-  // Each Thread by its title: the palette's way to any of them from the keyboard.
-  useEffect(
-    () =>
-      registerCommands(
-        threads.map((thread) => ({
-          id: `thread.open:${thread.id}`,
-          title: thread.title,
-          section: "Session" as const,
-          hint: [thread.project, thread.where === CLOUD_WHERE ? "Cloud" : thread.where].filter(Boolean).join(" · "),
-          keywords: [...new Set(thread.sessions.map((session) => webHarnessLabel(session.row.harness)))].join(" "),
-          run: () => latest.current.open({ kind: "thread", thread: thread.id }),
-        }))
-      ),
-    [threads]
-  )
   // The keyboard layer, as the desk's: a chord runs its command; an unmodified key stays with what's being typed into.
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

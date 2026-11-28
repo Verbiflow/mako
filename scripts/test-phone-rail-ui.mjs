@@ -152,7 +152,22 @@ async function checkRail() {
       // The rail's top is the desk's own rows (`RailRow`, the left rail's New thread and Inbox) at a finger's 44 px, the
       // Inbox's count a bare number in the attention hue as on the desk. A phone has no New thread row: New floats.
       const top = await evaluate("[...document.querySelectorAll('[data-rail-top] [data-rail-top-row]')].map((node) => ({ row: node.dataset.railTopRow, desk: node.classList.contains('group/top'), height: Math.round(node.getBoundingClientRect().height), count: node.querySelector('[data-inbox-count]') ? getComputedStyle(node.querySelector('[data-inbox-count]')).backgroundColor : null }))")
-      assert.deepEqual(top, [{ row: "inbox", desk: true, height: 44, count: "rgba(0, 0, 0, 0)" }], `${where}: the desk's Inbox row at the list's top: ${JSON.stringify(top)}`)
+      assert.deepEqual(top, [{ row: "view.command-palette", desk: true, height: 44, count: null }, { row: "inbox", desk: true, height: 44, count: "rgba(0, 0, 0, 0)" }], `${where}: the desk's Search and Inbox rows at the list's top: ${JSON.stringify(top)}`)
+      // Search is the desk's palette on its Threads tab, over the list's Threads, found by a word and lit where it matched.
+      await tap('[data-rail-top-row="view.command-palette"]')
+      await until("document.querySelector('[data-command-palette][data-state=open]')?.dataset.category === 'threads'", `${where}: Search opens the palette on its Threads`)
+      await until("document.querySelectorAll('[data-command-palette] [data-palette-row]').length > 0", `${where}: the palette lists Threads`)
+      const word = await evaluate("document.querySelector('[data-command-palette] [data-palette-title]').textContent.split(' ')[0]")
+      await evaluate(`(() => { const input = document.querySelector('[data-command-palette] input'); Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, ${JSON.stringify("")} + ${q(word)}); input.dispatchEvent(new Event('input', { bubbles: true })); return true })()`)
+      await until("document.querySelector('[data-command-palette] [data-lit]') !== null", `${where}: what's typed lights in the rows`)
+      assert.equal(await evaluate("getComputedStyle(document.querySelector('[data-palette-footer]')).display"), "none", `${where}: no key hints on a touch screen`)
+      await capture(`03-phone-search-${theme}.png`)
+      assert.equal(await evaluate("(() => { const box = document.querySelector('[data-command-palette]').getBoundingClientRect(); return box.left >= 0 && box.right <= innerWidth })()"), true, `${where}: the palette fits the phone's width`)
+      // A finger on the dimmed list below the panel.
+      const below = await evaluate("(() => { const box = document.querySelector('[data-command-palette]').getBoundingClientRect(); return { x: Math.round(innerWidth / 2), y: Math.round(Math.min(innerHeight - 20, box.bottom + 40)) } })()")
+      await send("Input.dispatchTouchEvent", { type: "touchStart", touchPoints: [{ ...below, id: 1 }] })
+      await send("Input.dispatchTouchEvent", { type: "touchEnd", touchPoints: [] })
+      await until("document.querySelector('[data-command-palette]') === null", `${where}: a tap outside closes Search`)
       assert.ok(await evaluate("Boolean(document.querySelector('button.web-fab[aria-label=\\'New thread\\']'))"), `${where}: New floats at the foot`)
       const corners = await evaluate("[...document.querySelectorAll('.web-row, .web-fin-row, .web-project-row, [data-project-avatar], [data-setup-card], [data-rail-top-row], .web-fab')].map((node) => getComputedStyle(node).borderRadius).filter((radius) => radius !== '0px')")
       assert.deepEqual(corners, [], `${where}: every corner square`)
@@ -271,7 +286,7 @@ async function checkRail() {
       assert.equal(await evaluate("(() => { const card = document.querySelector('[data-list=\"rail\"] [data-setup-card]'); const rows = document.querySelector('[data-list=\"rail\"] .web-scroll'); return Boolean(card && rows && card.getBoundingClientRect().top >= rows.getBoundingClientRect().bottom - 1) })()"), true, `iPad, ${theme}: the card under the rail's rows`)
       assert.equal(await evaluate("document.querySelector('[data-list=\"rail\"] h1')"), null, `iPad, ${theme}: the rail has no title of its own, as the desk's`)
       const railTop = await evaluate("[...document.querySelectorAll('[data-rail-top] [data-rail-top-row]')].map((node) => ({ row: node.dataset.railTopRow, desk: node.classList.contains('group/top'), height: Math.round(node.getBoundingClientRect().height), count: node.querySelector('[data-inbox-count]') ? getComputedStyle(node.querySelector('[data-inbox-count]')).backgroundColor : null }))")
-      assert.deepEqual(railTop.map((each) => [each.row, each.desk, each.height]), [["session.new", true, 44], ["inbox", true, 44]], `iPad, ${theme}: the desk's New thread and Inbox rows head the rail: ${JSON.stringify(railTop)}`)
+      assert.deepEqual(railTop.map((each) => [each.row, each.desk, each.height]), [["session.new", true, 44], ["view.command-palette", true, 44], ["inbox", true, 44]], `iPad, ${theme}: the desk's New thread, Search and Inbox rows head the rail: ${JSON.stringify(railTop)}`)
       await press(`${row("apex")} [data-row-fold]`)
       await until(`document.querySelector('${row("apex")}').dataset.apexOpen === 'true'`, `iPad, ${theme}: the Apex unfolds`)
       await wait(600)

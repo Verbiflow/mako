@@ -141,12 +141,12 @@ async function checkWindow() {
     await press("k", { meta: true })
     await until(OPEN, `${label}: ⌘K opens the palette`)
     await until(`document.activeElement?.matches(${JSON.stringify(FIELD)})`, `${label}: the caret is in the palette (was ${before})`)
-    await type("ab")
-    await press("c")
+    await type("zq")
+    await press("x")
     await press("ArrowDown")
     await press("ArrowUp")
     await press("Tab")
-    assert.equal(await evaluate(`document.querySelector(${JSON.stringify(FIELD)}).value`), "abc", `${label}: what's typed is in the palette`)
+    assert.equal(await evaluate(`document.querySelector(${JSON.stringify(FIELD)}).value`), "zqx", `${label}: what's typed is in the palette`)
     if (shot) await capture(shot)
     await press("Escape")
     await until(GONE, `${label}: Escape closes the palette`)
@@ -177,8 +177,8 @@ async function checkWindow() {
   await press("k", { meta: true })
   await until(OPEN, "the palette over Settings")
   await type("toggle light")
-  await until(`[...document.querySelectorAll('[data-command-palette] button[data-index]')].some(b => b.textContent.includes('Toggle light and dark'))`, "Toggle light and dark is listed")
-  await click(`[data-command-palette] button[data-index="0"]`)
+  await until(`document.querySelector('[data-command-palette] [data-palette-row][data-index="0"]')?.textContent.includes('Toggle light and dark')`, "Toggle light and dark is listed")
+  await click(`[data-command-palette] [data-palette-row][data-index="0"]`)
   await until(GONE, "a click on a row runs it and closes the palette")
   await until(`import('/src/state/prefs.ts').then(({ prefsStore }) => prefsStore.get().theme === 'light')`, "the row's command ran")
   assert.ok(await evaluate(SETTINGS), "Settings is still open")
@@ -272,6 +272,178 @@ async function checkWindow() {
   await roundTrip("the New Apex dialog", { stays: `document.querySelector('[data-apex-dialog]') !== null`, shot: "08-dialog-palette-dark.png" })
   await press("Escape")
   await until(`document.querySelector('[data-apex-dialog]') === null`, "the dialog closes on its own Escape")
+
+
+  // ——— Search ———
+  const rowsNow = () => evaluate(`[...document.querySelectorAll('[data-command-palette] [data-palette-row]')].map(row => ({ id: row.dataset.paletteRow, title: row.querySelector('[data-palette-title]')?.textContent, lit: [...row.querySelectorAll('[data-lit]')].map(mark => mark.textContent).join(''), group: row.closest('[data-palette-group]')?.dataset.paletteGroup, selected: row.hasAttribute('data-selected') }))`)
+  const headers = () => evaluate(`[...document.querySelectorAll('[data-command-palette] [role=group]')].map(group => group.getAttribute('aria-label'))`)
+  const openFresh = async () => {
+    if (await evaluate(OPEN)) {
+      await press("Escape")
+      await until(GONE, "closed before opening again")
+    }
+    await press("k", { meta: true })
+    await until(OPEN, "the palette opens")
+  }
+  const setQuery = async (text) => {
+    await evaluate(`(() => { const input = document.querySelector(${JSON.stringify(FIELD)}); input.select(); return true })()`)
+    if (text) await type(text)
+    else await press("Backspace")
+    await until(`document.querySelector(${JSON.stringify(FIELD)}).value === ${JSON.stringify(text)}`, `typed ${text}`)
+    await frames()
+  }
+
+  // Nothing typed: recent Threads, suggested actions and projects at once, each group headed once.
+  await openFresh()
+  await until(`document.querySelectorAll('[data-command-palette] [data-palette-row]').length > 5`, "rows with nothing typed")
+  const empty = await headers()
+  assert.ok(empty.includes("Threads") && empty.includes("Actions"), `recent Threads and actions with nothing typed: ${empty.join(", ")}`)
+  assert.equal(new Set(empty).size, empty.length, "each group headed once")
+  assert.ok((await rowsNow())[0]?.selected, "the first row is highlighted")
+  await capture("10-empty-dark.png")
+  console.log(`PASS: nothing typed lists ${empty.join(", ")}`)
+
+  // Typed: grouped, each header once, matched letters lit, footer says what Enter and ⌘↩ do.
+  await setQuery("toggle")
+  const toggled = await rowsNow()
+  assert.ok(toggled.length > 2 && toggled.every((row) => row.lit.toLowerCase().includes("toggle") || !row.id.startsWith("command:")), `toggle lights its letters: ${JSON.stringify(toggled.slice(0, 4))}`)
+  const typedHeaders = await headers()
+  assert.equal(new Set(typedHeaders).size, typedHeaders.length, `no header twice: ${typedHeaders.join(", ")}`)
+  assert.match(await evaluate(`document.querySelector('[data-palette-footer]').textContent`), /Run/)
+  assert.equal(toggled.at(-1)?.id, "search:conversations", "the last row searches every conversation for the words")
+  await capture("11-typed-dark.png")
+  await setQuery("theme")
+  await until(`document.querySelector('[data-palette-row="settings:appearance"]') !== null`, "theme finds Settings › Appearance", 10_000)
+  await capture("12-setting-by-keyword-dark.png")
+  console.log("PASS: typed rows group under one header each, letters lit, Settings found by its words")
+
+  // Tabs: → with nothing typed moves along them; ⌘P is Files.
+  await setQuery("")
+  await press("ArrowRight")
+  await until(`document.querySelector('[data-command-palette]').dataset.category === 'threads'`, "→ to Threads")
+  assert.ok((await rowsNow()).every((row) => ["threads", "fins", "needs"].includes(row.group)), "the Threads tab lists Threads")
+  await capture("13-threads-tab-dark.png")
+  await press("ArrowLeft")
+  await until(`document.querySelector('[data-command-palette]').dataset.category === 'all'`, "← back to All")
+  await press("p", { meta: true })
+  await until(`document.querySelector('[data-command-palette]').dataset.category === 'files'`, "⌘P is the Files tab")
+  await press("k", { meta: true })
+  await until(`document.querySelector('[data-command-palette]').dataset.category === 'all'`, "⌘K back to All")
+  console.log("PASS: ← and → move between tabs with nothing typed; ⌘P and ⌘K switch tabs")
+
+  // > narrows to actions.
+  await setQuery(">new")
+  await until(`document.querySelector('[data-palette-prefix]')?.textContent === 'Actions'`, "> says Actions")
+  assert.ok((await rowsNow()).every((row) => ["actions", "settings", "models"].includes(row.group)), "> lists actions only")
+  console.log("PASS: > narrows to actions")
+
+  // A project: Tab looks inside it, Escape backs out of it and then closes.
+  await setQuery("api")
+  await until(`document.querySelector('[data-palette-row="project:/Users/you/api"]') !== null`, "the api project is listed")
+  const apiIndex = await evaluate(`Number(document.querySelector('[data-palette-row="project:/Users/you/api"]').dataset.index)`)
+  for (let step = 0; step < apiIndex; step += 1) await press("ArrowDown")
+  await until(`document.querySelector('[data-palette-row="project:/Users/you/api"]')?.hasAttribute('data-selected')`, "the project highlighted")
+  await press("Tab")
+  await until(`document.querySelector('[data-command-palette]').dataset.scope === 'project' && document.querySelector('[data-palette-scope]')?.textContent === 'api'`, "Tab scopes to api")
+  assert.equal(await evaluate(`document.querySelector(${JSON.stringify(FIELD)}).value`), "", "the scope starts empty")
+  assert.match(await evaluate(`document.querySelector(${JSON.stringify(FIELD)}).placeholder`), /Search in api/)
+  await capture("14-project-scope-dark.png")
+  await press("Escape")
+  await until(`document.querySelector('[data-command-palette]')?.dataset.scope === undefined && ${OPEN}`, "Escape backs out of the scope, the palette stays")
+  await press("Escape")
+  await until(GONE, "the second Escape closes it")
+  assert.deepEqual(await leaks(), [])
+  console.log("PASS: Tab scopes into a project, Escape backs out, then closes")
+
+  // ⌘⇧M: straight into the models.
+  await press("m", { meta: true, shift: true })
+  await until(`${OPEN} && document.querySelector('[data-command-palette]').dataset.scope === 'models'`, "⌘⇧M opens the models")
+  await until(`document.querySelectorAll('[data-command-palette] [data-palette-row^="model:"]').length > 0`, "models listed")
+  await capture("15-models-dark.png")
+  await press("Escape")
+  await press("Escape")
+  await until(GONE, "closed")
+  console.log("PASS: ⌘⇧M opens the palette in its models")
+
+  // Enter on a Thread opens it; nothing found offers a new Thread with the words.
+  await openFresh()
+  const threadRow = (await rowsNow()).find((row) => row.group === "threads")
+  assert.ok(threadRow, "a Thread to open")
+  await setQuery(threadRow.title)
+  await until(`document.querySelector('[data-command-palette] [data-palette-row]')?.dataset.paletteRow === ${JSON.stringify(threadRow.id)}`, "its exact title puts it first")
+  await press("Enter")
+  await until(GONE, "Enter opens it and closes the palette")
+  await openFresh()
+  await setQuery("qqzzxx unfindable")
+  await until(`document.querySelector('[data-palette-row="new-thread:typed"]') !== null`, "nothing found offers a new Thread")
+  await capture("16-no-match-dark.png")
+  await press("Escape")
+  await until(GONE)
+  console.log("PASS: Enter opens a Thread; nothing found offers New Thread with the words")
+
+  // Light theme, over Settings.
+  await evaluate(`import('/src/state/prefs.ts').then(({ prefsStore }) => { prefsStore.set({ theme: 'light' }); return true })`)
+  await evaluate(`window.dispatchEvent(new CustomEvent('mako:settings', { detail: 'appearance' })); true`)
+  await until(SETTINGS, "Settings, light")
+  await press("k", { meta: true })
+  await until(OPEN)
+  await setQuery("git")
+  await frames()
+  await capture("17-settings-light.png")
+  await press("Escape")
+  await until(GONE)
+  await press("Escape")
+  await until(`!(${SETTINGS})`)
+  await evaluate(`import('/src/state/prefs.ts').then(({ prefsStore }) => { prefsStore.set({ theme: 'dark' }); return true })`)
+
+  // 5,000 Threads: the palette opens and answers each key inside a frame or two.
+  await evaluate(`import('/src/state/thread-store.ts').then(({ threadsStore }) => {
+    const words = ["gateway", "retry", "billing", "auth", "palette", "inbox", "migrate", "postgres", "flaky", "onboarding", "deploy", "cache", "render", "worker", "webhook", "export", "sidebar", "phone", "ipad", "release"]
+    const projects = ["mako", "api", "site", "web", "infra", "mobile", "billing", "docs"]
+    const harnesses = ["claude", "codex", "cursor", "grok", "opencode"]
+    const now = Date.now()
+    const refs = Array.from({ length: 5000 }, (_, i) => ({ harness: harnesses[i % 5], nativeId: 'bench-' + i, path: '/bench/' + i + '.jsonl', cwd: '/Users/you/' + projects[i % 8], title: words[i % 20] + ' ' + words[(i * 7 + 3) % 20] + ' when ' + words[(i * 13 + 5) % 20] + ' fails #' + i, updatedAt: new Date(now - i * 60_000).toISOString(), threadId: 'bench-thread-' + i }))
+    threadsStore.set({ threads: [...threadsStore.get().threads, ...refs] })
+    return true
+  })`)
+  await frames()
+  const timeOpen = () => evaluate(`new Promise(resolve => {
+    const start = performance.now()
+    const done = () => document.querySelector('[data-command-palette] [data-palette-row]') ? resolve(performance.now() - start) : requestAnimationFrame(done)
+    window.dispatchEvent(new CustomEvent('mako:palette'))
+    requestAnimationFrame(done)
+  })`)
+  const opens = []
+  for (let round = 0; round < 5; round += 1) {
+    opens.push(await timeOpen())
+    await press("Escape")
+    await until(GONE)
+  }
+  await press("k", { meta: true })
+  await until(OPEN)
+  const keys = []
+  for (const text of ["g", "ga", "gat", "gate", "gatew", "gatewa", "gateway", "gateway a", "gateway au", "gateway aut", "gateway auth"]) {
+    keys.push(await evaluate(`new Promise(resolve => {
+      const input = document.querySelector(${JSON.stringify(FIELD)})
+      const before = document.querySelector('[data-command-palette] [role=listbox]').innerHTML
+      const start = performance.now()
+      const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set
+      setter.call(input, ${JSON.stringify(text)})
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      const done = () => document.querySelector('[data-command-palette] [role=listbox]').innerHTML !== before ? requestAnimationFrame(() => resolve(performance.now() - start)) : requestAnimationFrame(done)
+      requestAnimationFrame(done)
+    })`))
+  }
+  const found = await rowsNow()
+  assert.ok(found.some((row) => row.title?.startsWith("gateway auth")), "the 5,000 are searched")
+  assert.ok(await evaluate(`document.querySelector('[data-palette-group="threads"] .tabular')?.textContent.includes('more') ?? false`), "under All, Threads say how many more")
+  await capture("18-5k-threads-dark.png")
+  await press("Escape")
+  await until(GONE)
+  const sortedOpens = [...opens].sort((a, b) => a - b)
+  const sortedKeys = [...keys].sort((a, b) => a - b)
+  console.log(`TIMING: 5,000 Threads in the window: open to rows painted median ${sortedOpens[2].toFixed(1)} ms (max ${sortedOpens.at(-1).toFixed(1)}); a keystroke to its rows painted median ${sortedKeys[5].toFixed(1)} ms (max ${sortedKeys.at(-1).toFixed(1)})`)
+  assert.ok(sortedKeys[5] < 100, "a keystroke's rows paint well inside 100 ms")
 
   // An Apex on screen: the mock's Apex scene, its Fins working.
   await window.loadURL(`${base}?mock&app=apex&plugins=none`)

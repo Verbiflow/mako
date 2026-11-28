@@ -886,6 +886,59 @@ diffs-container {
  *      enough to be seen, and never delays the caret. See the palette.
  * ------------------------------------------------------------------ */
 
+/*
+ * The palette. Opened by keyboard dozens of times a day, so it moves only enough to be seen arriving: opacity and a
+ * 0.98 scale on the menu's tokens, out a little faster. The caret is in its field on the chord's frame either way.
+ */
+/* Scale alone: the panel is centred by `translate`, which a transform here composes with rather than replaces. */
+@keyframes palette-in {
+  from {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+@keyframes palette-out {
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+@keyframes palette-scrim-in {
+  from {
+    opacity: 0;
+  }
+}
+@keyframes palette-scrim-out {
+  to {
+    opacity: 0;
+  }
+}
+.palette-panel {
+  transform-origin: 50% 0;
+}
+.palette-panel[data-state="open"] {
+  animation: palette-in var(--duration-menu) var(--ease-out);
+}
+.palette-panel[data-state="closed"] {
+  animation: palette-out var(--duration-menu-out) var(--ease-swift) forwards;
+}
+.palette-scrim[data-state="open"] {
+  animation: palette-scrim-in var(--duration-menu) var(--ease-out);
+}
+.palette-scrim[data-state="closed"] {
+  animation: palette-scrim-out var(--duration-menu-out) var(--ease-swift) forwards;
+}
+/* The list fades at its edges as it scrolls, instead of a rule. */
+.palette-list {
+  mask-image: linear-gradient(to bottom, transparent, #000 6px, #000 calc(100% - 10px), transparent);
+}
+@media (prefers-reduced-motion: reduce) {
+  .palette-panel[data-state],
+  .palette-scrim[data-state] {
+    animation: none;
+  }
+}
+
 @keyframes mako-enter {
   from {
     opacity: 0;

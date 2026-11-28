@@ -1,6 +1,8 @@
 import { observeVisibleAnimation } from "@/lib/visible-animation"
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, MessagesSquareIcon, MoonIcon, ServerIcon, SquarePenIcon } from "lucide-react"
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, MessagesSquareIcon, MoonIcon, SearchIcon, ServerIcon, SquarePenIcon } from "lucide-react"
+import { loadWebSettings, paletteThreads, useThreadOpener } from "./palette-threads"
+import type { PaletteItem } from "@/components/palette/palette-search"
 import { askWords, childLine, childStateOf, childWord, finsAsChildren, rollup, rollupLabel } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { WORK_STATUS_WORDS } from "@mako/host/contracts/thread-marks"
@@ -95,6 +97,11 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
     }
     return { placedByApex: under, unplaced: alone }
   }, [placed, byId])
+  // Search: the desk's palette over every Thread listed here, Fins and archived ones too; its rows open as a row does.
+  useThreadOpener(onOpen)
+  // The palette's code loads the first time Search is pressed: a phone's list opens without it.
+  const [searchAsked, setSearchAsked] = useState(0)
+  const searchRows = useMemo(() => (searchAsked ? paletteThreads([...threads, ...placed, ...archived]) : []), [searchAsked, threads, placed, archived])
   const read = useReadState((state) => state)
   const asked = useAskedMarks((state) => state)
   // Threads listed here for the first time read as seen: only what happens from now on is news.
@@ -170,7 +177,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
         <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
           <ListTrouble />
           {wide || list.phase === "starting" ? null : <SetupCard onNew={onNew} onSettings={onSettings} />}
-          <ListTop wide={wide} starting={starting} onNew={onNew} inbox={onInbox && (threads.length > 0 || archived.length > 0) ? { count: webInboxCount(threads, fins, placed), open: inbox, onOpen: onInbox } : undefined} />
+          <ListTop wide={wide} starting={starting} onNew={onNew} onSearch={threads.length > 0 || archived.length > 0 ? () => setSearchAsked((asked) => asked + 1) : undefined} inbox={onInbox && (threads.length > 0 || archived.length > 0) ? { count: webInboxCount(threads, fins, placed), open: inbox, onOpen: onInbox } : undefined} />
           {threads.length === 0 && archived.length === 0 ? (
             <EmptyList answered={list.phase === "live" || list.asOf !== undefined} onNew={onNew} />
           ) : groups.length ? (
@@ -231,6 +238,11 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
             <span className="min-w-0 flex-1 truncate text-left">{client.account.name || client.account.email}</span>
           </button>
         </footer>
+      ) : null}
+      {searchAsked ? (
+        <Suspense fallback={null}>
+          <TouchSearch rows={searchRows} asked={searchAsked} />
+        </Suspense>
       ) : null}
     </div>
   )
@@ -714,16 +726,18 @@ export function ThreadRow({ thread, selected, named, onOpen, context = {}, marks
 /**
  * The rail's fixed top, the desk's own rows (`RailRow`, as `rail-top.tsx` draws them) at a finger's height: on a
  * tablet New thread and the Inbox, on a phone the Inbox alone, since New floats at the foot in thumb's reach. The
- * Inbox's count is the desk's, a number in the attention hue. Search, Pull requests and Automations need a Mac's
- * palette, checkouts and schedules, which this browser doesn't reach, so they have no row here.
+ * Inbox's count is the desk's, a number in the attention hue. Search opens the desk's palette on its Threads, as the
+ * laptop's Search row does, over every Thread the account lists. Pull requests and Automations need a Mac's checkouts
+ * and schedules, which this browser doesn't reach, so they have no row here.
  */
-function ListTop({ wide, starting, onNew, inbox }: { wide: boolean; starting: boolean; onNew: () => void; inbox: { count: number; open: boolean; onOpen: () => void } | undefined }) {
-  if (!wide && !inbox) return null
+function ListTop({ wide, starting, onNew, inbox, onSearch }: { wide: boolean; starting: boolean; onNew: () => void; inbox: { count: number; open: boolean; onOpen: () => void } | undefined; onSearch: (() => void) | undefined }) {
+  if (!wide && !inbox && !onSearch) return null
   // A finger's 44 px, its icon in the column the projects' tiles stand in: inset on the tablet's rail as on the desk's.
   const row = cn("h-11 gap-3", wide ? "px-2" : "px-4")
   return (
     <nav aria-label="Go to" data-rail-top className={cn("flex shrink-0 flex-col gap-px pt-2", wide && "px-2")}>
       {wide ? <RailRow data-rail-top-row="session.new" icon={<SquarePenIcon />} label="New thread" open={starting} onClick={onNew} className={row} /> : null}
+      {onSearch ? <RailRow data-rail-top-row="view.command-palette" icon={<SearchIcon />} label="Search" onClick={onSearch} className={row} /> : null}
       {inbox ? (
         <RailRow
           data-rail-top-row="inbox"
@@ -775,4 +789,15 @@ function useAwayWhileScrolling(scroller: React.RefObject<HTMLDivElement | null>,
     return () => node.removeEventListener("scroll", scrolled)
   }, [scroller, on])
   return away
+}
+
+const CommandPalette = lazy(() => import("@/components/palette/command-palette").then((module) => ({ default: module.CommandPalette })))
+
+/** The palette over the list's Threads, opened on its Threads tab each time Search is pressed. */
+function TouchSearch({ rows, asked }: { rows: readonly PaletteItem[]; asked: number }) {
+  useEffect(() => {
+    // After the palette's own listener is in: a child's effects run before its parent's.
+    window.dispatchEvent(new CustomEvent("mako:palette", { detail: { category: "threads" } }))
+  }, [asked])
+  return <CommandPalette threads={rows} settings={loadWebSettings} />
 }

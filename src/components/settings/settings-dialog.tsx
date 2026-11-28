@@ -62,6 +62,9 @@ const SECTIONS: readonly SettingsSection[] = [
   about,
 ]
 
+/** Every section, in the nav's order: what the palette lists of Settings (`useSettingsItems`). */
+export const SETTINGS_SECTIONS: readonly SettingsSection[] = SECTIONS
+
 /**
  * Settings takes the whole window, the way a preferences page does: its own
  * title strip with the way back, a grouped nav with a search-as-index, and
