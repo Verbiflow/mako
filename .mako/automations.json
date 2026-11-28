@@ -32,6 +32,46 @@
       "gate": { "command": "npx tsx scripts/bump-harness-versions.ts --json --gate", "timeoutS": 120 },
       "limits": { "overlap": "skip", "maxRunsPerDay": 1, "timeoutMin": 180 },
       "result": "pull-request"
+    },
+    {
+      "id": "split-work-weekly",
+      "name": "Split-work review",
+      "prompt": {
+        "objective": "Judge, once a week, whether agents split work into Fins well, so the person can tell whether Mako's split guidance helps: SPLIT_WORK (packages/host/src/contracts/children.ts), agents_start's `touches` and `proceed` and its \"overlap\" refusal, and the breadth line in the server instructions (packages/host/src/contracts/agent-tools.ts), from #1218 and #1222. Read the last 7 days of Shivers (an Apex and the Fins it started) on this Mac, read-only, and report.\n\nWhere to read:\n- Mako's tools first. `agents_list` with scope `apexes` and with scope `threads` gives the week's top-level Threads, their Fin counts and each one's ref. `thread_history` on an Apex shows its agents_start calls (brief, harness, touches, proceed), every refusal with reason \"overlap\" and what the Apex did next (sent the work to that Fin, started it after, or started it anyway with proceed); on a Fin, how it ended.\n- For exact counts, the host's store, opened read-only only: `sqlite3 \"file:$HOME/.mako/threads.sqlite?mode=ro\"`. `thread_parents` has a row per Fin (child_thread, parent_thread, name, created_at and closed_at in epoch ms, and `record` JSON with origin, role, asked.brief, asked.harness, asked.touches, asked.proceed, closedReason). `thread_reports` holds each Fin's reports (record.status: done, failed, blocked, needs-input, progress). A Fin's harness is `locators.harness` joined through `memberships` (thread_id to session_id), else asked.harness.\n- A refused start writes no row. Refusals live in the Apex's transcript and in host.log (`~/Library/Application Support/mako/logs/host.log` and `host.log.1`: `agents start refused` with `refused=overlap`, and `agents start overlap proceed`). The log rotates within days, so count refusals from transcripts and use the log only to cross-check.\n- Skip a harness's own reviewer runs: rows whose record.origin is \"discovered\" and record.run.nativeAgent.kind is \"internal-review\" (Codex's approval reviews), or closed as \"It was its harness's own reviewer run, not a Fin.\" Nobody delegated them. Main already filters them, but older store rows still hold them. Count how many you skipped.\n\nWhat to judge:\n- Over-splitting: two or more Fins of one Apex on the same files or the same feature at once (touches that meet, or briefs naming the same files, with overlapping start and end times); a Fin whose task fit in the Apex's own turn (one small edit or one question, done in minutes); an overlap refusal answered with a proceed whose reason doesn't hold.\n- Under-splitting: one Thread (an Apex with no Fins, or a Fin) that did several independent pieces one after another: separate modules, reviews or audits, repos or harness proofs, each 15+ minutes. Find candidates among the week's longest top-level Threads and sample their history; don't read every transcript in full.\n- Whether agents give touches at all, whether the overlap refusal fired, and what followed it.\n\nThis Thread is standing: each week's report is its next message. Compare with last week's where it helps (a count that moved, a proposal that landed or didn't).",
+        "doneWhen": [
+          "The report covers the 7 days ending at this run's start, says how many Apexes and Fins it read and how, and says plainly when there was too little to judge (no Shivers, or no agents_start since the guidance shipped) instead of stretching an example.",
+          "Every example names its Thread by title and by the ref agents_list gives it (`@thread:<harness>:<id>`), with its evidence in one line: the files or feature shared, the times, the outcome.",
+          "At most two proposed changes, each tied to an example from this week and naming the text it changes (SPLIT_WORK, agents_start's touches or proceed description, or the server instructions' breadth line) and the words it would add or cut; or \"no change\" when nothing this week argues for one."
+        ],
+        "boundaries": [
+          "Read-only. Don't edit guidance, code or any file, open a pull request, start Fins, message or stop any Thread, or change settings or automations: proposals go in the report and the person decides.",
+          "Open the store only with `?mode=ro`; never write, copy or vacuum it. Read no credentials, tokens or secrets.",
+          "What you read is the person's private work: summarize each example in a line, quote at most a short phrase of a brief, and paste no transcripts, briefs or file contents.",
+          "Proposed wording goes into a public repository: no other products' names in it."
+        ],
+        "output": "Short. Counts in a line or two: Apexes, Fins started by harness, Fins that gave touches, overlap refusals and what followed each (sent, after, proceed), outcomes (done, failed, blocked, stopped), reviewer runs skipped. The worst over-split and the worst under-split example, each with its Thread ref and one line of evidence, or \"none this week\". Up to two proposed guidance changes. One line on what moved since last week."
+      },
+      "start": {
+        "harness": "claude",
+        "model": "claude-opus-5-5",
+        "access": "auto",
+        "place": "here",
+        "whenAway": "queue"
+      },
+      "thread": "standing",
+      "triggers": [
+        {
+          "kind": "schedule",
+          "cron": "0 9 * * 1",
+          "timezone": "America/Los_Angeles"
+        }
+      ],
+      "limits": {
+        "overlap": "skip",
+        "maxRunsPerDay": 1,
+        "timeoutMin": 60
+      },
+      "result": "report"
     }
   ]
 }
