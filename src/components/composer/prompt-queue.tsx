@@ -113,6 +113,8 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
   const delivery = limit?.request.continues?.auto ? listed.filter(request => request.id !== limit.request.id) : listed
   const [expanded, setExpanded] = useState(false)
   const [pageIndex, setPageIndex] = useState(0)
+  // What was queued when the list was first drawn stands; what's queued after it arrives (`animate-enter`).
+  const [standing] = useState(() => new Set(delivery.map((request) => request.id)))
   if (!target || !delivery.length) return null
   const page = Math.min(
     pageIndex,
@@ -152,23 +154,24 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
       </div>
       <div className="min-h-0 overflow-y-auto">
         {shown.map((request) => (
-          <QueueRow
-            key={request.id}
-            target={target}
-            request={request}
-            limitWait={request.id === limit?.request.id}
-            onEdit={onEdit}
-            editable={
-              native ||
-              Boolean(
-                accepted?.some(
-                  (item) =>
-                    item.id === request.id &&
-                    (item.status === "queued" || item.status === "held")
+          <div key={request.id} className={standing.has(request.id) ? undefined : "animate-enter"}>
+            <QueueRow
+              target={target}
+              request={request}
+              limitWait={request.id === limit?.request.id}
+              onEdit={onEdit}
+              editable={
+                native ||
+                Boolean(
+                  accepted?.some(
+                    (item) =>
+                      item.id === request.id &&
+                      (item.status === "queued" || item.status === "held")
+                  )
                 )
-              )
-            }
-          />
+              }
+            />
+          </div>
         ))}
       </div>
       {expanded && delivery.length > 20 ? (

@@ -1,5 +1,6 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { SquarePenIcon } from "lucide-react"
+import { useSwitchFade } from "@/components/ui/use-switch-fade"
 import { toast } from "sonner"
 import { landTranscriptsAtEnd } from "@/components/transcript/transcript-end"
 import { MakoMark } from "@/components/ui/mako-mark"
@@ -212,6 +213,8 @@ export function WebApp() {
       onInbox={() => open({ kind: "inbox" })}
     />
   )
+  const pane = useRef<HTMLDivElement>(null)
+  useSwitchFade(pane, wide ? (startPane ? "new" : under.kind === "thread" ? `thread:${under.thread}` : under.kind) : undefined)
   const detail = startPane ? (
     startCode ? (
       <startCode.StartPane onDismiss={back} onStarted={onStarted} />
@@ -284,7 +287,10 @@ export function WebApp() {
         <>
           <div className="web-rail flex shrink-0 flex-col">{list}</div>
           <main className="relative flex min-w-0 flex-1 flex-col">
-            {detail ?? <NothingOpen onNew={() => navigate({ kind: "new", over: under })} />}
+            {/* Another Thread (or screen) in the pane fades up in place of the last. */}
+            <div ref={pane} className="flex min-h-0 min-w-0 flex-1 flex-col">
+              {detail ?? <NothingOpen onNew={() => navigate({ kind: "new", over: under })} />}
+            </div>
             <ReviewLayer form={form} place={reviewPlace} />
             <FilesLayer form={form} place={reviewPlace} />
           </main>

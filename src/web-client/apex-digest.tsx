@@ -5,6 +5,7 @@ import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { ApexMark } from "@/components/ui/apex-mark"
 import { finsWord } from "@mako/host/contracts/agents"
 import { cn } from "@/lib/utils"
+import { Collapse } from "@/components/ui/collapse"
 import { useThreadChildren } from "@/state/apex-fins"
 import { useSeenSince } from "@/state/apexes"
 import { useWebClient } from "./client"
@@ -65,7 +66,7 @@ export function PhoneApexDigest({ thread, session, onOpenFin }: { thread: WebThr
         </span>
         <ChevronRightIcon className={cn("size-3.5 shrink-0 text-faint transition-transform duration-150", shown && "rotate-90")} />
       </button>
-      {shown ? (
+      <Collapse open={shown}>
         <div className="flex max-h-[45dvh] flex-col overflow-y-auto overscroll-contain pb-2">
           <Part heading={DIGEST_HEADINGS.needs} items={digest.needs} shown={5} attention render={(item) => {
             if (item.kind === "plan") return <PlanLine key={item.key} item={item} {...(!lastKnown && { onDone: () => check(item) })} />
@@ -78,7 +79,7 @@ export function PhoneApexDigest({ thread, session, onOpenFin }: { thread: WebThr
           <Part heading={DIGEST_HEADINGS.new} items={digest.new} folds render={(item) => <FinLine key={item.key} item={item} onOpen={() => { const agent = fin(item); if (agent) onOpenFin(agent) }} />} />
           <Part heading={DIGEST_HEADINGS.progress} items={digest.progress} folds render={(item) => <FinLine key={item.key} item={item} onOpen={() => { const agent = fin(item); if (agent) onOpenFin(agent) }} />} />
         </div>
-      ) : null}
+      </Collapse>
     </section>
   )
 }
@@ -104,12 +105,14 @@ function Part({ heading, items, render, attention = false, folds = false, shown:
         {heading} <span className="ml-1.5 font-normal tabular text-faint">{items.length}</span>
         <ChevronRightIcon className={cn("ml-auto size-3.5 text-faint transition-transform duration-150", open && "rotate-90")} />
       </button>
-      {open ? shown.map(render) : null}
-      {open && items.length > first && !all ? (
-        <button type="button" onClick={() => setAll(true)} className="pressable flex h-9 w-full items-center px-4 text-label text-faint">
-          Show {items.length - first} more
-        </button>
-      ) : null}
+      <Collapse open={open}>
+        {shown.map(render)}
+        {items.length > first && !all ? (
+          <button type="button" onClick={() => setAll(true)} className="pressable flex h-9 w-full items-center px-4 text-label text-faint">
+            Show {items.length - first} more
+          </button>
+        ) : null}
+      </Collapse>
     </div>
   )
 }
