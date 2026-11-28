@@ -2580,8 +2580,19 @@ export class ThreadWorktreeService {
         throw new Error("This repository has no commits yet, so a worktree has nothing to start from. Make a first commit, or choose Project folder.", { cause: error })
       }
       let adopted: string | undefined
+      let made: string | undefined
       let started: string | undefined
-      if (from.kind === "newest") ({ commit: base, from: started } = await this.starts.point(repoRoot, false))
+      if (from.kind === "branch" && from.make && !(await this.hasBranch(repoRoot, from.branch))) {
+        // A branch a Fin's start names that isn't there yet is made, from its base or the start point.
+        if (!(await this.git.succeeds(repoRoot, ["check-ref-format", "--branch", from.branch])))
+          throw new Error(`${from.branch} isn't a name Git allows for a branch.`)
+        if (from.make.from !== undefined) {
+          base = await this.git.output(repoRoot, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${from.make.from}^{commit}`]).catch(() => "")
+          if (!base) throw new Error(`${from.make.from} isn't in ${basename(repoRoot)} anymore. Choose another branch to start from.`)
+          started = from.make.from
+        } else ({ commit: base, from: started } = await this.starts.point(repoRoot, false))
+        made = from.branch
+      } else if (from.kind === "newest") ({ commit: base, from: started } = await this.starts.point(repoRoot, false))
       else if (from.kind === "from") {
         base = await this.git.output(repoRoot, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${from.ref}^{commit}`]).catch(() => "")
         if (!base) throw new Error(`${from.ref} isn't in ${basename(repoRoot)} anymore. Choose another branch to start from.`)
@@ -2591,7 +2602,7 @@ export class ThreadWorktreeService {
       const parent = this.projectFolder(repoRoot)
       const slug = adopted
         ? this.freeFolder(parent, worktreeSlug(adopted.replace(/[/_.]+/g, " ")))
-        : await this.reserveSlug(repoRoot, parent, worktreeSlug(branch?.replace(/[/_.]+/g, " ") ?? name), base)
+        : await this.reserveSlug(repoRoot, parent, worktreeSlug((branch ?? made)?.replace(/[/_.]+/g, " ") ?? name), base)
       const path = join(parent, slug)
       const inside = relative(repoRoot, source)
       receipt = {
@@ -2600,7 +2611,7 @@ export class ThreadWorktreeService {
         repoRoot,
         path,
         cwd: inside && !inside.startsWith("..") ? join(path, inside) : path,
-        branch: adopted ?? branch ?? `${BRANCH_PREFIX}${slug}`,
+        branch: adopted ?? branch ?? made ?? `${BRANCH_PREFIX}${slug}`,
         base,
         state: "creating",
       }

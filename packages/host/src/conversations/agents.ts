@@ -4610,7 +4610,8 @@ export class Agents implements AgentOperations, ConversationChildren {
       ...(tuning && { tuning }),
       ...(workspace && {
         worktree: true,
-        ...(workspace.branch ? { worktreeStart: { kind: "branch" as const, branch: workspace.branch } } : workspace.base ? { worktreeStart: { kind: "from" as const, ref: workspace.base } } : {}),
+        // A branch is taken if it's there, else made from base (`AgentsStartInput.workspace`).
+        ...(workspace.branch ? { worktreeStart: { kind: "branch" as const, branch: workspace.branch, make: { ...(workspace.base && { from: workspace.base }) } } } : workspace.base ? { worktreeStart: { kind: "from" as const, ref: workspace.base } } : {}),
       }),
       parent,
     }
