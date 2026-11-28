@@ -15,6 +15,7 @@ import { SessionDraftReceipt } from "@/components/stage/session-draft-receipt"
 import { openSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { Divider } from "@/components/shell/divider"
 import { useSideSlide } from "@/components/shell/side-slide"
+import { useSwitchFade } from "@/components/ui/use-switch-fade"
 import { ErrorBoundary } from "@/components/shell/error-boundary"
 import { useSurfaces } from "@/extend/surfaces"
 import { APEX_COMPANION, shownCompanion, stage, useStage } from "@/state/stage"
@@ -187,6 +188,9 @@ export function Stage() {
   const shownSide = sideSurface ?? (companionSlide.leaving ? kept?.surface : undefined)
   const shownWidth = sideSurface ? width : (kept?.width ?? width)
   const leaving = companionSlide.leaving && !sideSurface
+  // Another of its tabs: the body fades up under the same bar.
+  const companionBody = useRef<HTMLDivElement>(null)
+  useSwitchFade(companionBody, shownSide?.id)
   const coveredNow = sideSurface ? covered : Boolean(kept?.covered)
 
   return (
@@ -256,9 +260,11 @@ export function Stage() {
                 </div>
               ) : null}
               <SideRail surfaces={sideSurfaces} activeId={shownSide.id} />
-              <ErrorBoundary key={shownSide.id} surface={shownSide.label}>
-                <CompanionBody render={shownSide.render} />
-              </ErrorBoundary>
+              <div ref={companionBody} className="flex min-h-0 min-w-0 flex-1 flex-col">
+                <ErrorBoundary key={shownSide.id} surface={shownSide.label}>
+                  <CompanionBody render={shownSide.render} />
+                </ErrorBoundary>
+              </div>
             </div>
           </div>
         ) : null}

@@ -516,7 +516,7 @@ export function GonePermission({ permission }: { permission: LivePermissionReque
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
   const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
   return (
-    <div data-permission-gone={permission.id} className="shrink-0 bg-surface/60 px-4 py-2.5">
+    <div data-permission-gone={permission.id} className="animate-enter shrink-0 bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         <CircleAlertIcon aria-hidden className="size-3.5 shrink-0 text-caution" />
         <span className="min-w-0 truncate">{provider} stopped before you answered</span>
@@ -558,7 +558,7 @@ function PermissionInput({ permission }: { permission: LivePermissionRequest }) 
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
   const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
   return (
-    <div data-permission={permission.id} className="shrink-0 bg-surface/60 px-4 py-2.5">
+    <div data-permission={permission.id} className="animate-enter shrink-0 bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         {permission.kind ? (
           <ToolGlyph
@@ -663,7 +663,7 @@ function QuestionPermission({
       answers[question.id]?.some((answer) => answer.trim().length > 0)
   )
   return (
-    <div className="shrink-0 bg-surface/60 px-4 py-3">
+    <div className="animate-enter shrink-0 bg-surface/60 px-4 py-3">
       <p className="flex items-center gap-1.5 pb-2 text-ui text-foreground/90">
         <ShieldQuestionIcon className="size-3.5 shrink-0 text-attention/90" />
         <span className="min-w-0 truncate">{permission.title}</span>
