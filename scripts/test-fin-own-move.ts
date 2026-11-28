@@ -7,6 +7,7 @@ import { join } from "node:path"
 import { Git } from "@mako/git"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { WorkspaceMoves } from "@mako/host/workspaces/moves"
+import { moveablePlace, workspaceTools } from "@mako/host/workspaces/tools"
 import { moveSource, ThreadWorktreeMoves } from "@mako/host/workspaces/thread-worktree-moves"
 import { ThreadWorktreeService } from "@mako/host/workspaces/thread-worktrees"
 import { AgentsWorld, type Script } from "./lib/agents-world.ts"
@@ -157,7 +158,95 @@ async function scenario(name: string, options: { elsewhere: boolean; busyWhileMa
   }
 }
 
-/** Naming a case (`forks`, `busy`) runs it alone. */
+/**
+ * 2026-11-28: a Fin's Apex worked in its own worktree and started it with no workspace, so it began in
+ * the Apex's worktree, and its worktree_move onto a new branch from the commit production runs was refused as "a worktree
+ * made outside Mako". The Apex's worktree is Mako's: the Fin moves out of it onto a branch of its own, from the base it
+ * named, and the Apex's worktree and branch stay as they are.
+ */
+async function leavesApexWorktree(harness: "claude" | "codex") {
+  const name = `apex-worktree-${harness}`
+  const repo = repository(name)
+  const main = git(repo, "rev-parse", "HEAD")
+  // The Apex's branch moves on from main, so a Fin that names main as its base doesn't start from the Apex's work.
+  const branch = `fix/own-${harness}`
+  let fin = ""
+  let asked: string | undefined
+  let workspace!: WorkspaceMoves
+  const script: Script = async (turn) => {
+    if (turn.text.includes("You're fin:")) {
+      const cwd = turn.world.live.session(turn.conversation)!.cwd
+      // worktree_move(branch, base) as `workspace/tools.ts` takes it.
+      await worktrees.wantBranch(turn.conversation, cwd, { branch, base: main }).then(() => workspace.ask(turn.conversation)).then((said) => { asked = said }, (error: Error) => { asked = `refused: ${error.message}` })
+      return "Moving onto my own branch."
+    }
+    return "ok"
+  }
+  const world = new AgentsWorld({ root: repo, script, elsewhere: true })
+  const store = world.store
+  const worktrees = new ThreadWorktreeService(new Git(), join(root, `${name}-worktrees`), store)
+  const threadMoves = new ThreadWorktreeMoves({
+    conversations: world.live,
+    worktrees,
+    threadOf: (id) => store.journalPlacement(id)?.thread,
+    archived: (id) => world.archived.has(id),
+    archive: (id) => { world.archived.add(id) },
+    moved: () => {},
+    launch: async (_harness, _cwd, tuning) => tuning,
+    warn: () => {},
+  })
+  const failures: string[] = []
+  writeFileSync(join(root, `${name}-moves.json`), JSON.stringify({ alwaysAllowed: [] }))
+  workspace = new WorkspaceMoves({
+    file: join(root, `${name}-moves.json`),
+    source: (id) => moveSource(world.live, id),
+    companions: (id) => threadMoves.companions(id),
+    // As the host places a move (`workspaces/index.ts`).
+    place: (id, cwd) => moveablePlace(new Git(), worktrees, id, threadMoves.project(id) ?? cwd),
+    move: async (id) => (await threadMoves.carry(id, { lead: true, tell: true, waitTurn: true })).session.id,
+    follow: async (id, told, lead) => { await threadMoves.carry(id, { lead: false, tell: told, after: lead }) },
+    announce: () => {},
+    tier: () => "full",
+    failed: (_id, message) => failures.push(message),
+  })
+  const settling = setInterval(() => { if (fin) workspace.settled(fin) }, 20)
+  try {
+    const apex = await world.apex(harness, "full")
+    // The Apex works in its own worktree, on its own branch, a commit past main.
+    world.say(apex.conversation, "Fix the webhook on a branch of its own.")
+    await world.settle()
+    await threadMoves.carry(apex.conversation, { lead: true, tell: false })
+    const apexCheckout = worktrees.threadCheckout(apex.conversation)!
+    assert.ok(apexCheckout, "the Apex has its worktree")
+    writeFileSync(join(apexCheckout.path, "app", "index.ts"), "export const answer = 42\n")
+    git(apexCheckout.path, "commit", "-qam", "the Apex's work")
+    const { status } = workspaceTools({ git: new Git(), cwd: (id) => world.live.session(id)?.cwd, worktrees, moves: workspace, changed: () => {} })
+    const started = await world.agents.start(apex.caller, { brief: { objective: "Fix it on a branch of its own" }, harness, name: "own", clientKey: "own" })
+    assert.ok(!("refused" in started) && started.conversation, JSON.stringify(started))
+    fin = started.conversation!
+    assert.equal(realpathSync(world.live.session(fin)!.cwd), realpathSync(apexCheckout.path), "it starts in its Apex's worktree")
+    const where = await status(fin)
+    assert.equal(where.editsIn, "another Thread's worktree", JSON.stringify(where))
+    assert.equal(where.otherThreadWorktree?.branch, apexCheckout.branch)
+    await until("the carry-on message", () => world.prompts.some((prompt) => prompt.conversation !== apex.conversation && prompt.text.includes("You're on this Thread's own branch now")) || failures.length > 0 || asked?.startsWith("refused") === true, 30_000)
+    assert.doesNotMatch(asked ?? "", /^refused/, "its move isn't refused")
+    assert.deepEqual(failures, [], "and goes through")
+    await world.settle(400)
+    const own = worktrees.threadCheckout(fin)
+    assert.ok(own && existsSync(own.path), "its own worktree is there")
+    assert.notEqual(own!.path, apexCheckout.path, "apart from its Apex's")
+    assert.equal(own!.branch, branch, "on the branch it asked for")
+    assert.equal(git(own!.path, "rev-parse", "HEAD"), main, "from the base it named, not the Apex's work")
+    assert.equal(git(apexCheckout.path, "branch", "--show-current"), apexCheckout.branch, "its Apex's worktree stays on its branch")
+    assert.equal(worktrees.threadCheckout(apex.conversation)?.path, apexCheckout.path, "and stays its Apex's")
+    assert.equal(store.edges().of(ThreadIdSchema.parse(store.journalPlacement(fin)!.thread))?.closedAt, undefined, "its delegation stays open")
+  } finally {
+    clearInterval(settling)
+    await world.close()
+  }
+}
+
+/** Naming a case (`forks`, `busy`, `apex-worktree`) runs it alone. */
 const only = process.argv[2]
 try {
   if (!only || only === "forks") {
@@ -167,6 +256,12 @@ try {
   if (!only || only === "busy") {
     await scenario("busy", { elsewhere: true, busyWhileMade: true })
     console.log("a Fin whose turn began while its worktree was made: it moved as itself once the turn ended, its branch kept")
+  }
+  if (!only || only === "apex-worktree") {
+    for (const harness of ["claude", "codex"] as const) {
+      await leavesApexWorktree(harness)
+      console.log(`${harness}: a Fin started in its Apex's worktree moves out onto its own branch, from the base it named`)
+    }
   }
 } finally {
   rmSync(root, { recursive: true, force: true })

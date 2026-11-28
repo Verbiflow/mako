@@ -156,7 +156,7 @@ import { resetWords, type HarnessLimit } from "../contracts/account-usage.js"
 import { signInPause, signInResuming } from "../contracts/sign-in-hold.js"
 import { FIN_LIMIT, finPolicyNote, placeFull, roleRuleLines, type RoleRuleLines, type CloudFinLimits, type FinPlaceLimit, FinTuningSourceSchema, finTuningLine, finTuningWords, resolveFinTuning, type FinPolicy, type FinTarget, type FinTuningSource } from "../contracts/fin-tuning.js"
 import { AFTER_LIMIT, ASK_OPTIONS, type FinAsk, type NativeAgent } from "../contracts/native-agents.js"
-import { backgroundWorkText, HELD_WORK_CEILING_MS, pendingWake, providerHolds, staleWork } from "../contracts/background-work.js"
+import { backgroundWorkText, HELD_WORK_CEILING_MS, pendingWake, providerHolds, staleWork, WAKE_GRACE_MS } from "../contracts/background-work.js"
 import type { PendingAsk } from "../contracts/live-questions.js"
 import { RESTART_RETIRED_MOVE, type ContextTransfer } from "../contracts/conversation-control.js"
 import type { LiveRequest, LiveSnapshot, LiveStartOptions } from "../contracts/live-conversations.js"
@@ -499,6 +499,8 @@ export interface AgentsDeps {
   processes?: ProcessReads
   /** `APEX_ANSWER_MS`, shorter in tests. */
   apexAnswerMs?: number
+  /** `WAKE_GRACE_MS`: how long a Fin's ended held work has to start its harness's turn before nothing woke it; shorter in tests. */
+  wakeGraceMs?: number
   /** `FOCUS_MS`: how long a working Apex's turn runs before what waits for its end is steered in once; shorter in tests. */
   focusMs?: number
   /** `HOLD_RESULTS_MS`: how long results that ask nothing wait for the Fins still at work; shorter in tests. */
@@ -879,9 +881,12 @@ export class Agents implements AgentOperations, ConversationChildren {
   /**
    * Fins whose turn ended while their own work went on, with that turn: its reply is their report once nothing is left.
    * `work` names what their harness held then (`pendingWake`), so a process that ends with it still pending is said;
-   * `woke`, that its harness started a turn of its own since, on that work.
+   * `woke`, that its harness started a turn of its own since, on that work; `quiet`, when that work was first seen
+   * ended with no such turn yet (`WAKE_GRACE_MS`).
    */
-  private readonly awaiting = new Map<string, { conversation: string; request: string; work?: string; woke?: true }>()
+  private readonly awaiting = new Map<string, { conversation: string; request: string; work?: string; woke?: true; quiet?: number }>()
+  /** By Fin, what cancels the timer that looks again once its held work's end has had `WAKE_GRACE_MS` to wake it. */
+  private readonly graces = new Map<string, () => void>()
   /** The turns whose harness asked its Fin to report before they ended (`finStop`): their end is the report, never asked again. */
   private readonly stopAsked = new Set<string>()
   /** By Fin, what cancels the timer that looks at its held work's end again past `HELD_WORK_CEILING_MS`: one at a time. */
@@ -1214,6 +1219,8 @@ export class Agents implements AgentOperations, ConversationChildren {
     this.awaiting.delete(child)
     this.ceilings.get(child)?.()
     this.ceilings.delete(child)
+    this.graces.get(child)?.()
+    this.graces.delete(child)
   }
 
   /** `resume`, every conversation it reads read in first a slice at a time (`LiveConversations.readIn`): what a host starting calls. */
@@ -5736,17 +5743,38 @@ export class Agents implements AgentOperations, ConversationChildren {
   private checkAwaiting(edge: ThreadParent): void {
     const held = this.awaiting.get(edge.child)
     if (!held || edge.closedAt !== undefined) return
-    if (this.ready(held.conversation) !== "idle" || this.wakes.waits(held.conversation) || this.waitsOn(edge, held.conversation)) return
-    this.stopAwaiting(edge.child)
-    // Its harness's process ended while what it waited on still ran: that work ended with it, and nothing wakes it now.
+    if (this.ready(held.conversation) !== "idle" || this.wakes.waits(held.conversation) || this.waitsOn(edge, held.conversation)) {
+      // Its work is back, or a turn runs: the wait for a wake counts again from the next end it's seen with none.
+      delete held.quiet
+      this.graces.get(edge.child)?.()
+      this.graces.delete(edge.child)
+      return
+    }
     const snapshot = this.deps.live.held(held.conversation)
     const newest = snapshot?.requests.filter((request) => request.status !== "queued" && request.status !== "held" && request.status !== "canceled").at(-1)
+    // Its harness says the work ended before it starts the turn that work wakes (`WAKE_GRACE_MS`): while that turn may
+    // still come, with the process there to start it and nothing past the ceiling, nothing is said yet.
+    if (held.work && !held.woke && newest?.id === held.request && providerHolds(snapshot?.session) && !staleWork(snapshot?.nativeAgents, this.now()).length) {
+      const grace = this.deps.wakeGraceMs ?? WAKE_GRACE_MS
+      held.quiet ??= this.now()
+      const left = held.quiet + grace - this.now()
+      if (left > 0) {
+        if (!this.graces.has(edge.child)) this.graces.set(edge.child, this.later(left, () => {
+          this.graces.delete(edge.child)
+          const now = this.store()?.edges().of(edge.child)
+          if (now && this.awaiting.get(edge.child) === held) this.checkAwaiting(now)
+        }))
+        return
+      }
+    }
+    this.stopAwaiting(edge.child)
     if (held.work && newest?.id !== held.request) {
       // A turn its harness started on that work (a Monitor's event, a command settling) came after it: that turn's end
       // is its word, as `turnEnded` reads it.
       if (newest && (newest.status === "completed" || newest.status === "failed" || newest.status === "interrupted")) this.turnEnded(edge, held.conversation, newest.id)
       return
     }
+    // Its harness's process ended while what it waited on still ran: that work ended with it, and nothing wakes it now.
     if (held.work && !providerHolds(snapshot?.session) && snapshot?.session.connection !== "hibernated") {
       const why = snapshot?.session.error
       this.keepReport(edge, {

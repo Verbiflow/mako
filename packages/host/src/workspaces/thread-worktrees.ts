@@ -131,6 +131,11 @@ const ReceiptSchema = z.object({
   /** Where a new branch started, as a person reads it: `main`, `origin/main`, a short commit. */
   from: z.string().optional(),
   /**
+   * Made from a commit its start or move named (`WorktreeFrom` "from"), not the commit its source checkout is on: a
+   * move into it carries none of that checkout's changes, which were made on another commit (`wantBranch`).
+   */
+  based: z.literal(true).optional(),
+  /**
    * A project folder holding several repositories, no repository itself:
    * `repoRoot` is the project folder, `path` the folder mirroring it, and
    * each repository has its worktree here, at the same place inside, on
@@ -734,8 +739,13 @@ export class ThreadWorktreeService {
       if (roots.length > 1) throw new Error("This project holds several repositories, so its worktree starts each at its own commit; leave base out.")
       if (!(await this.git.succeeds(roots[0]!, ["rev-parse", "--verify", "--quiet", "--end-of-options", `${wanted.base}^{commit}`])))
         throw new Error(`${wanted.base} isn't a commit, branch or tag in ${basename(roots[0]!)}.`)
-      if (await this.git.readOutput(source, ["status", "--porcelain", "--untracked-files=no"]))
-        throw new Error("This checkout has uncommitted changes, which a move carries onto the commit they were made on. Leave base out, or commit them first.")
+      // In another Thread's worktree (a Fin started in its Apex's), what's uncommitted is that Thread's: the move
+      // carries only this Thread's own, so only those hold it to the commit they were made on.
+      const own = (await this.otherThreadWorktree(conversationId, source)) && this.ledger() ? await this.shares(conversationId, source).catch(() => undefined) : undefined
+      if (own ? own.thread.files + (own.likely?.files ?? 0) > 0 : await this.git.readOutput(source, ["status", "--porcelain", "--untracked-files=no"]))
+        throw new Error(own
+          ? "This Session has uncommitted changes of its own in this worktree, which a move carries onto the commit they were made on. Leave base out, or commit them first."
+          : "This checkout has uncommitted changes, which a move carries onto the commit they were made on. Leave base out, or commit them first.")
     }
     this.wanted.set(conversationId, wanted)
   }
@@ -819,6 +829,24 @@ export class ThreadWorktreeService {
     const path = worktreeCheckout(first)
     const project = path === first.path ? first.repoRoot : first.project
     return { path, project, branch: first.branch, worktrees: worktrees.filter((worktree) => worktreeCheckout(worktree) === path) }
+  }
+
+  /**
+   * The worktree Mako made for another Thread that `folder` is in, on this device: a Fin started without a workspace
+   * of its own edits in its Apex's, a linked worktree like one made outside Mako, which it may move out of onto a
+   * branch of its own. Undefined when `folder` is in this conversation's Thread's own, or in none Mako made.
+   */
+  async otherThreadWorktree(conversationId: string, folder: string): Promise<{ path: string; branch: string; thread: string } | undefined> {
+    const own = this.threadCheckout(conversationId)?.path
+    const source = await realpath(folder).catch(() => folder)
+    for (const worktree of this.threads.worktrees()) {
+      const path = worktreeCheckout(worktree)
+      if (path === own) continue
+      const real = await realpath(path).catch(() => path)
+      const inside = relative(real, source)
+      if (inside === "" || (!inside.startsWith("..") && !isAbsolute(inside))) return { path, branch: worktree.branch, thread: worktree.thread }
+    }
+    return undefined
   }
 
   /**
@@ -2260,6 +2288,7 @@ export class ThreadWorktreeService {
     // Without the journal nobody is named, so the Thread isn't needed to divide anything.
     const thread = options.thread ?? this.threads.journalPlacement(conversationId)?.thread ?? (ledger ? undefined : "")
     if (thread === undefined) throw new Error("Mako doesn't know this conversation's Thread, so it can't tell its changes from others'.")
+    if (receipt.based) return this.basedMove(receipt, thread)
     const id = randomUUID()
     await this.save({ ...receipt, moving: { id } })
     try {
@@ -2283,6 +2312,27 @@ export class ThreadWorktreeService {
       await this.save({ ...receipt, moving: undefined })
       throw error
     }
+  }
+
+  /**
+   * A move into a worktree made from the base it named: what's uncommitted in the checkout it left was made on another
+   * commit, so nothing comes, and what stays is said as a move's outcome. The Thread's own changes there would be lost
+   * from its sight, so a move that finds some (made after `wantBranch` looked) is refused, its worktree given back.
+   */
+  private async basedMove(receipt: Receipt, thread: string): Promise<MoveOutcome> {
+    const shares = thread ? await this.threadShares(thread, receipt.source).catch(() => undefined) : undefined
+    const own = (shares?.thread.files ?? 0) + (shares?.likely?.files ?? 0)
+    if (own) throw new Error(`This Thread changed ${own === 1 ? "a file" : `${own} files`} in ${basename(receipt.source)} after asking to start from ${receipt.from ?? "another commit"}, made on another commit, so it didn't move. Commit them, or move without base.`)
+    const none = { files: 0, lines: 0, paths: [] }
+    const outcome: MoveOutcome = {
+      came: none,
+      stayed: { others: shares?.others ?? none, person: shares?.person ?? none, uncertain: shares?.uncertain ?? none, unattributed: shares?.unattributed ?? none },
+      split: [],
+      brought: false,
+      unstaged: [],
+    }
+    await this.save({ ...receipt, moving: undefined, moved: { files: 0, outcome } })
+    return outcome
   }
 
   /**
@@ -2617,6 +2667,7 @@ export class ThreadWorktreeService {
       }
       if (adopted) receipt.adopted = true
       if (started) receipt.from = started
+      if (from.kind === "from") receipt.based = true
       branched = adopted !== undefined || receipt.branch === `${BRANCH_PREFIX}${slug}`
       await this.save(receipt)
     }

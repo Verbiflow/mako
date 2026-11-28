@@ -198,6 +198,8 @@ export interface WorldOptions {
   steering?: Partial<Record<string, Pick<Extract<SteerCapability, { kind: "supported" }>, "lands" | "answersOnEnd" | "hears"> & { holds?: true }>>
   /** How long an ask waits on its Apex alone before the person is asked too (`AgentsDeps.apexAnswerMs`). */
   apexAnswerMs?: number
+  /** How long a Fin's ended held work has to start its harness's turn (`AgentsDeps.wakeGraceMs`). */
+  wakeGraceMs?: number
   /** How long a working Apex's turn runs before what waits for its end is steered in once (`AgentsDeps.focusMs`). */
   focusMs?: number
   /** How long results that ask nothing wait for the Fins still at work (`AgentsDeps.holdMs`). */
@@ -446,6 +448,7 @@ export class AgentsWorld {
       ...(this.options.lent && { lent: this.options.lent }),
       ...(this.options.processes && { processes: this.options.processes }),
       ...(this.options.apexAnswerMs !== undefined && { apexAnswerMs: this.options.apexAnswerMs }),
+      ...(this.options.wakeGraceMs !== undefined && { wakeGraceMs: this.options.wakeGraceMs }),
       ...(this.options.focusMs !== undefined && { focusMs: this.options.focusMs }),
       ...(this.options.holdMs !== undefined && { holdMs: this.options.holdMs }),
       ...(this.options.quietMs !== undefined && { quietMs: this.options.quietMs }),

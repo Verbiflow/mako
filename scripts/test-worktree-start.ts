@@ -179,6 +179,15 @@ assert.equal(git(made.path, "rev-parse", "HEAD"), git(project, "rev-parse", "fea
 const madeNewest = await service.prepare(placed(), project, "From the start point", { kind: "branch", branch: "fin/from-start", make: {} })
 assert.equal(madeNewest.branch, "fin/from-start")
 assert.equal(git(madeNewest.path, "rev-parse", "HEAD"), (await starts.point(project, false)).commit, "made from the start point without a base")
+// 2026-11-28: an Apex working in its own worktree started a Fin with a new workspace.branch from the
+// commit production runs; before, the start was refused with "isn't in <the Apex's worktree> anymore". Made from inside
+// the Apex's worktree, it's the Fin's own branch, from its base.
+const fromApexId = placed()
+const fromApex = await service.prepare(fromApexId, made.path, "A Fin of an Apex in its worktree", { kind: "branch", branch: "fin/from-apex", make: { from: "main" } })
+assert.equal(fromApex.branch, "fin/from-apex")
+assert.notEqual(fromApex.path, made.path, "in a worktree of its own")
+assert.equal(git(fromApex.path, "rev-parse", "HEAD"), git(project, "rev-parse", "main"), "from the base it named, not the Apex's branch")
+await service.abandon(fromApexId)
 const takenId = randomUUID()
 const taken = await service.prepare(takenId, project, "Feature again", { kind: "branch", branch: "feature", make: { from: "main" } })
 assert.equal(git(taken.path, "rev-parse", "HEAD"), git(project, "rev-parse", "feature"), "a branch that's there is taken, its base aside")

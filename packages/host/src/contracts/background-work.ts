@@ -73,6 +73,16 @@ export function providerHolds(session: WorkSession | undefined): boolean {
  */
 export const HELD_WORK_CEILING_MS = 6 * 60 * 60_000
 
+/**
+ * How long a Fin whose held work ended is given for the turn its harness starts on that end, before Mako says nothing
+ * woke it. A harness says the work ended before it starts that turn: Claude Code's `task_notification` comes ahead of
+ * the wake turn's `init`, and an ACP harness (Devin, Grok) or OpenCode shows a turn only once its model's first words
+ * stream. Judged at the end itself, a Fin on 2026-11-28 read as failed 3 ms before Claude's wake turn began, which
+ * went on to report done. Past this, a harness that hasn't started a turn won't: Claude dropped a Monitor saying
+ * nothing, or the harness doesn't wake on that work at all.
+ */
+export const WAKE_GRACE_MS = 2 * 60_000
+
 /** Provider work the roster shows active, believed at `now` (`HELD_WORK_CEILING_MS`); every one without a time. */
 export function heldWork(roster: NativeAgentRoster | undefined, now?: number): NativeAgent[] {
   return (roster?.agents ?? []).filter((agent) => isActiveNativeAgent(agent) && isProviderWork(agent) && !pastCeiling(agent, now))
