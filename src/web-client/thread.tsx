@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { PhoneApexDigest } from "./apex-digest"
-import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, EllipsisIcon, FileDiffIcon, FolderTreeIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, ServerIcon, XIcon } from "lucide-react"
+import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, CheckIcon, ChevronLeftIcon, ChevronsUpDownIcon, CloudIcon, CopyIcon, EllipsisIcon, FileDiffIcon, FolderTreeIcon, GlobeIcon, LaptopIcon, MoonIcon, MoreHorizontalIcon, PlusIcon, ServerIcon, XIcon } from "lucide-react"
 import { sessionStanding, type OpenedBy } from "@mako/host/contracts/session-choice"
 import { forkedFrom, sessionBrief, sessionDetail, sessionName } from "@/lib/session-words"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
@@ -20,6 +20,7 @@ import { webHarnessLabel } from "./labels"
 import { MoveSheet, ThreadMove } from "./move-card"
 import { ContinueOffer, ContinueSheet } from "./continue-cloud"
 import { startContinue, useContinueChoice } from "./continue-actions"
+import { continueRefusalShown } from "@mako/host/contracts/cloud-continues"
 import { moveKept, startMove, type MoveMac } from "./move-actions"
 import type { MoveWay } from "./move-progress"
 import { askBringBack, listedMove, useBringBackAsked, useMoves } from "./moves"
@@ -37,8 +38,7 @@ import { useDelayedStatus } from "./delayed-status"
 import { useBranchOpening } from "./replies"
 import { checkReach, useSessionDiagnosis } from "./thread-trouble"
 import { DiagnosisCard } from "./trouble"
-import { useNow, useTryAgain } from "./trouble-state"
-import { QuietStrip } from "./quiet-strip"
+import { copyDiagnostics, useNow, useTryAgain } from "./trouble-state"
 import { activeLiveAcp, useAcp } from "@/state/acp"
 import { openFiles } from "./files-open"
 import { openReview } from "./review-open"
@@ -168,9 +168,10 @@ export function ThreadScreen({ threadId, sessionId, onBack, onSession, wide }: {
 /**
  * What a Thread shows under its bar, on a phone, a tablet and a laptop's browser alike: archived, or the Session, live
  * or, while its Mac is asleep or offline, read from the copy that Mac keeps in the account, a message sent waiting for
- * it; with no copy to read, why its Mac can't be reached instead. Above it, a move while one goes, the transcript and
- * composer kept under it; above the transcript, what can't be reached, when something can't (its Mac off, and since
- * when), and the servers its app runs. Links in it to the app's own address open the app here.
+ * it; with no copy to read, only the messages waiting for it. Its Mac off is said once, by the bar's moon and the
+ * composer's words, never again in the body. Above it, a move while one goes, the transcript and composer kept under
+ * it; above the transcript, what can't be reached when something else can't, the offer to continue in the cloud when
+ * it may, and the servers its app runs. Links in it to the app's own address open the app here.
  */
 export function ThreadBody({ thread, session, desk = false, openedBy = "person", onSession }: { thread: WebThread; session: WebSession; desk?: boolean; openedBy?: OpenedBy; onSession?: (session: string) => void }) {
   const client = useWebClient()
@@ -193,7 +194,7 @@ export function ThreadBody({ thread, session, desk = false, openedBy = "person",
   useEffect(() => {
     if (!transcript) void transcriptChunk.read().catch(() => undefined)
   }, [transcript])
-  // Its Mac off, what would carry the Thread on: said after why it can't be reached, as the remedy to it.
+  // Its Mac off, what would carry the Thread on, when it may: the one thing to press. Why it may not stays in the menu.
   const offered = session.quietSince && !moving && cloudOn(client.account.entitlements) ? <ContinueOffer thread={thread} session={session} /> : null
   // A link to the app's own address (`localhost:5173/login`) opens the app here, through its owner, not this phone's own.
   const openLinks = (event: React.MouseEvent) => {
@@ -243,9 +244,9 @@ export function ThreadBody({ thread, session, desk = false, openedBy = "person",
 }
 
 /**
- * What can't be reached for a Session, above its transcript. Its Mac asleep or offline with the copy it keeps on screen:
- * one quiet line (`QuietStrip`), there from when the copy is drawn until the Mac is back and the Session live. Anything
- * else that failed: the headline in a strip, Details a tap away.
+ * What can't be reached for a Session, above its transcript: the headline in a strip, Details a tap away. Not its Mac
+ * asleep or offline, which the bar's moon and the composer already say, and which ends by itself once the Mac is back:
+ * the account's list follows it live. Its diagnosis is in the menu's Copy diagnostics meanwhile.
  */
 function ThreadTrouble({ session }: { session: WebSession }) {
   const client = useWebClient()
@@ -259,17 +260,12 @@ function ThreadTrouble({ session }: { session: WebSession }) {
   })
   // Its copy on screen and its Mac not heard: quiet as the list says, or refused a call before the list says so.
   const macOff = copyAt !== undefined && (session.quietSince !== undefined || diagnosis?.at === "mac")
-  // Each said once it has lasted a moment: a reconnect that's over at once, or a list kept from the last visit that the
+  // Said once it has lasted a moment: a reconnect that's over at once, or a list kept from the last visit that the
   // account's own answer corrects, never shows.
-  const quiet = useDelayedStatus(macOff ? (session.quietSince ?? UNHEARD) : null, conversation)
   const shown = useDelayedStatus(diagnosis ? diagnosis.headline : null, conversation)
-  if (quiet && copyAt !== undefined) return <QuietStrip session={session} seenAt={quiet === UNHEARD ? undefined : quiet} copyAt={copyAt} />
-  if (!diagnosis || !shown || session.quietSince) return null
+  if (macOff || !diagnosis || !shown || session.quietSince) return null
   return <DiagnosisCard diagnosis={diagnosis} checking={checking} onTryAgain={tryAgain} compact className="web-trouble-strip" />
 }
-
-/** A Mac not heard that the list doesn't call quiet yet: when it was last seen isn't known. */
-const UNHEARD = "unheard"
 
 /**
  * The servers a live Session's app runs, a card each, while it runs: tap one to open it here. Where there's room for
@@ -345,6 +341,11 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
   const way = backAsked ? "device" : asking
   const choice = useContinueChoice(session.quietSince ? session : undefined)
   const offered = choice?.offer && cloudOn(client.account.entitlements) && !moving ? choice : undefined
+  // Why it can't continue in the cloud yet, when the person can change that: said here only, under the item it holds off.
+  const refused = choice && !choice.offer && continueRefusalShown(choice.why) && cloudOn(client.account.entitlements) && !moving ? choice.text : undefined
+  // Its Mac off: why it can't be reached, hop by hop, for a bug report. Nothing to try meanwhile: it's live again by itself once the Mac is back.
+  const diagnosis = useSessionDiagnosis(session)
+  const quietDiagnosis = session.quietSince ? diagnosis : undefined
   const onMac = session.owner.kind === "device" && !session.quietSince ? session.owner : undefined
   // Whether its tree of agents keeps it on its Mac, by the list this browser follows: gone as its last Fin ends there.
   const kept = useAccountList((state) => (onMac ? moveKept(session.row, state.rows, session.where) : undefined))
@@ -419,11 +420,25 @@ export function ThreadActions({ thread, session, onArchived, onAdd, desk = false
               <CloudIcon className={glyph} />
               Continue in the cloud
             </MenuItem>
+          ) : refused ? (
+            <MenuItem disabled data-continue-refused className={cn(item, "items-start data-[disabled]:opacity-100")}>
+              <CloudIcon className={cn(glyph, "mt-0.5 opacity-60")} />
+              <span className="min-w-0 flex-1">
+                <span className="text-faint">Continue in the cloud</span>
+                <span className="mt-0.5 block max-w-64 text-label leading-snug whitespace-normal text-faint/80">{refused}</span>
+              </span>
+            </MenuItem>
           ) : null}
           {inCloud && hasMac && !moving ? (
             <MenuItem onSelect={() => setAsking("device")} className={item}>
               <ArrowDownIcon className={glyph} />
               Bring back to a Mac
+            </MenuItem>
+          ) : null}
+          {quietDiagnosis ? (
+            <MenuItem onSelect={() => copyDiagnostics(quietDiagnosis)} data-copy-diagnostics className={item}>
+              <CopyIcon className={glyph} />
+              Copy diagnostics
             </MenuItem>
           ) : null}
           <MenuItem onSelect={archive} className={item}>
@@ -584,15 +599,12 @@ function SessionList({ thread, current, now, onPick, onAdd }: { thread: WebThrea
 
 /**
  * A Session whose Mac can't be reached and whose copy can't be read (the account has none yet, or neither it nor this
- * browser has it now): why, hop by hop (this phone, Mako Cloud, the Mac, its harness), with what it may be, Try again
- * and Copy diagnostics. Nothing runs it and nothing answers for it meanwhile; a message sent here waits in the account
- * and runs once the Mac is back.
+ * browser has it now): nothing but the messages sent to it meanwhile, each to take back, and the composer saying they
+ * wait for the Mac. The bar's moon says it's off; it turns live by itself once the Mac is back, and why it can't be
+ * reached is the menu's Copy diagnostics.
  */
 export function QuietSession({ session }: { session: WebSession }) {
   const client = useWebClient()
-  const diagnosis = useSessionDiagnosis(session)
-  const mac = session.owner.kind === "device" ? session.owner.deviceId : undefined
-  const { checking, tryAgain } = useTryAgain(() => checkReach(client, mac))
   const send = async (text: string, _attachments: PromptAttachment[], id: string): Promise<boolean> => {
     try {
       // Put under the message's own ID: asked again, it's the same message.
@@ -607,12 +619,8 @@ export function QuietSession({ session }: { session: WebSession }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-quiet-session>
       <div className="web-scroll min-h-0 flex-1 overflow-y-auto px-4 pt-6">
-        <div className="mx-auto max-w-[460px]">
-          {diagnosis ? <DiagnosisCard diagnosis={diagnosis} checking={checking} onTryAgain={tryAgain} /> : null}
-          <p className="mt-4 px-1 text-label text-muted-foreground">A message sent now waits in your account and runs when {session.where} is back.</p>
-        </div>
         {session.waiting.length ? (
-          <ul role="list" className="mx-auto mt-4 flex max-w-[460px] flex-col gap-2">
+          <ul role="list" className="mx-auto flex max-w-[460px] flex-col gap-2">
             {session.waiting.map((message) => (
               <li key={message.id} className="web-waiting flex items-start gap-2 bg-raised px-3.5 py-2.5 ring-1 ring-hairline">
                 <p className="min-w-0 flex-1 text-ui whitespace-pre-wrap">{message.displayText ?? message.text}</p>

@@ -12,9 +12,7 @@ import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
 import { FinAnswerButtons } from "@/components/viewer/fin-answer-buttons"
 import { useFinAnswer } from "@/components/viewer/use-fin-answer"
 import { childStateOf, openAsk } from "@mako/host/contracts/children"
-import { LastKnownLine } from "@/components/apexes/last-known"
 import { checkWebAnswer, checkWebPlan, markWebSeen, useWebApex, useWebDigest, useWebLastKnown, useWebPlan } from "./apexes"
-import { useAccountList } from "./account-list"
 import type { WebSession, WebThread } from "./threads"
 import { ownerOf } from "./threads"
 
@@ -24,8 +22,8 @@ const SHOWN = 3
  * A deliberate Apex's digest under its bar on the phone and the iPad, and on a laptop's while its Mac is off: what needs the person, what's new since they last
  * read it, what's in progress, built from the same roster and plan its Mac's note reads, so it can't say otherwise.
  * Folded to one line when nothing needs them; a Fin's row opens it, a plan line checks off where it stands. Read from
- * the account's list, so it stands while its Mac is off, marked as the last it said, nothing in it to act on until it's
- * back.
+ * the account's list, so it stands while its Mac is off as the Mac last said it, nothing in it to act on until it's
+ * back: the bar's moon already says the Mac is off.
  */
 export function PhoneApexDigest({ thread, session, onOpenFin }: { thread: WebThread; session: WebSession; onOpenFin: (agent: NativeAgent) => void }) {
   const client = useWebClient()
@@ -34,7 +32,6 @@ export function PhoneApexDigest({ thread, session, onOpenFin }: { thread: WebThr
   const apex = useWebApex(client, deviceId, thread.id)
   const fins = useThreadChildren(apex ? thread.id : undefined)
   const lastKnown = useWebLastKnown(apex?.thread)
-  const device = useAccountList((state) => (deviceId ? state.devices.get(deviceId)?.name : undefined)) ?? "Its Mac"
   const seen = useCallback((thread: string) => {
     if (deviceId) markWebSeen(client, deviceId, thread)
   }, [client, deviceId])
@@ -68,7 +65,6 @@ export function PhoneApexDigest({ thread, session, onOpenFin }: { thread: WebThr
         </span>
         <ChevronRightIcon className={cn("size-3.5 shrink-0 text-faint transition-transform duration-150", shown && "rotate-90")} />
       </button>
-      {lastKnown ? <LastKnownLine device={device} since={lastKnown} className="block px-4 pt-0 pb-2" /> : null}
       {shown ? (
         <div className="flex max-h-[45dvh] flex-col overflow-y-auto overscroll-contain pb-2">
           <Part heading={DIGEST_HEADINGS.needs} items={digest.needs} shown={5} attention render={(item) => {

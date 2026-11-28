@@ -1,9 +1,9 @@
 import { useState } from "react"
 import { CopyIcon, RotateCwIcon } from "lucide-react"
-import { toast } from "sonner"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
-import { diagnosisText, type Diagnosis } from "./diagnosis"
+import type { Diagnosis } from "./diagnosis"
+import { copyDiagnostics } from "./trouble-state"
 
 /**
  * A diagnosis drawn: the headline and its line (with a spinner while Mako retries by itself), what it may be, and Try
@@ -13,11 +13,7 @@ import { diagnosisText, type Diagnosis } from "./diagnosis"
  */
 export function DiagnosisCard({ diagnosis, checking, onTryAgain, compact = false, className }: { diagnosis: Diagnosis; checking: boolean; onTryAgain: () => void; compact?: boolean; className?: string }) {
   const [open, setOpen] = useState(!compact)
-  const copy = () =>
-    void navigator.clipboard.writeText(diagnosisText(diagnosis)).then(
-      () => toast.success("Copied", { description: "Diagnostics, with no secrets in them." }),
-      () => toast.error("Not copied", { description: "This browser didn't allow it." })
-    )
+  const copy = () => copyDiagnostics(diagnosis)
   return (
     <section className={cn("web-trouble", compact && "web-trouble-compact", className)} data-diagnosis={diagnosis.at} aria-live="polite">
       <button type="button" className="web-trouble-head" onClick={() => setOpen((shown) => !shown)} aria-expanded={open} disabled={!compact}>

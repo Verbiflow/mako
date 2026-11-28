@@ -189,13 +189,14 @@ async function checkDesk() {
     console.log("Settings: the desktop's panes and Toggle, with what a browser reaches")
 
     // 7. An Apex whose Mac is off, this page having read nothing from it: Agents opens on its Overview from the account's
-    //    list, its name, purpose, plan and Fins as its Mac last said them, marked as last known and read-only; the Mac
-    //    back, its row's word replaces it and the plan's lines check again, its rules and plan text still its Mac's.
+    //    list, its name, purpose, plan and Fins as its Mac last said them, read-only, the strip's moon alone saying it's
+    //    off; the Mac back, its row's word replaces it and the plan's lines check again, its rules and plan text still
+    //    its Mac's.
     await window.loadURL(`${new URL("scripts/web-desk.html", process.env.MAKO_DESK_URL).href}?app=apex&thread=apex&listed=off&theme=dark`)
     await until("Boolean(document.querySelector('[data-thread-screen]'))", "the Apex's Thread")
     await evaluate("window.webDeskCheck.agents(), true")
     await until("Boolean(document.querySelector('[data-apex-header][data-apex-elsewhere]'))", "its Overview, from the account's list")
-    assert.match(await evaluate("document.querySelector('[data-apex-last-known]').innerText"), /^Last known · Studio off for 2\dm$/, "marked as the last its Mac said")
+    assert.equal(await evaluate("Boolean(document.querySelector('[data-place=\"quiet\"]'))"), true, "the strip's moon says its Mac is off")
     assert.ok(await evaluate("Number(document.querySelector('[data-apex-fins]').dataset.apexFins) >= 10"), "its Fins, counted as its Mac listed them")
     assert.ok(await evaluate("document.querySelector('[data-overview-section=\"plan\"]').innerText.includes('Now')"), "its plan, as its Mac listed it")
     const offChecks = await evaluate("document.querySelectorAll('[data-plan-item=\"open\"], [data-plan-item=\"done\"], [data-plan-answer]').length")
@@ -208,14 +209,20 @@ async function checkDesk() {
       const answers = [...document.querySelectorAll("[data-fin-answer], [data-plan-answer], [data-phone-answer], [data-phone-plan-done], [data-plan-item=open], [data-plan-item=done]")].filter(visible).length
       const named = [...document.querySelectorAll("button")].filter(visible).map((button) => (button.getAttribute("aria-label") || button.innerText || "").trim()).filter((words) => /^(Allow once|Allow always|Refuse|Stop all|Stop)$/.test(words))
       const composer = [...document.querySelectorAll("textarea")].filter(visible).map((node) => node.getAttribute("placeholder") || "").find(Boolean) ?? null
-      return { answers, named, composer }
+      const notices = [...document.querySelectorAll("[data-apex-last-known], [data-quiet-strip], [data-diagnosis], [data-continue]")].filter(visible).length
+      const said = ["Last known", "asleep or offline", "waits in your account", "continue in the cloud"].filter((words) => document.body.innerText.includes(words))
+      return { answers, named, composer, notices, said }
     })()`)
     assert.equal(offControls.answers, 0, `Mac off: no answer or check: ${JSON.stringify(offControls)}`)
     assert.deepEqual(offControls.named, [], `Mac off: no approval, Stop all or Stop: ${JSON.stringify(offControls)}`)
     assert.equal(offControls.composer, "Message — waits until it's back", `Mac off: the composer says its message waits: ${JSON.stringify(offControls)}`)
+    // The bar's moon and the composer say the Mac is off; nothing else does: no "Last known", no asleep line or card,
+    // no message-waits line, no "can't continue in the cloud" card.
+    assert.equal(offControls.notices, 0, `Mac off: no notice says it again: ${JSON.stringify(offControls)}`)
+    assert.deepEqual(offControls.said, [], `Mac off: no notice's words on screen: ${JSON.stringify(offControls)}`)
     await capture("apex-agents-mac-off-1280-dark.png")
     await evaluate("window.webDeskCheck.back(), true")
-    await until("!document.querySelector('[data-apex-last-known]')", "the Mac back, no longer marked")
+    await until("!document.querySelector('[data-place=\"quiet\"]')", "the Mac back, the moon gone")
     await until("document.querySelectorAll('[data-plan-item=\"open\"]').length > 0", "its plan's lines check again")
     assert.equal(await evaluate("document.querySelectorAll('[data-plan-edit], [data-apex-header] input').length"), 0, "and its plan text and name stay its Mac's")
     const backControls = await evaluate(`(() => {
@@ -228,7 +235,7 @@ async function checkDesk() {
     assert.ok(backControls.answers > 0 && backControls.named.length > 0, `Mac back: its asks are answerable again: ${JSON.stringify(backControls)}`)
     assert.notEqual(backControls.composer, "Message — waits until it's back", "Mac back: the composer sends to it again")
     await capture("apex-agents-mac-back-1280-dark.png")
-    console.log("Apex: its Overview from the account's list while its Mac is off, last known and read-only; live again once it's back")
+    console.log("Apex: its Overview from the account's list while its Mac is off, read-only, the moon alone saying so; live again once it's back")
 
     await desk("light")
     await until("Boolean(document.querySelector('[data-background-work]'))", "the busy Session, light")

@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react"
-import { AlertTriangleIcon, CloudIcon, CloudOffIcon, GitBranchIcon, HistoryIcon, LaptopIcon, MessageSquareIcon, RotateCwIcon } from "lucide-react"
+import { AlertTriangleIcon, CloudIcon, GitBranchIcon, HistoryIcon, LaptopIcon, MessageSquareIcon, RotateCwIcon } from "lucide-react"
 import type { ContinueOffer } from "@mako/protocol/continues"
 import { copyAge } from "@/lib/format"
 import { useAccountList } from "./account-list"
 import { useWebClient, type WebClient } from "./client"
-import { continueRefusalShown, continueWords } from "@mako/host/contracts/cloud-continues"
+import { continueWords } from "@mako/host/contracts/cloud-continues"
 import { askContinueOffer, startContinue, useContinueChoice } from "./continue-actions"
 import { lastSeen } from "./diagnosis"
 import type { MoveMac } from "./move-actions"
@@ -15,16 +15,16 @@ import { useNow } from "./trouble-state"
 
 /**
  * Continue in the cloud, beside a Thread whose Mac is off: the offer when its rows may go (the press opens what it
- * takes, `ContinueSheet`); why not yet when a person can change that; a continue that failed, with its reason and
- * another try. Nothing while a move or continue of it is followed: its strip says that.
+ * takes, `ContinueSheet`); a continue that failed, with its reason and another try. Nothing when it can't go yet: why
+ * is said only in the Thread's menu, under the item it holds off. Nothing while a move or continue of it is followed:
+ * its strip says that.
  */
 export function ContinueOffer({ thread, session }: { thread: WebThread; session: WebSession }) {
   const choice = useContinueChoice(session)
   const followed = useMoves((state) => state.moves.get(thread.id))
   const [asking, setAsking] = useState(false)
-  if (!choice || followed) return null
+  if (!choice?.offer || followed) return null
   const failed = session.row.continued?.phase === "failed" ? session.row.continued : undefined
-  if (!choice.offer && !continueRefusalShown(choice.why)) return null
   const press = (
     <button type="button" className={failed ? "web-button" : "web-button h-9 shrink-0 px-3.5"} onClick={() => setAsking(true)} data-continue-press>
       {failed ? <RotateCwIcon className="size-4" /> : <CloudIcon className="size-4" />}
@@ -32,25 +32,25 @@ export function ContinueOffer({ thread, session }: { thread: WebThread; session:
     </button>
   )
   return (
-    <section className="web-continue" data-continue={choice.offer ? (failed ? "failed" : "offer") : choice.why} aria-label="Continue in the cloud">
+    <section className="web-continue" data-continue={failed ? "failed" : "offer"} aria-label="Continue in the cloud">
       <div className="web-move-head">
-        <span className="web-move-mark">{choice.offer ? failed ? <AlertTriangleIcon className="size-4 text-caution" /> : <CloudIcon className="size-4" /> : <CloudOffIcon className="size-4 text-muted-foreground" />}</span>
+        <span className="web-move-mark">{failed ? <AlertTriangleIcon className="size-4 text-caution" /> : <CloudIcon className="size-4" />}</span>
         <span className="min-w-0 flex-1">
-          <span className="block text-ui font-medium">{choice.offer ? (failed ? "Couldn't continue in the cloud" : "Continue in the cloud") : "It can't continue in the cloud yet"}</span>
-          {failed ? null : <span className="block text-label text-muted-foreground">{choice.offer ? `Pick up where ${choice.mac.name} left off, on a cloud machine.` : choice.text}</span>}
+          <span className="block text-ui font-medium">{failed ? "Couldn't continue in the cloud" : "Continue in the cloud"}</span>
+          {failed ? null : <span className="block text-label text-muted-foreground">{`Pick up where ${choice.mac.name} left off, on a cloud machine.`}</span>}
         </span>
-        {choice.offer && !failed ? press : null}
+        {failed ? null : press}
       </div>
-      {choice.offer && failed ? (
+      {failed ? (
         <>
           <p className="web-move-reason text-label text-muted-foreground">{failed.reason ?? "It didn't continue in the cloud."}</p>
           <div className="web-move-actions">{press}</div>
         </>
       ) : null}
-      {choice.offer ? <ContinueSheet open={asking} thread={thread} session={session} mac={choice.mac} onDismiss={() => setAsking(false)} onContinue={(client) => {
+      <ContinueSheet open={asking} thread={thread} session={session} mac={choice.mac} onDismiss={() => setAsking(false)} onContinue={(client) => {
         setAsking(false)
         void startContinue(client, { thread, session, mac: choice.mac })
-      }} /> : null}
+      }} />
     </section>
   )
 }

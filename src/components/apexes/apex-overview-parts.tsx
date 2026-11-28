@@ -6,7 +6,6 @@ import { APEX_PURPOSE_CHARS, DIGEST_HEADINGS, RULE_LAYER_CHARS, parsePlan, planQ
 import { stoodFor } from "@mako/host/contracts/children"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { OverviewHeading } from "@/components/inspector/apex-overview"
-import { LastKnownLine } from "@/components/apexes/last-known"
 import { useTickingText } from "@/components/ui/second-clock"
 import { FIELD, Segmented } from "@/components/ui/kit"
 import { roughTokens } from "@/lib/role-rules"
@@ -42,7 +41,7 @@ export function ApexHeader({ apex }: { apex: ApexEntry }) {
 
 /**
  * An Apex another device keeps, as a browser shows it: its name and purpose as that device lists them, which are its
- * to change, and while it's quiet, that this is the last it said and since when.
+ * to change. While it's quiet the strip's moon says so; nothing here repeats it.
  */
 function ApexElsewhereHeader({ apex, elsewhere }: { apex: ApexEntry; elsewhere: ApexElsewhere }) {
   const folder = apex.folder?.split("/").filter(Boolean).at(-1)
@@ -51,7 +50,6 @@ function ApexElsewhereHeader({ apex, elsewhere }: { apex: ApexEntry; elsewhere: 
       <span data-apex-name className="min-w-0 truncate text-title font-semibold text-foreground">{apex.name}</span>
       {apex.purpose ? <span data-apex-purpose className="text-ui leading-snug text-muted-foreground">{apex.purpose}</span> : null}
       <span className="pt-1 text-label text-faint">{[folder, `on ${elsewhere.device}`].filter(Boolean).join(" · ")}</span>
-      {elsewhere.quietSince ? <LastKnownLine device={elsewhere.device} since={elsewhere.quietSince} /> : null}
     </div>
   )
 }
