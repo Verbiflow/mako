@@ -16,7 +16,7 @@ import { gitActionPrompt } from "../contracts/git-actions.js"
 import type { ThreadWorktree, WorktreeBranchPull, WorktreeUpdate } from "../contracts/thread-worktrees.js"
 import type { MoveOutcome, MoveShare, MoveShares } from "../contracts/workspace-moves.js"
 
-type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary" | "shares" | "wantBranch"> & Partial<Pick<ThreadWorktreeService, "borrowing" | "moveOutcome" | "bringStayed" | "putBack" | "stayed">>
+type Worktrees = Pick<ThreadWorktreeService, "threadCheckout" | "ahead" | "merge" | "removal" | "remove" | "review" | "update" | "summary" | "shares" | "wantBranch"> & Partial<Pick<ThreadWorktreeService, "borrowing" | "moveOutcome" | "bringStayed" | "putBack" | "stayed" | "otherThreadWorktree">>
 
 interface Deps {
   git: Git
@@ -43,13 +43,15 @@ interface BranchState {
 }
 
 export interface WorkspaceStatus {
-  editsIn: "this Thread's worktree" | "a worktree made outside Mako" | "the main checkout" | "a folder outside Git"
+  editsIn: "this Thread's worktree" | "another Thread's worktree" | "a worktree made outside Mako" | "the main checkout" | "a folder outside Git"
   folder: string
   /** A project folder holding several repositories: each one's folder inside it. */
   repositories?: string[]
   branch?: string
   uncommittedFiles?: number
   outsideWorktree?: { folder: string; mainCheckout: string }
+  /** Another Thread's worktree, made by Mako (a Fin started in its Apex's): worktree_move leaves it for one of this Thread's own. */
+  otherThreadWorktree?: { folder: string; branch: string }
   threadWorktree?: BranchState & {
     folder: string
     branch: string
@@ -263,7 +265,10 @@ export async function moveablePlace(git: Git, worktrees: Worktrees | null, conve
   if (current && (await within(current.path, cwd)))
     return { refused: `This Session already edits in this Thread's worktree, ${current.path}, on ${current.branch}.` }
   const linked = (await locateCheckout(cwd))?.linked
-  if (linked) return { refused: `This Session already edits in a worktree made outside Mako, ${linked.path}, of the main checkout ${linked.repoRoot}.` }
+  // Another Thread's worktree (a Fin started in its Apex's) is a checkout it moves out of, taking only its own changes,
+  // as a Fin started with a workspace is made from it. Only one Mako didn't make is the agent's own to keep.
+  if (linked && !(await worktrees.otherThreadWorktree?.(conversationId, cwd)))
+    return { refused: `This Session already edits in a worktree made outside Mako, ${linked.path}, of the main checkout ${linked.repoRoot}.` }
   const repository = await git.output(cwd, ["rev-parse", "--show-toplevel"]).catch(() => "")
   // A project folder holding several repositories moves onto one branch in every one.
   const changed = repository ? await uncommitted(git, repository) : await uncommittedIn(git, cwd)
@@ -368,16 +373,18 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
         uncommitted(deps.git, cwd),
         onIt ? null : locateCheckout(cwd),
       ])
+      const borrowed = checkout?.linked ? await deps.worktrees?.otherThreadWorktree?.(conversationId, cwd) : undefined
       const roots = project ? [] : (await discoverRepositories(cwd)).roots
       const changed = inRepository ?? (roots.length ? await uncommittedAcross(deps.git, roots) : undefined)
       // A project folder of several repositories is its own main checkout: worktree_move gives it one worktree per repository.
       const projectFolder = !onIt && roots.length ? await realpath(cwd).catch(() => cwd) : ""
       const status: WorkspaceStatus = {
-        editsIn: onIt ? "this Thread's worktree" : checkout?.linked ? "a worktree made outside Mako" : project || projectFolder ? "the main checkout" : "a folder outside Git",
+        editsIn: onIt ? "this Thread's worktree" : borrowed ? "another Thread's worktree" : checkout?.linked ? "a worktree made outside Mako" : project || projectFolder ? "the main checkout" : "a folder outside Git",
         folder: cwd,
       }
       if (projectFolder) status.repositories = roots.map((root) => relative(cwd, root) || basename(root))
-      if (checkout?.linked) status.outsideWorktree = { folder: checkout.linked.path, mainCheckout: checkout.linked.repoRoot }
+      if (borrowed) status.otherThreadWorktree = { folder: borrowed.path, branch: borrowed.branch }
+      else if (checkout?.linked) status.outsideWorktree = { folder: checkout.linked.path, mainCheckout: checkout.linked.repoRoot }
       if (branch) status.branch = branch
       const main = onIt && current ? current.project : project ? checkout?.linked?.repoRoot ?? project : projectFolder
       if (main) {
@@ -385,7 +392,7 @@ export function workspaceTools(deps: Deps): WorkspaceTools {
         if (ignored) status.ignoredInMain = ignored
       }
       if (changed !== undefined) status.uncommittedFiles = changed
-      if (changed && !onIt && !checkout?.linked && (project || projectFolder)) {
+      if (changed && !onIt && (!checkout?.linked || borrowed) && (project || projectFolder)) {
         const shares = await deps.worktrees?.shares(conversationId, project || projectFolder).catch(() => undefined)
         if (shares) status.changes = changesOf(shares)
       }
@@ -588,7 +595,7 @@ export function registerWorkspaceTools(server: McpServer, tools: WorkspaceTools,
     "worktree_status",
     {
       description:
-        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, updating, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, or in a worktree made outside Mako. A project folder holding several repositories is a main checkout too, with its repositories listed. Returns the folder with its branch and uncommitted files, and, in the main checkout, whose those changes are: how many changed files and lines are this Thread's (each line counts for its last writer), other Threads', the user's, might be this Thread's, or not attributed (changed before Mako tracked the checkout); this Thread's worktree with the commits on its branch, where it started, how far behind the branch new Threads start from it is, whether its work has landed in the main checkout's branch, and its pull request with one word for its checks (for a project folder holding several repositories, the worktree holds one per repository on the same branch, each listed with these under its name, which the pull_request_* tools take as repository); where a move you asked for stands, and in the worktree what it left to check (afterMove); and the originating main checkout's ignored paths: a count, those the recipe's carry names, and credentials and package folders this checkout lacks; ignored: true lists all, a big folder as folder/**.",
+        "Call when you're unsure which checkout your edits land in, and before moving, bringing files, updating, merging or removing. Says whether this Session edits in the main checkout, in this Thread's worktree, in another Thread's worktree (a Fin started in its Apex's, which worktree_move leaves for one of its own), or in a worktree made outside Mako. A project folder holding several repositories is a main checkout too, with its repositories listed. Returns the folder with its branch and uncommitted files, and, in the main checkout, whose those changes are: how many changed files and lines are this Thread's (each line counts for its last writer), other Threads', the user's, might be this Thread's, or not attributed (changed before Mako tracked the checkout); this Thread's worktree with the commits on its branch, where it started, how far behind the branch new Threads start from it is, whether its work has landed in the main checkout's branch, and its pull request with one word for its checks (for a project folder holding several repositories, the worktree holds one per repository on the same branch, each listed with these under its name, which the pull_request_* tools take as repository); where a move you asked for stands, and in the worktree what it left to check (afterMove); and the originating main checkout's ignored paths: a count, those the recipe's carry names, and credentials and package folders this checkout lacks; ignored: true lists all, a big folder as folder/**.",
       inputSchema: z.object({ ignored: z.boolean().optional() }).strict(),
       annotations: { readOnlyHint: true, openWorldHint: false },
     },

@@ -94,6 +94,10 @@ try {
   const refusal = await moveablePlace(gitRunner, noWorktrees, "conversation", join(worktree, "web"))
   assert.ok(refusal.refused, "a Session already in a worktree made outside Mako isn't moved into another")
   assert.match(refusal.refused, /made outside Mako/)
+  // One Mako made for another Thread (a Fin started in its Apex's) is a checkout the Session moves out of.
+  const borrowed = await moveablePlace(gitRunner, { ...noWorktrees, shares: async () => undefined, otherThreadWorktree: async () => ({ path: worktree, branch: "mako/fix-redirect", thread: "apex" }) }, "conversation", join(worktree, "web"))
+  assert.ok(!("refused" in borrowed), JSON.stringify(borrowed))
+  assert.equal(borrowed.project, worktree, "made from that worktree, as a Fin's start from its Apex's is")
   await expectEvent(worktree, () => git(worktree, "checkout", "-q", "--detach"),
     (head) => head?.kind === "detached", "detaching a linked worktree")
   assert.deepEqual((await heads.read([repo]))[repo], { kind: "branch", name: "feature/login" }, "the main checkout is unaffected")

@@ -9,7 +9,7 @@ import { readFinReports } from "@mako/host/contracts/fin-reports"
 import type { PullReading } from "@mako/host/contracts/pull-waits"
 import { ThreadIdSchema } from "@mako/host/contracts/thread-identity"
 import { claudeFinStop } from "@mako/host/harnesses/claude/routing"
-import { AgentsWorld, type Script } from "./lib/agents-world.ts"
+import { AgentsWorld, HARNESSES, type Script } from "./lib/agents-world.ts"
 
 /**
  * What a Fin's turn's end says when the Fin made no report in it (`npm run test:fin-turn-ends`), on a scratch host with
@@ -31,6 +31,7 @@ import { AgentsWorld, type Script } from "./lib/agents-world.ts"
  *   harness asks before a turn ends (Claude Code's Stop hook), the hook's reason. A report then is its result; none,
  *   and the end is written as before, from the turn it was asked about.
  */
+type Harness = (typeof HARNESSES)[number]
 const root = mkdtempSync(join(tmpdir(), "mako-fin-turn-ends-"))
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -46,11 +47,12 @@ const monitor = (state: NativeAgentObservation["state"]): NativeAgentObservation
   ({ nativeId: "monitor-ci", title: "CI checks on #783", work: "monitor", ambient: true, background: true, stoppable: true, state })
 
 /** A world whose Fins run `script`, and what the Apex heard and how each Fin stands. */
-async function world(name: string, script: Script, options: { reportAsks?: boolean; readPull?: () => Promise<PullReading | null>; apexAnswerMs?: number; now?: () => number; later?: (ms: number, run: () => void) => () => void } = {}) {
-  const w = new AgentsWorld({ root: join(root, name), script, backgroundOutlivesTurn: ["claude"], reportAsks: true, ...options })
+async function world(name: string, script: Script, options: { reportAsks?: boolean; readPull?: () => Promise<PullReading | null>; apexAnswerMs?: number; wakeGraceMs?: number; now?: () => number; later?: (ms: number, run: () => void) => () => void; harness?: Harness } = {}) {
+  const { harness = "claude", ...rest } = options
+  const w = new AgentsWorld({ root: join(root, name), script, backgroundOutlivesTurn: [harness], reportAsks: true, wakeGraceMs: 50, ...rest })
   const apex = await w.apex("claude", "full")
   const start = async (fin: string, objective: string) => {
-    const started = await w.agents.start(apex.caller, { brief: { objective }, name: fin, harness: "claude", cwd: w.root, clientKey: fin })
+    const started = await w.agents.start(apex.caller, { brief: { objective }, name: fin, harness, cwd: w.root, clientKey: fin })
     assert.ok(!("refused" in started), JSON.stringify(started))
     await until(`${fin}'s first turn`, () => w.prompts.some((prompt) => prompt.text.includes(`You're fin:${fin}`)))
     return started.child!
@@ -179,6 +181,72 @@ async function lateNotification(): Promise<void> {
   assert.ok(heard.lastIndexOf("#783 is green at 1a2b3c4.") > heard.lastIndexOf("ended without waking it"), "and the result after it: the last word is the result")
   assert.equal(childWord((await f.state("queue")).state), "Done")
   console.log("late notification: the end the grace inferred went at once, the result after it, and the Fin stands done")
+  await f.w.close()
+}
+
+/**
+ * 2026-11-28: a Fin left a background subagent running, reported progress and ended its turn. Claude Code
+ * said the subagent ended (`task_notification`) 3 ms before it started the turn that notification woke, and Mako wrote
+ * "An agent it left running ended without waking it" in between; the wake turn went on to report done. Every harness
+ * that wakes on its own says the end before the turn (Grok's `will_wake`, Devin's `subagent_completed`, OpenCode's
+ * queued cause, Cursor's), so the end is given `WAKE_GRACE_MS` for the turn to start. Named in the roster (Claude,
+ * Cursor, Devin) or only counted (Grok's task list, OpenCode's), it's the same.
+ */
+async function wakeAfterEnd(harness: Harness): Promise<void> {
+  const named = harness === "claude" || harness === "cursor" || harness === "devin"
+  const subagent = (state: NativeAgentObservation["state"]): NativeAgentObservation =>
+    ({ nativeId: "agent-inventory", title: "Inventory the callers", work: "agent", background: true, stoppable: true, state })
+  const held = (w: AgentsWorld, conversation: string, running: boolean) => named
+    ? w.live.observe({ type: "live-agent", id: conversation, agent: subagent(running ? { kind: "working" } : { kind: "completed" }) })
+    : w.live.observe({ type: "live-session", session: { ...w.live.snapshot(conversation)!.session, backgroundTasks: running ? 1 : 0 } })
+  const f = await world(`wake-${harness}`, async (turn) => {
+    if (!turn.text.includes("You're fin:")) return "ok"
+    await turn.world.agents.report(turn.caller, { status: "progress", summary: "Mapped the code path; a subagent inventories the callers.", clientKey: "mapped" })
+    held(turn.world, turn.conversation, true)
+    return "Progress is reported. I'll finish when the caller-inventory subagent returns."
+  }, { harness, wakeGraceMs: 1_500 })
+  const child = await f.start("need", "Is the service needed?")
+  const conversation = f.conversationOf(child)
+  // Its work runs on, so the world never settles: its turn's end is waited for instead.
+  await until("its turn to end on the work it left running", () => f.w.live.snapshot(conversation)?.session.status === "ready")
+  await pause(100)
+  assert.equal((await f.state("need")).state.kind, "working", "at work on what it left running")
+  // Its harness says the work ended, and starts the turn it wakes a moment later.
+  held(f.w, conversation, false)
+  await pause(300)
+  assert.deepEqual(f.reports(child).filter((report) => report.implicit), [], "nothing is said while the wake may still come")
+  await harnessTurn(f.w, conversation, async () => {
+    await f.w.agents.report(f.w.caller(conversation), { status: "done", summary: "Not needed for sequences; three other features need it.", clientKey: "final" })
+  })
+  await f.w.settle()
+  await pause(1_600)
+  await f.w.settle()
+  assert.deepEqual(f.reports(child).map((report) => [report.status, report.implicit ?? false]), [["progress", false], ["done", false]], "its own result, and nothing Mako wrote for it")
+  assert.match(f.heard(), /"need" \([^)]+\) done: Not needed for sequences/, "its Apex hears the result")
+  assert.doesNotMatch(f.heard(), /ended without waking it/, "and never that it failed")
+  console.log(`${harness}: the work's end a moment before its wake turn is no failure`)
+  await f.w.close()
+}
+
+/** Codex starts no turn of its own when its terminal or subagent ends: once the grace passes, it ended without a result. */
+async function noWakeAfterGrace(harness: Harness): Promise<void> {
+  const f = await world(`no-wake-${harness}`, async (turn) => {
+    if (!turn.text.includes("You're fin:")) return "ok"
+    turn.world.live.observe({ type: "live-session", session: { ...turn.world.live.snapshot(turn.conversation)!.session, backgroundTasks: 1 } })
+    return "The suite runs in the background; I'll report when it settles."
+  }, { harness, wakeGraceMs: 400 })
+  const child = await f.start("suite", "Run the suite")
+  const conversation = f.conversationOf(child)
+  await until("its turn to end on the work it left running", () => f.w.live.snapshot(conversation)?.session.status === "ready")
+  await pause(100)
+  f.w.live.observe({ type: "live-session", session: { ...f.w.live.snapshot(conversation)!.session, backgroundTasks: 0 } })
+  await pause(150)
+  assert.equal(f.reports(child).length, 0, "not before the grace")
+  await until("its end to be said", () => f.reports(child).length > 0)
+  const [report] = f.reports(child)
+  assert.deepEqual([report!.status, report!.unfinished], ["failed", true], JSON.stringify(report))
+  assert.match(report!.summary, /^1 background task it left running ended without waking it\. Nothing it waits on will wake it\./)
+  console.log(`${harness}: no wake within the grace, so it ended without a result`)
   await f.w.close()
 }
 
@@ -411,7 +479,11 @@ async function askedAtStop(): Promise<void> {
 
 try {
   const only = process.argv.slice(2)
-  const cases = { monitorArmed, monitorDied, monitorDropped, lateNotification, oneCeilingTimer, monitorPastCeiling, promiseAfterWake, unfinished, unfinishedHoldsAfter, finishedWithoutReport, askedReports, askedAtStop }
+  const cases = {
+    monitorArmed, monitorDied, monitorDropped, lateNotification, oneCeilingTimer, monitorPastCeiling, promiseAfterWake, unfinished, unfinishedHoldsAfter, finishedWithoutReport, askedReports, askedAtStop,
+    wakeAfterEnd: async () => { for (const harness of ["claude", "cursor", "devin", "grok", "opencode"] as const) await wakeAfterEnd(harness) },
+    noWakeAfterGrace: () => noWakeAfterGrace("codex"),
+  }
   for (const [name, run] of Object.entries(cases)) if (!only.length || only.includes(name)) await run()
 } finally {
   rmSync(root, { recursive: true, force: true })

@@ -813,7 +813,7 @@ export const AGENT_TOOLS: readonly AgentToolDefinition[] = [
         fast: "Only when the person asked: true for the fast lane (quicker, pricier), false for standard.",
         access: "plan, chat, ask, edits, auto, full or deny, at most yours (the default). A harness without it runs at its nearest level below; one with none at or below is refused.",
         place: "Only where the person said: here, device:<name> or cloud. Absent: where you run. To move this Thread's own work to the cloud, use thread_move.",
-        workspace: "Its own worktree on branch (taken if it exists, else made from base), the same branch in every repository of a project folder. Absent: your folder, for reading or one writer.",
+        workspace: "Its own worktree on branch (taken if it exists, else made from base), the same branch in every repository of a project folder. Absent: your folder and branch, shared with you: for reading, or one writer. A Fin that edits while you do, or on a branch of its own, needs it.",
         title: "A few words the person sees for it.",
         role: `worker (default), reviewer, verifier, researcher, or lead: an ${APEX_WORD} that starts its own ${FIN_WORD}s.`,
         mode: "background (default): returns at once. wait: only when your next step needs its result. Never wait on work that can run while you do other things.",
