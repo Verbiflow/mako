@@ -370,6 +370,69 @@ export function triggersLine(definition: Pick<AutomationDefinition, "triggers">)
   return triggers.length > 1 ? `${triggerSentence(first)} · and ${triggers.length - 1} more` : triggerSentence(first)
 }
 
+const SHORT_GITHUB = {
+  release: "On release",
+  push: "On push",
+  pull_request: "On pull request",
+  check_failed: "On failed check",
+  issue_comment: "On comment",
+  issues: "On issue",
+  workflow_run: "On workflow run",
+} satisfies Record<Extract<AutomationTrigger, { kind: "github" }>["event"], string>
+
+/** A schedule's cadence in a row's few words: "Every 15 min", "Hourly :05", "Daily 3:00", "Weekdays 8:00", "Mon 6:00". */
+export function shortCadence(cron: string): string {
+  const preset = presetOf(cron)
+  switch (preset.kind) {
+    case "minutes":
+      return `Every ${preset.every} min`
+    case "hourly":
+      return preset.minute === 0 ? "Hourly" : `Hourly :${String(preset.minute).padStart(2, "0")}`
+    case "daily":
+      return `Daily ${clock(preset.hour, preset.minute)}`
+    case "weekdays":
+      return `Weekdays ${clock(preset.hour, preset.minute)}`
+    case "weekly":
+      return `${WEEKDAY_NAMES[preset.day]!.slice(0, 3)} ${clock(preset.hour, preset.minute)}`
+    case "monthly":
+      return `Monthly, ${ordinal(preset.date)} ${clock(preset.hour, preset.minute)}`
+    case "custom":
+      return preset.cron.trim()
+  }
+}
+
+/** A trigger in a row's few words: its short cadence, or "On pull request", "On commit to main". */
+export function shortTrigger(trigger: AutomationTrigger): string {
+  switch (trigger.kind) {
+    case "schedule":
+      return shortCadence(trigger.cron)
+    case "commit":
+      return trigger.branch ? `On commit to ${trigger.branch}` : "On commit"
+    case "manual":
+      return "Run now only"
+    case "github":
+      return SHORT_GITHUB[trigger.event]
+    case "slack":
+      return "On Slack"
+    case "linear":
+      return "On Linear"
+    case "sentry":
+      return "On Sentry"
+    case "webhook":
+      return "On webhook"
+    case "unsupported":
+      return "Can't read"
+  }
+}
+
+/** A definition's triggers in a row's few words: the first, and how many more ("Daily 3:00 +1"). */
+export function shortTriggers(definition: Pick<AutomationDefinition, "triggers">): string {
+  const triggers = definition.triggers.filter((trigger) => trigger.kind !== "manual")
+  const first = triggers[0]
+  if (!first) return "Run now only"
+  return triggers.length > 1 ? `${shortTrigger(first)} +${triggers.length - 1}` : shortTrigger(first)
+}
+
 export function lowerFirst(words: string): string {
   return words ? words.charAt(0).toLowerCase() + words.slice(1) : words
 }
