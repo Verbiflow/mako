@@ -1966,7 +1966,8 @@ export function installMockBridge() {
       pulls: matchPullRequests(MOCK_PULLS, request.query).slice(0, pullSearchLimit(request.limit)),
     }),
     pullBranches: async () => ["main", "release"],
-    projectBoard: async (request) => mockBoard(request),
+    // The Apex scene's project has no GitHub remote, so its rail is the one its checks measure.
+    projectBoard: async (request) => scene === "apex" ? { kind: request.kind, projects: request.folders.map((folder) => ({ folder, repositories: [] })), repositories: {}, pulls: [], issues: [] } : mockBoard(request),
     createPull: async (options) => {
       if (!sinceWorktree) return null
       await new Promise((resolve) => setTimeout(resolve, 600))
