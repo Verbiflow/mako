@@ -85,17 +85,8 @@ export const antigravityAcp: ProviderAcpSource = {
   goals: { kind: "mako", reason: "Mako drives the goal between turns." },
   review: { kind: "mako", reason: "Mako sends the review prompt." },
   sideQuestions: { kind: "not-built", reason: "Mako has no separate Antigravity side session." },
-  // Measured 2026-11-27 on agy 1.5.16 against a stand-in model: a prompt sent 3 s into a 12 s command ended the running
-  // prompt at once (`end_turn`) and carried the turn on; the model heard it at its next step, once the command went to
-  // the background at its `WaitMsBeforeAsync` (10 s). A Stop ended the turn in 30 ms. The person's steer restarts it.
-  steering: { kind: "supported", landing: "restart", hears: "at its next step, once the command it's running returns or goes to the background (it waits up to 10 s)",
-    via: "A prompt sent while a turn runs ends the running prompt and carries the turn on, read at its next step.", wire: "concurrent-prompt" },
-  // agy 1.5.16 lists Default, Accept edits and Plan; it has no session mode that asks nothing (`yolo`, `bypass` are
-  // unknown, `auto` needs a sandbox not rolled out), and `--dangerously-skip-permissions` holds for the whole process.
-  // So Full access runs in Accept edits and Mako answers every tool's request itself.
-  access: { default: "ask", native: { ask: "default", edits: "accept-edits", plan: "plan" }, answered: { full: "accept-edits" } },
-  // agy repeats each call's `rawInput` as `args`, which the SDK drops.
-  mirroredUpdateFields: ["args"],
+  steering: { kind: "unavailable", reason: "Messages wait for the active ACP prompt to finish." },
+  access: { default: "ask", native: { ask: "default", edits: "accept-edits", plan: "plan" } },
   nativeModes: [{ id: "default", name: "Default" }, { id: "accept-edits", name: "Accept edits" }, { id: "plan", name: "Plan" }],
   available: () => Boolean(resolveExecutable("agy")),
   async launch({ env }) {

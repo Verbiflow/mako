@@ -276,4 +276,4 @@ export { openCodeDatabasePaths } from "./providers/opencode-location.js"
 export { devinCliDirectory, devinDataHome } from "./providers/devin-location.js"
 export { claudeTranscriptRoots } from "./providers/claude-location.js"
 
-export { AntigravityProvider, agyConversationPath, agyDataDirectory, agyStepEntries, agyStoredCalls, AGY_KEY_DATA, AGY_STEP, type AgyStoredCall } from "./providers/antigravity.js"
+export { AntigravityProvider, agyConversationPath, agyDataDirectory, agyStoredCalls, AGY_KEY_DATA, type AgyStoredCall } from "./providers/antigravity.js"

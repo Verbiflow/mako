@@ -581,8 +581,8 @@ assert.doesNotMatch(separator, /h-px flex-1 bg-hairline/, "a plain system line i
 console.log("Mako's lines, stops, errors and system lines: one line where a prompt would be; Mako's and the provider's interruptions are attention, yours is not")
 
 // Each message names the entries it was drawn from and their bytes; Original
-// is offered where an entry names its record. An unread record draws nothing:
-// Settings › Unread records counts it, with the record, once per kind.
+// is offered where an entry names its record, and an unread record shows
+// collapsed, as the JSON it is.
 {
   const path = "/sessions/rollout.jsonl"
   const entries: Entry[] = [
@@ -596,15 +596,11 @@ console.log("Mako's lines, stops, errors and system lines: one line where a prom
   const prompt = messages.find((message) => message.role === "user")!
   assert.deepEqual(prompt.origin, { path, entries: [{ id: "u1", type: "user", record: { ranges: [[0, 40]] } }] })
   const drawn = messages.flatMap((message) => message.origin?.entries ?? [])
-  assert.deepEqual(drawn.map((entry) => entry.id), ["u1", "a1", "call_1", "a2"], "every drawn entry is named by the message it is drawn in")
+  assert.deepEqual(drawn.map((entry) => entry.id), ["u1", "a1", "call_1", "@190", "a2"], "every entry is named by the message it is drawn in")
   assert.deepEqual(drawn.find((entry) => entry.id === "call_1"), { id: "call_1", type: "tool", label: "exec_command", record: { ranges: [[90, 140], [140, 190]] } })
-  assert.equal(messages.some((message) => message.note?.label.startsWith("Unread record")), false, "an unread record is no notice: nothing the person can do follows from it")
-  {
-    // A stopped turn's eleven unread steps of one kind are not eleven notices, nor one.
-    const steps: Entry[] = Array.from({ length: 11 }, (_, index): Entry => ({ type: "unread", id: `agy-step-${index}`, kind: "Antigravity step 132", reason: "undrawn" }))
-    const drawnSteps = entriesToMessages([{ type: "user", id: "u", text: "Go" }, ...steps, { type: "provider-turn", id: "stop", reason: "Stopped" }], { kind: "saved", provider: "antigravity" }).messages
-    assert.deepEqual(drawnSteps.filter((message) => message.note?.label.startsWith("Unread record")), [], "no unread notice under a stopped turn")
-  }
+  const unread = messages.find((message) => message.origin?.entries[0]?.type === "unread")!
+  assert.equal(unread.note?.label, "Unread record: response_item/telepathy")
+  assert.equal(unread.note?.body, `\`\`\`\`json\n${JSON.stringify({ type: "telepathy", note: "```not a fence```" }, null, 2)}\n\`\`\`\``, "the record whole, fenced as JSON past its own backticks")
   assert.equal(entriesToMessages(entries, { kind: "saved", provider: "codex" }).messages.some((message) => message.origin), false, "a source without a path names nothing")
 
   const before = draw(toExchanges(messages))
@@ -618,15 +614,15 @@ console.log("Mako's lines, stops, errors and system lines: one line where a prom
     // The record is a step of a settled turn, so it is drawn inside the turn's fold: opened, as a reader would.
     setTurnFoldOpen(turnFoldKey(LIVE, "native-user-u1", 0), true)
     const html = draw(toExchanges(messages))
-    assert.equal(html.match(/data-show-original/g)?.length, 2, "the prompt's and the answer's footers offer Original")
-    assert.doesNotMatch(html, /Unread record/, "the unread record draws no line")
+    assert.equal(html.match(/data-show-original/g)?.length, 2, "the prompt's and the answer's footers offer Original; the unread line's opens with its record")
+    assert.match(html, /data-event="Unread record: response_item\/telepathy"[^]*?aria-expanded="false"/, "the unread record starts collapsed")
     // SAFETY: dropping `record` leaves each entry valid, as `record` is optional on every entry type.
     const unrecorded = draw(toExchanges(entriesToMessages(entries.map(({ record: _record, ...entry }) => entry as Entry), { kind: "saved", provider: "codex", path }).messages))
     assert.doesNotMatch(unrecorded, /data-show-original/, "entries that name no record (Mako's older copies) offer nothing to open")
   } finally {
     delete host.window
   }
-  console.log("Originals: each message names its entries and their bytes; Original only where a record is named; unread records draw nothing")
+  console.log("Originals: each message names its entries and their bytes; Original only where a record is named; unread records collapsed as JSON")
 
   // A live conversation's entries name the stream frames they came from, by their address in its view.
   const frames: RecordRef = { file: "mako-streams:codex/rollout.jsonl", ranges: [[0, 120]] }

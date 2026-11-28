@@ -175,7 +175,7 @@ Projected from each live driver (`packages/host/src/harnesses/live-capabilities.
 | Idle process | implemented | implemented | implemented | implemented | implemented | implemented | implemented |
 | Process death mid-turn | implemented | implemented | implemented | implemented | implemented | implemented | implemented |
 | Fork | implemented | implemented | implemented | implemented | implemented | implemented | implemented |
-| Steering | implemented | implemented | implemented | implemented | implemented | implemented | implemented |
+| Steering | implemented | implemented | implemented | implemented | implemented | implemented | harness has none |
 | Compaction | implemented | implemented | default | implemented | implemented | implemented | harness has none |
 | Planning | implemented | implemented | implemented | implemented | implemented | implemented | implemented |
 | Approvals | implemented | implemented | harness has none | implemented | implemented | implemented | implemented |

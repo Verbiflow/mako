@@ -272,8 +272,6 @@ export interface ProviderAcpSource extends ProviderCapability, AcpDecoderHooks<A
   resume: AcpResume
   steering: AcpSteering
   access?: AcpAccessPolicy
-  /** Update fields the agent repeats under a name the SDK drops, whose values the decoder reads elsewhere: never counted as lost. */
-  mirroredUpdateFields?: readonly string[]
   /**
    * The session modes the installed agent advertises, recorded from a real
    * `session/new` so the ladder can be offered before a session exists. The

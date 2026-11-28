@@ -652,7 +652,7 @@ export function validateLiveDriver(driver: ProviderLiveDriver): void {
   for (const [name, text] of declaredTexts(driver))
     if (!text.trim()) throw new Error(`${driver.provider}: explain its ${name} declaration`)
   for (const mode of driver.modes ?? [])
-    if (mode.access && mode.enforcement !== "provider" && mode.enforcement !== "launch" && mode.enforcement !== "mako")
+    if (mode.access && mode.enforcement !== "provider" && mode.enforcement !== "launch")
       throw new Error(`${driver.provider}: mode ${mode.id} names a tier with no enforcer`)
   if (driver.defaultMode && !driver.modes?.some((mode) => mode.id === driver.defaultMode))
     throw new Error(`${driver.provider}: defaultMode ${driver.defaultMode} is not one of its declared modes`)

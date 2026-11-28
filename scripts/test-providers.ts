@@ -1,11 +1,5 @@
 import { antigravityAcp } from "@mako/host/harnesses/antigravity/acp"
 import { antigravityCatalog } from "@mako/host/harnesses/antigravity/profile"
-import { acpAnsweredRequest, acpInitialSelection, acpModeChange, acpReportedMode, acpSessionModes } from "@mako/host/harnesses/acp-access"
-import { AcpPromptTurn, type AcpTurnResult } from "@mako/host/harnesses/acp-prompt-turn"
-import { workDefault } from "@mako/host/contracts/harness-defaults"
-import { agyStepEntries, AGY_STEP, AntigravityProvider } from "@mako/sessions"
-import { resolveSessionSettings } from "@mako/sessions/settings"
-import { BinaryWriter } from "@bufbuild/protobuf"
 import { claudeRuntime } from "@mako/host/harnesses/claude/runtime"
 import { OPENCODE_OLDEST } from "@mako/host/harnesses/opencode/version"
 import {
@@ -594,168 +588,14 @@ assert.deepEqual(
   providerHost.acpSources.list().map((source) => source.provider),
   ["grok", "devin", "antigravity"]
 )
-{
-  // Antigravity's catalog as agy 1.5.16 lists it on `session/new` (recorded 2026-11-27): the picker names each model once,
-  // `thought_level` holds the running model's levels only, and the legacy list names every model/level pair.
-  const legacy = [["gemini-4-neon", ["high", "xhigh", "medium", "low"]], ["gemini-4-carbon", ["high", "medium", "low"]], ["gemini-3.1-pro", ["high", "low"]]] as const
-  const label = (level: string) => ({ low: "Low", medium: "Medium", high: "High", xhigh: "XHigh" })[level] ?? level
-  const session = {
-    configOptions: [
-      { id: "model", name: "Model", category: "model", type: "select", currentValue: "gemini-3.1-pro",
-        options: [{ value: "gemini-4-neon", name: "Gemini 4 Neon" }, { value: "gemini-4-carbon", name: "Gemini 4 Carbon" }, { value: "gemini-3.1-pro", name: "Gemini 3.1 Pro" }] },
-      { id: "thought_level", name: "Thinking Level", category: "thought_level", type: "select", currentValue: "low", options: [{ value: "low", name: "Low" }, { value: "high", name: "High" }] },
-      { id: "mode", name: "Mode", category: "mode", type: "select", currentValue: "default", options: [{ value: "default", name: "Default" }, { value: "accept-edits", name: "Accept edits" }, { value: "plan", name: "Plan" }] },
-    ] satisfies SessionConfigOption[],
-    models: { availableModels: legacy.flatMap(([id, levels]) => levels.map((level) => ({ modelId: `${id}-${level}`, name: `${id} (${label(level)})` }))) },
-  }
-  const levelsOf = (catalog: ReturnType<typeof antigravityCatalog>, id: string) => {
-    const option = catalog.models.find((model) => model.id === id)?.options.find((entry) => entry.id === "effort")
-    return option?.kind === "select" ? option.values.map((entry) => entry.value + (entry.default ? "*" : "")) : []
-  }
-  const fromLegacy = antigravityCatalog(session)
-  assert.deepEqual(levelsOf(fromLegacy, "gemini-4-neon"), ["low*", "medium", "high", "xhigh"], "a model's own levels, least first, starting on the least as agy does")
-  assert.deepEqual(levelsOf(fromLegacy, "gemini-4-carbon"), ["low*", "medium", "high"], "Carbon has no XHigh")
-  assert.deepEqual(levelsOf(fromLegacy, "gemini-3.1-pro"), ["low*", "high"], "the running model's levels, as its session reports them")
-  // What agy reports once switched to each model wins over the legacy names: a level the list never named, and the
-  // level the model starts on.
-  const switched = antigravityCatalog(session, new Map([["gemini-4-neon", { values: [{ value: "low", label: "Low" }, { value: "medium", label: "Medium" }, { value: "high", label: "High" }, { value: "xhigh", label: "Extra" }, { value: "max", label: "Max" }], current: "medium" }]]))
-  assert.deepEqual(levelsOf(switched, "gemini-4-neon"), ["low", "medium*", "high", "xhigh", "max"])
-  const neonEffort = switched.models.find((model) => model.id === "gemini-4-neon")?.options[0]
-  assert.equal(neonEffort?.kind === "select" ? neonEffort.values.find((entry) => entry.value === "xhigh")?.label : undefined, "Extra", "agy's own words for a level")
-  assert.deepEqual(fromLegacy.settings, { model: "gemini-3.1-pro", options: {} }, "with no default of Mako's, the agent's own selected model")
-  // Mako starts Antigravity on its newest Gemini, at High, falling back to 3.1 Pro where an account lacks it.
-  const profile = providerHost.profiles.list().find((loader) => loader.provider === "antigravity")!
-  assert.deepEqual(profile.defaults.work, [{ model: "gemini-4-neon", options: { effort: "high" } }, { model: "gemini-3.1-pro", options: { effort: "high" } }])
-  assert.deepEqual(workDefault(profile.defaults, fromLegacy.models), { model: "gemini-4-neon", options: { effort: "high" } })
-  assert.deepEqual(workDefault(profile.defaults, fromLegacy.models.filter((model) => !model.id.startsWith("gemini-4"))), { model: "gemini-3.1-pro", options: { effort: "high" } })
-  // A person's pick in their loadout wins over Mako's default, and the effort follows the model they picked.
-  const resolved = (preference?: { model: string; options?: Record<string, string> }) =>
-    resolveSessionSettings({ models: fromLegacy.models, context: "new", phase: "launch", defaults: workDefault(profile.defaults, fromLegacy.models), ...preference && { preference: { source: "saved" as const, settings: preference } } }).settings
-  assert.deepEqual(resolved(), { model: "gemini-4-neon", options: { effort: "high" } })
-  assert.deepEqual(resolved({ model: "gemini-4-carbon" }), { model: "gemini-4-carbon", options: { effort: "low" } }, "Carbon starts on its own default level")
-  assert.deepEqual(resolved({ model: "gemini-3.1-pro", options: { effort: "high" } }), { model: "gemini-3.1-pro", options: { effort: "high" } })
-}
-{
-  // Steering: a prompt sent into a running agy turn ends the running prompt at once (`end_turn`) and carries the turn on.
-  // The turn stays running until the prompt carrying it ends; the person's steer stops the turn and goes as the next one.
-  assert.deepEqual(antigravityAcp.steering, { ...antigravityAcp.steering, kind: "supported", landing: "restart", wire: "concurrent-prompt" })
-  let ended: AcpTurnResult | undefined
-  const turn = new AcpPromptTurn((result) => { ended = result })
-  let firstEnds!: () => void
-  let steerEnds!: () => void
-  const first = turn.send(() => new Promise((resolve) => { firstEnds = () => resolve({ stopReason: "end_turn" }) }))
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(turn.acceptsSteering, true)
-  const steer = turn.send(() => new Promise((resolve) => { steerEnds = () => resolve({ stopReason: "end_turn" }) }), "steer")
-  firstEnds()
-  await first
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.equal(ended, undefined, "the running prompt ending for the steer doesn't end the turn")
-  assert.equal(turn.acceptsSteering, true)
-  steerEnds()
-  await steer
-  await new Promise((resolve) => setImmediate(resolve))
-  assert.deepEqual(ended, { kind: "completed", stopReason: "end_turn" })
-}
-{
-  // Access: agy lists Default, Accept edits and Plan. Full access runs in Accept edits and Mako approves each tool's
-  // request itself, at once and for as long as the session is in it, a resumed one too; a question still asks.
-  const policy = antigravityAcp.access
-  const modes = acpSessionModes(policy, { availableModes: antigravityAcp.nativeModes!.map(({ id, name }) => ({ id, name })) })
-  assert.deepEqual(modes.map((mode) => [mode.id, mode.access, mode.enforcement]),
-    [["default", "ask", "provider"], ["accept-edits", "edits", "provider"], ["plan", "plan", "provider"], ["access:full", "full", "mako"]])
-  assert.deepEqual(acpModeChange(policy, modes, "access:full", null, "Antigravity", "default"), { kind: "native", modeId: "access:full", nativeModeId: "accept-edits" })
-  assert.deepEqual(acpModeChange(policy, modes, "default", null, "Antigravity", "access:full"), { kind: "native", modeId: "default", nativeModeId: "default" }, "back to Ask at once")
-  assert.equal(acpReportedMode(policy, "accept-edits", null, "access:full"), "access:full", "agy reporting the mode Full runs in is Full holding")
-  assert.equal(acpReportedMode(policy, "default", null, "access:full"), "default", "agy leaving it is Full ending")
-  assert.equal(acpReportedMode(policy, "accept-edits", null, "default"), "accept-edits")
-  assert.deepEqual(acpInitialSelection(policy, modes, { availableModes: [], currentModeId: "accept-edits" }, "access:full"), { currentMode: "access:full" }, "a resumed session in Full is Full again")
-  // agy 1.5.16's request for a command: Allow (allow_once) or Deny (reject_once).
-  const command = { options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }, { optionId: "deny", name: "Deny", kind: "reject_once" }] }
-  assert.equal(acpAnsweredRequest(policy, "access:full", command, "8078fd85-852d-40ad-adb2-cd9070e1ecc1"), "allow")
-  assert.equal(acpAnsweredRequest(policy, "accept-edits", command, "8078fd85"), undefined, "Accept edits still asks for a command")
-  assert.equal(acpAnsweredRequest(policy, "default", command, "8078fd85"), undefined)
-  assert.equal(acpAnsweredRequest(policy, "access:full", command, "interaction_1"), undefined, "a question to the person is never answered for them")
-  assert.equal(acpAnsweredRequest(policy, "access:full", { ...command, questions: [{}] }, "8078fd85"), undefined)
-  const choices = { options: [{ optionId: "a", name: "Postgres", kind: "allow_once" }, { optionId: "b", name: "SQLite" }] }
-  assert.equal(acpAnsweredRequest(policy, "access:full", choices, "8078fd85"), undefined, "choices that aren't allow or deny are a question")
-  assert.deepEqual(antigravityAcp.mirroredUpdateFields, ["args"], "agy's copy of rawInput is no lost field")
-}
-{
-  // Antigravity's records: a conversation's `steps` rows, protobuf in agy 1.5.16's shapes (`CortexStep`), with the
-  // person's words and paths made up. A reply that only calls tools (step 15) and a generic tool's step (132) are read,
-  // so a long session of tool steps leaves nothing unread.
-  /** A call's arguments as agy's tools take them. */
-  interface ToolArguments { Path?: string; CommandLine?: string; toolSummary?: string }
-  const message = (build: (writer: BinaryWriter) => void) => {
-    const writer = new BinaryWriter()
-    build(writer)
-    return writer.finish()
-  }
-  const timestamp = (seconds: number) => message((w) => w.uint32(8).int64(seconds).uint32(16).int32(5e8))
-  const call = (id: string, name: string, args: ToolArguments) => message((w) => w.uint32(10).string(id).uint32(18).string(name).uint32(26).string(JSON.stringify(args)))
-  const step = (kind: number, status: number, body: (writer: BinaryWriter) => void, metadata?: Uint8Array) =>
-    message((w) => {
-      w.uint32(8).int32(kind).uint32(32).int32(status)
-      if (metadata) w.uint32(42).bytes(metadata)
-      body(w)
-    })
-  const toolMetadata = (id: string, name: string, args: ToolArguments) => message((w) => w.uint32(10).bytes(timestamp(1795785656)).uint32(34).bytes(call(id, name, args)).uint32(66).bytes(timestamp(1795785657)))
-  const generic = (args: Record<string, string>, result?: string) => message((w) => {
-    for (const [key, value] of Object.entries(args)) w.uint32(10).bytes(message((entry) => entry.uint32(10).string(key).uint32(18).string(value)))
-    if (result !== undefined) w.uint32(18).bytes(message((r) => r.uint32(10).string(result).uint32(26).bytes(message((render) => render.uint32(42).string("Ran")))))
-  })
-  const rows: Array<[number, Uint8Array]> = [
-    [14, step(14, 3, (w) => w.uint32(154).bytes(message((input) => input.uint32(18).string("Why does the worker time out?"))))],
-    [15, step(15, 3, (w) => w.uint32(162).bytes(message((reply) => reply.uint32(26).string("**Checking the worker** I'll read its config.").uint32(50).string("resp-1")
-      .uint32(58).bytes(call("call_1", "read_file", { Path: "/work/app/worker.yaml" })).uint32(58).bytes(call("call_2", "run_command", { CommandLine: "make status" })))))],
-    [132, step(132, 3, (w) => w.uint32(1122).bytes(generic({ Path: "/work/app/worker.yaml" }, "timeout: 30s\n")), toolMetadata("call_1", "read_file", { Path: "/work/app/worker.yaml" }))],
-    [132, step(132, 6, (w) => w.uint32(1122).bytes(generic({ CommandLine: "make status" })), toolMetadata("call_2", "run_command", { CommandLine: "make status", toolSummary: "Status" }))],
-    [132, step(132, 1, (w) => w.uint32(1122).bytes(generic({ CommandLine: "make logs" })), toolMetadata("call_3", "run_command", { CommandLine: "make logs" }))],
-    [101, step(101, 3, () => {})],
-    [15, step(15, 3, (w) => w.uint32(162).bytes(message((reply) => reply.uint32(10).string("The worker's timeout is 30 s.").uint32(26).string("Done reading."))))],
-    [77, step(77, 3, () => {})],
-  ]
-  const entries = rows.flatMap(([kind, payload], idx) => agyStepEntries(idx, kind, payload))
-  assert.deepEqual(entries.map((entry) => entry.type === "tool" ? `tool ${entry.name} ${entry.status}` : entry.type === "unread" ? `unread ${entry.kind} ${entry.reason}` : `${entry.type} ${"text" in entry ? entry.text : ""}`), [
-    "user Why does the worker time out?",
-    "thinking **Checking the worker** I'll read its config.",
-    "tool read_file completed",
-    "tool run_command cancelled",
-    "tool run_command pending",
-    "thinking Done reading.",
-    "text The worker's timeout is 30 s.",
-    "unread Antigravity step 77 unknown",
-  ], "a reply's thinking and words, each call once by its own step, the agent's system message as nothing")
-  const read = entries.find((entry) => entry.type === "tool" && entry.id === "call_1")
-  assert.deepEqual(read, { type: "tool", id: "call_1", name: "read_file", status: "completed", input: JSON.stringify({ Path: "/work/app/worker.yaml" }), output: "timeout: 30s\n", at: 1795785656500, endedAt: 1795785657500 }, "a call by the id the live stream gave it, with its result")
-  const queued = entries.find((entry) => entry.type === "tool" && entry.id === "call_3")
-  assert.equal(queued?.type === "tool" ? queued.endedAt : "missing", undefined, "a call that never ran has no end")
-  assert.deepEqual(agyStepEntries(9, 15, new Uint8Array([0xff, 0xff])), [{ type: "unread", id: "agy-step-9", kind: "Antigravity step 15", reason: "unreadable" }], "a payload a newer build changed stays where it stood")
-  assert.deepEqual(agyStepEntries(3, AGY_STEP.plannerResponse, step(15, 3, () => {})), [{ type: "unread", id: "agy-step-3", kind: "Antigravity step 15", reason: "unreadable" }], "a reply with nothing in it")
-
-  // A whole conversation as Mako reads it from disk: the person's stopped session's shape, 26 steps, nothing unread.
-  const home = await mkdtemp(join(tmpdir(), "mako-agy-records-"))
-  const store = join(home, "mako-antigravity-key", "conversations")
-  await mkdir(store, { recursive: true })
-  const nativeId = "9f8e7d6c-1111-4222-8333-444455556666"
-  const db = new DatabaseSync(join(store, nativeId + ".db"))
-  db.exec("CREATE TABLE steps (idx integer PRIMARY KEY, step_type integer NOT NULL DEFAULT 0, status integer NOT NULL DEFAULT 0, step_payload blob, metadata blob)")
-  const insert = db.prepare("INSERT INTO steps (idx, step_type, status, step_payload) VALUES (?, ?, ?, ?)")
-  const kinds = [14, 15, 132, 132, 15, 132, 132, 132, 15, 132, 132, 132, 15, 132, 132, 132, 14, 15, 132, 132, 15, 132, 132, 132, 132, 132]
-  kinds.forEach((kind, idx) => insert.run(idx, kind, 3, kind === 14 ? rows[0]![1] : kind === 15 ? rows[1]![1] : step(132, 3, (w) => w.uint32(1122).bytes(generic({ Path: "/work/a" }, "ok")), toolMetadata(`call_${idx}`, "read_file", { Path: "/work/a" }))))
-  db.close()
-  const summaries = new DatabaseSync(join(home, "mako-antigravity-key", "conversation_summaries.db"))
-  summaries.exec("CREATE TABLE conversation_summaries (conversation_id text, title text, preview text, workspace_uris text, last_modified_time text, step_count integer)")
-  summaries.prepare("INSERT INTO conversation_summaries VALUES (?, ?, ?, ?, ?, ?)").run(nativeId, "Worker timeouts", "", JSON.stringify(["file:///work/app"]), "2026-11-27T13:24:12Z", kinds.length)
-  summaries.close()
-  const provider = new AntigravityProvider(nativeStores, home)
-  const session = await provider.read(join(store, nativeId + ".db"))
-  assert.ok(session)
-  assert.equal(session.entries.filter((entry) => entry.type === "unread").length, 0, "no unread record in a long session of tool steps")
-  assert.equal(session.entries.filter((entry) => entry.type === "tool").length, kinds.filter((kind) => kind === 132).length)
-  await rm(home, { recursive: true, force: true })
-}
+const antigravityPicker = {
+  id: "model", name: "Model", category: "model", type: "select", currentValue: "gemini-3.1-pro",
+  options: [{ value: "gemini-3.1-pro", name: "Gemini 3.1 Pro" }],
+} as const
+const catalogWith = (options: Array<{ value: string; name: string }>) =>
+  antigravityCatalog({ configOptions: [{ ...antigravityPicker, options }] })
+assert.equal(catalogWith([...antigravityPicker.options]).settings?.model, "gemini-3.1-pro")
+assert.equal(catalogWith([...antigravityPicker.options, { value: "gemini-nano", name: "Gemini Nano" }]).settings?.model, "gemini-nano")
 {
   // A prompt fails when the conversation's database gained an executor error (step 17) after it was sent; a missing,
   // unreadable or unchanged database says nothing, and never throws into the turn.

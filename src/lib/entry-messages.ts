@@ -4,6 +4,8 @@ import { liveToolFinished, toolTitle } from "@mako/sessions/live-content"
 import { AGENT_PLAN_TOOL, identifyTool } from "@mako/sessions/tool-identity"
 import { callMedia } from "@mako/sessions/turn-media"
 import type { LiveHistoryAddress } from "@mako/host/contracts/live-history"
+import { z } from "zod"
+import { formatBytes } from "@/lib/format"
 import { entryToolIdentity } from "@/lib/tools"
 import type { Block, ChatMessage, MessageAnchor, OriginEntry, ToolContentRest } from "@/lib/types"
 
@@ -149,8 +151,7 @@ class EntryDrawing {
           this.marker(entry, at, { label: entry.label, detail: entry.detail, body: entry.body, tone: entry.tone, setup: entry.setup, source: entry.source, cause: entry.cause, limit: entry.limit, nearLimit: entry.nearLimit, retries: entry.retries, direct: entry.direct }, false)
           break
         case "unread":
-          // A record Mako couldn't read or doesn't draw leaves the person nothing to do: Settings → Unread records
-          // counts it by harness, kind and reason, with the record itself, once however often it recurs.
+          this.marker(entry, at, unreadNote(entry), false)
           break
         case "plan":
           this.plan = entry.entries
@@ -316,6 +317,35 @@ function restOf(entry: EntryOf<"tool">, source: EntrySource): ToolContentRest | 
     return { length, live: { token: source.token, at: address } }
   }
   return { length, entry: entry.id }
+}
+
+/**
+ * A record the decoder didn't read, as a quiet marker whose body is the
+ * record, fenced past any backticks in it (`fenced`).
+ */
+function unreadNote(entry: EntryOf<"unread">): TranscriptEvent {
+  const why = entry.reason === "unknown" ? "not a kind Mako reads" : entry.reason === "unreadable" ? "Mako couldn't read it" : "not drawn"
+  const note: TranscriptEvent = { label: `Unread record: ${entry.kind}`, detail: why }
+  const raw = entry.raw
+  const line = z.string().safeParse(raw)
+  const cut = CutLineSchema.safeParse(raw)
+  if (line.success) note.body = fenced(line.data, "text")
+  else if (cut.success) {
+    note.detail = `${why}: a ${formatBytes(cut.data.bytes)} line, longer than one string can hold`
+    note.body = fenced(cut.data.head, "text")
+  } else if (raw !== undefined) note.body = fenced(JSON.stringify(raw, null, 2), "json")
+  else if (entry.rawOmitted) note.body = "The record is large. Original reads it whole."
+  return note
+}
+
+/** A line too long to be a string, as its decoder keeps it (`unparsedLine`). */
+const CutLineSchema = z.strictObject({ head: z.string(), bytes: z.number() })
+
+/** `text` as a fenced code block, its fence longer than any run of backticks inside. */
+function fenced(text: string, language: string): string {
+  const longest = Math.max(0, ...Array.from(text.matchAll(/`+/g), (run) => run[0].length))
+  const fence = "`".repeat(Math.max(3, longest + 1))
+  return `${fence}${language}\n${text}\n${fence}`
 }
 
 /** The question a saved session is waiting on: its newest question call, while unanswered. */

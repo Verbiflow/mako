@@ -16,7 +16,7 @@ import type { ProviderTurnCause } from "@mako/sessions/provider-turn"
 import type { NativeNotice } from "../contracts/native-activity.js"
 import { turnVerdict } from "./acp-turn-verdict.js"
 import { openAuthenticatedSession } from "./acp-authentication.js"
-import { acpAnsweredRequest, acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "./acp-access.js"
+import { acpDefaultMode, acpInitialSelection, acpModeChange, acpNativeModes, acpReportedMode, acpSessionModes } from "./acp-access.js"
 import { acpClientCapabilities, midTurnMarker, TURN_CONTENT, type AcpLaunchOptions, type AcpAgentObserver } from "./acp-source.js"
 import { accessModeId, accessTierOfModeId, type AccessTier } from "../contracts/access.js"
 import { heavy } from "../base/heavy-packages.js"
@@ -541,12 +541,6 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
           sessionId: id,
           ...decoder.permission(params).request,
         }
-        // A tier Mako makes true by answering (`AcpAccessPolicy.answered`) approves the call it covers without a card.
-        const approved = acpAnsweredRequest(source.access, live.state.currentMode, request, params.toolCall.toolCallId)
-        if (approved !== undefined) {
-          hostLog("acp", "approved a call the access level covers", { harness, conversation: id, mode: live.state.currentMode, tool: params.toolCall.kind ?? params.toolCall.title ?? null })
-          return { outcome: { outcome: "selected" as const, optionId: approved } }
-        }
         const response = await engine.ask(live, request)
         const chosen = response.kind === "choice" ? response.optionId : null
         if (chosen === null) return { outcome: { outcome: "cancelled" as const } }
@@ -693,9 +687,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     }
     /** The SDK kept this update but not all of it; each lost place is logged once. */
     function lossyUpdate({ params, kind, paths }: LossySessionUpdate): void {
-      const mirrored = source.mirroredUpdateFields ?? []
-      for (const path of paths) if (!mirrored.some((field) => path === field || path.startsWith(field + ".") || path.startsWith(field + "[")))
-        engine.unknown(live, `session/update/${kind}/lost/${path}`, "unreadable", { method: "session/update", params })
+      for (const path of paths) engine.unknown(live, `session/update/${kind}/lost/${path}`, "unreadable", { method: "session/update", params })
     }
     const mcpStartup = source.mcpStartup?.()
     const childSpend = source.childSpend?.()
@@ -1184,7 +1176,7 @@ export function createAcpEngine(source: ProviderAcpSource, dependencies: AcpEngi
     if (!live) return
     const policy = source.access
     live.nativeMode = nativeMode
-    update(live, { currentMode: acpReportedMode(policy, nativeMode, live.launchAccess, live.state.currentMode) })
+    update(live, { currentMode: acpReportedMode(policy, nativeMode, live.launchAccess) })
   }
 
   async function liveCancel(id: string): Promise<void> {
