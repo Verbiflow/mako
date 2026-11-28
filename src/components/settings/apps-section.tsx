@@ -6,6 +6,7 @@ import { environmentRepairPrompt } from "@mako/host/contracts/thread-environment
 import { Action, Blank, Chip, Eyebrow, ListCard, ListCardRow } from "@/components/ui/kit"
 import { Shimmer } from "@/components/ui/shimmer"
 import { SetupPage } from "@/components/setup/setup-page"
+import { RoomSection } from "@/components/rail/room-section"
 import { Skeleton } from "@/components/ui/skeleton"
 import { changeWithAgent } from "@/state/recipe-change"
 import { cn } from "@/lib/utils"
@@ -81,6 +82,11 @@ function ProjectList({ onOpen }: { onOpen: (root: string) => void }) {
       ) : (
         <div className="bg-raised">
           <Blank title="No projects yet" body="Start a Thread in a project folder and it shows up here." />
+        </div>
+      )}
+      {tab === "setup" ? null : (
+        <div className="pt-6">
+          <RoomSection />
         </div>
       )}
     </div>

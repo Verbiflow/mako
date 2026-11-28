@@ -279,7 +279,8 @@ export function formatAgo(at: number, now: number): string {
   const minutes = Math.round(seconds / 60)
   if (minutes < 60) return `${minutes} min ago`
   const hours = Math.round(minutes / 60)
-  return `${hours} h ago`
+  if (hours < 48) return `${hours} h ago`
+  return `${Math.round(hours / 24)} days ago`
 }
 
 export function formatDuration(ms: number): string {

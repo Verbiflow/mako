@@ -107,6 +107,9 @@ async function check() {
   await evaluate("document.querySelector('[data-rail-top-row=inbox]').click(); true")
   await until("Boolean(document.querySelector('[data-inbox]'))", "the Inbox")
   await until("document.querySelectorAll('[data-inbox-kind=agent-ask]').length === 1", "the ask in the Inbox, once")
+  // Only the selected ask shows its answers: select it as a click on its row does.
+  await evaluate("document.querySelector('[data-inbox-kind=agent-ask]').click(); true")
+  await until("Boolean(document.querySelector('[data-inbox-kind=agent-ask] [data-inbox-answer=allow]'))", "the selected ask's answers")
   const inbox = await evaluate("document.querySelector('[data-inbox-kind=agent-ask]').innerText.replace(/\\s+/g, ' ')")
   assert.ok(inbox.includes("Move to the cloud") && inbox.includes("Keep here"), inbox)
   assert.ok(await evaluate("!document.querySelector('[data-inbox]').innerText.includes('Nothing waits on you')"), "the Inbox says what the rail says")
@@ -135,7 +138,9 @@ async function check() {
 
   // On its Apex's row the Fin's ask reads in its own words, as its own card does: never as a command's approval.
   await until("[...document.querySelectorAll('[data-inbox-kind=fin]')].some((node) => node.innerText.includes('Dictation fallback'))", "the Fin's ask in the Inbox, from its Apex's row")
-  const inboxFin = await evaluate("[...[...document.querySelectorAll('[data-inbox-kind=fin]')].find((node) => node.innerText.includes('Dictation fallback')).querySelectorAll('[data-inbox-answer]')].map((node) => node.innerText.trim())")
+  await evaluate("[...document.querySelectorAll('[data-inbox-kind=fin]')].find((node) => node.innerText.includes('Dictation fallback')).click(); true")
+  await until("[...document.querySelectorAll('[data-inbox-kind=fin][data-selected]')].some((node) => node.innerText.includes('Dictation fallback') && node.querySelector('[data-inbox-answer]'))", "the Fin's ask selected")
+  const inboxFin = await evaluate("[...[...document.querySelectorAll('[data-inbox-kind=fin]')].find((node) => node.innerText.includes('Dictation fallback')).querySelectorAll('[data-inbox-answer]')].map((node) => node.innerText.trim().replace(/^\\d\\s*/, ''))")
   assert.deepEqual(inboxFin, ["Move to the cloud", "Keep here"], `the Inbox answers in the ask's words: ${JSON.stringify(inboxFin)}`)
   await evaluate("[...[...document.querySelectorAll('[data-inbox-kind=fin]')].find((node) => node.innerText.includes('Dictation fallback')).querySelectorAll('[data-inbox-answer]')][0].click(); true")
   await until("window.apexScene.responds().some((each) => each.allow === true)", "its answer reaching the Apex's host as an allow")
@@ -202,6 +207,8 @@ async function check() {
   await until("[...document.querySelectorAll('.thread-jump-scope [data-flip-key]')].some((row) => row.innerText.includes('Mobile polish'))", "the rail")
   await evaluate("document.querySelector('[data-rail-top-row=inbox]').click(); true")
   await until("document.querySelectorAll('[data-inbox-kind=agent-ask]').length === 1", "the ask to come back in the Inbox")
+  await evaluate("document.querySelector('[data-inbox-kind=agent-ask]').click(); true")
+  await until("Boolean(document.querySelector('[data-inbox-kind=agent-ask] [data-inbox-open]'))", "the selected ask")
   assert.equal(await evaluate("document.querySelectorAll('[data-inbox-kind=agent-ask] [data-inbox-answer]').length"), 0, "only the card can press Bring it back")
   assert.ok((await evaluate("document.querySelector('[data-inbox-kind=agent-ask]').innerText")).includes("Bring it back from its Thread"), "the Inbox says where to answer it")
   await evaluate("document.querySelector('[data-inbox-kind=agent-ask] [data-inbox-open]').click(); true")

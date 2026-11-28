@@ -299,6 +299,11 @@ export interface PlanAsk {
   text: string
 }
 
+/** A plan line's key in a list (the Inbox's row). */
+export function planKey(ask: PlanAsk): string {
+  return `plan:${ask.apex.thread}:${ask.section}:${ask.index}`
+}
+
 const WAITING = /^waiting on\b/i
 
 /** Every Apex's plan lines that wait on the person, its plan read once it's asked for. */

@@ -224,12 +224,16 @@ async function checkWindow() {
   assert.deepEqual(items.filter((item) => item.kind === "fin").map((item) => item.fin).sort(), [...facts.fins].sort(), "one item per asking Fin")
   assert.ok(items.filter((item) => item.kind === "fin").every((item) => item.text.includes("Mobile polish")), "each Fin's item says where it is")
   await capture("desktop-inbox.png")
-  // Each ask's anatomy, which the phone's and the iPad's cards share (`web-client/fin-ask.tsx`): where it is, the
-  // question, the answers in a row.
-  const deskAnatomy = await evaluate(`[...document.querySelectorAll(${JSON.stringify('[data-inbox-section="needs"] [data-inbox-item][data-inbox-kind="fin"]')})].map((card) => ({ head: Boolean(card.querySelector('[data-ask-head]')), question: card.querySelector('[data-ask-question]')?.innerText.trim() ?? null, answers: Boolean(card.querySelector('[data-ask-answers] [data-fin-typed], [data-ask-answers] button')), order: [...card.querySelectorAll('[data-ask-head], [data-ask-question], [data-ask-answers]')].map((node) => Object.keys(node.dataset).find((key) => key.startsWith('ask'))) }))`)
+  // Each ask is two lines, its answers only while it's the selected row: the first is selected as the Inbox opens.
+  const shown = await evaluate(`[...document.querySelectorAll('[data-inbox-section="needs"] [data-inbox-item]')].map((node) => ({ selected: node.hasAttribute('data-selected'), answers: Boolean(node.querySelector('[data-ask-answers]')) }))`)
+  assert.ok(shown[0].selected && shown.every((row, index) => row.selected === (index === 0)), `the first ask selected: ${JSON.stringify(shown)}`)
+  assert.ok(shown.every((row) => row.answers === row.selected), `only the selected ask shows its answers: ${JSON.stringify(shown)}`)
+  // Each ask's anatomy, selected, which the phone's and the iPad's cards share (`web-client/fin-ask.tsx`): where it is,
+  // the question, the answers in a row.
+  const deskAnatomy = await evaluate(`(async () => { const out = []; for (const card of document.querySelectorAll(${JSON.stringify('[data-inbox-section="needs"] [data-inbox-item][data-inbox-kind="fin"]')})) { card.click(); await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))); out.push({ head: Boolean(card.querySelector('[data-ask-head]')), question: card.querySelector('[data-ask-question]')?.innerText.trim() ?? null, answers: Boolean(card.querySelector('[data-ask-answers] [data-fin-typed], [data-ask-answers] button')), order: [...card.querySelectorAll('[data-ask-head], [data-ask-question], [data-ask-answers]')].map((node) => Object.keys(node.dataset).find((key) => key.startsWith('ask'))) }) } return out })()`)
   assert.ok(deskAnatomy.length > 0 && deskAnatomy.every((card) => card.head && card.question && card.answers), `the desk's Inbox asks: ${JSON.stringify(deskAnatomy)}`)
   // Every Fin's question (a Thread's approval answers with its harness's own options) offers words of the person's own beside its options, or as its only answer: no ask is a dead end.
-  const deskTyped = await evaluate(`[...document.querySelectorAll('[data-inbox-section="needs"] [data-inbox-item][data-inbox-kind="fin"]')].filter((node) => !node.querySelector('[data-inbox-answer="allow"]')).map((node) => Boolean(node.querySelector('[data-fin-typed]')))`)
+  const deskTyped = await evaluate(`(async () => { const out = []; for (const node of document.querySelectorAll('[data-inbox-section="needs"] [data-inbox-item][data-inbox-kind="fin"]')) { node.click(); await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))); if (!node.querySelector('[data-inbox-answer="allow"]')) out.push(Boolean(node.querySelector('[data-fin-typed]'))) } return out })()`)
   assert.ok(deskTyped.length > 0 && deskTyped.every(Boolean), `every question in the Inbox takes typed words: ${JSON.stringify(deskTyped)}`)
   const shiverTyped = await evaluate(`[...document.querySelectorAll('[data-shiver-row][data-child-group="needs"]')].filter((node) => node.dataset.finAsk && node.dataset.finAsk !== 'approval').map((node) => Boolean(node.querySelector('[data-fin-typed]')))`)
   assert.ok(shiverTyped.every(Boolean), `every question in the Shiver card takes typed words: ${JSON.stringify(shiverTyped)}`)
@@ -242,6 +246,8 @@ async function checkWindow() {
   await click('[data-rail-top-row="inbox"]')
   await until(`document.querySelector('[data-inbox]') !== null`)
   const target = items.find((item) => item.kind === "fin")
+  await evaluate(`document.querySelector('[data-inbox-item=${JSON.stringify(target.key)}]').click(); true`)
+  await until(`Boolean(document.querySelector('[data-inbox-item=${JSON.stringify(target.key)}] [data-ask-answers]'))`, "the target selected")
   const answer = await evaluate(`(() => { const card = document.querySelector('[data-inbox-item=${JSON.stringify(target.key)}]'); const button = card.querySelector('[data-inbox-answer="allow"], [data-inbox-answer="0"]'); button.setAttribute('data-inbox-test', 'answer'); return button.dataset.inboxAnswer })()`)
   const before = await rollup()
   await click('[data-inbox-test="answer"]')
@@ -256,6 +262,8 @@ async function checkWindow() {
   assert.equal(await inboxCount(), expected - 1)
   console.log(`PASS: answering ${answer === "allow" ? "Allow once" : "the first option"} in the Inbox moves the Fin to working everywhere (${await rollup()})`)
   await capture("desktop-inbox-answered.png")
+
+  await checkInboxKeys({ evaluate, until, chord, capture, expected: expected - 1 })
 
   await checkInboxNavigation({ window, page, base, evaluate, until, frames, click, capture })
 
@@ -298,4 +306,69 @@ async function checkWindow() {
   assert.deepEqual(errors.filter((message) => !/Download the React DevTools/.test(message)), [])
   console.log("Inbox UI: passed")
   app.exit(0)
+}
+
+/**
+ * The Inbox from the keyboard: j and k walk the asks (the selected one opening its answers), a number key answers it
+ * through its Apex's host, the selection moving on to the row in its place; lines to read follow, e settles one into
+ * the folded "Read today" and u there puts it back; Enter opens a Thread and Escape closes the Inbox.
+ */
+async function checkInboxKeys({ evaluate, until, chord, capture, expected }) {
+  const key = (name) => chord(name, name.length === 1 ? name.toUpperCase().charCodeAt(0) : { Enter: 13, Escape: 27 }[name], 0)
+  const selected = () => evaluate(`document.querySelector('[data-inbox] [data-list-row][data-selected]')?.dataset.listRow ?? null`)
+  const rows = () => evaluate(`[...document.querySelectorAll('[data-inbox] [data-list-row]')].filter((row) => !row.closest('[inert]')).map((row) => row.dataset.listRow)`)
+  // Answers to read beside the asks, as finished and failed Threads leave them.
+  const seeded = await evaluate(`Promise.all([import('/src/state/threads.ts'), import('/src/state/thread-store.ts')]).then(([{ setThreadAttention }, { threadsStore }]) => {
+    const state = threadsStore.get()
+    const refs = state.threads.filter((ref) => !ref.parent && !state.working[ref.path] && !state.attention[ref.path]).slice(0, 3)
+    refs.forEach((ref, index) => setThreadAttention(ref.path, index === 1 ? { kind: 'failed', at: Date.now() - 5 * 3600e3, detail: 'lint failed' } : { kind: 'review', at: Date.now() - (index + 1) * 60e3, unread: true }))
+    return refs.map((ref) => ref.path)
+  })`)
+  assert.equal(seeded.length, 3, "three Threads to read")
+  await until(`document.querySelector('[data-inbox]') !== null && document.activeElement?.matches('[data-inbox] [data-list-row]')`, "the Inbox open, its selected row focused")
+  const walk = await rows()
+  const asks = walk.filter((row) => row.startsWith("fin:") || row.startsWith("approval:") || row.startsWith("agent-ask:") || row.startsWith("waiting:") || row.startsWith("setup:"))
+  assert.equal(asks.length, expected, `every ask walked: ${JSON.stringify(walk)}`)
+  assert.equal(await selected(), walk[0], "the first row selected")
+  await key("j")
+  assert.equal(await selected(), walk[1], "j moves down")
+  assert.equal(await evaluate(`Boolean(document.querySelector('[data-list-row][data-selected] [data-ask-answers]')) && document.querySelectorAll('[data-inbox] [data-ask-answers]').length === 1`), walk[1].startsWith("fin:") || walk[1].startsWith("approval:") || walk[1].startsWith("agent-ask:") || walk[1].startsWith("setup:"), "the selected ask alone shows its answers")
+  await key("k")
+  assert.equal(await selected(), walk[0], "k moves up")
+  await capture("desktop-inbox-keys.png")
+  // A number key answers the selected Fin: through its Apex's host, and the row in its place is selected.
+  const fin = walk.find((row) => row.startsWith("fin:"))
+  const at = walk.indexOf(fin)
+  for (let step = 0; step < at; step += 1) await key("j")
+  assert.equal(await selected(), fin, "walked to a Fin's ask")
+  const before = await evaluate("window.apexScene.responds().length")
+  await key("1")
+  await until(`window.apexScene.responds().length === ${before + 1}`, "1 answers the selected ask")
+  await until(`document.querySelector('[data-inbox-item=${JSON.stringify(fin)}]') === null`, "the answered ask leaves")
+  await until(`document.querySelector('[data-inbox] [data-list-row][data-selected]')?.dataset.listRow === ${JSON.stringify(walk[at + 1])}`, "the selection moves to the row in its place")
+  // Down to the lines to read; e settles one into the folded "Read today", u puts it back.
+  const read = `read:${seeded[0]}`
+  await until(`Boolean(document.querySelector('[data-inbox-item=${JSON.stringify(read)}]'))`, "a line to read")
+  for (let step = 0; step < 30 && (await selected()) !== read; step += 1) await key("j")
+  assert.equal(await selected(), read, "j reaches the lines to read")
+  await key("e")
+  await until(`document.querySelector('[data-inbox-item=${JSON.stringify(read)}]') === null && document.querySelector('[data-inbox-section="today"]')?.dataset.folded !== undefined`, "e settles it into a folded Read today")
+  assert.match(await evaluate(`document.querySelector('[data-inbox-section="today"] h2').innerText`), /Read today\s*1/)
+  assert.equal(await evaluate(`[...document.querySelectorAll('[data-inbox] [data-list-row]')].filter((row) => !row.closest('[inert]')).some((row) => row.dataset.listRow.startsWith('today:'))`), false, "folded, out of the walk")
+  await evaluate(`document.querySelector('[data-inbox-section="today"] h2 button').click(); true`)
+  await until(`Boolean(document.querySelector('[data-inbox-section="today"]:not([data-folded]) [data-list-row="today:${seeded[0]}"]'))`, "Read today unfolds")
+  await capture("desktop-inbox-read-today.png")
+  for (let step = 0; step < 30 && (await selected()) !== `today:${seeded[0]}`; step += 1) await key("j")
+  await key("u")
+  await until(`Boolean(document.querySelector('[data-inbox-item=${JSON.stringify(read)}]')) && !document.querySelector('[data-inbox-section="today"]')`, "u puts it back to read")
+  // Enter opens the selected line's Thread, leaving the Inbox; Escape closes it from anywhere.
+  for (let step = 0; step < 30 && (await selected()) !== read; step += 1) await key("k")
+  assert.equal(await selected(), read)
+  await key("Enter")
+  await until(`document.querySelector('[data-inbox]') === null`, "Enter opens its Thread")
+  await evaluate(`import('/src/state/inbox-view.ts').then(({ inboxView }) => { inboxView.open(); return true })`)
+  await until(`document.querySelector('[data-inbox]') !== null`, "the Inbox again")
+  await key("Escape")
+  await until(`document.querySelector('[data-inbox]') === null`, "Escape closes it")
+  console.log("PASS: the Inbox's keys: j/k, a number answers, e settles into Read today, u puts back, Enter opens, Escape closes")
 }

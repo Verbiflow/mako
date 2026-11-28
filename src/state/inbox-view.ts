@@ -49,3 +49,10 @@ export const automationsPane = {
     inboxViewStore.set({ automations: false })
   },
 }
+
+/**
+ * Where the Inbox's keyboard stands, kept while it's closed so it comes back where it was: the selected row, and
+ * whether "Read today" is folded.
+ */
+export const inboxListStore = createStore<{ selected?: string; readFolded: boolean }>({ readFolded: true })
+export const useInboxList = createHook(inboxListStore)

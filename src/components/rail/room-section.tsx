@@ -3,7 +3,7 @@ import { CheckIcon, HourglassIcon, PlayIcon, SquareIcon, TriangleAlertIcon } fro
 import { Spinner } from "@/components/ui/spinner"
 import { toast } from "sonner"
 import { useWorkspaceFocus } from "@/components/stage/workspace-focus-context"
-import { fitLine, memoryLine, othersAmong, roomDetail, roomMemory, roomTip, roomTitle } from "@/lib/room"
+import { fitLine, memoryLine, othersAmong, roomApps, roomDetail, roomMemory, roomTip, roomTitle } from "@/lib/room"
 import { cn } from "@/lib/utils"
 import { confirmAction } from "@/state/confirm"
 import { formatBytes, threadAppDriver, useThreadApp, type RoomApp, type RoomView } from "@/state/thread-app"
@@ -33,10 +33,10 @@ const STATE_WORDS = {
 } satisfies Record<RoomApp["state"], string>
 
 /**
- * Every app on this Mac, at the foot of the Inbox: what it is, what it holds, how
- * long it has been up, and how many copies of each project's app fit. Rows
- * select for stopping several at once; stopping an app that isn't the one
- * in view asks first. Watched only while it shows.
+ * Every app on this Mac, in Settings › Apps: what it is, what it holds and how long it has been up. A crash older than
+ * a day is dropped (its Thread says it, with Restart); how many copies of each project's app fit and the memory
+ * reading are the header's tip, not lines of their own. Rows select for stopping several at once; stopping an app
+ * that isn't the one in view asks first. Watched only while it shows.
  */
 export function RoomSection() {
   useEffect(() => threadAppDriver()?.watchRoom?.(), [])
@@ -45,7 +45,8 @@ export function RoomSection() {
   return <RoomList room={room} />
 }
 
-export function RoomList({ room, now = room.at }: { room: RoomView; now?: number }) {
+export function RoomList({ room: read, now = read.at }: { room: RoomView; now?: number }) {
+  const room = { ...read, apps: roomApps(read.apps, now) }
   const { cwd } = useWorkspaceFocus()
   const [selected, setSelected] = useState<readonly string[]>([])
   const [stopping, setStopping] = useState<readonly string[]>([])
@@ -96,7 +97,9 @@ export function RoomList({ room, now = room.at }: { room: RoomView; now?: number
   return (
     <section data-room className="pt-2 pb-2">
       <div className="flex h-7 items-center gap-1.5 px-1.5 text-label font-medium text-faint">
-        <span className="flex-1 truncate">Room</span>
+        <span className="flex-1 truncate" data-room-tip data-tip={[...room.fits.map((fit) => fitLine(fit).tip), memoryLine(room)].join("\n")}>
+          {localWords("Apps on this Mac")}
+        </span>
         {choosing ? (
           <>
             <button
@@ -203,17 +206,6 @@ export function RoomList({ room, now = room.at }: { room: RoomView; now?: number
           })}
         </ul>
       )}
-      <div className="px-1.5 pt-1 text-label text-faint/70">
-        {room.fits.map((fit) => {
-          const line = fitLine(fit)
-          return (
-            <p key={fit.root} data-tip={line.tip} data-room-fit={fit.root} className="truncate leading-5">
-              {line.text}
-            </p>
-          )
-        })}
-        <p className="truncate leading-5">{memoryLine(room)}</p>
-      </div>
     </section>
   )
 }
