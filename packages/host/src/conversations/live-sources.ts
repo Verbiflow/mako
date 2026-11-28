@@ -36,6 +36,12 @@ const MERGE_ATTEMPTS = 3
 const SETTLE_PAUSE_MS = 2_000
 /** How long after a window last read a conversation `settleBases` reads none in: what the person opens goes first. */
 const PERSON_QUIET_MS = 10_000
+/**
+ * The longest `settleBases` waits for that quiet before a journal. Past it the sweep ends and leaves the rest
+ * (`deferred`) to the next, which goes on from there: on 2026-11-27 a sweep waited 14 hours behind one conversation,
+ * open all that time as host work. A sweep is a few minutes at most, and never stays open on the person's Mac.
+ */
+const SETTLE_WAIT_MS = 60_000
 /** The sweep, as the host's work is named (`HostWork.run`): who it reads in is counted to it. */
 export const SETTLE_WORK = "move journals' copies onto their sessions' records"
 
@@ -44,6 +50,8 @@ export interface SettledBases {
   copies: number
   moved: number
   freed: number
+  /** Copies left for the next sweep: work went on past `SETTLE_WAIT_MS`, or the host began to stop. */
+  deferred: number
   ms: number
   journals: { id: string; bytes: number; ms: number; keptBecause?: string }[]
 }
@@ -456,16 +464,21 @@ export class LiveSources {
    * a reason of its own, is skipped, as is one kept for its session's sake
    * while that session is unchanged too; one sweep runs at a time.
    */
-  settleBases(pauseMs = SETTLE_PAUSE_MS): Promise<SettledBases> {
+  settleBases(pauseMs = SETTLE_PAUSE_MS, waitMs = SETTLE_WAIT_MS): Promise<SettledBases> {
     const work = this.access.dependencies.work
-    this.settling ??= (work?.run ? work.run(SETTLE_WORK, () => this.settleNow(pauseMs)) : this.settleNow(pauseMs)).finally(() => { this.settling = undefined })
+    this.settling ??= (work?.run ? work.run(SETTLE_WORK, () => this.settleNow(pauseMs, waitMs)) : this.settleNow(pauseMs, waitMs)).finally(() => { this.settling = undefined })
     return this.settling
   }
 
-  /** The journal's file and its write-ahead log as they stand: a write to either changes it. */
+  /**
+   * The journal's file and its write-ahead log as they stand: a write to either changes it. An empty log holds no
+   * write, and a reader makes one as it opens the journal (a read-only open of a WAL journal creates it, and the
+   * hourly rewind budget reads every journal), so an empty log stamps as none: stamped by its time, the sweep found
+   * every journal it remembered changed and read its 24 copies in again every 15 minutes.
+   */
   private journalStamp(id: string): string {
     const { root } = this.access.dependencies
-    const at = (path: string) => { try { return statSync(path).mtimeMs } catch { return 0 } }
+    const at = (path: string) => { try { const info = statSync(path); return info.size ? `${info.mtimeMs}/${info.size}` : "0" } catch { return "0" } }
     return `${at(join(root, `${id}.sqlite`))}:${at(join(root, `${id}.sqlite-wal`))}`
   }
 
@@ -484,7 +497,7 @@ export class LiveSources {
     }
   }
 
-  private async settleNow(pauseMs: number): Promise<SettledBases> {
+  private async settleNow(pauseMs: number, waitMs: number): Promise<SettledBases> {
     const { root } = this.access.dependencies
     const started = performance.now()
     const copies: { id: string; bytes: number; changed: number }[] = []
@@ -510,12 +523,18 @@ export class LiveSources {
     }
     copies.sort((a, b) => b.changed - a.changed)
     const journals: SettledBases["journals"] = []
+    let deferred = 0
     for (const [index, { id, bytes }] of copies.entries()) {
       // A window reading a conversation goes first: each journal read in here weighs on the memory what it opens holds,
-      // and its session's read waits on the same catalog.
-      while (!this.access.admission.closed && (this.access.hasActiveWork() || this.personReading(pauseMs ? PERSON_QUIET_MS : 0)))
-        await new Promise((resolve) => setTimeout(resolve, Math.min(SETTLE_PAUSE_MS, pauseMs || 50)))
-      if (this.access.admission.closed) break
+      // and its session's read waits on the same catalog. Waited on only so long: what is left goes in the next sweep.
+      const busy = () => this.access.hasActiveWork() || this.personReading(pauseMs ? PERSON_QUIET_MS : 0)
+      const waitUntil = performance.now() + waitMs
+      while (!this.access.admission.closed && busy() && performance.now() < waitUntil)
+        await new Promise((resolve) => setTimeout(resolve, Math.min(SETTLE_PAUSE_MS, pauseMs || 50, Math.max(1, waitUntil - performance.now()))))
+      if (this.access.admission.closed || busy()) {
+        deferred = copies.length - index
+        break
+      }
       const began = performance.now()
       const loaded = Boolean(this.access.resident(id))
       const resident = await this.access.loadSliced(id).catch(() => undefined)
@@ -583,9 +602,10 @@ export class LiveSources {
       hostLog("live", "journals moved onto their sessions' records", {
         // `ms` counts the pauses between journals and the waits for work to end; `workMs` only the journals' own.
         copies: copies.length, moved, kept: journals.length - moved, freed, ms, workMs: journals.reduce((sum, journal) => sum + journal.ms, 0),
+        ...deferred && { deferred },
         why: [...why].map(([reason, count]) => `${count}: ${reason}`).join("; ") || undefined,
       })
-    return { copies: copies.length, moved, freed, ms, journals }
+    return { copies: copies.length, moved, freed, deferred, ms, journals }
   }
 
   /** Observe native history independently of whether another client owns execution.

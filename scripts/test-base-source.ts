@@ -1,8 +1,9 @@
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
-import { mkdtempSync, renameSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { monitorEventLoopDelay } from "node:perf_hooks"
 import { DatabaseSync } from "node:sqlite"
 import { z } from "zod"
 import type { ThreadPage } from "@mako/sessions"
@@ -554,6 +555,95 @@ async function spansThroughRewording() {
   }
 }
 
+/**
+ * A store shaped like the person's of 2026-11-27: 328 journals, 24 of them keeping copies (20 to 4,000 entries) for
+ * reasons of their own, one conversation running. The sweep waited for that turn to end before every journal and, its
+ * turn waiting on an approval, stayed open 14 hours. Now it leaves the rest to the next sweep after its wait, goes
+ * through while a turn waits only on the person, keeps the loop turning, and opens none of them again after a reader
+ * of every journal left their logs touched and empty.
+ */
+async function sweepsAStoreLikeThePerson() {
+  const f = fixture()
+  const running = randomUUID()
+  const kept: string[] = []
+  try {
+    const page = f.native.page!
+    const sizes = [20, 40, 60, 110, 180, 240, 500, 520, 790, 850, 970, 1_340, 1_640, 1_930, 2_000, 2_200, 2_600, 2_900, 3_100, 3_300, 3_500, 3_700, 3_900, 4_000]
+    for (const [index, size] of sizes.entries()) {
+      const id = randomUUID()
+      const next = randomUUID()
+      kept.push(id)
+      const base = pageOf(f.path, Array.from({ length: size }, (_, entry) => `turn ${entry} of journal ${index}: ${"words ".repeat(8)}`))
+      const journal = new LiveJournal(f.journals, id)
+      journal.commit({
+        session: { id, harness, nativeId: "native-2", cwd: "/tmp", status: "ready", connection: "disconnected", modes: [], currentMode: null, configOptions: [] },
+        revision: 1, createdAt: Date.now() - index * 1_000, threadPath: `${f.path}.second`, base,
+        blocks: [{ type: "text", text: "an answer from another session" }], permissions: [], requests: [],
+        control: { merges: [], activeBindingId: next, transfers: [], bindings: [
+          { id, provider: harness, nativeId: "native-2", path: `${f.path}.second`, coveredBlocks: 0, includesBase: false },
+          { id: next, provider: harness, nativeId: "native-3", path: `${f.path}.third`, coveredBlocks: 1, includesBase: false },
+        ] },
+      })
+      journal.close()
+    }
+    for (let index = 0; index < 303; index++) {
+      const id = randomUUID()
+      const journal = new LiveJournal(f.journals, id)
+      journal.commit({
+        session: { id, harness, nativeId: `native-plain-${index}`, cwd: "/tmp", status: "ready", connection: "disconnected", modes: [], currentMode: null, configOptions: [] },
+        revision: 1, createdAt: Date.now(), threadPath: `${f.path}.${index}`, base: null,
+        blocks: [{ type: "text", text: "a conversation with no copy" }], permissions: [], requests: [],
+      })
+      journal.close()
+    }
+    const host = f.host()
+    await host.capture(running, f.path)
+    await waitFor(() => Boolean(host.snapshot(running)?.baseSource), "the running conversation's own copy goes at capture")
+    host.submit(running, randomUUID(), "a long turn")
+    await waitFor(() => f.sent.length === 1, "a turn runs")
+    assert.ok(host.hasActiveWork(), JSON.stringify(host.lifecycleWork()))
+    assert.equal(page.entries.length, 4)
+
+    // A turn at work: the sweep waits its bound, then ends, leaving every copy to the next.
+    const began = performance.now()
+    const busy = await host.settleHistoryCopies(0, 300)
+    assert.ok(performance.now() - began < 5_000, `the sweep ended within its wait: ${Math.round(performance.now() - began)} ms`)
+    // The running conversation's own rows stay until its journal closes: it counts as a copy too.
+    assert.equal(busy.copies, kept.length + 1, JSON.stringify({ ...busy, journals: busy.journals.length }))
+    assert.equal(busy.deferred, busy.copies, "nothing read in while the turn works")
+    assert.equal(busy.journals.length, 0)
+
+    // The turn waits on the person's approval: nothing runs, so the sweep goes through, with the loop turning.
+    host.observe({ type: "live-permission", request: { id: "approve-1", observationId: "approve-1-0", sessionId: running, title: "Run the build", options: [{ optionId: "allow", name: "Allow once", kind: "allow_once" }] } })
+    await waitFor(() => host.snapshot(running)?.permissions.length === 1, "the approval is asked")
+    const loop = monitorEventLoopDelay({ resolution: 10 })
+    loop.enable()
+    const swept = await host.settleHistoryCopies(0, 300)
+    loop.disable()
+    assert.equal(swept.deferred, 0, JSON.stringify({ ...swept, journals: swept.journals.length }))
+    assert.deepEqual(swept.journals.map((entry) => entry.id).sort(), [...kept, running].sort(), "every copy is looked at once")
+    for (const entry of swept.journals.filter((journal) => journal.id !== running))
+      assert.equal(entry.keptBecause, "the conversation went on in 2 sessions, none of them the one its history came from")
+    const heldMs = loop.max / 1e6
+    assert.ok(heldMs < 500, `the sweep left the loop free: held ${Math.round(heldMs)} ms at most`)
+
+    // Every journal read once by another reader (the rewind budget reads them all, read-only): none is opened again.
+    for (const name of readdirSync(f.journals).filter((file) => file.endsWith(".sqlite"))) {
+      const db = new DatabaseSync(join(f.journals, name), { readOnly: true })
+      db.prepare("SELECT count(*) FROM sqlite_master").get()
+      db.close()
+    }
+    const reads = f.native.reads
+    const again = await host.settleHistoryCopies(0, 300)
+    assert.equal(again.copies, 0, `a journal only read since isn't measured or opened again: ${JSON.stringify(again.journals.map((entry) => entry.id))}`)
+    assert.equal(f.native.reads, reads)
+    await host.stop()
+    console.log(`PASS: a sweep over 328 journals ends within its wait while a turn works, goes through while one waits on the person (loop held ${Math.round(heldMs)} ms at most), and doesn't open its 24 kept copies again`)
+  } finally {
+    await f.cleanup()
+  }
+}
+
 /** A session nobody has any more is shown as unreadable, and messages still go. */
 async function unreadable() {
   const f = fixture()
@@ -672,5 +762,6 @@ await sweepsAgain()
 await remembersCopyOnly()
 await spansThroughRewording()
 await spansSessions()
+await sweepsAStoreLikeThePerson()
 await unreadable()
 await keepsWithoutHold()
