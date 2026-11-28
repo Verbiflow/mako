@@ -3,6 +3,7 @@ import { CheckIcon, ChevronRightIcon } from "lucide-react"
 import { DIGEST_HEADINGS, parsePlan, type DigestItem } from "@mako/host/contracts/apexes"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { ApexMark } from "@/components/ui/apex-mark"
+import { finsWord } from "@mako/host/contracts/agents"
 import { cn } from "@/lib/utils"
 import { useThreadChildren } from "@/state/apex-fins"
 import { useSeenSince } from "@/state/apexes"
@@ -45,7 +46,8 @@ export function PhoneApexDigest({ thread, session, onOpenFin }: { thread: WebThr
   // screen above the conversation. What needs the person is also in the Inbox.
   const [shown, setOpen] = useState(false)
   if (!apex) return null
-  const rest = [digest.new.length ? `${digest.new.length} new` : undefined, digest.progress.length ? `${digest.progress.length} in progress` : undefined].filter(Boolean).join(" · ")
+  // Its Mac off, the line also counts its Fins as last listed: a laptop's pane has no Fin count in its bar to say it.
+  const rest = [digest.new.length ? `${digest.new.length} new` : undefined, digest.progress.length ? `${digest.progress.length} in progress` : undefined, lastKnown && fins.length ? finsWord(fins.length) : undefined].filter(Boolean).join(" · ")
   const check = (item: DigestItem) => {
     if (!deviceId || !plan) return
     const found = locate(plan, item.line)

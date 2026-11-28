@@ -427,6 +427,10 @@ const SnapshotSchema = z.object({ session: z.object({ currentMode: z.string().nu
 /** What `mako:live-start` and `mako:thread-create-session` answer that a start reads: the Thread, and the new Session. */
 const StartedSchema = z.object({ threadId: z.string() }).loose()
 const PlacedSchema = z.object({ session: z.string() }).loose()
+/** What the Apex commands read of their answers: the Apex made, the Threads moved in, the plan saved. */
+const ApexMadeSchema = z.object({ apex: z.object({ thread: z.string() }).loose() }).loose()
+const GatheredSchema = z.object({ moved: z.array(z.unknown()).optional() }).loose()
+const PlanSavedSchema = z.object({ chars: z.number() }).loose()
 const SyncSchema = z.object({ state: z.string(), stale: z.number().optional(), sending: z.number().optional(), tiers: z.array(z.object({ sessions: z.number(), readable: z.number() }).loose()).optional() }).loose()
 /** Every Session in the sync window readable by another device, its copy up to date: so long as `ms` allows. */
 async function copiesUp(ms: number): Promise<{ readable: number; sessions: number; ms: number }> {
@@ -474,17 +478,17 @@ for await (const line of createInterface({ input: process.stdin })) {
   else if (line.startsWith("copies")) console.log(`COPIES ${JSON.stringify(await copiesUp(Number(line.trim().split(/\s+/)[1]) || 2 * 60_000))}`)
   else if (line.startsWith("apex ")) {
     const [, conversation, ...name] = line.trim().split(/\s+/)
-    const made = z.object({ apex: z.object({ thread: z.string() }).loose() }).loose().parse(await call("mako:apex-promote", [conversation, { name: name.join(" "), purpose: "The payments service's reliability work" }]))
+    const made = ApexMadeSchema.parse(await call("mako:apex-promote", [conversation, { name: name.join(" "), purpose: "The payments service's reliability work" }]))
     console.log(`APEX ${JSON.stringify({ thread: made.apex.thread })}`)
   } else if (line.startsWith("gather ")) {
     const [, apex, ...conversations] = line.trim().split(/\s+/)
-    const threads = await Promise.all(conversations.map(async (conversation) => z.object({ threadId: z.string() }).loose().parse(await call("mako:live-snapshot", [conversation])).threadId))
-    const gathered = z.object({ moved: z.array(z.unknown()).optional() }).loose().parse(await call("mako:apex-gather", [apex, threads, true]))
+    const threads = await Promise.all(conversations.map(async (conversation) => StartedSchema.parse(await call("mako:live-snapshot", [conversation])).threadId))
+    const gathered = GatheredSchema.parse(await call("mako:apex-gather", [apex, threads, true]))
     console.log(`GATHERED ${JSON.stringify({ moved: gathered.moved?.length ?? 0, answer: gathered })}`)
   } else if (line.startsWith("plan ")) {
     const [, apex] = line.trim().split(/\s+/)
     const text = z.string().parse(JSON.parse(line.trim().slice(`plan ${apex} `.length)))
-    const saved = z.object({ chars: z.number() }).loose().parse(await call("mako:apex-plan-save", [apex, text]))
+    const saved = PlanSavedSchema.parse(await call("mako:apex-plan-save", [apex, text]))
     console.log(`PLAN ${JSON.stringify({ chars: saved.chars })}`)
   } else if (line.trim() === "sleep") {
     host.kill("SIGSTOP")
