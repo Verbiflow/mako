@@ -71,6 +71,14 @@ export class GitHubRepositoryLookupError extends Error {
   }
 }
 
+/** `gh` isn't installed here. */
+export class GitHubCliMissing extends Error {
+  constructor() {
+    super("The GitHub CLI was not found")
+    this.name = "GitHubCliMissing"
+  }
+}
+
 /** Normalise only rate-limit facts; arbitrary gh output is never a user-facing error. */
 export function githubRateLimit(cause: unknown, now: number, backoffMs = 60_000): GitHubRateLimitError | undefined {
   if (cause instanceof GitHubRateLimitError) return cause
@@ -90,6 +98,11 @@ export class GitHubReads {
   private readonly entries = new Map<string, Entry>()
   private readonly scopes = new Map<string, Promise<string>>()
   private readonly repositories = new Map<string, Set<string>>()
+  /**
+   * The last answer of each conditional REST read, by key, kept when its reading is forgotten: a read after a write
+   * still sends `If-None-Match`, and an unchanged answer (304) costs nothing of the login's limit.
+   */
+  private readonly validators = new Map<string, { etag: string; body: string }>()
   private tail: Promise<unknown> = Promise.resolve()
   private blockedUntil = 0
   private failures = 0
@@ -212,16 +225,21 @@ export class GitHubReads {
     // Only plain REST GETs: jq output cannot be reused as an HTTP body, and GraphQL has no ETag contract.
     const conditional = args[0] === "api" && args.length === 2 && args[1] !== "graphql"
     const include = args[0] === "api" && !args.includes("--include")
-    entry.value = this.send(cwd, include ? [...args, "--include", ...(conditional && prior?.etag ? ["-H", `If-None-Match: ${prior.etag}`] : [])] : args, env).then(output => {
+    const validator = conditional ? (prior?.etag !== undefined && prior.body !== undefined ? { etag: prior.etag, body: prior.body } : this.validators.get(key)) : undefined
+    entry.value = this.send(cwd, include ? [...args, "--include", ...(validator ? ["-H", `If-None-Match: ${validator.etag}`] : [])] : args, env).then(output => {
       if (include) {
         const response = httpResponse(output)
         if (response.status === 304) {
-          if (prior?.body === undefined) throw new Error("GitHub returned an unowned conditional response")
-          entry.body = prior.body
-          entry.etag = prior.etag
+          if (validator === undefined) throw new Error("GitHub returned an unowned conditional response")
+          entry.body = validator.body
+          entry.etag = validator.etag
         } else {
           entry.body = response.body
           entry.etag = response.headers.get("etag")
+        }
+        if (conditional && entry.etag !== undefined) {
+          if (this.validators.size >= MAX_READS && !this.validators.has(key)) this.validators.delete(this.validators.keys().next().value!)
+          this.validators.set(key, { etag: entry.etag, body: entry.body! })
         }
         output = entry.body!
       }

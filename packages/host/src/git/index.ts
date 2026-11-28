@@ -5,11 +5,13 @@ import type { DomainSecrets } from "../base/host-secrets.js"
 import { installGitIpc, openUtilityModels, type GitTab, type HarnessOrderPreference } from "./methods.js"
 import { UtilityWork } from "./utility-work.js"
 import type { RecordHelperRun } from "./helper-tally.js"
-import { githubStatus, listPulls, listRemoteBranches, pullForBranch, repoAvatar, userAvatar, type CreatePullOptions } from "./github.js"
+import { githubApi, githubStatus, githubViewer, listPulls, listRemoteBranches, pullForBranch, repoAvatar, userAvatar, type CreatePullOptions } from "./github.js"
 import { mergePullRequest, openPullRequest, rerunFailedChecks, type PersonOf } from "./pull-requests.js"
 import type { MergeMethod } from "../contracts/git-actions.js"
 import type { PullRequestSearchRequest } from "../contracts/pull-request-search.js"
 import { PullRequestSearch } from "./pull-request-search.js"
+import { ProjectBoard } from "./project-board.js"
+import type { BoardRequest } from "../contracts/project-pulls.js"
 import type { Git } from "@mako/git"
 
 export type { GitTab } from "./methods.js"
@@ -43,6 +45,7 @@ export function declareGitMethods(methods: MethodTable, { worktrees, withHost, g
   const models = openUtilityModels(environment, secrets, recordHelperRun)
   const avatars = join(environment.dataRoot, "avatars")
   const pullSearch = new PullRequestSearch()
+  const board = new ProjectBoard({ api: githubApi, viewer: githubViewer })
   const work = new UtilityWork({ models })
   installGitIpc(methods, { withHost, git, models, work, record: recordHelperRun, ...(harnessOrder && { harnessOrder }) })
   methods.handle("mako:github-status", () => withHost((h) => githubStatus(h.gitWorkspace)))
@@ -50,11 +53,14 @@ export function declareGitMethods(methods: MethodTable, { worktrees, withHost, g
   methods.handle("mako:pull-requests", (limit?: number) => withHost((h) => listPulls(h.gitWorkspace, limit)))
   /** Any pull request of the repository by number, title, head branch or author, for the composer's `#`. */
   methods.handle("mako:pull-request-search", (request: PullRequestSearchRequest) => withHost((h) => pullSearch.search(h.gitWorkspace, request)))
+  /** Projects' pull requests or issues across their repositories, for the right panel and the Pull requests page. */
+  methods.handle("mako:project-board", (request: BoardRequest) => board.read(request))
   methods.handle("mako:pull-branches", () => withHost((h) => listRemoteBranches(git, h.gitWorkspace)))
   methods.handle("mako:create-pull", (options: CreatePullOptions) =>
     withHost(async (h) => {
       const opened = await openPullRequest(git, h.gitWorkspace, options, undefined, person)
       worktrees?.forgetPulls()
+      board.forget()
       return opened.pull
     })
   )
@@ -62,6 +68,7 @@ export function declareGitMethods(methods: MethodTable, { worktrees, withHost, g
     withHost(async (h) => {
       const { pull } = await mergePullRequest(h.gitWorkspace, strategy, person, as === "app")
       worktrees?.forgetPulls()
+      board.forget()
       return pull
     })
   )

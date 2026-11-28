@@ -3,7 +3,7 @@ import { hostFetch, hostStopping, type HostStopping } from "../base/host-stoppin
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { GitHubReads, GitHubRateLimitError, GitHubRepositoryLookupError, githubRateLimit } from "./github-reads.js"
+import { GitHubCliMissing, GitHubReads, GitHubRateLimitError, GitHubRepositoryLookupError, githubRateLimit } from "./github-reads.js"
 import { hostLog } from "../base/host-log.js"
 import type { JsonObject, JsonValue } from "../contracts/json.js"
 import { findExecutable } from "../base/executable.js"
@@ -211,6 +211,15 @@ async function accountUser(cwd: string): Promise<GitHubUser | null> {
   } catch {
     throw new GitHubRepositoryLookupError(Date.now() + 60_000)
   }
+}
+
+/**
+ * Who is signed in to `gh` here, for lists that say what's the person's own: their login, null when nobody is.
+ * Throws `GitHubCliMissing` without `gh`, and a lookup to try again when GitHub didn't say.
+ */
+export async function githubViewer(cwd: string): Promise<string | null> {
+  if (!(await githubInstalled(cwd))) throw new GitHubCliMissing()
+  return ((await machineUser()) ?? (await accountUser(cwd)))?.login ?? null
 }
 
 /** How long a `gh` that ran answers for: every status asked started one just to hear its version. */
