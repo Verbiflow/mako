@@ -44,7 +44,7 @@ export const useWebApexes = createHook(webApexesStore)
  * Every deliberate Apex the account's rows list, by Thread, on devices only: one whose owner is quiet carries since
  * when. A Thread listed by two rows (it moved, both still listed) is the newer `at`.
  */
-export function listedWebApexes(rows: readonly ListedSession[], quiet: ReadonlyMap<string, string>): Record<string, ListedWebApex> {
+export function listedWebApexes(rows: readonly ListedSession[], quiet: ReadonlyMap<string, string>) {
   const byThread: Record<string, ListedWebApex> = {}
   for (const row of rows) {
     if (!row.apex || row.runsOn.kind !== "device") continue

@@ -20,7 +20,7 @@ import { ownerOf } from "./threads"
 const SHOWN = 3
 
 /**
- * A deliberate Apex's digest under its bar on the phone and the iPad: what needs the person, what's new since they last
+ * A deliberate Apex's digest under its bar on the phone and the iPad, and on a laptop's while its Mac is off: what needs the person, what's new since they last
  * read it, what's in progress, built from the same roster and plan its Mac's note reads, so it can't say otherwise.
  * Folded to one line when nothing needs them; a Fin's row opens it, a plan line checks off where it stands. Read from
  * the account's list, so it stands while its Mac is off, marked as the last it said, nothing in it to act on until it's

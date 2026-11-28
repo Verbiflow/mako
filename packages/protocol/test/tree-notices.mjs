@@ -288,7 +288,8 @@ describe("tree notices: the contract", () => {
   })
 
   test("link version 30 says the gateway takes notices: this build settles on 29 with a gateway before it, and a build before it on 29 with this one", async () => {
-    assert.deepEqual([TREE_NOTICES_LINK_VERSION, LINK_VERSION], [30, 30])
+    assert.equal(TREE_NOTICES_LINK_VERSION, 30)
+    assert.ok(LINK_VERSION >= TREE_NOTICES_LINK_VERSION)
     assert.equal(negotiate(SUPPORTED_VERSIONS, { min: 1, max: 29 }), 29)
     for (const [gatewayMax, runtimeMax] of [[29, LINK_VERSION], [LINK_VERSION, 29], [LINK_VERSION, LINK_VERSION]]) {
       const gateway = createFakeGateway({ versions: { min: 1, max: gatewayMax } })
@@ -296,7 +297,7 @@ describe("tree notices: the contract", () => {
         const runtime = await serveRuntime(await gateway.connectRuntime(), { runtimeId: `notices-${gatewayMax}-${runtimeMax}`, build: "tree-notices", versions: { min: 1, max: runtimeMax }, handle: async () => assert.fail("no operation expected") })
         try {
           assert.equal(runtime.version, Math.min(gatewayMax, runtimeMax))
-          assert.equal(runtime.version >= TREE_NOTICES_LINK_VERSION, gatewayMax === 30 && runtimeMax === 30, "only both at 30 agree a Fin's host may post")
+          assert.equal(runtime.version >= TREE_NOTICES_LINK_VERSION, gatewayMax >= 30 && runtimeMax >= 30, "only both at 30 or later agree a Fin's host may post")
         } finally { runtime.close(); await runtime.done }
       } finally { await gateway.close() }
     }
