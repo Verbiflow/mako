@@ -6,6 +6,8 @@ import { ApexMark } from "@/components/ui/apex-mark"
 import { finsWord } from "@mako/host/contracts/agents"
 import { cn } from "@/lib/utils"
 import { Collapse } from "@/components/ui/collapse"
+import { ExitScene } from "@/components/ui/exit"
+import { useExit } from "@/components/ui/exit-motion"
 import { useThreadChildren } from "@/state/apex-fins"
 import { useSeenSince } from "@/state/apexes"
 import { useWebClient } from "./client"
@@ -97,16 +99,19 @@ function locate(plan: string, text: string): { section: string; index: number } 
 function Part({ heading, items, render, attention = false, folds = false, shown: first = SHOWN }: { heading: string; items: DigestItem[]; render: (item: DigestItem) => React.ReactNode; attention?: boolean; folds?: boolean; shown?: number }) {
   const [all, setAll] = useState(false)
   const [open, setOpen] = useState(!folds)
+  // Its last item resolved, the part leaves with it; one resolved among others leaves, and the rest come up (`exit.tsx`).
+  const exit = useExit<HTMLDivElement>(`digest-part:${heading}`)
   if (!items.length) return null
   const shown = all ? items : items.slice(0, first)
   return (
-    <div data-phone-digest-part={heading}>
+    <div ref={exit} data-phone-digest-part={heading}>
       <button type="button" aria-expanded={open} onClick={() => setOpen(!open)} className={cn("pressable flex h-9 w-full items-center px-4 text-left text-label font-medium", attention ? "text-attention" : "text-muted-foreground")}>
         {heading} <span className="ml-1.5 font-normal tabular text-faint">{items.length}</span>
         <ChevronRightIcon className={cn("ml-auto size-3.5 text-faint transition-transform duration-150", open && "rotate-90")} />
       </button>
       <Collapse open={open}>
-        {shown.map(render)}
+        {/* Showing the rest is another view of the part: what it hides again doesn't leave. */}
+        <ExitScene scene={all ? "all" : "first"}>{shown.map(render)}</ExitScene>
         {items.length > first && !all ? (
           <button type="button" onClick={() => setAll(true)} className="pressable flex h-9 w-full items-center px-4 text-label text-faint">
             Show {items.length - first} more
@@ -117,9 +122,15 @@ function Part({ heading, items, render, attention = false, folds = false, shown:
   )
 }
 
+/** An item of the digest, leaving once it resolves (`exit.tsx`). */
+function useItemExit<T extends HTMLElement>(item: DigestItem) {
+  return useExit<T>(`digest:${item.key}`)
+}
+
 function FinLine({ item, onOpen, needs = false }: { item: DigestItem; onOpen: () => void; needs?: boolean }) {
+  const exit = useItemExit<HTMLButtonElement>(item)
   return (
-    <button type="button" data-phone-digest-item={item.kind} onClick={onOpen} className="pressable flex min-h-11 w-full flex-col justify-center px-4 py-1.5 text-left">
+    <button ref={exit} type="button" data-phone-digest-item={item.kind} onClick={onOpen} className="pressable flex min-h-11 w-full flex-col justify-center px-4 py-1.5 text-left">
       <span className={cn("truncate text-ui", needs ? "font-medium text-foreground" : "text-foreground/90")}>{item.fin?.title}</span>
       <span className="line-clamp-2 text-label text-muted-foreground">{item.kind === "failed" ? `Failed: ${item.line}` : item.line}</span>
     </button>
@@ -128,8 +139,9 @@ function FinLine({ item, onOpen, needs = false }: { item: DigestItem; onOpen: ()
 
 /** A to-do of the person's the plan lists: ticked once done. */
 function PlanLine({ item, onDone }: { item: DigestItem; onDone?: () => void }) {
+  const exit = useItemExit<HTMLDivElement>(item)
   return (
-    <div data-phone-digest-item="plan" className="flex min-h-11 items-center gap-3 px-4 py-1.5">
+    <div ref={exit} data-phone-digest-item="plan" className="flex min-h-11 items-center gap-3 px-4 py-1.5">
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="text-label text-attention">Your to-do</span>
         <span className="text-ui font-medium text-foreground">{item.line}</span>
@@ -146,6 +158,7 @@ function PlanLine({ item, onDone }: { item: DigestItem; onDone?: () => void }) {
 /** A question the plan asks the person, answered where it stands: its answers a tap each, their own words beside. */
 export function QuestionLine({ item, onAnswer }: { item: DigestItem; onAnswer?: (answer: string) => Promise<boolean> }) {
   const [sent, setSent] = useState<string | null>(null)
+  const exit = useItemExit<HTMLDivElement>(item)
   const send = async (answer: string) => {
     if (!onAnswer) return
     setSent(answer)
@@ -153,13 +166,13 @@ export function QuestionLine({ item, onAnswer }: { item: DigestItem; onAnswer?: 
   }
   if (!onAnswer)
     return (
-      <div data-phone-digest-item="question" className="flex flex-col gap-1 px-4 py-2">
+      <div ref={exit} data-phone-digest-item="question" className="flex flex-col gap-1 px-4 py-2">
         <span className="text-ui font-medium text-foreground">{item.line}</span>
         {item.options?.length ? <span className="text-label text-muted-foreground">{item.options.join(" · ")}</span> : null}
       </div>
     )
   return (
-    <div data-phone-digest-item="question" className="flex flex-col gap-2 px-4 py-2">
+    <div ref={exit} data-phone-digest-item="question" className="flex flex-col gap-2 px-4 py-2">
       <span className="text-ui font-medium text-foreground">{item.line}</span>
       <div className="flex flex-wrap items-center gap-1.5">
         {(item.options ?? []).map((option, at) => (
@@ -177,8 +190,9 @@ export function QuestionLine({ item, onAnswer }: { item: DigestItem; onAnswer?: 
 function FinAskLine({ item, agent, apex, apexTitle, onOpen }: { item: DigestItem; agent: NativeAgent; apex: string; apexTitle: string; onOpen: () => void }) {
   const { sent, send } = useFinAnswer(agent, apex)
   const ask = openAsk(childStateOf(agent))?.ask
+  const exit = useItemExit<HTMLDivElement>(item)
   return (
-    <div data-phone-digest-item={item.kind} className="flex flex-col gap-2 px-4 py-2">
+    <div ref={exit} data-phone-digest-item={item.kind} className="flex flex-col gap-2 px-4 py-2">
       <button type="button" onClick={onOpen} className="pressable flex flex-col text-left">
         <span className="truncate text-ui font-medium text-foreground">{item.fin?.title}</span>
         <span className="line-clamp-2 text-label text-muted-foreground">{item.line}</span>

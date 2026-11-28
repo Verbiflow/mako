@@ -1,3 +1,5 @@
+import { ExitScene } from "@/components/ui/exit"
+import { useExit } from "@/components/ui/exit-motion"
 import { Fragment, memo, useCallback, useMemo, useState, type ReactNode, type RefObject } from "react"
 import { DIGEST_HEADINGS } from "@mako/host/contracts/apexes"
 import { ApexHeader, NewSection, PlanNeeds, PlanSection, RulesSection } from "@/components/apexes/apex-overview-parts"
@@ -194,11 +196,13 @@ const FinSection = memo(function FinSection({
     <div data-overview-section={section}>
       <OverviewHeading id={section} label={label ?? OVERVIEW_HEADINGS[section]} count={fins.length + extraCount} folded={folded} attention={section === "needs"} onToggle={() => toggleOverviewFold(key)} />
       {folded ? null : (
-        <>
+        // A Fin that leaves the section (answered, finished, stopped) goes and those under it come up (`exit.tsx`);
+        // showing more or fewer is another view of it, and a window of many draws its rows as it scrolls.
+        <ExitScene scene={opened ? "opened" : "first"} quiet={shown.length > OVERVIEW_WINDOWED}>
           {shown.length > OVERVIEW_WINDOWED ? <WindowedFins fins={shown} scroller={scroller} row={row} /> : shown.map(row)}
           {fins.length > OVERVIEW_SHOWN ? <OverviewMore rest={fins.length - OVERVIEW_SHOWN} opened={opened} onToggle={() => toggleOverviewOpened(key)} /> : null}
           {extra}
-        </>
+        </ExitScene>
       )}
     </div>
   )
@@ -246,8 +250,9 @@ const FinRow = memo(function FinRow({
     agent.runsOn?.rule ? `started by your rule: ${agent.runsOn.rule}` : undefined,
     agent.child?.proceed ? `started on files another ${FIN_WORD} edits: ${agent.child.proceed}` : undefined,
   ].filter(Boolean).join(" · ")
+  const exit = useExit<HTMLDivElement>(`overview-fin:${group}:${agent.nativeId}`)
   return (
-    <div className={cn("contain-turn group/fin relative", nested && "ml-5")}>
+    <div ref={exit} className={cn("contain-turn group/fin relative", nested && "ml-5")}>
       <FinRowActions agent={agent} conversation={conversation} always={quiet} className="absolute top-1 right-1 z-[1] bg-shell" />
       <button
         type="button"
@@ -308,7 +313,9 @@ function SubApexFold({ thread, conversation, apexTitle, onOpen }: { thread: stri
         <ApexMark className="size-3" />
         {finsWord(children.length)}
       </button>
-      {open ? children.slice(0, OVERVIEW_WINDOWED).map((agent) => <FinRow key={agent.nativeId} agent={agent} conversation={conversation} apexTitle={apexTitle} onOpen={onOpen} nested />) : null}
+      <ExitScene scene={open ? "open" : "folded"}>
+        {open ? children.slice(0, OVERVIEW_WINDOWED).map((agent) => <FinRow key={agent.nativeId} agent={agent} conversation={conversation} apexTitle={apexTitle} onOpen={onOpen} nested />) : null}
+      </ExitScene>
     </div>
   )
 }

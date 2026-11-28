@@ -1,3 +1,4 @@
+import { useExit } from "@/components/ui/exit-motion"
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react"
 import { ArrowUpIcon, MessageCircleDashedIcon, RotateCcwIcon, SquareIcon, XIcon } from "lucide-react"
 import { SIDE_QUESTION_LIMIT, type SideConversation, type SideExchange } from "@mako/host/contracts/live-side-questions"
@@ -79,11 +80,14 @@ function SideConversationPanel({ conversation, harness, side }: { conversation: 
     if (question && !answering) void ask(question)
   }
 
+  // Closed, it leaves into the composer and the transcript comes down into its room (`exit-motion.ts`).
+  const exit = useExit<HTMLElement>("side-panel", { transcript: true })
   const question = draft.trim()
   const tooLong = question.length > SIDE_QUESTION_LIMIT
 
   return (
     <section
+      ref={exit}
       aria-label="Side question"
       data-side-panel
       data-side-by={side?.by}

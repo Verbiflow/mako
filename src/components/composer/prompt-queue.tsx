@@ -6,7 +6,9 @@ import { harnessLabel } from "@/lib/harness-label"
 import { savedContinuation } from "@mako/host/contracts/turn-continuation"
 import { draftText, rememberDraft, clearSubmittedDraft } from "@/state/drafts"
 import { useThreads } from "@/state/threads"
-import { useLayoutEffect, useRef, useState } from "react"
+import { useLayoutEffect, useRef, useState, type ReactNode } from "react"
+import { ExitScene } from "@/components/ui/exit"
+import { useExit } from "@/components/ui/exit-motion"
 import {
   ArrowUpIcon,
   CheckIcon,
@@ -26,6 +28,16 @@ import { parseAttachmentAppendix } from "@/lib/attachments"
 import { stripSkillAppendix } from "@/lib/skill-references"
 
 const EMPTY: PendingPrompt[] = []
+
+/** A queued message's place in the list: arriving after the list was drawn, and leaving once it's sent or removed. */
+function QueueSlot({ id, arrives, children }: { id: string; arrives: boolean; children: ReactNode }) {
+  const exit = useExit<HTMLDivElement>(`queued:${id}`, { transcript: true })
+  return (
+    <div ref={exit} className={arrives ? "animate-enter" : undefined}>
+      {children}
+    </div>
+  )
+}
 
 /**
  * `onEdit`: where a queued message is edited instead of in its row (the phone's composer, which takes its words and
@@ -115,6 +127,10 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
   const [pageIndex, setPageIndex] = useState(0)
   // What was queued when the list was first drawn stands; what's queued after it arrives (`animate-enter`).
   const [standing] = useState(() => new Set(delivery.map((request) => request.id)))
+  // Sent or removed, a row leaves and the rest glide into its room; the last takes the queue with it (`exit.tsx`).
+  // Another conversation's queue, or another page of this one, is another view: nothing leaves for it.
+  const place = target ? (target.kind === "native" ? `native:${target.path}` : `live:${target.id}`) : undefined
+  const exit = useExit<HTMLElement>(place && `queue:${place}`, { transcript: true, scene: place })
   if (!target || !delivery.length) return null
   const page = Math.min(
     pageIndex,
@@ -125,6 +141,7 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
     : delivery.slice(0, 2)
   return (
     <section
+      ref={exit}
       aria-label="Queued messages"
       className="flex max-h-[min(240px,20dvh)] shrink-0 flex-col overflow-hidden rounded-none border-b border-hairline bg-raised/40"
     >
@@ -153,8 +170,9 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
         </span>
       </div>
       <div className="min-h-0 overflow-y-auto">
+        <ExitScene scene={`${place}:${expanded ? page : "folded"}`}>
         {shown.map((request) => (
-          <div key={request.id} className={standing.has(request.id) ? undefined : "animate-enter"}>
+          <QueueSlot key={request.id} id={request.id} arrives={!standing.has(request.id)}>
             <QueueRow
               target={target}
               request={request}
@@ -171,8 +189,9 @@ export function PromptQueue({ onEdit }: { onEdit?: (request: PendingPrompt, body
                 )
               }
             />
-          </div>
+          </QueueSlot>
         ))}
+        </ExitScene>
       </div>
       {expanded && delivery.length > 20 ? (
         <div className="flex items-center justify-between border-t border-hairline px-3 py-1 text-label text-faint">

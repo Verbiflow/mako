@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react"
 import { CheckIcon, CornerLeftUpIcon, ListEndIcon, SquareIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
+import { useExit } from "@/components/ui/exit-motion"
 import type { LiveSteering } from "@/lib/types"
 import { SendGlyph } from "./glyphs"
 import { sendChoiceDetail, type SendPresentation } from "./send-action"
@@ -145,6 +146,8 @@ export function SendButton({
 /** Both ways to send while the agent works, over the button: each with the one line it does, the default checked. */
 function SendChoices({ primary, lands, onPick, onDismiss }: { primary: "queue" | "steer"; lands: LiveSteering | null; onPick: (how: "queue" | "steer") => void; onDismiss: () => void }) {
   const first = useRef<HTMLButtonElement>(null)
+  // Picked or put away, it shrinks back into the button; drawn over the page if the button turns to Stop as it goes.
+  const exit = useExit<HTMLDivElement>("send-choices", { motion: "shrink", float: true })
   useEffect(() => {
     first.current?.focus({ preventScroll: true })
     const key = (event: KeyboardEvent) => {
@@ -158,7 +161,7 @@ function SendChoices({ primary, lands, onPick, onDismiss }: { primary: "queue" |
   return (
     <>
       <div className="fixed inset-0 z-40" aria-hidden onPointerDown={onDismiss} />
-      <div role="menu" aria-label="Send this message" className="web-send-choices overlay-panel">
+      <div ref={exit} role="menu" aria-label="Send this message" className="web-send-choices overlay-panel">
         {(["queue", "steer"] as const).map((how) => (
           <button key={how} ref={how === primary ? first : undefined} type="button" role="menuitemradio" aria-checked={how === primary} data-send-choice={how} className="web-send-choice" onClick={() => onPick(how)}>
             {how === "queue" ? <ListEndIcon aria-hidden className="mt-0.5 size-4 shrink-0" /> : <CornerLeftUpIcon aria-hidden className="mt-0.5 size-4 shrink-0" />}

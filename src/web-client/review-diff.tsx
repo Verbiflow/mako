@@ -1,3 +1,4 @@
+import { useExit } from "@/components/ui/exit-motion"
 import { memo, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
 import { ChevronDownIcon, CheckIcon } from "lucide-react"
 import type { TurnFileHunks } from "@mako/host/contracts/turn-review"
@@ -203,6 +204,8 @@ function Reading() {
  */
 const DiffBody = memo(function DiffBody({ view, file, path, conversation, onComment }: { view: FileView; file: ReviewFile; path: string; conversation: string; onComment: (ask: CommentAsk) => void }) {
   const [anchor, setAnchor] = useState<RowPick | null>(null)
+  // Its range picked or put away, the capsule drops back out of view (`exit-motion.ts`).
+  const hintExit = useExit<HTMLDivElement>(`range-hint:${path}`, { motion: "drop" })
   const hold = useRef<{ timer: number; x: number; y: number; pick: RowPick; held: boolean } | null>(null)
   const notes = useReviewNotes(conversation)
   const commented = useMemo(() => {
@@ -296,7 +299,7 @@ const DiffBody = memo(function DiffBody({ view, file, path, conversation, onComm
         {view.limited ? <p className="rv-gap">The rest of this file’s changes are too long to read here.</p> : null}
       </div>
       {anchor ? (
-        <div className="rv-range-hint" role="status">
+        <div ref={hintExit} className="rv-range-hint" role="status">
           <span className="min-w-0 flex-1">Tap the last line of the range</span>
           <button
             type="button"

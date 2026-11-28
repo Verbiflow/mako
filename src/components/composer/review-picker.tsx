@@ -1,3 +1,4 @@
+import { useExit } from "@/components/ui/exit-motion"
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { FileDiffIcon, GitBranchIcon, GitCommitHorizontalIcon, ScanSearchIcon, XIcon } from "lucide-react"
 import type { ReviewTarget } from "@mako/host/contracts/live-reviews"
@@ -135,11 +136,12 @@ function ReviewChoices({ cwd }: { cwd?: string }) {
     }
   }
 
+  const exit = useExit<HTMLElement>("review-picker", { transcript: true })
   const changesAndBranch = choices.slice(0, 2)
   const commitChoices = choices.slice(2)
 
   return (
-    <section aria-label="Code review" data-review-picker className="review-picker animate-enter shrink-0 border-b border-hairline">
+    <section ref={exit} aria-label="Code review" data-review-picker className="review-picker animate-enter shrink-0 border-b border-hairline">
       <header className="flex h-8 items-center gap-2 px-3 text-label">
         <ScanSearchIcon className="size-3.5 shrink-0 text-faint" aria-hidden />
         <span className="shrink-0 font-medium text-muted-foreground">Code review</span>

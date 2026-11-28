@@ -1,3 +1,4 @@
+import { useExit } from "@/components/ui/exit-motion"
 import { useHarnessIdentity } from "@/lib/harness-label"
 import { useApex } from "@/state/apexes"
 import { memo, useCallback, useMemo, useRef, useState } from "react"
@@ -332,8 +333,9 @@ export const AgentRow = memo(function AgentRow({ agent, conversation, transcript
     agent.ambient ? "housekeeping, not counted as work" : undefined,
   ].filter(Boolean)
   const more = Boolean(agent.detail || agent.output || (said && said.length > 120))
+  const exit = useExit<HTMLElement>(`agent:${agent.bindingId}:${agent.nativeId}`)
   return (
-    <article className="contain-turn group/agent relative" data-native-work={work} data-native-state={agent.state.kind}>
+    <article ref={exit} className="contain-turn group/agent relative" data-native-work={work} data-native-state={agent.state.kind}>
       <button
         type="button"
         aria-expanded={more ? expanded : undefined}

@@ -184,7 +184,8 @@ async function checkWindow() {
           await answer(label)
           await handedOver()
           await frames()
-          assert.equal(await evaluate(cardShown), false, `${harness}: the answered card goes`)
+          // It leaves with motion (`exit.tsx`): settled, it's gone.
+          await until(`!(${cardShown})`, `${harness}: the answered card goes`)
           assert.match(await evaluate(liveStep), /npm test -- --run src\/router/, `${harness}: the live step names the call that now runs`)
           assert.doesNotMatch(await evaluate(liveStep), /Waiting for your approval/, `${harness}: the live step stops waiting`)
           await shot("answered")

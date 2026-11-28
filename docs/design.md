@@ -115,6 +115,15 @@ A sidebar slides by `transform` beside a pane laid out once at its new width (`s
 parts marked `data-slide-anchor` glide from where they were, so the transcript reflows and measures once, not every
 frame. A toggle mid-way turns around from where everything is drawn.
 
+What arrives also leaves (`exit-motion.ts`, `useExit`, `<Exit>`): a prompt answered, a queued message sent, a Fin let
+go, a digest item resolved, a card put away. A copy of the element is drawn where it stood and fades with a few pixels
+of travel (`--duration-menu-out`, `--ease-swift`); what stood beside it glides into the room by `translate`
+(`--duration-panel-out`), read once, so no list lays out per frame. A transcript held at its end under a leaving prompt
+or queue glides down with it, the viewport carried rather than its rows, so the virtualizer measures nothing new. One
+that comes back mid-way turns around. Nothing leaves this way for another view of the same place (`ExitScene`, a page,
+a fold, another conversation), with its place, on a reload, when it was on screen under 300 ms, off screen, or under
+reduced motion; focus goes where it went before, since the element itself is gone at once.
+
 ## State
 
 A view keeps what it last showed through any transition of its session: a turn, starting, waking, reconnecting,

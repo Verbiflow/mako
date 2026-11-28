@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react"
 import { PlusSquareIcon, ShareIcon, XIcon } from "lucide-react"
 import { MakoMark } from "@/components/ui/mako-mark"
+import { useExit } from "@/components/ui/exit-motion"
 import { install, noteVisit, readOffer, shouldOffer, SNOOZE_MS, useInstallWay, writeOffer } from "./install"
 import { Sheet } from "./sheet"
 
@@ -13,6 +14,8 @@ export function InstallCard() {
   const [offered, setOffered] = useState(() => shouldOffer())
   const [steps, setSteps] = useState(false)
   useEffect(() => noteVisit(), [])
+  // Put off, it drops back toward the corner it rose from, and New settles into its place (`exit.tsx`).
+  const exit = useExit<HTMLElement>("install-card", { motion: "drop" })
   if (way === "none" || !offered) return null
   const notNow = () => {
     writeOffer({ ...readOffer(), snoozedUntil: Date.now() + SNOOZE_MS })
@@ -20,7 +23,7 @@ export function InstallCard() {
   }
   return (
     <>
-      <aside aria-label="Add to Home Screen" className="web-install flex items-start gap-3 p-3.5">
+      <aside ref={exit} aria-label="Add to Home Screen" className="web-install flex items-start gap-3 p-3.5">
         <span className="flex size-10 shrink-0 items-center justify-center bg-shell ring-1 ring-hairline">
           <MakoMark className="size-5" />
         </span>

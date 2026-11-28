@@ -1,3 +1,4 @@
+import { useExit } from "@/components/ui/exit-motion"
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
 import { FileIcon, MicIcon, PencilIcon, PlusIcon, SquareIcon, XIcon } from "lucide-react"
 import type { PromptAttachment } from "@mako/host/contracts/providers-acp"
@@ -299,7 +300,7 @@ export function Composer({
     picked.length || reading ? (
       <ul role="list" aria-label="Attachments" className="web-scroll web-attachments flex gap-2 overflow-x-auto">
         {picked.map((each) => (
-          <li key={each.id} className="web-attachment">
+          <AttachmentTile key={each.id} id={each.id}>
             {each.preview ? <img src={each.preview} alt="" className="size-full object-cover" /> : (
               <span className="flex size-full flex-col items-center justify-center gap-1 px-1.5 text-center">
                 <FileIcon className="size-4 text-muted-foreground" />
@@ -309,7 +310,7 @@ export function Composer({
             <button type="button" aria-label={`Remove ${each.attachment.name}`} className="web-attachment-remove" onClick={() => remove(each)}>
               <XIcon className="size-3" strokeWidth={2.5} />
             </button>
-          </li>
+          </AttachmentTile>
         ))}
         {Array.from({ length: reading }, (_, index) => (
           <li key={`reading-${index}`} className="web-attachment skeleton" aria-label="Reading a file" />
@@ -541,4 +542,14 @@ function useDraft(key: string | undefined, text: string): void {
       flush()
     }
   }, [key])
+}
+
+/** An attached file's tile: removed, it shrinks away and the rest close up (`exit-motion.ts`). */
+function AttachmentTile({ id, children }: { id: string; children: ReactNode }) {
+  const exit = useExit<HTMLLIElement>(`attachment:${id}`, { motion: "shrink" })
+  return (
+    <li ref={exit} className="web-attachment">
+      {children}
+    </li>
+  )
 }
