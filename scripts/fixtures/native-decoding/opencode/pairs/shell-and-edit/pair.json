@@ -1,14 +1,50 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.2"
   },
   "about": "Run `wc -l notes.md` in the shell, then edit notes.md so the release ships on Monday. A shell command with output, a file edit with its diff, then the answer.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10ae4435ffeKwCHoOS448h7ax",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_ddd361e63fferktLnvNtvG6UmX",
+      "known": [
+        {
+          "side": "-",
+          "line": "text: Counting first.",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "tool #1 shell shell {\"command\":\"wc -l notes.md\"} -> 2 notes.md",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "thinking: Two lines. The edit needs the file read.",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "tool #2 read read {\"path\":\"/tmp/mako-pair/project/notes.md\"} -> Read file /tmp/mako-pair/project/notes.md, lines 1-2\\n1: The release ships on Friday.\\n2: QA signs off on Thursday. details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "thinking: Now the edit.",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "tool #3 edit edit {\"newString\":\"ships on Monday\",\"oldString\":\"ships on Friday\",\"path\":\"/tmp/mako-pair/project/notes.md\"} -> Edited notes.md (1 replacement) details=[{\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"location\"},{\"newText\":\"ships on Monday\",\"oldText\":\"ships on Friday\",\"path\":\"/tmp/mako-pair/project/notes.md\",\"type\":\"diff\"}]",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: notes.md has two lines, and the release now ships on Monday.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }
