@@ -482,7 +482,7 @@
     "@mako/lazy": "0.1.0",
     "@modelcontextprotocol/sdk": "1.32.2",
     "@napi-rs/keyring": "2.1.0",
-    "@opencode/client": "2.3.2",
+    "@opencode/client": "2.4.2",
     "@parcel/watcher": "2.6.0",
     "ai": "7.0.89",
     "devtools-protocol": "0.0.1692173",

@@ -1,14 +1,25 @@
 {
   "harness": "opencode",
   "native": {
-    "version": "2.3.2"
+    "version": "2.4.2"
   },
   "about": "Read only lines 10 to 20 of log.md with your file read tool, once, and tell me the last line you were shown. Don't run commands. A read of lines 10 to 20 of a long file, so a harness's own cut can be told from one the model asked for.",
   "stores": [
     {
       "reader": "opencode",
-      "path": ".local/share/opencode/opencode.db#v2:ses_e10ae2addffeghQTcQCvgkyDpv",
-      "known": []
+      "path": ".local/share/opencode/opencode.db#v2:ses_ddd35f35fffe430fX0TjD93xmJ",
+      "known": [
+        {
+          "side": "-",
+          "line": "tool #1 read read {\"limit\":11,\"offset\":10,\"path\":\"/tmp/mako-pair/project/log.md\"} -> Read file /tmp/mako-pair/project/log.md, lines 10-20\\n10: entry 10\\n11: entry 11\\n12: entry 12\\n13: entry 13\\n14: entry 14\\n15: entry 15\\n16: entry 16\\n17: entry 17\\n18: entry 18\\n19: entry 19\\n20: entry 20\\n[Output truncated. Continue reading with offset: 21] details=[{\"path\":\"/tmp/mako-pair/project/log.md\",\"type\":\"location\"}]",
+          "reason": ""
+        },
+        {
+          "side": "-",
+          "line": "text: The last line was entry 20.",
+          "reason": ""
+        }
+      ]
     }
   ]
 }
