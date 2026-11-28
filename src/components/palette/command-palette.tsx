@@ -99,8 +99,8 @@ function requestOf(event: Event): PaletteRequest {
  * ran put it elsewhere. The caret is in the field on the frame the chord lands; the panel arrives on the menu's
  * motion tokens without delaying it.
  *
- * `threads` replaces the catalog's Threads (the laptop browser's desk lists its own); `settings` loads its Settings'
- * sections instead of the desktop's.
+ * `threads` replaces the catalog's Threads (the laptop browser's desk lists its own); `settings` loads the window's
+ * Settings sections.
  */
 export function CommandPalette({ threads: threadsOverride, settings }: { threads?: readonly PaletteItem[]; settings?: () => Promise<readonly SettingsEntry[]> } = {}) {
   const [open, setOpen] = useState(false)

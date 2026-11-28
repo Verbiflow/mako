@@ -313,16 +313,15 @@ export interface SettingsEntry {
   onSearch?: (query: string) => void
 }
 
-const loadDeskSettings = () => import("@/components/settings/settings-dialog").then((module) => module.SETTINGS_SECTIONS)
-
 /**
- * Settings' sections and what each is found by ("theme" finds Appearance), read from Settings' own list once its
- * code has loaded (the window loads it when idle, `app-shell.tsx`), so the palette's first paint never waits on it.
+ * Settings' sections and what each is found by ("theme" finds Appearance), read from Settings' own list through
+ * `load`, which the window that mounts the palette passes with its Settings' code (the desktop's loads when idle,
+ * `app-shell.tsx`), so the palette neither waits on it nor carries one window's Settings into another's bundle.
  */
-export function useSettingsItems(open: boolean, load: () => Promise<readonly SettingsEntry[]> = loadDeskSettings): PaletteItem[] {
+export function useSettingsItems(open: boolean, load: (() => Promise<readonly SettingsEntry[]>) | undefined): PaletteItem[] {
   const [sections, setSections] = useState<readonly SettingsEntry[] | null>(null)
   useEffect(() => {
-    if (!open || sections) return
+    if (!open || sections || !load) return
     let current = true
     void load().then((loaded) => {
       if (current) setSections(loaded)
