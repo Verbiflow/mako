@@ -1,4 +1,5 @@
 import { useLayoutEffect, useRef, type RefObject } from "react"
+import { EXIT_GLIDE } from "@/components/ui/exit-motion"
 
 /**
  * Rows that change place glide there instead of teleporting.
@@ -64,6 +65,11 @@ function measure(root: HTMLElement, nodes: HTMLElement[]) {
   return { bounds, origin, tops }
 }
 
+/** A row on its way somewhere: here, or into the room a row that left gave up (`exit.tsx`). Its place is read once it's there. */
+function gliding(node: HTMLElement): boolean {
+  return node.getAnimations().some((running) => running.id === FLIP || running.id === EXIT_GLIDE)
+}
+
 interface Places {
   scene: string
   order: string
@@ -78,7 +84,7 @@ function notePlaces(root: HTMLElement, previous: { current: Places | null }): vo
   const held = previous.current
   if (!held) return
   const nodes = [...root.querySelectorAll<HTMLElement>("[data-flip-key]")]
-  if (nodes.some((node) => node.getAnimations().some((running) => running.id === FLIP))) return
+  if (nodes.some(gliding)) return
   previous.current = { scene: held.scene, order: nodes.map((node) => node.dataset["flipKey"] ?? "").join("\n"), tops: measure(root, nodes).tops }
 }
 
@@ -120,10 +126,7 @@ export function useRowFlip<Order>(
       refresh.current = whenIdle(() => {
         refresh.current = null
         if (previous.current !== before) return
-        const gliding = nodes.some((node) =>
-          node.getAnimations().some((running) => running.id === FLIP)
-        )
-        if (gliding) return
+        if (nodes.some(gliding)) return
         previous.current = { scene, order, tops: measure(root, nodes).tops }
       })
       return

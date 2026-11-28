@@ -2,6 +2,7 @@ import { useState } from "react"
 import { CopyIcon, RotateCwIcon } from "lucide-react"
 import { Spinner } from "@/components/ui/spinner"
 import { cn } from "@/lib/utils"
+import { useExit } from "@/components/ui/exit-motion"
 import type { Diagnosis } from "./diagnosis"
 import { copyDiagnostics } from "./trouble-state"
 
@@ -14,8 +15,10 @@ import { copyDiagnostics } from "./trouble-state"
 export function DiagnosisCard({ diagnosis, checking, onTryAgain, compact = false, className }: { diagnosis: Diagnosis; checking: boolean; onTryAgain: () => void; compact?: boolean; className?: string }) {
   const [open, setOpen] = useState(!compact)
   const copy = () => copyDiagnostics(diagnosis)
+  // Once it's reached again, the card leaves and what's under it comes up into its room (`exit.tsx`).
+  const exit = useExit<HTMLElement>(`trouble:${className ?? "card"}`)
   return (
-    <section className={cn("web-trouble", compact && "web-trouble-compact", className)} data-diagnosis={diagnosis.at} aria-live="polite">
+    <section ref={exit} className={cn("web-trouble", compact && "web-trouble-compact", className)} data-diagnosis={diagnosis.at} aria-live="polite">
       <button type="button" className="web-trouble-head" onClick={() => setOpen((shown) => !shown)} aria-expanded={open} disabled={!compact}>
         {diagnosis.retrying ? <Spinner aria-hidden className="mt-0.5 size-4 shrink-0 text-muted-foreground" /> : null}
         <span className="min-w-0 flex-1 text-left">

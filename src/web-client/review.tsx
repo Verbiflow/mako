@@ -1,3 +1,4 @@
+import { useExit } from "@/components/ui/exit-motion"
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { z } from "zod"
 import { ChevronLeftIcon, ChevronRightIcon, MessageSquareIcon, Undo2Icon } from "lucide-react"
@@ -80,6 +81,8 @@ export function ReviewScreen({ open, onClose }: { open: ReviewOpen; onClose: () 
   const row = useAccountList((state) => state.rows.find((each) => each.conversation === conversation))
   const syncing = useSyncing((state) => state.conversation === conversation)
   const notes = useReviewNotes(conversation)
+  // Its comments sent or cleared, the bar drops back out of view (`exit-motion.ts`).
+  const finishExit = useExit<HTMLDivElement>(`finish-review:${conversation}`, { motion: "drop" })
   // Each ask its own sheet: one asked while the last leaves opens fresh, and the last one's leaving doesn't close it.
   const [asking, setAsking] = useState<{ ask: CommentAsk; id: number } | null>(null)
   const [finishing, setFinishing] = useState(false)
@@ -146,7 +149,7 @@ export function ReviewScreen({ open, onClose }: { open: ReviewOpen; onClose: () 
         )}
       </div>
       {notes.length ? (
-        <div className="rv-finish">
+        <div ref={finishExit} className="rv-finish">
           <button type="button" className="rv-finish-button" data-finish-review="" onClick={() => setFinishing(true)}>
             <MessageSquareIcon aria-hidden className="size-4" />
             <span className="min-w-0 flex-1 truncate text-left">{commentWords(notes.length)} for {webHarnessLabel(harness ?? row?.harness ?? "")}</span>

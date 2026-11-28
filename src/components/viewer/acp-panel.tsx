@@ -48,6 +48,8 @@ import {
   XIcon,
 } from "lucide-react"
 import { Orb } from "@/components/ui/orb/orb"
+import { ExitScene } from "@/components/ui/exit"
+import { useExit } from "@/components/ui/exit-motion"
 
 /**
  * A foreign agent, live.
@@ -104,10 +106,11 @@ export function AcpPanel({ asks = true, compact = false }: { asks?: boolean; com
           {scope ? (
             <PaneWaiting />
           ) : !asks ? null : (
-            <>
+            // Another conversation in this pane puts its asks away at once; one answered here leaves (`exit.tsx`).
+            <ExitScene scene={session.id}>
               <Permission />
               <SessionQuestion />
-            </>
+            </ExitScene>
           )}
         </div>
       </div>
@@ -486,11 +489,13 @@ function Permission() {
   const gone = useAcp((state) => Boolean(activeLiveAcp(state)?.permission?.gone) || activeLiveAcp(state)?.session.connection === "disconnected")
   // A plan approval is answered from the plan bar above the composer.
   const planApproval = usePlanDecision()?.approval?.id
+  // Answered, it leaves as it hides; a refusal that renews it brings it back (`exit.tsx`).
+  const exit = useExit<HTMLDivElement>(permission ? `permission:${permission.id}` : undefined, { transcript: true, hidden: Boolean(receipt) })
   if (!permission || planApproval === permission.id) return null
   if (gone) return <GonePermission permission={permission} />
   // Keep a structured draft mounted while its answer is in flight. A proven
   // refusal can renew the public occurrence without clearing the user's input.
-  return <div hidden={Boolean(receipt)}>
+  return <div ref={exit} hidden={Boolean(receipt)}>
     <PermissionInput key={permission.origin ? JSON.stringify(permission.origin) : permission.id} permission={permission} />
   </div>
 }
@@ -515,8 +520,9 @@ export function GonePermission({ permission }: { permission: LivePermissionReque
   const provider = harness ? harnessLabel(harness) : "The agent"
   const tool = identifyTool({ acpKind: permission.kind, title: permission.title })
   const makoTool = tool.server === "mako" && tool.kind === "mcp" ? tool.label : undefined
+  const exit = useExit<HTMLDivElement>(`permission-gone:${permission.id}`, { transcript: true })
   return (
-    <div data-permission-gone={permission.id} className="animate-enter shrink-0 bg-surface/60 px-4 py-2.5">
+    <div ref={exit} data-permission-gone={permission.id} className="animate-enter shrink-0 bg-surface/60 px-4 py-2.5">
       <p className="flex items-center gap-1.5 text-ui text-foreground/90">
         <CircleAlertIcon aria-hidden className="size-3.5 shrink-0 text-caution" />
         <span className="min-w-0 truncate">{provider} stopped before you answered</span>
@@ -662,8 +668,9 @@ function QuestionPermission({
       question.required === false ||
       answers[question.id]?.some((answer) => answer.trim().length > 0)
   )
+  const exit = useExit<HTMLDivElement>(`question:${permission.id}`, { transcript: true })
   return (
-    <div className="animate-enter shrink-0 bg-surface/60 px-4 py-3">
+    <div ref={exit} className="animate-enter shrink-0 bg-surface/60 px-4 py-3">
       <p className="flex items-center gap-1.5 pb-2 text-ui text-foreground/90">
         <ShieldQuestionIcon className="size-3.5 shrink-0 text-attention/90" />
         <span className="min-w-0 truncate">{permission.title}</span>

@@ -1008,6 +1008,13 @@ diffs-container {
   animation: mako-switch var(--duration-switch) var(--ease-out) both;
 }
 
+/* What's leaving (`exit.tsx`): a drawing of the element as it was, so nothing in it arrives again or eases toward anything. */
+[data-exit-ghost],
+[data-exit-ghost] * {
+  animation: none !important;
+  transition: none !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .animate-enter,
   .animate-switch {

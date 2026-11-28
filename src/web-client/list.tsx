@@ -1,3 +1,5 @@
+import { ExitScene } from "@/components/ui/exit"
+import { useExit } from "@/components/ui/exit-motion"
 import { observeVisibleAnimation } from "@/lib/visible-animation"
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { ArchiveIcon, ArrowDownIcon, ArrowUpIcon, ChevronRightIcon, CloudIcon, InboxIcon, MessagesSquareIcon, MoonIcon, ServerIcon, SquarePenIcon } from "lucide-react"
@@ -370,14 +372,19 @@ function hungFins(roster: readonly NativeAgent[], placed: readonly WebThread[], 
 function ApexFins({ apex, hung, open, onOpen }: { apex: WebThread; hung: HungFins; open: boolean; onOpen: (thread: WebThread) => void }) {
   const count = hung.placed.length + hung.fins.length
   const last = (index: number) => index === count - 1 && !hung.finished
+  // A Fin that finishes or is answered leaves its place and those under it come up (`exit.tsx`); folding or opening
+  // the Apex is another view of it, which its rows don't leave for.
+  const exit = useExit<HTMLDivElement>(`hung-fins:${apex.id}`)
   return (
-    <div data-hung-fins={apex.id} data-hung-fins-open={open || undefined}>
+    <div ref={exit} data-hung-fins={apex.id} data-hung-fins-open={open || undefined}>
+      <ExitScene scene={open ? "open" : "folded"}>
       {hung.placed.map((thread, index) => (
         <PlacedFinRow key={thread.id} thread={thread} last={last(index)} onOpen={() => onOpen(thread)} />
       ))}
       {hung.fins.map(({ agent, ask }, index) => (
         <FinRow key={agent.nativeId} agent={agent} ask={ask} last={last(hung.placed.length + index)} onOpen={() => onOpen(apex)} />
       ))}
+      </ExitScene>
       {hung.finished ? (
         <div data-fins-finished={hung.finished} className="web-fins-finished">
           <span aria-hidden className="rail-branch" data-last />
@@ -392,8 +399,10 @@ function ApexFins({ apex, hung, open, onOpen }: { apex: WebThread; hung: HungFin
 function FinRow({ agent, ask, last, onOpen }: { agent: NativeAgent; ask: HungAsk | undefined; last: boolean; onOpen: () => void }) {
   const state = childStateOf(agent)
   const line = ask?.words ?? childLine(state)
+  const exit = useExit<HTMLButtonElement>(`fin-row:${agent.nativeId}`, { motion: "shrink" })
   return (
     <button
+      ref={exit}
       type="button"
       onClick={onOpen}
       data-fin-row={agent.child?.thread}
@@ -421,8 +430,9 @@ function FinRow({ agent, ask, last, onOpen }: { agent: NativeAgent; ask: HungAsk
 function PlacedFinRow({ thread, last, onOpen }: { thread: WebThread; last: boolean; onOpen: () => void }) {
   const detail = rowDetail(thread, true)
   const asks = thread.standing === "waiting"
+  const exit = useExit<HTMLButtonElement>(`placed-fin-row:${thread.id}`, { motion: "shrink" })
   return (
-    <button type="button" onClick={onOpen} data-thread={thread.id} data-under={thread.apex?.thread} data-standing={thread.standing} aria-label={`${shownTitle(thread)}. ${detail.where ? `On ${detail.where}. ` : ""}${detail.text}.`} className={cn("web-fin-row", thread.quietSince && "opacity-60")}>
+    <button ref={exit} type="button" onClick={onOpen} data-thread={thread.id} data-under={thread.apex?.thread} data-standing={thread.standing} aria-label={`${shownTitle(thread)}. ${detail.where ? `On ${detail.where}. ` : ""}${detail.text}.`} className={cn("web-fin-row", thread.quietSince && "opacity-60")}>
       <span aria-hidden className="rail-branch" data-last={last || undefined} />
       <span className="web-row-mark">
         <LiveMark kind="fin" state={STANDING_MARK[thread.standing]}>

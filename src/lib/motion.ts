@@ -8,9 +8,9 @@ export const EASE_OUT = "cubic-bezier(0.22, 1, 0.36, 1)"
 /** `--ease-swift`: everything that leaves, a little faster than it came. */
 export const EASE_SWIFT = "cubic-bezier(0.2, 0, 0, 1)"
 
-export type MotionDuration = "press" | "menu" | "switch" | "panel" | "panel-out"
+export type MotionDuration = "press" | "menu" | "menu-out" | "switch" | "panel" | "panel-out"
 
-const FALLBACK = { press: 120, menu: 160, switch: 140, panel: 240, "panel-out": 200 } satisfies Record<MotionDuration, number>
+const FALLBACK = { press: 120, menu: 160, "menu-out": 120, switch: 140, panel: 240, "panel-out": 200 } satisfies Record<MotionDuration, number>
 const read = new Map<MotionDuration, number>()
 
 /** A `--duration-<name>` token in milliseconds. */

@@ -20,6 +20,7 @@ import type { PendingPrompt } from "@/state/prompt-delivery"
 import { ToolGlyph } from "@/components/transcript/tool-views"
 import { Ticking } from "@/components/ui/ticking"
 import { GonePermission } from "@/components/viewer/acp-panel"
+import { Exit, ExitScene } from "@/components/ui/exit"
 import { toast } from "sonner"
 import { cn } from "@/lib/utils"
 import { acp, activeLiveAcp, useAcp } from "@/state/acp"
@@ -153,9 +154,20 @@ export function WebDock({ conversation, harness, target, draftKey, away, jump, r
     <div className="web-dock shrink-0" data-asking={ask ? ask.kind : fin ? "fin" : undefined}>
       <div aria-hidden className="web-dock-fade" />
       <StatusCapsule conversation={conversation} cloudThread={target.cloudThread} asking={Boolean(ask ?? fin)} away={away} jump={jump} reconnect={reconnect} />
-      {ask ? <AskCard key={ask.kind === "question" ? ask.id : ask.kind === "agent" ? ask.ask.id : ask.permission.id} ask={ask} conversation={conversation} harness={harness} answerTyped={answerTyped} /> : null}
-      {card !== null ? <FinsNeedYou thread={threadId} compact /> : null}
-      {fin ? <FinAskCard key={`${fin.fin}:${fin.ask.id}`} apex={conversation} ask={fin} more={finAsks.length - 1} answerTyped={answerTyped} /> : null}
+      {/* Answered, an ask leaves into the composer and the transcript comes down into its room (`exit.tsx`). */}
+      <ExitScene scene={conversation}>
+        {ask ? (
+          <Exit key={askKey(ask)} id={`ask:${askKey(ask)}`} transcript>
+            <AskCard ask={ask} conversation={conversation} harness={harness} answerTyped={answerTyped} />
+          </Exit>
+        ) : null}
+        {card !== null ? <FinsNeedYou thread={threadId} compact /> : null}
+        {fin ? (
+          <Exit key={`${fin.fin}:${fin.ask.id}`} id={`fin-ask:${fin.fin}:${fin.ask.id}`} transcript>
+            <FinAskCard apex={conversation} ask={fin} more={finAsks.length - 1} answerTyped={answerTyped} />
+          </Exit>
+        ) : null}
+      </ExitScene>
       {!ask && !fin ? <LimitContinueCard /> : null}
       {unsent.length ? (
         <ul role="list" aria-label="Messages not sent" className="mx-auto flex w-full max-w-content flex-col gap-1.5 px-3 pb-1">
@@ -335,6 +347,10 @@ function useAsk(): Ask | undefined {
     if (agentAsk) return { kind: "agent", ask: agentAsk }
     return undefined
   }, [permission, gone, question, agentAsk])
+}
+
+function askKey(ask: Ask): string {
+  return ask.kind === "question" ? ask.id : ask.kind === "agent" ? ask.ask.id : ask.permission.id
 }
 
 /** The card above the composer: an approval's answers, a question's, or an agent that went before it was answered. */
