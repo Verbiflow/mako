@@ -18,11 +18,11 @@ import type { HarnessVersions } from "../../contracts/harness-versions.js"
  * with 10.14).
  */
 export const CURSOR_VERSIONS: HarnessVersions = {
-  tested: "1.4.1",
-  bundled: { package: "@cursor/sdk", version: "1.4.1", released: "2026-11-17T19:04:35.285Z", imports: "cursor-agent" },
+  tested: "1.5.2",
+  bundled: { package: "@cursor/sdk", version: "1.5.2", released: "2026-11-26T02:27:20.361Z", imports: "cursor-agent" },
   feed: { npm: "@cursor/sdk" },
   checked: {
-    on: "2026-11-18",
+    on: "2026-11-28",
     how: "@cursor/sdk 1.4.1 in Mako's lockfile: native-tools/cursor-1.4.1.json, cursor-concepts.json, and its six patches found by shape in the ESM/CJS bundles with test:cursor-child passing; the 18 live/store pairs are still 1.4.0's until they're recorded on Cursor's own model",
   },
 }
