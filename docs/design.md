@@ -100,8 +100,20 @@ Apex again. The phone's the same: a count in the bar and the Shiver card, no chi
 
 `transform` and `opacity` only, on HTML boxes, on the shared clock, resting off screen and under reduced motion
 (`observeVisibleAnimation`, `observePhaseLockedAnimation`). Two curves: `--ease-out` to arrive, `--ease-swift` to
-leave; entrances under 250ms, presses `scale(0.97)`, nothing from `scale(0)`. Nothing keyboard-driven animates. An
-endless loop runs only on the gate; Tailwind's `animate-*` loops are refused.
+leave; entrances under 250ms, presses `scale(0.97)`, nothing from `scale(0)`. An endless loop runs only on the gate;
+Tailwind's `animate-*` loops are refused.
+
+One set of durations, in `index.css` and read by script through `src/lib/motion.ts`: `--duration-press` (120),
+`--duration-tooltip` (120, out 80), `--duration-menu` (160, out 120) for menus, popovers and rows or cards arriving,
+`--duration-switch` (140) for one view of a place giving way to another (`.animate-switch`, a fade), and
+`--duration-panel` (240, out 200) for a sidebar. A spring only where a finger hands off its speed
+(`src/web-client/motion.ts`). Nothing moves on the first paint or for a change nobody asked for (a launch restoring a
+sidebar, another tab bringing its own), and what a key repeats many times a minute (the palette, walking a list)
+doesn't animate; a sidebar's toggle does, by key or by click.
+
+A sidebar slides by `transform` beside a pane laid out once at its new width (`side-slide.ts`): the pane's edge and the
+parts marked `data-slide-anchor` glide from where they were, so the transcript reflows and measures once, not every
+frame. A toggle mid-way turns around from where everything is drawn.
 
 ## State
 

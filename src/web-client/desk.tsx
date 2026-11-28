@@ -12,6 +12,7 @@ import { inboxShortcut } from "@/components/inbox/open-inbox"
 import { inboxView } from "@/state/inbox"
 import { AgentThreads } from "@/components/rail/agent-threads"
 import { Divider } from "@/components/shell/divider"
+import { useSideSlide } from "@/components/shell/side-slide"
 import { RailToggle, TitleStrip } from "@/components/shell/title-bar"
 import { PlaceMark } from "@/components/ui/place-mark"
 import { runPlace } from "@mako/host/contracts/account-devices"
@@ -38,6 +39,7 @@ import { noteOpenedByScreen, useThreadTabs } from "@/state/thread-sessions"
 import { routeWindow } from "@/state/window-routes"
 import { useAccountList } from "./account-list"
 import { AgentsLayer } from "./agents-layer"
+import { DeskSide } from "./desk-side"
 import { deskComposerChunk } from "./chunks"
 import { ScreenFailed, ScreenLoading } from "./code-unavailable"
 import { LazyBoundary } from "@/components/ui/lazy-boundary"
@@ -102,6 +104,11 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   const selected = !starting && under.kind === "thread" ? under.thread : undefined
   const railOpen = usePrefs((prefs) => prefs.railOpen)
   const rail = useRef<HTMLDivElement>(null)
+  // The rail and the right rail slide in and out beside the pane, as the desktop's do (`side-slide.ts`).
+  const railGroup = useRef<HTMLDivElement>(null)
+  const pane = useRef<HTMLElement>(null)
+  const thePane = useCallback(() => pane.current, [])
+  const railSlide = useSideSlide({ open: railOpen, side: "left", panel: railGroup, pane: thePane })
   // One step of the app at a time: opening another Thread replaces the one open, as the desk's rail does.
   const open = (next: ScreenRoute) => navigate(next, { replace: route.kind !== "list" })
   const [startIn, setStartIn] = useState<StartIn | undefined>(undefined)
@@ -151,6 +158,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
   )
   // The Inbox lies over whatever the desk shows; its address opens it, and going anywhere else puts it away.
   useEffect(() => (under.kind === "inbox" ? inboxView.open() : inboxView.close()), [route, under.kind])
+  const place = under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind
   useDeskKeys({ threads, selected, open, newThread: () => newThread(), settings: () => open({ kind: "settings" }) })
   // Of the desk's notices above its composer, those a laptop's browser needs: a send to an old Session asks first, and
   // what an agent asked is answered here as on the desk.
@@ -163,8 +171,8 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
     <div className="web-desk flex min-h-0 min-w-0 flex-1 flex-col bg-shell">
       <DeskTitleBar starting={starting} onNew={() => newThread()} />
       <div className="relative flex min-h-0 min-w-0 flex-1">
-        {railOpen ? (
-          <>
+        {railSlide.present ? (
+          <div ref={railGroup} className={cn("flex min-h-0 shrink-0", railSlide.leaving && "pointer-events-none absolute inset-y-0 left-0 z-20")}>
             <nav ref={rail} aria-label="Threads" style={{ width: prefsStore.get().railWidth }} className="flex min-h-0 shrink-0 flex-col overflow-hidden">
               <AgentThreads />
               <DeskIdentity settings={!starting && (under.kind === "settings" || under.kind === "setup")} onSettings={() => open({ kind: "settings" })} />
@@ -179,9 +187,9 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
               }}
               onCommit={(next) => setPref("railWidth", next)}
             />
-          </>
+          </div>
         ) : null}
-        <main className="relative flex min-w-0 flex-1 flex-col bg-surface">
+        <main ref={pane} className="relative flex min-w-0 flex-1 flex-col bg-surface">
           {starting ? (
             <DeskStart key="new" startIn={startIn} onDismiss={back} onStarted={onStarted} />
           ) : under.kind === "thread" ? (
@@ -197,10 +205,12 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
           )}
           <InboxView />
         </main>
-        <ReviewLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
-        <FilesLayer form="desk" place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
-        <AgentsLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} />
-        <SetupLayer place={under.kind === "thread" && !starting ? `thread:${under.thread}` : starting ? "new" : under.kind} onAll={(project) => open({ kind: "setup", project })} />
+        <DeskSide place={place} pane={thePane}>
+          <ReviewLayer form="desk" place={place} />
+          <FilesLayer form="desk" place={place} />
+          <AgentsLayer place={place} />
+          <SetupLayer place={place} onAll={(project) => open({ kind: "setup", project })} />
+        </DeskSide>
       </div>
       <CommandPalette />
       <ConfirmHost />
@@ -547,11 +557,13 @@ function DeskThread({ threadId, sessionId, addSessionRef, onArchived, onSession 
       </WorkbenchStrip>
       {/* Its Mac off, Agents has no live conversation to open on: the Apex's digest, from the account's list, stands here. */}
       {session.quietSince && !opened && !thread.archived ? <PhoneApexDigest thread={thread} session={session} onOpenFin={openChild} /> : null}
-      <RoutedOpenContext value={openChild}>
-        <FinOfApexContext value={opened ? thread.title : undefined}>
-          <ThreadBody key={opened?.row.conversation} thread={thread} session={opened ?? session} desk />
-        </FinOfApexContext>
-      </RoutedOpenContext>
+      <div data-slide-anchor="center" className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <RoutedOpenContext value={openChild}>
+          <FinOfApexContext value={opened ? thread.title : undefined}>
+            <ThreadBody key={opened?.row.conversation} thread={thread} session={opened ?? session} desk />
+          </FinOfApexContext>
+        </RoutedOpenContext>
+      </div>
       {addingTo ? (
         <StartSheet
           open={adding}
@@ -595,7 +607,7 @@ function DeskStart({ startIn, onDismiss, onStarted }: { startIn: StartIn | undef
       </WorkbenchStrip>
       {/* The desktop's opening screen, its pane's own: the engraving under the headline and the composer, whose chips
           say where it runs and in what. */}
-      <div className="agent-surface relative isolate flex min-h-0 flex-1 flex-col overflow-hidden">
+      <div data-slide-anchor="center" className="agent-surface relative isolate flex min-h-0 flex-1 flex-col overflow-hidden">
         <OceanScene />
         <div className="min-h-0 flex-1 overflow-y-auto">
           <Welcome />

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 import { ThreadSetup } from "@/components/setup/setup-page"
 import { activeAcp, useAcp } from "@/state/acp"
 import { setSetupSource } from "@/state/setup"
@@ -11,6 +11,7 @@ import { listedAsker, webSetup } from "./setup-source"
 import { closeSetup, setupOpenStore, useSetupOpen } from "./setup-open"
 import { useThreadSetupPlace } from "./setup-thread"
 import { WebSideRail } from "./side-rail"
+import { useDeskSideLeaving } from "./desk-side-leaving"
 
 /**
  * Setup in the right rail of a laptop's browser, as the desktop's side panel draws it: the Thread on screen's place, its
@@ -43,9 +44,14 @@ export function SetupLayer({ place, onAll }: { place: string | undefined; onAll:
     if (was.current !== place) closeSetup()
     was.current = place
   }, [place])
-  if (!open || !onScreen) return null
+  // Kept on screen while the right rail slides away with it (`desk-side.tsx`).
+  const sideLeaving = useDeskSideLeaving()
+  const [showing, setShowing] = useState(false)
+  const shows = open && Boolean(onScreen)
+  if (shows !== showing && (shows || !sideLeaving)) setShowing(shows)
+  if (!(shows || (showing && sideLeaving)) || !onScreen) return null
   return (
-    <div className="rv-layer" data-form="desk" data-setup-layer>
+    <div className="rv-layer animate-switch" data-form="desk" data-setup-layer>
       <div className="rv-screen">
         <WebSideRail active="setup" conversation={onScreen} />
         <div className="flex min-h-0 flex-1 flex-col">

@@ -258,6 +258,7 @@ const FilePane = memo(function FilePane({
     <section
       aria-label="Workbench pane"
       data-pane-id={pane.id}
+      data-slide-anchor="start"
       onPointerDownCapture={(event) => {
         const target = event.target instanceof Element ? event.target : null
         const resting = Boolean(target?.closest("[data-pane-reply]"))

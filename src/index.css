@@ -267,16 +267,17 @@
   /*
    * Motion: two curves total. --ease-out for everything that arrives,
    * --ease-swift for everything that leaves. Exits are faster than
-   * entrances — attention has already moved on.
+   * entrances — attention has already moved on. The durations are in
+   * `:root` below, where script reads them too (`src/lib/motion.ts`).
+   *
+   *   press      a pressed control gives a hair
+   *   tooltip    a tooltip (and its faster way out)
+   *   menu       a menu, a popover, a row or a card arriving
+   *   switch     one view of a place giving way to another (a tab, a panel)
+   *   panel      a sidebar sliding in (and its faster way out)
    */
   --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
   --ease-swift: cubic-bezier(0.2, 0, 0, 1);
-
-  --duration-press: 120ms;
-  --duration-tooltip: 120ms;
-  --duration-tooltip-out: 80ms;
-  --duration-menu: 160ms;
-  --duration-panel: 240ms;
 
   /* The tool-status label spring; surfaces may retune locally. */
   --tool-motion-spring: 480ms;
@@ -286,6 +287,17 @@
 
 :root {
   color-scheme: dark;
+
+  /* Motion durations (see the curves in the theme). Plain properties, not theme ones, so each is in the page for
+     `motionMs` to read whether or not a stylesheet names it. */
+  --duration-press: 120ms;
+  --duration-tooltip: 120ms;
+  --duration-tooltip-out: 80ms;
+  --duration-menu: 160ms;
+  --duration-menu-out: 120ms;
+  --duration-switch: 140ms;
+  --duration-panel: 240ms;
+  --duration-panel-out: 200ms;
 
   /*
    * OpenCode OC-2 uses #080808 / #161616 / #242424 with warm #f1ece8 text.
@@ -983,6 +995,24 @@ diffs-container {
 
 .animate-enter {
   animation: mako-enter var(--duration-menu) var(--ease-out) both;
+}
+
+/* One view of a place giving way to another (a sidebar's tab, a workbench tab): the new one fades up, nothing moves. */
+@keyframes mako-switch {
+  from {
+    opacity: 0;
+  }
+}
+
+.animate-switch {
+  animation: mako-switch var(--duration-switch) var(--ease-out) both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-enter,
+  .animate-switch {
+    animation: none;
+  }
 }
 
 /*
