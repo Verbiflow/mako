@@ -403,9 +403,8 @@ const DESK_COMMANDS: DeskCommand[] = [
     section: "Model",
     keys: "mod+shift+m",
     hint: "Search every authenticated model",
-    // The palette opens with its field empty and the caret in it; with Settings or a dialog open too, a field there
-    // was what the old way here reached for.
-    run: openPalette,
+    // The palette, in its models: favourites, then recent, then the rest.
+    run: () => window.dispatchEvent(new CustomEvent("mako:palette", { detail: { scope: "models" } })),
   },
   {
     id: "model.cycle-effort",

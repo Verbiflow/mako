@@ -31,6 +31,8 @@ import { WorkspaceFocusProvider } from "@/components/stage/workspace-focus"
  */
 const loadSettings = () => import("@/components/settings/settings-dialog")
 const SettingsDialog = lazy(() => loadSettings().then((module) => ({ default: module.SettingsDialog })))
+/** Settings' sections, for the palette to find them by their words. */
+const loadSettingsSections = () => loadSettings().then((module) => module.SETTINGS_SECTIONS)
 
 export function AppShell() {
   const bootHost = actions.boot
@@ -182,7 +184,7 @@ export function AppShell() {
             )}
           </div>
         </div>
-        <CommandPalette />
+        <CommandPalette settings={loadSettingsSections} />
         <OpenProjectPalette />
         <ApexDialog />
         {/* Settings takes the whole window under the palette's z-50, so the

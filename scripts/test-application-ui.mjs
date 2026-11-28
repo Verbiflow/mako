@@ -259,13 +259,13 @@ async function review() {
   await fixture("f.handOffScene('none')")
   await key("k", 75, 4)
   await until(
-    "document.activeElement?.getAttribute('placeholder') === 'Search commands, models, sessions…'"
+    "document.activeElement?.matches('[data-command-palette] input') === true"
   )
   await page.debugger.sendCommand("Input.insertText", {
     text: "Updates and build information",
   })
   await until(
-    "document.querySelector('[aria-label=\"Command palette\"] button')?.textContent.includes('Updates and build information')"
+    "document.querySelector('[aria-label=\"Command palette\"] [data-palette-row]')?.textContent.includes('Updates and build information')"
   )
   await key("Enter", 13)
   await until(
