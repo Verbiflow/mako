@@ -306,16 +306,6 @@ export function planKey(ask: PlanAsk): string {
 
 const WAITING = /^waiting on\b/i
 
-/** The lines of these Apexes' plans that wait on the person and aren't done, in the Apexes' order. */
-export function planAsksOf(apexes: readonly ApexEntry[], plans: ApexesState["plans"]): PlanAsk[] {
-  return apexes.flatMap((apex) => {
-    const plan = plans[apex.thread]
-    if (!plan) return []
-    return parsePlan(plan).sections.filter((section) => WAITING.test(section.name)).flatMap((section) =>
-      section.items.flatMap((item, index) => (item.done ? [] : [{ apex, section: section.name, index, text: item.text }])))
-  })
-}
-
 /** Every Apex's plan lines that wait on the person, its plan read once it's asked for. */
 export function useApexPlanAsks(): PlanAsk[] {
   const apexes = useApexList()
@@ -323,7 +313,12 @@ export function useApexPlanAsks(): PlanAsk[] {
   useEffect(() => {
     for (const apex of apexes) if (plans[apex.thread] === undefined) void readPlan(apex.thread).catch(() => undefined)
   }, [apexes, plans])
-  return useMemo(() => planAsksOf(apexes, plans), [apexes, plans])
+  return useMemo<PlanAsk[]>(() => apexes.flatMap((apex) => {
+    const plan = plans[apex.thread]
+    if (!plan) return []
+    return parsePlan(plan).sections.filter((section) => WAITING.test(section.name)).flatMap((section) =>
+      section.items.flatMap((item, index) => (item.done ? [] : [{ apex, section: section.name, index, text: item.text }])))
+  }), [apexes, plans])
 }
 
 

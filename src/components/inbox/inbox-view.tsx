@@ -17,7 +17,6 @@ import { markThreadReviewed, setThreadAttention } from "@/state/threads"
 import { useThreads } from "@/state/thread-store"
 import { threadTitle } from "@/state/thread-titles"
 import {
-  inboxCount,
   inboxView,
   openInboxItem,
   sameItems,
@@ -180,7 +179,7 @@ function InboxPane() {
     },
   })
 
-  const needs = inboxCount(model, planAsks)
+  const needs = model.asks.length + planAsks.length
   const toRead = model.toRead.length + failedAutomations.length
   const empty = !needs && !toRead && !today.length
   return (

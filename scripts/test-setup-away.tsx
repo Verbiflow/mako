@@ -205,7 +205,7 @@ setupStore.set((state) => {
 })
 assert.equal(allAsks(setupStore.get()).length, 1, "the two folders' views list it once")
 assert.equal(inboxModel().asks.filter((item) => item.kind === "setup").length, 1, "and the Inbox's row")
-assert.equal(inboxCount(inboxModel(), []), 1, "and its badge")
+assert.equal(inboxCount(inboxModel()), 1, "and its badge")
 // An answer that doesn't land frees its buttons and leaves the ask open; one that lands holds them until it goes.
 const [listed] = allAsks(setupStore.get())
 const choice = setupAskCard(listed!.folder, listed!.ask, false).choices[0]!

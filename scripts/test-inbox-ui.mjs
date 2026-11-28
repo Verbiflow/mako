@@ -51,7 +51,7 @@ if (process.versions.electron) {
 }
 
 /** The needs-you facts, read in the page from the contract and the Thread status the marks read, not from the Inbox. */
-const NEEDS_FACTS = `Promise.all([import('/src/state/acp-state.ts'), import('/src/state/apex-fins.ts'), import('/packages/host/src/contracts/children.ts'), import('/src/state/thread-store.ts'), import('/src/state/thread-status.ts'), import('/src/state/setup.ts'), import('/src/state/apexes.ts')]).then(([{ acpStore }, { threadChildren }, { childStateOf, childGroup }, { threadsStore }, { threadStatus }, { allAsks, setupStore }, { apexesStore, planAsksOf, planKey }]) => {
+const NEEDS_FACTS = `Promise.all([import('/src/state/acp-state.ts'), import('/src/state/apex-fins.ts'), import('/packages/host/src/contracts/children.ts'), import('/src/state/thread-store.ts'), import('/src/state/thread-status.ts'), import('/src/state/setup.ts')]).then(([{ acpStore }, { threadChildren }, { childStateOf, childGroup }, { threadsStore }, { threadStatus }, { allAsks, setupStore }]) => {
   const acp = acpStore.get()
   const apexes = [...new Set(Object.values(acp.conversations).flatMap((conversation) => conversation.kind === 'live' && conversation.threadId ? [conversation.threadId] : []))]
   const fins = apexes.flatMap((thread) => threadChildren(acp, thread).filter((agent) => { const state = childStateOf(agent); return childGroup(state) === 'needs' && state.on !== 'lead' }).map((agent) => ({ apex: thread, fin: agent.child.thread })))
@@ -60,10 +60,7 @@ const NEEDS_FACTS = `Promise.all([import('/src/state/acp-state.ts'), import('/sr
   const threads = state.threads.filter((ref) => !ref.parent && !asking.has(ref.threadId) && threadStatus(ref, state).kind === 'needs-permission').map((ref) => ref.path)
   // A Setup ask waits on the person too, once its folder's Setup has been read: each listed once.
   const setup = allAsks(setupStore.get()).map((entry) => entry.ask.id)
-  // And an Apex's plan lines under Waiting on you, which the Inbox lists under Needs you beside its asks.
-  const apexState = apexesStore.get()
-  const plans = planAsksOf(Object.values(apexState.byThread), apexState.plans).map(planKey)
-  return { fins: fins.map((fin) => fin.fin), threads, setup, plans }
+  return { fins: fins.map((fin) => fin.fin), threads, setup }
 })`
 
 async function checkWindow() {
@@ -205,18 +202,15 @@ async function checkWindow() {
   console.log("PASS: actual Cmd+K aliases and Settings resource/recipe searches, including another project")
 
   // 2. The Inbox's count is the needs-you facts.
-  // The facts as the Inbox's count reads them: a Setup ask arrives once its folder's Setup is read, a plan line once
-  // its Apex's plan is.
-  await until(`${NEEDS_FACTS}.then((facts) => facts.plans.length > 0 && Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) === facts.fins.length + facts.threads.length + facts.setup.length + facts.plans.length)`, "the Inbox row counts the needs-you facts and the plan lines waiting on the person")
+  // The facts as the Inbox's count reads them: a Setup ask arrives once its folder's Setup is read.
+  await until(`${NEEDS_FACTS}.then((facts) => Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) === facts.fins.length + facts.threads.length + facts.setup.length)`, "the Inbox row counts the needs-you facts")
   const facts = await evaluate(NEEDS_FACTS)
   console.log("NEEDS FACTS", JSON.stringify(facts))
   const expected = facts.fins.length + facts.threads.length + facts.setup.length
-  // What the row counts and the page says needs the person: the asks and the plan lines.
-  const counted = expected + facts.plans.length
   assert.ok(facts.fins.length >= 2, "the scene has Fins asking the person")
   assert.match(await rollup(), new RegExp(`${facts.fins.length} needs? you`), "the Apex row's rollup says the same")
   await capture("desktop-rail.png")
-  console.log(`PASS: the Inbox counts ${counted}, the needs-you facts and ${facts.plans.length} plan lines`)
+  console.log(`PASS: the Inbox counts ${expected}, the needs-you facts`)
 
   // 3. Cmd+Shift+U opens it, the first item focused; Escape puts it away.
   await click(".thread-jump-scope [data-thread-row]")
@@ -227,10 +221,6 @@ async function checkWindow() {
   const items = await evaluate(`[...document.querySelectorAll('[data-inbox-section="needs"] [data-inbox-item]')].map((node) => ({ key: node.dataset.inboxItem, kind: node.dataset.inboxKind, fin: node.dataset.fin, text: node.innerText.replace(/\\s+/g, ' ') }))`)
   console.log("INBOX", JSON.stringify(items))
   assert.equal(items.length, expected, "the Inbox lists every fact")
-  const shownPage = await evaluate(`({ summary: document.querySelector('[data-inbox-summary]')?.textContent ?? '', plans: [...document.querySelectorAll('[data-inbox-section="needs"] [data-inbox-plan]')].length, row: Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) })`)
-  assert.equal(shownPage.plans, facts.plans.length, "the page lists each plan line under Needs you")
-  assert.match(shownPage.summary, new RegExp(`^${counted} needs? you\\b`), `the page says what the row counts: ${JSON.stringify(shownPage)}`)
-  assert.equal(shownPage.row, counted, "the row says what the page does")
   assert.deepEqual(items.filter((item) => item.kind === "fin").map((item) => item.fin).sort(), [...facts.fins].sort(), "one item per asking Fin")
   assert.ok(items.filter((item) => item.kind === "fin").every((item) => item.text.includes("Mobile polish")), "each Fin's item says where it is")
   await capture("desktop-inbox.png")
@@ -264,12 +254,12 @@ async function checkWindow() {
   await until("window.apexScene.responds().length === 1", "the answer reaching the Apex's host")
   assert.equal((await evaluate("window.apexScene.responds()[0]")).fin, target.fin)
   await until(`document.querySelector('[data-inbox-item=${JSON.stringify(target.key)}]') === null`, "the answered Fin leaves the Inbox")
-  await until(`Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${counted - 1}`, "the Inbox row counts one fewer")
+  await until(`Number(document.querySelector('[data-rail-top-row="inbox"] [data-inbox-count]')?.textContent ?? 0) === ${expected - 1}`, "the Inbox row counts one fewer")
   const working = await evaluate(`import('/src/state/acp-state.ts').then(({acpStore}) => import('/src/state/apex-fins.ts').then(({threadChildren}) => import('/packages/host/src/contracts/children.ts').then(({childStateOf}) => { const acp = acpStore.get(); const thread = Object.values(acp.conversations).find((c) => c.kind === 'live' && threadChildren(acp, c.threadId).some((agent) => agent.child?.thread === ${JSON.stringify(target.fin)})).threadId; return childStateOf(threadChildren(acp, thread).find((agent) => agent.child?.thread === ${JSON.stringify(target.fin)})).kind })))`)
   assert.equal(working, "working", "the answered Fin is working")
   await until(`(document.querySelector('.thread-jump-scope [data-apex-row]')?.dataset.finCounts ?? '') !== ${JSON.stringify(before)}`, "the rail's rollup moves with it")
   assert.match(await rollup(), new RegExp(`${facts.fins.length - 1} needs? you`))
-  assert.equal(await inboxCount(), counted - 1)
+  assert.equal(await inboxCount(), expected - 1)
   console.log(`PASS: answering ${answer === "allow" ? "Allow once" : "the first option"} in the Inbox moves the Fin to working everywhere (${await rollup()})`)
   await capture("desktop-inbox-answered.png")
 
