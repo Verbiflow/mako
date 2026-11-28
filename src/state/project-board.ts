@@ -9,6 +9,8 @@ import {
   type BoardKind,
   type BoardProblem,
   type BoardPull,
+  type BoardPullDetail,
+  type BoardPullRequest,
   type BoardRepository,
 } from "@mako/host/contracts/project-pulls"
 
@@ -125,7 +127,7 @@ export interface BoardView<Row> {
   rows: Row[]
   viewer?: string
   problem?: BoardProblem
-  /** Nothing read yet for these folders. */
+  /** Some of these folders not read yet for this kind. */
   loading: boolean
   readAt: number
 }
@@ -158,8 +160,15 @@ function useBoardOf<Row>(folders: readonly string[], kind: BoardKind, held: Read
       rows: keys.flatMap((each) => held[each] ?? []),
       viewer,
       problem,
-      loading: known.length < listed.length,
+      // A folder whose repositories are known from the other kind's reading still waits on this kind's.
+      loading: known.length < listed.length || (listed.length > 0 && !(Number.isFinite(readAt) && readAt > 0)),
       readAt: Number.isFinite(readAt) ? readAt : 0,
     }
   }, [key, projects, repositories, held, viewer, problem, readAt])
+}
+
+/** One pull request a board listed, opened: its words, checks, reviews and files. Read when asked, never kept here. */
+export function readBoardPull(request: BoardPullRequest): Promise<BoardPullDetail> {
+  if (!hasBridge()) return Promise.reject(new Error("Pull requests are read on a computer."))
+  return getMako().boardPull(request)
 }

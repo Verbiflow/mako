@@ -49,7 +49,7 @@ interface Deps {
   branch(cwd: string): Promise<string>
   now(): number
   /** Fixed labels and counters only: never arguments, query text, output, authentication or repository names. */
-  trace?(event: "request" | "cached" | "limited", kind: string): void
+  trace?(event: "request" | "cached" | "limited" | "unchanged", kind: string): void
 }
 
 /** A transport refusal carries the original deadline through cached reads and tool preflights. */
@@ -237,6 +237,8 @@ export class GitHubReads {
         const response = httpResponse(output)
         if (response.status === 304) {
           if (validator === undefined) throw new Error("GitHub returned an unowned conditional response")
+          // An unchanged answer costs nothing of the login's limit; said apart so a budget can be read from the log.
+          this.deps.trace?.("unchanged", args[0]!)
           entry.body = validator.body
           entry.etag = validator.etag
         } else {

@@ -75,6 +75,18 @@ type Follow = { subscription?: Subscription; conversations: Set<string>; holds: 
  * same repeats (`sendWithRepeats`), and their live updates from the owner's stream. What the renderer asks of a host
  * that isn't a conversation's (a workspace, a terminal, a folder) has no host here and is refused by name.
  */
+const JsonValue: z.ZodType<Json> = z.lazy(() => z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(JsonValue), z.record(z.string(), JsonValue)]))
+const BoardRequestSchema = z.object({ folders: z.array(z.string()).max(64), kind: z.enum(["pulls", "issues"]), why: z.enum(["look", "refresh"]).optional() })
+const BoardPullSchema = z.object({ repository: z.string(), number: z.number() })
+/** A host's board as the browser merges it: its lists, each row passed on as the host wrote it. */
+const BoardAnswerSchema = z.object({
+  viewer: z.string().optional(),
+  projects: z.array(JsonValue),
+  repositories: z.record(z.string(), JsonValue),
+  pulls: z.array(JsonValue),
+  issues: z.array(JsonValue),
+})
+
 export class WebConversations {
   readonly bridge: MakoBridge
   readonly #appHint: ((owner: Owner, hint: RemoteAppHint) => void) | undefined
@@ -141,6 +153,8 @@ export class WebConversations {
         return this.#answerFor(shown, "mako:live-turn-media", [shown, ...args])
       }
       if (APEX_CALLS.has(channel)) return this.#apexCall(channel, args)
+      if (channel === "mako:project-board") return this.#board(args)
+      if (channel === "mako:board-pull") return this.#boardPull(args)
       const conversation = conversationCallId(channel, args) ?? this.#ownerAsked(channel, args)
       if (conversation) return this.#answerFor(conversation, channel, args)
       // No owner to ask: the null the bridge declares, so links are drawn as they are, unchecked (`file-references.ts`).
@@ -289,6 +303,50 @@ export class WebConversations {
     const reading = PlanReadingSchema.safeParse(answer)
     if (channel !== "mako:apex-seen" && reading.success) heardWebPlan(thread, reading.data.text)
     return answer
+  }
+
+  /** The conversation each repository's rows were last read through: an opened pull request is asked of that owner. */
+  readonly #boardOwners = new Map<string, string>()
+
+  /**
+   * Projects' pull requests from the browser: each project folder is asked of the computer that runs a conversation
+   * filed under it, those of one owner in one call, and the answers merged. A project whose computer doesn't answer
+   * is left out of this reading; the next one asks again.
+   */
+  async #board(args: readonly unknown[]): Promise<Json> {
+    const request = BoardRequestSchema.parse(args[0])
+    const byOwner = new Map<string, string[]>()
+    for (const folder of request.folders) {
+      const row = accountListStore.get().rows.find((each) => (each.project?.folder ?? each.folder) === folder && this.#row(each.conversation))
+      if (row) byOwner.set(row.conversation, [...(byOwner.get(row.conversation) ?? []), folder])
+    }
+    const answers = await Promise.all([...byOwner].map(async ([conversation, folders]) => {
+      const answer = BoardAnswerSchema.safeParse(await this.#answerFor(conversation, "mako:project-board", [{ ...request, folders }]).catch(() => undefined))
+      if (!answer.success) return undefined
+      for (const key of Object.keys(answer.data.repositories)) this.#boardOwners.set(key, conversation)
+      return answer.data
+    }))
+    const projects: Json[] = []
+    const repositories: Record<string, Json> = {}
+    const pulls: Json[] = []
+    const issues: Json[] = []
+    let viewer: string | undefined
+    for (const answer of answers) {
+      if (!answer) continue
+      projects.push(...answer.projects)
+      Object.assign(repositories, answer.repositories)
+      pulls.push(...answer.pulls)
+      issues.push(...answer.issues)
+      viewer ??= answer.viewer
+    }
+    return { kind: request.kind, projects, repositories, pulls, issues, ...(viewer && { viewer }) }
+  }
+
+  async #boardPull(args: readonly unknown[]): Promise<Json | CopyAnswer | null | undefined> {
+    const request = BoardPullSchema.parse(args[0])
+    const owner = this.#boardOwners.get(request.repository.toLowerCase())
+    if (!owner) throw new Error("Open the list this pull request is in first.")
+    return this.#answerFor(owner, "mako:board-pull", [request])
   }
 
   #ownerAsked(channel: string, args: readonly unknown[]): string | undefined {

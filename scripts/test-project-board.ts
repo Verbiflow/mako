@@ -197,7 +197,8 @@ const repositories = new Map<string, LocalRepository[]>([[
       const text = body(path)
       const etag = `"${createHash("sha1").update(text).digest("hex")}"`
       answers.set(path, { etag, body: text })
-      if (match === etag) { sent.push({ path, status: 304 }); return `HTTP/2.0 304 Not Modified\nETag: ${etag}\n\n` }
+      // As `gh api` answers a 304: exit 1, the response on standard output.
+      if (match === etag) { sent.push({ path, status: 304 }); throw Object.assign(new Error("Command failed: gh api"), { code: 1, stdout: `HTTP/2.0 304 Not Modified\nETag: ${etag}\n\n`, stderr: "gh: HTTP 304" }) }
       sent.push({ path, status: 200 })
       return `HTTP/2.0 200 OK\nETag: ${etag}\n\n${text}`
     },
@@ -217,6 +218,8 @@ const repositories = new Map<string, LocalRepository[]>([[
   }
   if (process.env.DEBUG_BOARD) for (const each of sent) console.log(each.status, each.path)
   const fresh = sent.filter((each) => each.status === 200).length
+  const read = await board.read({ folders: ["/p/makomono"], kind: "pulls" })
+  assert.deepEqual(Object.values(read.repositories).map((each) => each.problem), [undefined, undefined], "an unchanged answer (gh exits 1 on a 304) is no failure")
   const lists = sent.filter((each) => each.path.includes("pulls?state=")).length
   const checks = sent.filter((each) => each.path.includes("/check-runs")).length
   const reviews = sent.filter((each) => each.path.includes("/reviews")).length

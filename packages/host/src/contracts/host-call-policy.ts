@@ -61,6 +61,8 @@ const reads = [
   "mako:pull-branches",
   /** Lists of projects' pull requests or issues, conditional GETs kept a minute; changes nothing on GitHub. */
   "mako:project-board",
+  /** One pull request a board listed, read when opened; changes nothing on GitHub. */
+  "mako:board-pull",
   "mako:lifecycle-state",
   "mako:installation-state",
   /** Fetches the update source's upstream into its remote-tracking branch and reads the checkout; asked twice, the same answer. */

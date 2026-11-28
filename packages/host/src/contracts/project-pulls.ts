@@ -274,3 +274,34 @@ export function checksWords(checks: ChecksRollup | undefined): { text: string; t
   if (checks.running > 0) return { text: `${checks.passed}/${checks.total}`, tone: "faint" }
   return { text: `${checks.total}`, tone: "positive" }
 }
+
+// One pull request, opened
+
+export interface BoardPullRequest {
+  repository: string
+  number: number
+}
+
+/** A file a pull request changes, with GitHub's patch of it (absent for a binary or a very large one). */
+export interface BoardPullFile {
+  path: string
+  status: "added" | "modified" | "removed" | "renamed" | "copied" | "changed" | "unchanged"
+  additions: number
+  deletions: number
+  patch?: string
+}
+
+/** What the page's preview and the pull request's tab show beyond its row: words, checks, reviews and files. */
+export interface BoardPullDetail {
+  body: string
+  additions: number
+  deletions: number
+  changedFiles: number
+  /** GitHub's word for whether it merges now (`clean`, `blocked`, `dirty`, `behind`, `unstable`, …). */
+  mergeable?: string
+  checks: { name: string; state: "passed" | "failed" | "running" | "skipped"; url?: string }[]
+  reviews: { login: string; state: "approved" | "changes" | "commented" }[]
+  files: BoardPullFile[]
+  /** More files than GitHub lists in one page (100). */
+  moreFiles: boolean
+}

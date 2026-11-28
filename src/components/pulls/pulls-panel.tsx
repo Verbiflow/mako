@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { RotateCwIcon } from "lucide-react"
-import { boardReading, type BoardIssue, type BoardKind, type BoardPull } from "@mako/host/contracts/project-pulls"
+import { boardReading, multiRepositoryKeys, type BoardIssue, type BoardKind, type BoardPull } from "@mako/host/contracts/project-pulls"
 import { TabReading } from "@/components/stage/side-tab"
 import { ViewChips, type ListView } from "@/components/ui/list"
 import { useListKeys } from "@/components/ui/use-list-keys"
@@ -49,6 +49,7 @@ export function PullsPanel() {
   const [focused, setFocused] = useState(false)
   const rows: readonly (BoardPull | BoardIssue)[] = board.rows
   const byKey = useMemo(() => new Map(rows.map((row) => [row.key, row])), [rows])
+  const multi = useMemo(() => multiRepositoryKeys(board.projects), [board.projects])
   const views: ListView<BoardKind>[] = [
     { value: "pulls", label: "Pull requests", count: pulls.rows.filter((row) => row.state === "open").length || undefined },
     { value: "issues", label: "Issues", count: issues.rows.filter((row) => row.state === "open").length || undefined },
@@ -60,7 +61,7 @@ export function PullsPanel() {
     enabled: focused,
     selected,
     onSelect: (key) => setPullsView("panel", { selected: key }),
-    onOpen: (key) => { const row = byKey.get(key); if (row) openBoardRow(row) },
+    onOpen: (key) => { const row = byKey.get(key); if (row) openBoardRow(row, multi) },
     views: { count: views.length, pick: (index) => pick(views[index]!.value) },
     onKey: (event, key, typing) => {
       if (typing || event.metaKey || event.ctrlKey || event.altKey) return false
@@ -107,7 +108,7 @@ export function PullsPanel() {
             now={now}
             selected={selected}
             onSelect={(key) => setPullsView("panel", { selected: key })}
-            onOpen={(key) => { const row = byKey.get(key); if (row) openBoardRow(row) }}
+            onOpen={(key) => { const row = byKey.get(key); if (row) openBoardRow(row, multi) }}
           />
         )}
       </div>

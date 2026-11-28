@@ -1,10 +1,10 @@
 import { createHook, createStore } from "@/state/store"
 
 /**
- * What covers the conversation: the Inbox, or Automations, each independent of its background readings. One at a
- * time; whatever leaves the Inbox for a Thread (a row, a notification, a new Thread) leaves Automations too.
+ * What covers the conversation: the Inbox, Automations or Pull requests, each independent of its background readings.
+ * One at a time; whatever leaves the Inbox for a Thread (a row, a notification, a new Thread) leaves the others too.
  */
-export const inboxViewStore = createStore<{ open: boolean; automations: boolean }>({ open: false, automations: false })
+export const inboxViewStore = createStore<{ open: boolean; automations: boolean; pulls: boolean }>({ open: false, automations: false, pulls: false })
 export const useInboxView = createHook(inboxViewStore)
 
 let intent = 0
@@ -18,14 +18,14 @@ function pendingOpen(): () => boolean {
 /** Leave at input time; a delayed completion must still own this intent before changing selection. */
 function beginOpen(): () => boolean {
   const current = pendingOpen()
-  inboxViewStore.set({ open: false, automations: false })
+  inboxViewStore.set({ open: false, automations: false, pulls: false })
   return current
 }
 
 export const inboxView = {
   open: () => {
     intent += 1
-    inboxViewStore.set({ open: true, automations: false })
+    inboxViewStore.set({ open: true, automations: false, pulls: false })
   },
   close: () => {
     beginOpen()
@@ -34,7 +34,7 @@ export const inboxView = {
   pendingOpen,
   toggle: () => {
     intent += 1
-    inboxViewStore.set({ open: !inboxViewStore.get().open, automations: false })
+    inboxViewStore.set({ open: !inboxViewStore.get().open, automations: false, pulls: false })
   },
 }
 
@@ -42,7 +42,7 @@ export const inboxView = {
 export const automationsPane = {
   open: () => {
     intent += 1
-    inboxViewStore.set({ open: false, automations: true })
+    inboxViewStore.set({ open: false, automations: true, pulls: false })
   },
   close: () => {
     intent += 1
@@ -56,3 +56,15 @@ export const automationsPane = {
  */
 export const inboxListStore = createStore<{ selected?: string; readFolded: boolean }>({ readFolded: true })
 export const useInboxList = createHook(inboxListStore)
+
+/** Pull requests across every project over the conversation, as Automations is. */
+export const pullsPane = {
+  open: () => {
+    intent += 1
+    inboxViewStore.set({ open: false, automations: false, pulls: true })
+  },
+  close: () => {
+    intent += 1
+    inboxViewStore.set({ pulls: false })
+  },
+}

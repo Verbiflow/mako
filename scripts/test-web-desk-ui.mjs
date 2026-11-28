@@ -118,9 +118,10 @@ async function checkDesk() {
     await capture("list-1280-dark.png")
     console.log("Rail: checkouts, earlier agents, background work and another app's ring from the Mac's list")
     // The rail's top is the desk's own rows (`RailRow`), the ones a phone's and an iPad's list head with too
-    // (`test-phone-rail-ui`): here at the desk's 28 px, with Search, which a touch list has no palette for.
+    // (`test-phone-rail-ui`): here at the desk's 28 px, with Search, which a touch list has no palette for, and Pull
+    // requests, which the browser asks of the computers that run its projects.
     const top = await evaluate("[...document.querySelectorAll('[data-rail-top] [data-rail-top-row]')].map((node) => [node.dataset.railTopRow, node.classList.contains('group/top'), Math.round(node.getBoundingClientRect().height)])")
-    assert.deepEqual(top.map(([row]) => row), ["session.new", "view.command-palette", "inbox"], `the browser's rail top: ${JSON.stringify(top)}`)
+    assert.deepEqual(top.map(([row]) => row), ["session.new", "view.command-palette", "inbox", "pulls"], `the browser's rail top: ${JSON.stringify(top)}`)
     assert.ok(top.every(([, desk, height]) => desk && height === 28), `the desk's RailRow at its own size: ${JSON.stringify(top)}`)
 
     await desk("dark")
@@ -137,7 +138,7 @@ async function checkDesk() {
     assert.equal(await evaluate("[...document.querySelectorAll('[data-thread-row]')].filter((row) => /(^|\\n)4 sessions/.test(row.dataset.tip ?? '') || /4 sessions/.test(row.getAttribute('aria-label') ?? '')).length"), 1, "the busy Thread is one row for its four Sessions")
     assert.equal(await evaluate("Boolean(document.querySelector('[data-thread-row][data-active]'))"), true, "the open Thread's row is lit")
     assert.equal(await evaluate("document.querySelector('[data-rail-threads-heading]')?.textContent"), "Projects", "the rail's Projects, with no view switch")
-    assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-rail-top-row]')].map(node => node.dataset.railTopRow)"), ["session.new", "view.command-palette", "inbox"], "a browser's rail tops with New thread, Search and the Inbox")
+    assert.deepEqual(await evaluate("[...document.querySelectorAll('[data-rail-top-row]')].map(node => node.dataset.railTopRow)"), ["session.new", "view.command-palette", "inbox", "pulls"], "a browser's rail tops with New thread, Search, the Inbox and Pull requests")
     console.log(`Rail: ${folders.length} projects, the desktop's rows`)
 
     // 2. Nothing runs off the window: the page, the transcript's column, the background work, the composer's send.
