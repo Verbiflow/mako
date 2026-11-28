@@ -9,7 +9,7 @@ const MANIFESTS = "https://antigravity-cli-auto-updater-974169037036.us-central1
  * definitions check holds the two to each other. Cloud machines' images install exactly `tested`.
  */
 export const ANTIGRAVITY_VERSIONS: HarnessVersions = {
-  tested: "1.5.15",
+  tested: "1.5.19",
   oldest: "1.5.15",
   // This machine's own manifest, named when it's first read: which build a Linux machine runs is a file it has.
   get feed() {
@@ -20,5 +20,5 @@ export const ANTIGRAVITY_VERSIONS: HarnessVersions = {
     targets: ["darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64", "linux_amd64_musl", "linux_arm64_musl", "windows_amd64", "windows_arm64"],
     file: "builds.ts",
   },
-  checked: { on: "2026-11-23", how: "ACP handshake, model discovery, HTTP MCP and a complete Gemini-compatible test turn with agy 1.5.15." },
+  checked: { on: "2026-11-28", how: "ACP handshake, model discovery, HTTP MCP and a complete Gemini-compatible test turn with agy 1.5.15." },
 }
