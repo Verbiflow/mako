@@ -882,8 +882,8 @@ diffs-container {
  *      first frame most closely, so movement must start immediately.
  *   2. Nothing animates from scale(0). Things that appear from nothing
  *      read as broken; 0.96 reads as arriving.
- *   3. Anything the user triggers by keyboard many times a day does not
- *      animate at all. See the palette.
+ *   3. Anything the user triggers by keyboard many times a day moves only
+ *      enough to be seen, and never delays the caret. See the palette.
  * ------------------------------------------------------------------ */
 
 @keyframes mako-enter {
@@ -1072,7 +1072,7 @@ diffs-container {
  * Switching threads.
  *
  * Occasional rather than constant — tens of times a day, not hundreds — so it
- * earns a transition where the palette does not. Short and ease-out: the new
+ * earns a longer transition than the palette. Short and ease-out: the new
  * conversation should look like it arrived, not like it is being presented.
  * Opacity only, so a switch costs the compositor a frame and the main thread
  * nothing while tokens are landing next door. Nothing in it moves: the newest
