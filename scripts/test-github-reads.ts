@@ -99,7 +99,8 @@ const rest = new GitHubReads({ now: () => now, common: async cwd => cwd, branch:
   request++
   if (request === 1) { assert.ok(!args.includes("If-None-Match: fixture-etag")); return "HTTP/2.0 200 OK\nETag: fixture-etag\n\n{\"id\":7}" }
   assert.ok(args.includes("If-None-Match: fixture-etag"))
-  return "HTTP/2.0 304 Not Modified\nETag: fixture-etag\n\n"
+  // As `gh api` answers a 304: it exits 1, with the response on standard output.
+  throw Object.assign(new Error("Command failed: gh api user"), { code: 1, stdout: "HTTP/2.0 304 Not Modified\nETag: fixture-etag\n\n", stderr: "gh: HTTP 304" })
 } })
 assert.equal(await rest.run("/one", ["api", "user"]), '{"id":7}')
 assert.equal(await rest.run("/other", ["api", "user"]), '{"id":7}')
