@@ -85,8 +85,12 @@ export const PlaceSchema = z.discriminatedUnion("kind", [
 ])
 export type Place = z.infer<typeof PlaceSchema>
 
-/** A Thread at a place, as the account, its project (the repository it writes, `owner/name`) and its ID name it. */
-export const BorrowerSchema = z.lazy(() => z.object({ account: Id, repository: Ref, thread: Id, place: PlaceSchema }).strict())
+/**
+ * A Thread at a place, as the account, its project (the repository it writes, `owner/name`) and its ID name it. A cloud
+ * Thread in no repository has no project: what its account and the Thread itself grant reach it, a project's never.
+ * Readers before `PROJECTLESS_BORROWER_LINK_VERSION` required a project, so a gateway keeps such borrowers from them.
+ */
+export const BorrowerSchema = z.lazy(() => z.object({ account: Id, repository: Ref.optional(), thread: Id, place: PlaceSchema }).strict())
 export type Borrower = z.infer<typeof BorrowerSchema>
 
 /**
@@ -466,6 +470,13 @@ export const BORROW_PATHS = {
   events: "/v1/borrow/events",
 } as const
 
+/**
+ * Sent with a device's reads of the broker (`leases`, `events`, `asks`) by a build that reads a borrower in no project.
+ * A read without it is a build from before: the gateway leaves out every lease, event and ask of such a borrower, so
+ * what it answers still parses there, as it did before those borrowers could borrow.
+ */
+export const PROJECTLESS_READER = { header: "x-mako-borrowers", value: "projectless" } as const
+
 /** How long a lease lasts before it's renewed: a minted value an hour, anything else a day, never past its grant. */
 export const LEASE_TTL_MS = {
   copy: 24 * 60 * 60_000,
@@ -535,7 +546,7 @@ function serves(grant: Grant, need: Need): boolean {
 export function inScope(scope: Scope, borrower: Borrower): boolean {
   if (scope.account !== borrower.account) return false
   if (scope.level === "thread") return scope.thread === borrower.thread
-  if (scope.level === "project") return scope.repository === borrower.repository
+  if (scope.level === "project") return borrower.repository !== undefined && scope.repository === borrower.repository
   return true
 }
 
@@ -632,7 +643,7 @@ function currentNeedKey(key: string): boolean {
 }
 
 function borrowerKey(borrower: Borrower): string {
-  return `${borrower.account}\0${borrower.repository}\0${borrower.thread}`
+  return `${borrower.account}\0${borrower.repository ?? ""}\0${borrower.thread}`
 }
 
 /**

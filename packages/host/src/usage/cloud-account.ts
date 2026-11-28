@@ -24,7 +24,7 @@ import { MOVE_ANSWER_WAIT_MS, MoveAnswerSchema, MoveHandOverRequestSchema, MoveH
 import type { RecordsLink } from "@mako/sessions/record-sync"
 import { Agent, fetch as fetchWith, type Response as CloudResponse } from "undici"
 import { z } from "zod"
-import { ArtifactSchema, BORROW_PATHS, BorrowAnswerSchema, GrantSchema, type Artifact, LeaseEventSchema, LeaseSchema, SourceAnswerSchema, SourceAskSchema, type BorrowAnswer, type Grant, type Lease, type Progress, type SourceAnswer, type Stream } from "@mako/protocol/borrow"
+import { ArtifactSchema, BORROW_PATHS, PROJECTLESS_READER, BorrowAnswerSchema, GrantSchema, type Artifact, LeaseEventSchema, LeaseSchema, SourceAnswerSchema, SourceAskSchema, type BorrowAnswer, type Grant, type Lease, type Progress, type SourceAnswer, type Stream } from "@mako/protocol/borrow"
 import type { BorrowSnapshot } from "../contracts/setup.js"
 import {
   LIVE_FORM,
@@ -1769,6 +1769,8 @@ export class CloudAccounts {
       redirect: "error",
       signal: AbortSignal.timeout(REQUEST_MS),
     }
+    // This build reads a borrower in no project (a cloud Thread in no repository): the broker leaves none out of its answers.
+    if (path.startsWith("/v1/borrow/")) init.headers[PROJECTLESS_READER.header] = PROJECTLESS_READER.value
     if (body instanceof FileBody) {
       // Bytes, such as a move's checkpoint: streamed with their length, given as long as their size needs.
       init.headers["content-type"] = "application/octet-stream"

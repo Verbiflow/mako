@@ -36,6 +36,7 @@ import {
 import { Payload } from "./payload.js"
 import type { Progress } from "./borrow.js"
 import type { Advertisement, GatewayFrame, RuntimeFrame } from "./runtime-frames.js"
+import { lendableAt } from "./runtime-frames.js"
 import { type SshClient, SshIncoming, SshOutgoing, SshRefusedError, type SshStream } from "./ssh.js"
 import type { SessionsReport } from "./thread-listing.js"
 import {
@@ -1240,7 +1241,7 @@ export function createFakeGateway(
     beats: (runtimeId) => beaten.get(runtimeId) ?? [],
     lend: (runtimeId, frame) => {
       const runtime = runtimes.get(runtimeId)
-      if (!runtime || runtime.closed || (runtime.version ?? 0) < LEND_LINK_VERSION) return false
+      if (!runtime || runtime.closed || (runtime.version ?? 0) < LEND_LINK_VERSION || !lendableAt(runtime.version ?? 0, frame)) return false
       runtime.deliver(frame)
       return true
     },

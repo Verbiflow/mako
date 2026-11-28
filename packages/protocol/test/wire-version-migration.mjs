@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { describe, test } from "node:test"
 import * as migrationForms from "../dist/live-form.js"
-import { SESSION_ORDER_VERSION, ADVERTISE_LINK_VERSION, LEND_LINK_VERSION, QUIET_PROJECT_LINK_VERSION, QUIET_OTHERS_LINK_VERSION, EPHEMERAL_LIVE_VERSION, PASSING_THREAD_VERSION, THREAD_MARKS_VERSION, TREE_NOTICES_LINK_VERSION, APEX_LISTED_VERSION, LINK_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate, decodeRuntimeFrame, encodeRuntimeFrame, WireError, serveRuntime } from "../dist/index.js"
+import { SESSION_ORDER_VERSION, ADVERTISE_LINK_VERSION, LEND_LINK_VERSION, QUIET_PROJECT_LINK_VERSION, QUIET_OTHERS_LINK_VERSION, EPHEMERAL_LIVE_VERSION, PASSING_THREAD_VERSION, THREAD_MARKS_VERSION, TREE_NOTICES_LINK_VERSION, APEX_LISTED_VERSION, PROJECTLESS_BORROWER_LINK_VERSION, lendableAt, LINK_VERSION, PROTOCOL_VERSION, SUPPORTED_VERSIONS, negotiate, decodeRuntimeFrame, encodeRuntimeFrame, WireError, serveRuntime } from "../dist/index.js"
 import { ReportedSessionSchema, ListedSessionSchema, LISTED_PLAN_CHARS, newerApex, rowsForLink, sameListed } from "../dist/thread-listing.js"
 import { createFakeGateway } from "../dist/fake-gateway.js"
 describe("Session order and borrowing version migration", () => {
@@ -17,10 +17,11 @@ describe("Session order and borrowing version migration", () => {
     assert.equal(THREAD_MARKS_VERSION, 29)
     assert.equal(TREE_NOTICES_LINK_VERSION, 30)
     assert.equal(APEX_LISTED_VERSION, 31)
-    assert.equal(LINK_VERSION, 31)
+    assert.equal(PROJECTLESS_BORROWER_LINK_VERSION, 32)
+    assert.equal(LINK_VERSION, 32)
     assert.equal(PROTOCOL_VERSION, 1)
     assert.equal(SUPPORTED_VERSIONS.min, 1)
-    for (const maximum of [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31]) assert.equal(negotiate(SUPPORTED_VERSIONS, { min: 1, max: maximum }), maximum)
+    for (const maximum of [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32]) assert.equal(negotiate(SUPPORTED_VERSIONS, { min: 1, max: maximum }), maximum)
   })
   test("order survives strict row, report and wire parsing from 22, and is stripped before 22 without mutating the owner", () => {
     for (const version of [20, 21, 22, 23, 24]) {
@@ -151,4 +152,16 @@ describe("Session order and borrowing version migration", () => {
       }
     } finally { await gateway.close() }
   })
+})
+
+test("a lending frame naming a Thread in no project goes only to a link that reads one", () => {
+  const borrower = { account: "acct", thread: "t-1", place: { kind: "machine", machine: "m1" } }
+  const ask = { type: "source-ask", ask: { borrower } }
+  const lent = { type: "lent", lease: { borrower } }
+  for (const frame of [ask, lent]) {
+    assert.equal(lendableAt(PROJECTLESS_BORROWER_LINK_VERSION - 1, frame), false)
+    assert.equal(lendableAt(PROJECTLESS_BORROWER_LINK_VERSION, frame), true)
+  }
+  assert.equal(lendableAt(PROJECTLESS_BORROWER_LINK_VERSION - 1, { type: "lent", lease: { borrower: { ...borrower, repository: "acme/web" } } }), true)
+  assert.equal(lendableAt(PROJECTLESS_BORROWER_LINK_VERSION - 1, { type: "lent-ended" }), true)
 })

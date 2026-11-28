@@ -171,7 +171,7 @@ export function mockSetup() {
     const now = Date.now()
     const name = folder.split("/").filter(Boolean).at(-1) ?? "shop"
     const repository = `acme/${name}`
-    const ours = <T extends { borrower: { repository: string } }>(entry: T): T => ({ ...entry, borrower: { ...entry.borrower, repository } })
+    const ours = <T extends { borrower: { repository?: string } }>(entry: T): T => ({ ...entry, borrower: { ...entry.borrower, repository } })
     const broker: BrokerReading = {
       account: ACCOUNT,
       grants: grants.map((entry) => (entry.scope.level === "project" ? { ...entry, scope: { ...entry.scope, repository } } : entry)),

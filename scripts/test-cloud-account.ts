@@ -1,5 +1,6 @@
 import type { CloudFinStatus } from "@mako/protocol/cloud-fins"
 import type { AccountEvent } from "@mako/protocol/account-events"
+import { PROJECTLESS_READER } from "@mako/protocol/borrow"
 /**
  * The desktop's Mako account against a fake cloud that speaks the gateway's
  * protocol: the loopback hand-off with PKCE, the encrypted credential, token
@@ -97,6 +98,8 @@ async function fakeCloud({ runtimeEnrolled, finLimits, tree = true }: { runtimeE
   /** Every live socket: whose device, and whether it's the account's connection or the device's runtime's link. */
   const sockets = new Map<ServerSocket, { device: string; kind: "account" | "runtime" | "client" }>()
   const calls: string[] = []
+  /** What each read of the broker said of the borrowers it reads (`PROJECTLESS_READER`). */
+  const borrowReaders: Array<string | undefined> = []
   const correlations: (string | string[] | undefined)[] = []
   /** What each ask to make a Thread sent. */
   const threads: Array<{ threadId: string; prepare?: boolean; standby?: boolean; standsByFor?: string }> = []
@@ -299,6 +302,11 @@ async function fakeCloud({ runtimeEnrolled, finLimits, tree = true }: { runtimeE
       for (const [socket, held] of sockets) if (held.device === removing) goodbye(socket, 4003)
       return send(204)
     }
+    if (request.method === "GET" && url.pathname.startsWith("/v1/borrow/")) {
+      const said = request.headers["x-mako-borrowers"]
+      borrowReaders.push(Array.isArray(said) ? said.join(",") : said)
+      return send(200, JSON.stringify({ grants: [], leases: [], events: [], asks: [] }))
+    }
     send(404, JSON.stringify({ title: "Not found" }))
   })
   /** The reason said first, as the gateway does: `closing` to a client, `refused` to a runtime; then the close. */
@@ -405,6 +413,7 @@ async function fakeCloud({ runtimeEnrolled, finLimits, tree = true }: { runtimeE
     moves,
     browsers,
     calls,
+    borrowReaders,
     correlations,
     threads,
     bases,
@@ -706,6 +715,16 @@ test("signing in through the browser enrolls this Mac, keeps its credential seal
 
   const port = new URL(page.searchParams.get("redirect_uri") ?? "").port
   await assert.rejects(fetch(`http://127.0.0.1:${port}/callback`), "the loopback listener is gone once signed in")
+})
+
+test("this Mac's reads of the broker say it reads a borrower in no project, so the cloud leaves none out", async () => {
+  const cloud = await fakeCloud()
+  const mac = await signedIn(cloud)
+  assert.deepEqual(await mac.accounts.borrowSnapshot(0), { grants: [], leases: [], events: [], asks: [] })
+  assert.deepEqual(await mac.accounts.borrowLeases(), [])
+  assert.equal(cloud.borrowReaders.length, 5)
+  assert.ok(cloud.borrowReaders.every((said) => said === PROJECTLESS_READER.value), JSON.stringify(cloud.borrowReaders))
+  assert.equal(PROJECTLESS_READER.header, "x-mako-borrowers")
 })
 
 test("the sign-in survives a restart and reconnects from the sealed credential", async () => {

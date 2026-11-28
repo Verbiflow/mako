@@ -1,5 +1,6 @@
 import type { JsonValue } from "@mako/host/contracts/json"
 import { z } from "zod"
+import { PROJECTLESS_READER } from "@mako/protocol/borrow"
 import { watchSocket } from "./probe"
 import { answered, CLOUD, unanswered } from "./reach"
 import { LIVE_FORM, clientEndpointPath, clientSessionOverSockets, problemType, renewAtMs, subprotocols, type ClientEndpoint, type ClientSessionOverSockets, type ConnectionCredential, type MessageSocket } from "@mako/protocol"
@@ -150,6 +151,8 @@ export class Gateway {
   async #rest<Body>(method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE", path: string, body: Body | undefined, tried: { network: boolean; renewed: boolean }, correlationId: string): Promise<JsonValue | undefined> {
     const { token } = await this.connection()
     const headers = new Headers({ authorization: `Bearer ${token}`, [CORRELATION_HEADER]: correlationId })
+    // This build reads a borrower in no project (a cloud Thread in no repository): the broker leaves none out of its answers.
+    if (path.startsWith("/v1/borrow/")) headers.set(PROJECTLESS_READER.header, PROJECTLESS_READER.value)
     const init: RequestInit = { method, headers }
     if (body !== undefined) {
       headers.set("content-type", "application/json")

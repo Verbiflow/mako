@@ -19,7 +19,7 @@ import type { LiveForm } from "./live-form.js"
 import { PortRequestSchema } from "./ports.js"
 import { SessionsReportSchema } from "./thread-listing.js"
 import type { Payload } from "./payload.js"
-import { VersionRangeSchema } from "./version.js"
+import { PROJECTLESS_BORROWER_LINK_VERSION, VersionRangeSchema } from "./version.js"
 
 /**
  * One runtime's connection to the gateway. A runtime proposes events with its own counter
@@ -347,3 +347,13 @@ export type GatewayFrame =
       operation: Operation
     })
   | (Extract<GatewayFrameEnvelope, { type: "media-watch" }> & { request: Payload })
+
+/**
+ * Whether a lending frame (`source-ask`, `lent`, `lent-ended`) can go on a link at `version`: one naming a borrower in
+ * no project only from `PROJECTLESS_BORROWER_LINK_VERSION`, since a device before it can't parse that borrower. Such a
+ * device is told nothing of it, as it was before those borrowers could borrow.
+ */
+export function lendableAt(version: number, frame: { type: "source-ask"; ask: { borrower: { repository?: string } } } | { type: "lent"; lease: { borrower: { repository?: string } } } | { type: "lent-ended" }): boolean {
+  if (version >= PROJECTLESS_BORROWER_LINK_VERSION || frame.type === "lent-ended") return true
+  return (frame.type === "source-ask" ? frame.ask.borrower : frame.lease.borrower).repository !== undefined
+}
