@@ -256,14 +256,19 @@ export function StageStrip({
  */
 export function WorkbenchStrip({ children, end, ref }: { children: ReactNode; end?: ReactNode; ref?: Ref<HTMLDivElement> }) {
   return (
-    <div ref={ref} className="flex h-10 shrink-0 items-center bg-shell">
+    // Chrome on the shell's tone atop its pane, which a sliding sidebar's fill leaves be (`side-slide.ts`).
+    <div ref={ref} data-slide-chrome="" className="flex h-10 shrink-0 items-center bg-shell">
       <div
         role="tablist"
         className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto px-2"
       >
         {children}
       </div>
-      {end}
+      {end ? (
+        <div data-slide-anchor="end" className="flex shrink-0 items-center">
+          {end}
+        </div>
+      ) : null}
     </div>
   )
 }

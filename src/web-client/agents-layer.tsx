@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react"
+import { useCallback, useEffect, useRef, useState } from "react"
 import { ConversationAgents } from "@/components/inspector/agents-panel"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { activeAcp, useAcp } from "@/state/acp"
@@ -7,6 +7,7 @@ import { filesOpenStore, leftFiles } from "./files-open"
 import { leftReview, reviewOpenStore } from "./review-open"
 import { setupOpenStore } from "./setup-open"
 import { WebSideRail } from "./side-rail"
+import { useDeskSideLeaving } from "./desk-side-leaving"
 
 /**
  * Agents in the right rail of a laptop's browser, as the desktop draws it: the roster, where Changes and Files go, the
@@ -42,9 +43,14 @@ export function AgentsLayer({ place }: { place: string | undefined }) {
     if (was.current !== place) closeAgents()
     was.current = place
   }, [place])
-  if (!open || !onScreen || !roster) return null
+  // Kept on screen while the right rail slides away with it (`desk-side.tsx`).
+  const sideLeaving = useDeskSideLeaving()
+  const [showing, setShowing] = useState(false)
+  const shows = open && Boolean(onScreen && roster)
+  if (shows !== showing && (shows || !sideLeaving)) setShowing(shows)
+  if (!(shows || (showing && sideLeaving)) || !onScreen || !roster) return null
   return (
-    <div className="rv-layer" data-form="desk">
+    <div className="rv-layer animate-switch" data-form="desk">
       <div className="rv-screen">
         <WebSideRail active="agents" conversation={onScreen} />
         <div className="flex min-h-0 flex-1 flex-col">

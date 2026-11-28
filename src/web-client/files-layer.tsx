@@ -6,6 +6,7 @@ import { EASE_OUT, EASE_SWIFT, reducedMotion } from "./motion"
 import { closeFiles, followFilesHistory, leftFiles, useFilesOpen, type FilesOpen } from "./files-open"
 import { leftReview, reviewOpenStore } from "./review-open"
 import type { WebForm } from "./route"
+import { useDeskSideLeaving } from "./desk-side-leaving"
 
 /**
  * Files on the web: a conversation's folder, browsed and searched on the computer that runs it, where Changes goes
@@ -41,6 +42,9 @@ export function FilesLayer({ form, place }: { form: WebForm; place: string | und
 
   const [shown, setShown] = useState<FilesOpen | null>(open)
   if (open && shown !== open) setShown(open)
+  // On a laptop the right rail slides as a whole (`desk-side.tsx`): this keeps what it showed while that leaves.
+  const sideLeaving = useDeskSideLeaving()
+  if (form === "desk" && !open && shown && !sideLeaving) setShown(null)
   const layer = useRef<HTMLDivElement>(null)
   const wasOpen = useRef(false)
   useLayoutEffect(() => {
@@ -48,8 +52,9 @@ export function FilesLayer({ form, place }: { form: WebForm; place: string | und
     const isOpen = open !== null
     if (isOpen === wasOpen.current || !element) return
     wasOpen.current = isOpen
+    if (form === "desk") return
     const slide = form === "phone" && !reducedMotion()
-    const away: Keyframe = slide ? { transform: "translate3d(100%, 0, 0)" } : { opacity: 0, transform: form === "desk" ? "translate3d(12px, 0, 0)" : "none" }
+    const away: Keyframe = slide ? { transform: "translate3d(100%, 0, 0)" } : { opacity: 0, transform: "none" }
     const here: Keyframe = slide ? { transform: "none" } : { opacity: 1, transform: "none" }
     if (isOpen) {
       element.animate([away, here], { duration: slide ? 240 : 160, easing: EASE_OUT })
@@ -60,7 +65,7 @@ export function FilesLayer({ form, place }: { form: WebForm; place: string | und
   }, [open, form])
   if (!shown) return null
   return (
-    <div ref={layer} className="rv-layer" data-form={form} data-closing={open ? undefined : ""}>
+    <div ref={layer} className={form === "desk" ? "rv-layer animate-switch" : "rv-layer"} data-form={form} data-closing={open ? undefined : ""}>
       {screen ? <screen.FilesScreen key={shown.conversation} open={shown} touch={form !== "desk"} /> : failed ? <CodeUnavailable what="Files" retry={retry} onClose={closeFiles} /> : <CodeLoading what="Files" slow={slow} />}
     </div>
   )

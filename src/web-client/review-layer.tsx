@@ -5,6 +5,7 @@ import { CodeLoading, CodeUnavailable } from "./code-unavailable"
 import { EASE_OUT, EASE_SWIFT, reducedMotion } from "./motion"
 import { closeReview, deskReviewCode, followReviewHistory, leftReview, openReview, touchReviewCode, useReviewOpen, type ReviewOpen } from "./review-open"
 import type { WebForm } from "./route"
+import { useDeskSideLeaving } from "./desk-side-leaving"
 
 /**
  * Where Changes draws, mounted once by each form: over the Thread on a phone, sliding in from the right as a screen
@@ -46,15 +47,19 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
   const [shown, setShown] = useState<ReviewOpen | null>(open)
   const layer = useRef<HTMLDivElement>(null)
   if (open && shown !== open) setShown(open)
-  // In from the right on a phone, as a screen comes; a fade on a tablet's pane and the desk's. Out on the leaving curve, faster.
+  // On a laptop the right rail slides as a whole (`desk-side.tsx`): this keeps what it showed while that leaves.
+  const sideLeaving = useDeskSideLeaving()
+  if (form === "desk" && !open && shown && !sideLeaving) setShown(null)
+  // In from the right on a phone, as a screen comes; a fade on a tablet's pane. Out on the leaving curve, faster. A laptop's slides with its rail.
   const wasOpen = useRef(false)
   useLayoutEffect(() => {
     const element = layer.current
     const isOpen = open !== null
     if (isOpen === wasOpen.current || !element) return
     wasOpen.current = isOpen
+    if (form === "desk") return
     const slide = form === "phone" && !reducedMotion()
-    const away: Keyframe = slide ? { transform: "translate3d(100%, 0, 0)" } : { opacity: 0, transform: form === "desk" ? "translate3d(12px, 0, 0)" : "none" }
+    const away: Keyframe = slide ? { transform: "translate3d(100%, 0, 0)" } : { opacity: 0, transform: "none" }
     const here: Keyframe = slide ? { transform: "none" } : { opacity: 1, transform: "none" }
     if (isOpen) {
       element.animate([away, here], { duration: slide ? 240 : 160, easing: EASE_OUT })
@@ -65,7 +70,7 @@ export function ReviewLayer({ form, place }: { form: WebForm; place: string | un
   }, [open, form])
   if (!shown) return null
   return (
-    <div ref={layer} className="rv-layer" data-form={form} data-closing={open ? undefined : ""}>
+    <div ref={layer} className={form === "desk" ? "rv-layer animate-switch" : "rv-layer"} data-form={form} data-closing={open ? undefined : ""}>
       {!code ? failed ? <CodeUnavailable what="Changes" retry={retry} onClose={closeReview} /> : <CodeLoading what="Changes" slow={slow} /> : "DeskReview" in code ? <code.DeskReview key={shown.conversation} open={shown} onClose={closeReview} /> : <code.ReviewScreen key={shown.conversation} open={shown} onClose={closeReview} />}
     </div>
   )

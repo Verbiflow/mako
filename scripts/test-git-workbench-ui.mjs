@@ -672,6 +672,8 @@ async function check() {
         )
       )
         await click('[aria-label="Show the right sidebar"]')
+      // The sidebar slides in: its tabs are pressed where they come to rest.
+      await until("!document.querySelector('.companion-panel')?.parentElement?.getAnimations().length")
       await click('[data-surface-id="changes"]')
       await until("Boolean(document.querySelector('[data-change-list]'))")
       const metrics = await evaluate(

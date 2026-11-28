@@ -1,4 +1,4 @@
-import { memo, useContext, useEffect, useRef, useState } from "react"
+import { memo, useCallback, useContext, useEffect, useRef, useState } from "react"
 import { Composer } from "@/components/composer/composer"
 import { Transcript } from "@/components/transcript/transcript"
 import { ThreadViewer } from "@/components/viewer/thread-viewer"
@@ -14,6 +14,7 @@ import { AutomationRunLine } from "@/components/automations/automation-run-line"
 import { SessionDraftReceipt } from "@/components/stage/session-draft-receipt"
 import { openSessionDraft, useThreadGroups } from "@/state/thread-groups"
 import { Divider } from "@/components/shell/divider"
+import { useSideSlide } from "@/components/shell/side-slide"
 import { ErrorBoundary } from "@/components/shell/error-boundary"
 import { useSurfaces } from "@/extend/surfaces"
 import { APEX_COMPANION, shownCompanion, stage, useStage } from "@/state/stage"
@@ -95,6 +96,8 @@ export function Stage() {
   // companion nobody asked for this launch would cover the Thread, so it
   // stays closed there and the title bar's toggle brings it back.
   const seeded = useRef(false)
+  // The launch's own opening of the remembered companion: it's there, not asked for, so it doesn't slide in.
+  const restoring = useRef(false)
   useEffect(() => {
     if (seeded.current || !activeId) return
     seeded.current = true
@@ -104,7 +107,10 @@ export function Stage() {
     if (remembered && remembered.placement !== "bottom") {
       const least = Math.max(COMPANION_MIN_DEFAULT, ...surfaces.filter((surface) => surface.placement !== "bottom").map((surface) => surface.minWidth ?? 0))
       const wide = stageRef.current?.getBoundingClientRect().width
-      if (!wide || fitsBeside(wide, least)) stage.open(remembered.id, { remember: false })
+      if (!wide || fitsBeside(wide, least)) {
+        restoring.current = true
+        stage.open(remembered.id, { remember: false })
+      }
     } else if (last) setPref("lastCompanion", null)
   }, [activeId, surfaces])
 
@@ -156,6 +162,33 @@ export function Stage() {
   )
   const covered = wantsCover
 
+  // The right sidebar slides in beside the workbench and out over it. It doesn't when it comes with another tab or
+  // Apex (an Apex opens on its Overview by itself), or while it covers the workbench, where it simply arrives.
+  const companionGroup = useRef<HTMLDivElement>(null)
+  const workbenchPane = useCallback(() => {
+    const pane = workbenchRef.current
+    return pane && pane.getClientRects().length > 0 ? pane : null
+  }, [])
+  const quietCompanion = useCallback(() => {
+    const quiet = restoring.current || companionGroup.current?.dataset.covered !== undefined
+    restoring.current = false
+    return quiet
+  }, [])
+  const [kept, setKept] = useState<{ surface: NonNullable<typeof sideSurface>; width: number; covered: boolean } | undefined>(undefined)
+  if (sideSurface && (kept?.surface !== sideSurface || kept.width !== width || kept.covered !== covered)) setKept({ surface: sideSurface, width, covered })
+  const companionSlide = useSideSlide({
+    open: Boolean(sideSurface),
+    side: "right",
+    panel: companionGroup,
+    pane: workbenchPane,
+    context: `${activeId}\u0000${apex ?? ""}`,
+    quiet: quietCompanion,
+  })
+  const shownSide = sideSurface ?? (companionSlide.leaving ? kept?.surface : undefined)
+  const shownWidth = sideSurface ? width : (kept?.width ?? width)
+  const leaving = companionSlide.leaving && !sideSurface
+  const coveredNow = sideSurface ? covered : Boolean(kept?.covered)
+
   return (
     <div
       ref={stageRef}
@@ -173,50 +206,60 @@ export function Stage() {
           className={cn("flex-1", covered && "hidden")}
         />
 
-        {sideSurface && !covered ? (
-          <Divider
-            side="right"
-            size={width}
-            min={min}
-            max={available ? Math.max(available.width - 450 - 1, min) : 9999}
-            onResize={(next) => {
-              if (companionRef.current)
-                companionRef.current.style.width = `${next}px`
-            }}
-            onCommit={(next) =>
-              setPref("surfaceWidths", {
-                ...prefsStore.get().surfaceWidths,
-                ["right-sidebar"]: next,
-              })
-            }
-          />
-        ) : null}
-
-        {sideSurface ? (
+        {shownSide ? (
           <div
-            ref={companionRef}
-            style={covered ? undefined : { width }}
+            ref={companionGroup}
+            data-companion-leaving={leaving || undefined}
+            data-covered={coveredNow || undefined}
             className={cn(
-              "companion-panel relative flex min-h-0 flex-col overflow-hidden bg-shell",
-              covered && "min-w-0 flex-1"
+              "flex min-h-0",
+              coveredNow ? "min-w-0 flex-1" : "shrink-0",
+              leaving && "pointer-events-none absolute inset-y-0 right-0 z-20"
             )}
           >
-            {covered ? (
-              <div className="flex h-8 shrink-0 items-center justify-end px-2 text-label text-faint">
-                <button
-                  type="button"
-                  onClick={() => stage.close()}
-                  className="pressable flex items-center gap-1 px-1.5 py-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
-                >
-                  <ArrowLeftIcon className="size-3" />
-                  Workbench
-                </button>
-              </div>
+            {!coveredNow ? (
+              <Divider
+                side="right"
+                size={shownWidth}
+                min={min}
+                max={available ? Math.max(available.width - 450 - 1, min) : 9999}
+                onResize={(next) => {
+                  if (companionRef.current)
+                    companionRef.current.style.width = `${next}px`
+                }}
+                onCommit={(next) =>
+                  setPref("surfaceWidths", {
+                    ...prefsStore.get().surfaceWidths,
+                    ["right-sidebar"]: next,
+                  })
+                }
+              />
             ) : null}
-            <SideRail surfaces={sideSurfaces} activeId={sideSurface.id} />
-            <ErrorBoundary key={sideSurface.id} surface={sideSurface.label}>
-              <CompanionBody render={sideSurface.render} />
-            </ErrorBoundary>
+            <div
+              ref={companionRef}
+              style={coveredNow ? undefined : { width: shownWidth }}
+              className={cn(
+                "companion-panel relative flex min-h-0 flex-col overflow-hidden bg-shell",
+                coveredNow && "animate-enter min-w-0 flex-1"
+              )}
+            >
+              {coveredNow ? (
+                <div className="flex h-8 shrink-0 items-center justify-end px-2 text-label text-faint">
+                  <button
+                    type="button"
+                    onClick={() => stage.close()}
+                    className="pressable flex items-center gap-1 px-1.5 py-0.5 text-muted-foreground hover:bg-fill-hover hover:text-foreground"
+                  >
+                    <ArrowLeftIcon className="size-3" />
+                    Workbench
+                  </button>
+                </div>
+              ) : null}
+              <SideRail surfaces={sideSurfaces} activeId={shownSide.id} />
+              <ErrorBoundary key={shownSide.id} surface={shownSide.label}>
+                <CompanionBody render={shownSide.render} />
+              </ErrorBoundary>
+            </div>
           </div>
         ) : null}
       </div>
@@ -258,7 +301,7 @@ export function Stage() {
 const AgentSurface = memo(function AgentSurface({ session, composer, paneId }: AgentSurfaceProps) {
   const scope = usePaneScope(session)
   return (
-    <main className="agent-surface relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+    <main data-slide-anchor="center" className="agent-surface relative isolate flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
       {composer ? <ChildBreadcrumb /> : null}
       {composer ? <AutomationRunLine /> : null}
       <ConversationScopeContext.Provider value={scope}>

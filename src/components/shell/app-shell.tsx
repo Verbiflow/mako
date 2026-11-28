@@ -2,7 +2,7 @@ import { HostConnectionNotice } from "./host-connection-notice"
 import { ApexDialog } from "@/components/apexes/apex-dialog"
 import { FileEventsNotice } from "./file-events-notice"
 import { ApplicationDialog, ApplicationNotice } from "@/components/settings/application-dialog"
-import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { CommandPalette } from "@/components/palette/command-palette"
 import { OpenProjectPalette } from "@/components/palette/open-project-palette"
@@ -12,6 +12,7 @@ import { usePlugins } from "@/extend/use-plugins"
 import { SessionRail } from "@/components/rail/session-rail"
 import { TitleBar } from "@/components/shell/title-bar"
 import { Divider } from "@/components/shell/divider"
+import { useSideSlide } from "@/components/shell/side-slide"
 import { Stage } from "@/components/stage/stage"
 import { Action, Blank } from "@/components/ui/kit"
 import { useDeskCommands } from "@/desk/use-desk-commands"
@@ -21,6 +22,7 @@ import { followFirstRunAgent } from "@/state/default-agent"
 import { hostConnectionStore } from "@/state/host-connection"
 import { bindTheme, prefsStore, setPref, usePrefs } from "@/state/prefs"
 import { PlugZapIcon } from "lucide-react"
+import { cn } from "@/lib/utils"
 import { WorkspaceFocusProvider } from "@/components/stage/workspace-focus"
 
 /**
@@ -42,6 +44,16 @@ export function AppShell() {
   const railOpen = usePrefs((prefs) => prefs.railOpen)
 
   const railRef = useRef<HTMLDivElement>(null)
+  const railGroup = useRef<HTMLDivElement>(null)
+  const stageColumn = useRef<HTMLDivElement>(null)
+  // The pane the rail's edge meets: the workbench, unless a sidebar on the right covers it.
+  const workbench = useCallback(() => {
+    const pane = stageColumn.current?.querySelector<HTMLElement>("[data-workbench]")
+    return pane && pane.getClientRects().length > 0 ? pane : null
+  }, [])
+  const rail = useSideSlide({ open: railOpen, side: "left", panel: railGroup, pane: workbench })
+  // The rail itself, the same element on every render: closing it re-renders the shell, never the rail's rows.
+  const railBody = useMemo(() => <SessionRail />, [])
 
   useEffect(() => bindTheme(), [])
   useEffect(() => {
@@ -118,14 +130,18 @@ export function AppShell() {
           <ApplicationNotice />
           <FileEventsNotice />
           <div className="relative z-10 flex min-h-0 flex-1">
-            {railOpen ? (
-              <>
+            {rail.present ? (
+              <div
+                ref={railGroup}
+                data-rail-leaving={rail.leaving || undefined}
+                className={cn("flex min-h-0 shrink-0", rail.leaving && "pointer-events-none absolute inset-y-0 left-0 z-20")}
+              >
                 <div
                   ref={railRef}
                   style={{ width: prefsStore.get().railWidth }}
                   className="flex min-h-0 shrink-0 flex-col overflow-hidden"
                 >
-                  <SessionRail />
+                  {railBody}
                 </div>
                 <Divider
                   side="left"
@@ -135,7 +151,7 @@ export function AppShell() {
                   onResize={resizeRail}
                   onCommit={(next) => setPref("railWidth", next)}
                 />
-              </>
+              </div>
             ) : null}
 
             {phase === "detached" ? (
@@ -160,7 +176,7 @@ export function AppShell() {
                 />
               </main>
             ) : (
-              <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+              <div ref={stageColumn} className="flex min-h-0 min-w-0 flex-1 flex-col">
                 <Stage />
               </div>
             )}

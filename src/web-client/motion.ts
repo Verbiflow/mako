@@ -5,13 +5,10 @@
  * (`presentY`/`presentX`) and is never locked. Under reduced motion every animation is a short fade or nothing.
  */
 
-/** The desk's two curves (`--ease-out`, `--ease-swift`) for the Web Animations API, which can't read a custom property. */
-export const EASE_OUT = "cubic-bezier(0.22, 1, 0.36, 1)"
-export const EASE_SWIFT = "cubic-bezier(0.2, 0, 0, 1)"
+import { reducedMotion } from "@/lib/motion"
 
-export function reducedMotion(): boolean {
-  return matchMedia("(prefers-reduced-motion: reduce)").matches
-}
+/** The desk's two curves and its reduced-motion test, which the phone's motion shares (`src/lib/motion.ts`). */
+export { EASE_OUT, EASE_SWIFT, reducedMotion } from "@/lib/motion"
 
 /** How a spring settles: `response` is roughly the seconds it takes, `damping` 1 for no overshoot, under 1 for some. */
 export interface Spring {
