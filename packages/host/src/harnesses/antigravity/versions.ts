@@ -11,7 +11,10 @@ const MANIFESTS = "https://antigravity-cli-auto-updater-974169037036.us-central1
 export const ANTIGRAVITY_VERSIONS: HarnessVersions = {
   tested: "1.5.15",
   oldest: "1.5.15",
-  feed: { manifest: MANIFESTS.replace("{target}", antigravityTarget() ?? "darwin_arm64") },
+  // This machine's own manifest, named when it's first read: which build a Linux machine runs is a file it has.
+  get feed() {
+    return { manifest: MANIFESTS.replace("{target}", antigravityTarget() ?? "darwin_arm64") }
+  },
   digests: {
     manifests: MANIFESTS,
     targets: ["darwin_arm64", "darwin_amd64", "linux_amd64", "linux_arm64", "linux_amd64_musl", "linux_arm64_musl", "windows_amd64", "windows_arm64"],
