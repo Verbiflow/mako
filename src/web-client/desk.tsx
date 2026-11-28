@@ -1,4 +1,6 @@
 import { useLimitContinueNotice } from "@/components/composer/account-notice"
+import { BOARD_MAX_FOLDERS } from "@mako/host/contracts/project-pulls"
+import { PullsPageView } from "@/components/pulls/pulls-page"
 import { revealFolder } from "@/state/rail-ranks"
 import { useAskNotice } from "@/components/composer/agent-ask-card"
 import { askBringBack } from "./moves"
@@ -98,6 +100,8 @@ function useWebAskNotice() {
  */
 export default function Desk({ route, navigate, back, onStarted }: { route: WebRoute; navigate: (route: WebRoute, how?: { replace?: boolean }) => void; back: () => void; onStarted: (started: Started, where: string) => void }) {
   const list = useAccountList((state) => state)
+  // The Pull requests page's projects: each folder the account's Sessions are filed under, asked of its own computer.
+  const projectFolders = useMemo(() => [...new Set(list.rows.flatMap((row) => row.project?.folder ?? row.folder ?? []))].slice(0, BOARD_MAX_FOLDERS), [list.rows])
   const { threads } = useMemo(() => foldThreads(list), [list])
   const starting = route.kind === "new"
   const under: ScreenRoute = route.kind === "new" ? (route.over ?? { kind: "list" }) : route
@@ -208,6 +212,7 @@ export default function Desk({ route, navigate, back, onStarted }: { route: WebR
             <DeskEmpty onNew={() => newThread()} />
           )}
           <InboxView />
+          <PullsPageView folders={projectFolders} />
         </main>
         <DeskSide place={place} pane={thePane}>
           <ReviewLayer form="desk" place={place} />

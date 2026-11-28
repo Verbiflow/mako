@@ -180,7 +180,7 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   await until(`!document.querySelector('[data-automations]')`, "same Thread after Automations")
   assert.equal(await evaluate(`document.querySelector('.composer-input')?.value`), "Keep this unsent navigation draft")
 
-  // Setup is a Settings destination, and Pull requests an external URL, not Inbox-like overlays.
+  // Setup is a Settings destination, not an Inbox-like overlay.
   for (const destination of ["setup"]) {
     await openInbox()
     await click(`[data-rail-top-row="${destination}"]`)
@@ -194,13 +194,17 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
     await until(`!document.querySelector('[data-inbox]')`, "same Thread after Settings")
     assert.equal(await evaluate(`document.querySelector('.composer-input')?.value`), "Keep this unsent navigation draft")
   }
+  // Pull requests is a page over the conversation as Automations is: it takes the Inbox's place, and the Thread comes
+  // back with its draft.
   await evaluate(`window.navigationUrls = []; const original = window.mako.openUrl; window.mako.openUrl = async (url) => {window.navigationUrls.push(url); return original(url)}; true`)
   await openInbox()
   await click('[data-rail-top-row="pulls"]')
-  await until(`window.navigationUrls.length === 1`, "Pull requests opens external GitHub")
-  assert.match(await evaluate(`window.navigationUrls[0]`), /^https:\/\/github\.com\/[^/]+\/[^/]+\/pulls$/)
-  assert.equal(await evaluate(`Boolean(document.querySelector('[data-inbox]'))`), true, "external GitHub leaves the current page in place")
-  assert.equal(await evaluate(`Boolean(document.querySelector('[aria-label="Search settings"]'))`), false)
+  await until(`Boolean(document.querySelector('[data-pulls-page]')) && !document.querySelector('[data-inbox]')`, "Pull requests opens its page over the conversation")
+  assert.deepEqual(await evaluate(`window.navigationUrls`), [], "Pull requests no longer leaves for github.com")
+  await click(liveSelector)
+  await until(`!document.querySelector('[data-pulls-page]')`, "same Thread after Pull requests")
+  assert.equal(await evaluate(`document.querySelector('.composer-input')?.value`), "Keep this unsent navigation draft")
+  await openInbox()
   await click('[data-rail-top-row="view.command-palette"]')
   await until(`Boolean(document.querySelector('[aria-label="Command palette"]'))`, "Search opens command palette")
   await page.debugger.sendCommand("Input.dispatchKeyEvent", { type: "keyDown", key: "Escape", code: "Escape", windowsVirtualKeyCode: 27 })
@@ -209,7 +213,7 @@ export async function checkInboxNavigation({ window, page, base, evaluate, until
   assert.equal(await evaluate(`Boolean(document.querySelector('[data-inbox]'))`), true, "dismissing Search returns to Inbox")
   await click('[data-rail-top-row="session.new"]')
   await until(`!document.querySelector('[data-inbox]')`, "New thread leaves Inbox")
-  console.log("PASS: Automations over the conversation, Setup Settings and Back, external Pull requests, Search and New thread")
+  console.log("PASS: Automations and Pull requests over the conversation, Setup Settings and Back, Search and New thread")
 
   await window.loadURL(`${base}?mock&app=rail`)
   await until(`Boolean(document.querySelector('[data-thread-row][data-flip-key="/mock/devin.jsonl"]'))`, "native/folded rail fixture")

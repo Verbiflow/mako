@@ -26,7 +26,7 @@ import type { ProjectAppSetup } from "./project-app.js"
 import type { WorktreeRetentionSettings, WorktreeRetentionReport, ThreadWorktrees, WorktreeBranch, WorktreeInventory, WorktreePull, WorktreeReview, WorktreeStartPoint, WorktreeSummariesHeld, WorktreeSummary, WorktreeRemoval, WorktreeUpdate } from "./thread-worktrees.js"
 import type { MergeMethod } from "./git-actions.js"
 import type { PullRequestSearchRequest, PullRequestSearchResult } from "./pull-request-search.js"
-import type { Board, BoardRequest } from "./project-pulls.js"
+import type { Board, BoardPullDetail, BoardPullRequest, BoardRequest } from "./project-pulls.js"
 import type { ChatFolders } from "./chat-folders.js"
 import type { ChangeUsage, LostVersion, ThreadChangeSummary } from "./thread-changes.js"
 import type { FileReferenceSource, FileResolution } from "./file-references.js"
@@ -1047,6 +1047,8 @@ export function createMakoBridge(transport: BridgeTransport) {
     pullBranches: () => invokeTrustedHost<string[]>("mako:pull-branches"),
     /** Projects' pull requests or issues across their GitHub repositories, each repository read on its own. */
     projectBoard: (request: BoardRequest) => invokeTrustedHost<Board>("mako:project-board", request),
+    /** One pull request a board listed: its words, checks, reviews and files. */
+    boardPull: (request: BoardPullRequest) => invokeTrustedHost<BoardPullDetail>("mako:board-pull", request),
     createPull: (options: {
       title: string
       body: string

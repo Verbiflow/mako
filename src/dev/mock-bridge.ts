@@ -1,5 +1,5 @@
 import { getMako } from "@/lib/bridge"
-import { mockBoard } from "@/dev/mock-board"
+import { mockBoard, mockPullDetail } from "@/dev/mock-board"
 import type { LimitNoticeChoice } from "@mako/host/contracts/agents"
 import { fixtureHarnesses } from "./harness-fixtures"
 import type { ToolStep } from "@mako/host/contracts/tool-steps"
@@ -1967,6 +1967,7 @@ export function installMockBridge() {
     }),
     pullBranches: async () => ["main", "release"],
     // The Apex scene's project has no GitHub remote, so its rail is the one its checks measure.
+    boardPull: async (request) => mockPullDetail(request),
     projectBoard: async (request) => scene === "apex" ? { kind: request.kind, projects: request.folders.map((folder) => ({ folder, repositories: [] })), repositories: {}, pulls: [], issues: [] } : mockBoard(request),
     createPull: async (options) => {
       if (!sinceWorktree) return null

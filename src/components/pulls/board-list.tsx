@@ -37,7 +37,8 @@ export function BoardList({ place, kind, rows, projects, now, selected, onSelect
   const folded = usePullsView((state) => state[place].folded)
   const sections = useSections(kind, rows, place === "panel" ? "state" : grouping, now)
   const multi = useMemo(() => multiRepositoryKeys(projects), [projects])
-  const width = useMemo(() => codeWidth(rows.map((row) => rowCode(row, multi))), [rows, multi])
+  // Measured from the rows drawn: a folded section's longer codes don't push every title right.
+  const width = useMemo(() => codeWidth(sections.flatMap((section) => (folded[`${kind}:${section.key}`] ?? section.folded) ? [] : section.rows.map((row) => rowCode(row, multi)))), [sections, folded, kind, multi])
   return (
     <>
       {sections.map((section) => {

@@ -15,6 +15,9 @@ import {
   type BoardProblem,
   type BoardProject,
   type BoardPull,
+  type BoardPullDetail,
+  type BoardPullFile,
+  type BoardPullRequest,
   type BoardRepository,
   type BoardRequest,
   type ChecksRollup,
@@ -113,9 +116,24 @@ const RestIssue = z.looseObject({
 const RestPulls = z.array(RestPull)
 const RestIssues = z.array(RestIssue)
 const CommandFailure = z.object({ stderr: z.string().optional(), message: z.string().optional(), code: z.unknown().optional() })
+const RestPullDetail = z.looseObject({
+  body: z.string().nullable().optional(),
+  additions: z.number().optional(),
+  deletions: z.number().optional(),
+  changed_files: z.number().optional(),
+  mergeable_state: z.string().optional(),
+  head: z.looseObject({ sha: z.string() }),
+})
+const RestFiles = z.array(z.looseObject({
+  filename: z.string(),
+  status: z.enum(["added", "modified", "removed", "renamed", "copied", "changed", "unchanged"]),
+  additions: z.number(),
+  deletions: z.number(),
+  patch: z.string().optional(),
+}))
 const CheckRuns = z.looseObject({
   total_count: z.number(),
-  check_runs: z.array(z.looseObject({ status: z.string(), conclusion: z.string().nullable().optional() })),
+  check_runs: z.array(z.looseObject({ name: z.string().optional(), status: z.string(), conclusion: z.string().nullable().optional(), html_url: z.string().nullable().optional() })),
 })
 const Reviews = z.array(z.looseObject({ state: z.string(), user: User, submitted_at: z.string().nullable().optional() }))
 
@@ -243,6 +261,44 @@ export class ProjectBoard {
       else board.issues.push(...held.issues.open?.rows ?? [], ...held.issues.closed?.rows ?? [])
     }
     return board
+  }
+
+  /**
+   * One pull request opened from a list: its words, checks, reviews and files, each a conditional GET in a checkout
+   * of its repository that a list already read. Asked when the person opens it, never on a timer.
+   */
+  async detail(request: BoardPullRequest): Promise<BoardPullDetail> {
+    const held = this.#held.get(repositoryKey(request.repository))
+    if (!held) throw new Error("Open the list this pull request is in first.")
+    const base = `repos/${held.name}/pulls/${request.number}`
+    const pull = RestPullDetail.parse(JSON.parse(await this.#deps.api(held.root, base)))
+    const [files, runs, reviews] = await Promise.all([
+      this.#deps.api(held.root, `${base}/files?per_page=100`).then((body) => RestFiles.parse(JSON.parse(body))),
+      this.#deps.api(held.root, `repos/${held.name}/commits/${pull.head.sha}/check-runs?per_page=100`).then((body) => CheckRuns.parse(JSON.parse(body)).check_runs),
+      this.#deps.api(held.root, `${base}/reviews?per_page=100`).then((body) => Reviews.parse(JSON.parse(body))),
+    ])
+    const latest = new Map<string, BoardPullDetail["reviews"][number]>()
+    for (const review of reviews) {
+      const login = review.user?.login
+      if (!login) continue
+      const state = review.state === "APPROVED" ? "approved" : review.state === "CHANGES_REQUESTED" ? "changes" : review.state === "COMMENTED" ? "commented" : undefined
+      if (state && (state !== "commented" || !latest.has(login))) latest.set(login, { login, state })
+    }
+    return {
+      body: pull.body ?? "",
+      additions: pull.additions ?? 0,
+      deletions: pull.deletions ?? 0,
+      changedFiles: pull.changed_files ?? files.length,
+      ...(pull.mergeable_state && { mergeable: pull.mergeable_state }),
+      checks: runs.map((run) => {
+        const conclusion = (run.conclusion ?? "").toLowerCase()
+        const state = run.status !== "completed" ? "running" : conclusion === "success" || conclusion === "neutral" ? "passed" : conclusion === "skipped" || conclusion === "cancelled" || conclusion === "stale" ? "skipped" : "failed"
+        return { name: run.name ?? "check", state, ...(run.html_url && { url: run.html_url }) } satisfies BoardPullDetail["checks"][number]
+      }),
+      reviews: [...latest.values()],
+      files: files.map((file): BoardPullFile => ({ path: file.filename, status: file.status, additions: file.additions, deletions: file.deletions, ...(file.patch !== undefined && { patch: file.patch }) })),
+      moreFiles: (pull.changed_files ?? 0) > files.length,
+    }
   }
 
   /** A write or a Git action moved something: the next read asks again (each still a conditional request). */

@@ -611,7 +611,7 @@ export function AgentThreads() {
     [folders, listed, resting, held, recent, liveByFolder, pages, collapsed, hiddenProjects, showAllPinned, showAllFolders, showHidden]
   )
   useRowFlip(scroller, `${grouping}:${searchActive}`, rowOrder)
-  const inboxOpen = useInboxView((state) => state.open || state.automations)
+  const inboxOpen = useInboxView((state) => state.open || state.automations || state.pulls)
   const quietPinned = held
   const shownPinned = showAllPinned
     ? quietPinned

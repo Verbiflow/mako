@@ -1,4 +1,4 @@
-import { boardKey, type Board, type BoardIssue, type BoardPull, type BoardRequest } from "@mako/host/contracts/project-pulls"
+import { boardKey, type BoardPullDetail, type BoardPullRequest, type Board, type BoardIssue, type BoardPull, type BoardRequest } from "@mako/host/contracts/project-pulls"
 
 /**
  * The mock bridge's pull requests and issues: every project folder holds two repositories (`acme/api`, `acme/web`)
@@ -43,5 +43,29 @@ export function mockBoard(request: BoardRequest, now = Date.now()): Board {
       issue("acme/web", 133, "Dark mode contrast on faint text", { updatedAt: now - 30 * hour }),
       issue("acme/api", 498, "Rate limit headroom alarm", { state: "closed", closedAt: now - 2 * 24 * hour }),
     ] : [],
+  }
+}
+
+/** One mock pull request opened: a description, its checks and two files. */
+export function mockPullDetail(request: BoardPullRequest): BoardPullDetail {
+  return {
+    body: `## What changed\n\nRetries now back off: 1 s, 4 s, 16 s, then the delivery parks.\n\n- One queue per endpoint\n- A parked delivery shows in the endpoint's page (${request.repository}#${request.number})`,
+    additions: 48,
+    deletions: 12,
+    changedFiles: 2,
+    mergeable: "unstable",
+    checks: [
+      { name: "lint", state: "failed" },
+      { name: "e2e", state: "failed" },
+      { name: "typecheck", state: "passed" },
+      { name: "unit", state: "passed" },
+      { name: "build", state: "passed" },
+    ],
+    reviews: [{ login: "teammate", state: "commented" }],
+    files: [
+      { path: "src/webhooks/retry.ts", status: "modified", additions: 40, deletions: 10, patch: "@@ -1,5 +1,9 @@\n import { queue } from \"./queue\"\n-const DELAY = 1000\n+const DELAYS = [1000, 4000, 16000]\n+\n+export function delayFor(attempt: number) {\n+  return DELAYS[attempt] ?? null\n+}\n export function retry() {}" },
+      { path: "src/webhooks/park.ts", status: "added", additions: 8, deletions: 0, patch: "@@ -0,0 +1,3 @@\n+export function park(id: string) {\n+  return { id, parkedAt: Date.now() }\n+}" },
+    ],
+    moreFiles: false,
   }
 }

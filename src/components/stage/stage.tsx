@@ -10,6 +10,7 @@ import { PaneComposer } from "@/components/composer/pane-composer"
 import { SearchView } from "@/components/search/search-view"
 import { InboxView } from "@/components/inbox/inbox-view"
 import { AutomationsView } from "@/components/automations/automations-view"
+import { PullsPageView } from "@/components/pulls/pulls-page"
 import { AutomationRunLine } from "@/components/automations/automation-run-line"
 import { SessionDraftReceipt } from "@/components/stage/session-draft-receipt"
 import { openSessionDraft, useThreadGroups } from "@/state/thread-groups"
@@ -324,6 +325,7 @@ const AgentSurface = memo(function AgentSurface({ session, composer, paneId }: A
           <SearchView />
           <InboxView />
           <AutomationsView />
+          <PullsPageView />
         </>
       ) : null}
     </main>

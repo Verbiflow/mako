@@ -1,4 +1,5 @@
 import { useEffect } from "react"
+import { openPullsPage } from "@/components/pulls/open-pulls-page"
 import { openNewApex } from "@/state/apexes"
 import { setupLeftStore, showSetupChecklist } from "@/state/setup-checklist"
 import {
@@ -555,6 +556,13 @@ const DESK_COMMANDS: DeskCommand[] = [
     keys: "mod+alt+p",
     hint: "The project's pull requests and issues, beside Changes",
     run: () => stage.toggle("pulls"),
+  },
+  {
+    id: "view.pulls-page",
+    title: "Open pull requests across projects",
+    section: "View",
+    hint: "Every project's pull requests and issues, over the conversation",
+    run: () => openPullsPage(),
   },
   {
     id: "view.terminal",

@@ -69,7 +69,8 @@ export interface GitCommitEntry {
 }
 
 export type GitDiffPreview =
-  | { kind: "patch"; contents: string; limited: boolean }
+  /** `url`: a pull request's file on GitHub, which opens there rather than in an editor. */
+  | { kind: "patch"; contents: string; limited: boolean; url?: string }
   | { kind: "unavailable"; reason: string }
 
 /** One side of a binary file: its size, and an image as a data URL when it is small enough to show. */

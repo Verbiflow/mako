@@ -40,6 +40,10 @@ const ALLOWED: readonly string[] = [
   "mako:fin-defaults",
   "mako:fin-limit-set",
   "mako:resolve-file-references",
+  // The browser's Pull requests page: a project's lists, asked of the computer that runs it, and one pull request
+  // opened. They read the named folders' Git remotes and GitHub, nothing else of the folders, and change nothing.
+  "mako:project-board",
+  "mako:board-pull",
   // A Mac's host for a Thread on a cloud machine or another device (`cloud-conversations`, `cloud-moves`,
   // `cloud-returns`, `cloud-follow`, `cloud-archives`): preparing and starting it there, and its moves either way.
   "mako:cloud-prepare",

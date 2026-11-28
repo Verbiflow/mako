@@ -1135,6 +1135,8 @@ const inputs = {
       z.string().optional(),
     ]),
   "mako:automations-templates": () => z.tuple([]),
+  "mako:board-pull": () =>
+    z.tuple([z.object({ repository: z.string(), number: z.number() })]),
   "mako:boot": () => z.tuple([]),
   "mako:browser-control-connect": () => z.tuple([z.string()]),
   "mako:browser-control-disconnect": () => z.tuple([z.string()]),
@@ -3994,6 +3996,7 @@ const domains = new Map<HostChannel, HostMethodDomain>([
   ["mako:automations-runs", "workspaces"],
   ["mako:automations-save", "workspaces"],
   ["mako:automations-templates", "workspaces"],
+  ["mako:board-pull", "git"],
   ["mako:boot", "workspaces"],
   ["mako:browser-control-connect", "control"],
   ["mako:browser-control-disconnect", "control"],

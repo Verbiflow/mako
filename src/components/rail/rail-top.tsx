@@ -9,10 +9,14 @@ import { Keys } from "@/components/ui/kit"
 import { automations, automationsOn, failedAutomationRuns, pendingProposals, useAutomations } from "@/state/automations"
 import { toggleAutomations } from "@/state/automations-view"
 import { inboxView, useInboxCount, useInboxRosters, useInboxView } from "@/state/inbox"
-import { OPEN_PULLS_LISTED, openPullRequests, refreshOpenPulls, useOpenPulls } from "@/state/open-pulls"
+import { boardReading } from "@mako/host/contracts/project-pulls"
+import { usePanelFolders } from "@/components/pulls/pulls-offered"
+import { openPullsPage } from "@/components/pulls/open-pulls-page"
+import { useBoardWatch, usePullBoard } from "@/state/project-board"
+import { pullsPane } from "@/state/inbox-view"
+import { activeDocument, useViewer } from "@/state/viewer"
 import { RAIL_NAV, setRailNav, usePrefs, type RailNavId } from "@/state/prefs"
 import { openProjectSetup } from "@/state/project-setup"
-import { useSession } from "@/state/session"
 import { useWindowRoutes } from "@/state/window-routes"
 
 /**
@@ -27,14 +31,15 @@ import { useWindowRoutes } from "@/state/window-routes"
  * (`useInboxCount`).
  *
  * A window whose Threads live on another computer (the web desk) has no
- * project of its own to ask GitHub or run automations in, so it shows the
- * first three.
+ * project of its own to run automations in, so it shows the first three and
+ * Pull requests, which it asks of the computers that run its projects.
  */
 export const RailTop = memo(function RailTop() {
   const routed = useWindowRoutes((state) => state.routes !== null)
   const nav = usePrefs((prefs) => prefs.railNav)
-  // A window whose Threads live on another computer shows only what it can reach: Search and the Inbox.
-  const shows = (id: RailNavId) => nav[id] && (!routed || id === "search" || id === "inbox")
+  // A window whose Threads live on another computer shows only what it can reach: Search, the Inbox and Pull requests,
+  // which it asks of the computers that run its projects.
+  const shows = (id: RailNavId) => nav[id] && (!routed || id === "search" || id === "inbox" || id === "pulls")
   return (
     <ContextMenu modal={false}>
       <ContextMenuTrigger asChild>
@@ -147,25 +152,24 @@ function InboxRow() {
   )
 }
 
+/** The Pull requests page over the conversation; the project's reading is its tip, the count in the panel's tab. */
 function PullsRow() {
-  const root = useSession((state) => state.git?.root)
-  const count = useOpenPulls((state) => (root ? state.byRoot[root]?.count : undefined))
-  useEffect(() => {
-    refreshOpenPulls(root)
-    const again = () => refreshOpenPulls(root)
-    window.addEventListener("focus", again)
-    return () => window.removeEventListener("focus", again)
-  }, [root])
-  const shown = count === undefined || count === null ? undefined : count >= OPEN_PULLS_LISTED ? `${OPEN_PULLS_LISTED}+` : String(count)
+  const folders = usePanelFolders()
+  useBoardWatch(folders, "pulls", "glance")
+  const { rows } = usePullBoard(folders)
+  const reading = boardReading(rows)
+  const open = useInboxView((state) => state.pulls)
+  // Under a document's tab the page is still open but out of sight: the row brings it back rather than closing it.
+  const covered = useViewer((state) => Boolean(activeDocument(state.documents, state.panes, state.focusedPaneId)))
   return (
     <RailRow
       data-rail-top-row="pulls"
-      data-pulls-count={count ?? undefined}
       icon={<GitPullRequestIcon />}
       label="Pull requests"
-      spoken={shown && count ? `Pull requests, ${shown} open` : "Pull requests"}
-      title={shown && count ? `${shown} open on GitHub` : "Open on GitHub"}
-      onClick={() => void openPullRequests(root)}
+      spoken={reading ? `Pull requests, ${reading.text}` : "Pull requests"}
+      title={reading ? `${reading.text} in this project` : undefined}
+      open={open}
+      onClick={() => (open && !covered ? pullsPane.close() : openPullsPage())}
     />
   )
 }

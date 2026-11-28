@@ -115,6 +115,28 @@ async function check() {
   await until("document.querySelectorAll('[data-pulls-panel] [data-pull]').length > 0", "back to pull requests")
 
   await writeFile(join(root, "panel.png"), (await page.capturePage()).toPNG())
+
+  // The page: the rail's row opens it over the conversation, across projects, the same sections; a row previews, Enter
+  // opens the pull request as a tab, Escape goes back.
+  await click('[data-rail-top-row="pulls"]')
+  await until("document.querySelectorAll('[data-pulls-page] [data-pull]').length > 0", "the page's rows")
+  assert.match(await evaluate("document.querySelector('[data-pulls-page] [data-list-summary]').innerText"), /2 need you · 6 open · 3 repositories in \d+ projects/, "the page's summary")
+  assert.deepEqual(
+    await evaluate("[...document.querySelectorAll('[data-pulls-page] [data-list-section]')].map((section) => section.dataset.listSection).slice(0, 5)"),
+    ["Needs you", "Ready to merge", "Waiting on checks", "Waiting on others", "Draft"],
+    "the page's sections are the panel's"
+  )
+  assert.match(await evaluate("document.querySelector('[data-pulls-page] [data-board-problem]').innerText"), /acme\/infra couldn't be read/, "the page says the failed repository too")
+  await evaluate("document.querySelector('[data-pulls-page] [data-pull=\"acme/api#412\"]').click(); true")
+  await until("document.querySelector('[data-board-preview]')?.dataset.boardPreview === 'acme/api#412'", "the preview")
+  await until("/lint/.test(document.querySelector('[data-board-preview]').innerText) && /Retries now back off/.test(document.querySelector('[data-board-preview]').innerText)", "the preview's checks and description")
+  await key("Enter")
+  await until("[...document.querySelectorAll('[role=tab]')].some((tab) => /api#412/.test(tab.textContent))", "the pull request's tab")
+  await click('[data-rail-top-row="pulls"]')
+  await until("Boolean(document.querySelector('[data-pulls-page]'))", "the page again")
+  await key("Escape")
+  await until("!document.querySelector('[data-pulls-page]')", "Escape puts the page away")
+  console.log("Pull requests page: summary, sections, the failed line, preview, Enter as a tab, Escape passed")
   console.log(`Pull requests UI: the tab's reading, sections, name#n codes, a failed repository's one line, keys and Issues passed (${root})`)
   app.exit(0)
 }

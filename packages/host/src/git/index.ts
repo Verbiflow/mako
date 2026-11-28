@@ -11,7 +11,7 @@ import type { MergeMethod } from "../contracts/git-actions.js"
 import type { PullRequestSearchRequest } from "../contracts/pull-request-search.js"
 import { PullRequestSearch } from "./pull-request-search.js"
 import { ProjectBoard } from "./project-board.js"
-import type { BoardRequest } from "../contracts/project-pulls.js"
+import type { BoardPullRequest, BoardRequest } from "../contracts/project-pulls.js"
 import type { Git } from "@mako/git"
 
 export type { GitTab } from "./methods.js"
@@ -55,6 +55,8 @@ export function declareGitMethods(methods: MethodTable, { worktrees, withHost, g
   methods.handle("mako:pull-request-search", (request: PullRequestSearchRequest) => withHost((h) => pullSearch.search(h.gitWorkspace, request)))
   /** Projects' pull requests or issues across their repositories, for the right panel and the Pull requests page. */
   methods.handle("mako:project-board", (request: BoardRequest) => board.read(request))
+  /** One pull request a board listed, opened: its words, checks, reviews and files. */
+  methods.handle("mako:board-pull", (request: BoardPullRequest) => board.detail(request))
   methods.handle("mako:pull-branches", () => withHost((h) => listRemoteBranches(git, h.gitWorkspace)))
   methods.handle("mako:create-pull", (options: CreatePullOptions) =>
     withHost(async (h) => {
