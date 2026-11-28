@@ -84,7 +84,7 @@ Bold is the harness's own, shown in Mako; "Mako's" runs Mako's own; "none here" 
 | Background sessions | A conversation goes on with no terminal open. | Mako runs every conversation in its host, with no terminal open. | Mako's (its own: claude --bg) | Mako's | Mako's | Mako's | Mako's | Mako's | Mako's |
 | File rewind | Files put back as they were before a turn. | Rewind restores Mako's workspace checkpoint from before the turn. | Mako's (its own: /rewind) | Mako's (its own: thread/revert) | Mako's | Mako's (its own: /undo, /redo) | Mako's (its own: /rewind) | Mako's (its own: /revert) | Mako's |
 | Worktrees | Work in a Git worktree of its own. | A Thread moves into a worktree of its own, and its conversations run there. | Mako's (its own: --worktree) | Mako's (its own: /worktree) | Mako's | Mako's (its own: worktrees) | Mako's (its own: -w) | Mako's | Mako's |
-| Computer use | The agent drives a browser or the Mac. | Mako's browser and computer control, through its `mako-computer` MCP server. | Mako's (its own: computer use) | Mako's (its own: computer use) | Mako's | Mako's | Mako's | Mako's | Mako's |
+| Computer use | The agent drives a browser or the computer. | Mako's browser and computer control, through its `mako-computer` MCP server. | Mako's (its own: computer use) | Mako's (its own: computer use) | Mako's | Mako's | Mako's | Mako's | Mako's |
 | Notifications | You hear when a turn ends or needs you. | Mako's desktop notifications. | Mako's (its own: PushNotification) | Mako's (its own: notify) | Mako's | Mako's | Mako's | Mako's | Mako's |
 | Folder trust | The harness asks before it trusts a project folder. | – | trust dialog: Mako gap | trust_level: Mako gap | none | **external_directory** | **folder trust** | workspace trust: Mako gap | its own, by default |
 | Edit before approving | A command or tool input changed in its approval, then run. | – | updatedInput: Mako gap | none | none | none | none | editable commands: Mako gap | Mako gap |
@@ -129,7 +129,7 @@ List what no other harness has in the definition's `unique`: its name, what carr
 | Development desk | Its modes and plan approval in `src/dev/mock-bridge.ts` (`MOCK_MODES`, `MOCK_PLAN_APPROVALS`), copied from the real wire, so `?mock` shows what the harness shows. | review | – | – | – | – | – | – | – |
 
 - OpenCode, models: no default model: OpenCode's models are the person's own providers, so it starts on the model they configured.
-- Claude Code, versions: tested 2.1.327, no oldest proven, bundled @anthropic-ai/claude-agent-sdk
+- Claude Code, versions: tested 2.1.332, no oldest proven, bundled @anthropic-ai/claude-agent-sdk
 - Codex, versions: tested 0.170.0, oldest 0.142.0
 - Cursor, versions: tested 1.4.1, no oldest proven, bundled @cursor/sdk
 - OpenCode, versions: tested 2.3.2, oldest 2.0.0

@@ -1,7 +1,7 @@
 {
   "harness": "claude",
-  "version": "2.1.327",
-  "on": "2026-11-18",
+  "version": "2.1.332",
+  "on": "2026-11-28",
   "searched": "claude",
   "probed": 36,
   "missing": [],
