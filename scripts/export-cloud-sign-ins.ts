@@ -6,6 +6,7 @@ import { makoUserRoot } from "@mako/sessions/mako-root"
 import { childProcessEnv } from "@mako/host/base/child-environment"
 import { CloudSignInHarnessSchema, CloudSignInSchema, type CloudSignIn } from "@mako/host/contracts/cloud-sign-ins"
 import { createHarnessHost, detachedHarnessContext } from "@mako/host/harnesses/harness-host"
+import { isApiKeyAccount } from "@mako/host/harnesses/api-key-accounts"
 
 /**
  * This computer's harness sign-ins as a machine is given them: each adapter's own `export`, the refresh token
@@ -29,7 +30,9 @@ try {
     if (!harness.success || !capability.cloudSignIn) continue
     try {
       const launch = await host.accounts.launch(harness.data, childProcessEnv(process.env), { trackCredential: false })
-      const exported = await capability.cloudSignIn.export(launch.env)
+      // A key account's key goes the way the host's sync sends it (`keySignIn`), any other sign-in by its adapter.
+      const name = launch.account.name
+      const exported = isApiKeyAccount(name) && capability.cloudSignIn.keySignIn ? await capability.cloudSignIn.keySignIn(name) : await capability.cloudSignIn.export(launch.env)
       if (!exported) {
         console.error(`${harness.data}: signed out`)
         continue
