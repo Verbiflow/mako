@@ -38,6 +38,7 @@ const RepositoryIdentity = z.object({ nameWithOwner: z.string().regex(/^[^/]+\/[
 type RepositoryIdentity = z.infer<typeof RepositoryIdentity>
 const REPO_FIELDS = "url,nameWithOwner,defaultBranchRef,squashMergeAllowed,mergeCommitAllowed,rebaseMergeAllowed"
 const FRESH_MS = 60_000
+const CommandOutput = z.object({ stdout: z.string() })
 const MAX_READS = 512
 
 type Runner = (cwd: string, args: string[], env: Readonly<Record<string, string>> | undefined, now: () => number) => Promise<string>
@@ -226,7 +227,12 @@ export class GitHubReads {
     const conditional = args[0] === "api" && args.length === 2 && args[1] !== "graphql"
     const include = args[0] === "api" && !args.includes("--include")
     const validator = conditional ? (prior?.etag !== undefined && prior.body !== undefined ? { etag: prior.etag, body: prior.body } : this.validators.get(key)) : undefined
-    entry.value = this.send(cwd, include ? [...args, "--include", ...(validator ? ["-H", `If-None-Match: ${validator.etag}`] : [])] : args, env).then(output => {
+    entry.value = this.send(cwd, include ? [...args, "--include", ...(validator ? ["-H", `If-None-Match: ${validator.etag}`] : [])] : args, env).catch((cause: unknown) => {
+      // `gh api` exits 1 on a 304, its response on standard output: that's the unchanged answer, not a failure.
+      const failed = CommandOutput.safeParse(cause)
+      if (validator && failed.success && httpResponse(failed.data.stdout).status === 304) return failed.data.stdout
+      throw cause
+    }).then(output => {
       if (include) {
         const response = httpResponse(output)
         if (response.status === 304) {
