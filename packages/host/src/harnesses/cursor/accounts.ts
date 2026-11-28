@@ -309,7 +309,11 @@ function cursorCloudSignIn(auth: CursorSdkAuth, keys: CursorAccountKeys): CloudS
       const signIn = CursorSignInSchema.safeParse(payload)
       if (!signIn.success) throw new Error("Cursor's sign-in has no key")
       const { apiKey, expiresAt, email } = signIn.data
-      const file: CursorSdkAuthFile = { version: 1, backendUrl: API, apiKey, createdAtMs: Date.now() }
+      // The key installed again keeps the time it was first written, so the file, and the revision read from it, stay
+      // as they were: a machine hands its sign-ins over again on every hello.
+      const placed = await readFile(join(place.home, CURSOR_SDK_AUTH_FILE), "utf8").then(jsonFields, () => null).catch(() => null)
+      const createdAtMs = stringValue(placed?.get("apiKey")) === apiKey ? numberValue(placed?.get("createdAtMs")) : undefined
+      const file: CursorSdkAuthFile = { version: 1, backendUrl: API, apiKey, createdAtMs: createdAtMs ?? Date.now() }
       const lapses = expiresAt === undefined ? NaN : Date.parse(expiresAt)
       if (Number.isFinite(lapses)) file.apiKeyExpiresAtMs = lapses
       if (email !== undefined) file.email = email

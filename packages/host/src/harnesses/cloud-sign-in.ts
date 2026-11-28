@@ -192,7 +192,9 @@ function inside(root: string, relative: string): string {
 export async function placeSecret(place: CloudSignInPlace, relative: string, text: string): Promise<void> {
   const kept = inside(place.secrets, relative)
   const read = inside(place.home, relative)
-  await publishFile(kept, text, { mode: 0o600, dirMode: 0o700 })
+  // The same sign-in installed again leaves the file as it is: the machine hands sign-ins over again on every hello,
+  // and a harness or a launch reading it mid-turn must not see a rewrite as a new one.
+  if ((await readFile(kept, "utf8").catch(() => null)) !== text) await publishFile(kept, text, { mode: 0o600, dirMode: 0o700 })
   await mkdir(dirname(read), { recursive: true, mode: 0o700 })
   if ((await readlink(read).catch(() => null)) === kept) return
   await rm(read, { force: true })
@@ -212,7 +214,8 @@ export async function removeSecret(place: CloudSignInPlace, relative: string): P
 /**
  * A harness's own settings file in `place.home`, not a secret: `change` gets
  * what's there (null when there's none, or it isn't a JSON object) and
- * returns what to write. The harness keeps writing to it as it runs.
+ * returns what to write, written only when it differs. The harness keeps
+ * writing to it as it runs.
  */
 export async function changeJsonFile(
   place: CloudSignInPlace,
@@ -221,15 +224,18 @@ export async function changeJsonFile(
 ): Promise<void> {
   const path = inside(place.home, relative)
   let current: Record<string, JsonValue> | null = null
+  let raw: string | null = null
   if ((await lstat(path).catch(() => null))?.isFile()) {
     try {
-      const parsed = JsonObjectSchema.safeParse(JSON.parse(await readFile(path, "utf8")))
+      raw = await readFile(path, "utf8")
+      const parsed = JsonObjectSchema.safeParse(JSON.parse(raw))
       if (parsed.success) current = parsed.data
     } catch {
       // Unreadable settings are replaced rather than kept half-understood.
     }
   }
-  await publishFile(path, `${JSON.stringify(change(current), null, 2)}\n`, { mode: 0o600, dirMode: 0o700, foreignFolder: true })
+  const next = `${JSON.stringify(change(current), null, 2)}\n`
+  if (next !== raw) await publishFile(path, next, { mode: 0o600, dirMode: 0o700, foreignFolder: true })
 }
 
 /** The ISO time of a JWT's `exp`, or null when it has none. */

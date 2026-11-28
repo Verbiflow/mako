@@ -8,7 +8,7 @@ import { memorySecrets } from "@mako/host/base/secrets"
 import { antigravityAccounts } from "@mako/host/harnesses/antigravity/accounts"
 import { claudeAccountCapability, claudeKeyEnvironment } from "@mako/host/harnesses/claude/accounts"
 import { withApiKeyAccounts } from "@mako/host/harnesses/api-key-accounts"
-import { HarnessAccounts } from "@mako/host/harnesses/accounts"
+import { ExecutionAccountChanged, HarnessAccounts } from "@mako/host/harnesses/accounts"
 import { AccountRoot } from "@mako/host/harnesses/accounts-common"
 import { ProviderRegistry } from "@mako/host/harnesses/registry"
 import type { ProviderAccountCapability } from "@mako/host/harnesses/account-capability"
@@ -127,6 +127,19 @@ try {
   assert.equal(claude.env.ANTHROPIC_API_KEY, CLAUDE_KEY, "Claude Code on the machine runs on its key")
   console.log("ok  on the machine each harness's default account runs on the key it was given, kept in memory and linked from home")
 
+  // The machine hands its sign-ins over again on every hello and after each fetch, a launch's warm start included: the
+  // same key installed again mid-launch is the same credential, and the turn that launch admits goes out.
+  const keyFile = (harness: string) => join(machine.secrets, ".mako", "cloud-keys", harness)
+  const placed = await Promise.all(["antigravity", "claude"].map(async (harness) => (await lstat(keyFile(harness))).ino))
+  const launched = await Promise.all((["antigravity", "claude"] as const).map((harness) => onMachine.accounts.launch(harness, { PATH: process.env.PATH, HOME: machine.home })))
+  for (let round = 0; round < 3; round++) {
+    await installCloudSignIns(onMachine.registry, signIns, machine)
+    await Promise.all(launched.map((launch, index) => onMachine.accounts.assertLaunch(index === 0 ? "antigravity" : "claude", launch)))
+  }
+  assert.deepEqual(await Promise.all(["antigravity", "claude"].map(async (harness) => (await lstat(keyFile(harness))).ino)), placed, "an unchanged key's file isn't rewritten")
+  for (const launch of launched) assert.ok(!launch.credential?.revision.includes(AGY_KEY) && !launch.credential?.revision.includes(CLAUDE_KEY), "a revision is never made of the key")
+  console.log("ok  the same key installed again mid-launch leaves the file and the revision as they were, and the launch's turn goes out")
+
   // A new key on the Mac replaces the machine's, and its launches see the change.
   const capability = onMachine.registry.get("antigravity")!
   const before = await capability.credentialRevision("default")
@@ -144,6 +157,9 @@ try {
   await installCloudSignIns(onMachine.registry, [...fake.put.values()], machine)
   assert.equal(await readFile(join(machine.home, ".mako", "cloud-keys", "antigravity"), "utf8"), AGY_NEXT)
   assert.notEqual(await capability.credentialRevision("default"), before, "a replaced key is a new credential, so a running agy restarts on it")
+  await assert.rejects(onMachine.accounts.assertLaunch("antigravity", launched[0]!), (error) => error instanceof ExecutionAccountChanged && error.reason === "credentials",
+    "a launch made on the old key is refused its next turn, and restarts on the new one")
+  await onMachine.accounts.assertLaunch("claude", launched[1]!)
   console.log("ok  a key changed on the Mac replaces the machine's, as a new credential")
 
   // Claude Code signed in again on the Mac and shared as its own sign-in: the key goes, and its own file takes its place.
