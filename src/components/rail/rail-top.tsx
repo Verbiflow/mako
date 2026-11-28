@@ -27,8 +27,8 @@ import { useWindowRoutes } from "@/state/window-routes"
  * Automations say theirs in their tips; an automation that failed counts in the
  * Inbox, as a proposal does through its agent's ask. Each reads its own narrow
  * slice, so a token in a Thread or a row changing below repaints none of them;
- * the Inbox's count is a number from the same facts the marks read
- * (`useInboxCount`).
+ * the Inbox's count is the page's "N need you" (`useInboxCount`): the same
+ * facts the marks read and the Apex plan lines waiting on the person.
  *
  * A window whose Threads live on another computer (the web desk) has no
  * project of its own to run automations in, so it shows the first three and
