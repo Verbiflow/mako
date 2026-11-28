@@ -32,6 +32,8 @@ export type HostLock =
 const O_EXLOCK = 0x20
 /** A holder writes its pid just after it takes the lock; until then the file is empty or names the last holder. */
 const HOLDER_WRITE_MS = 250
+/** How long a socket lock's holder has to say its pid (`askHolder`). */
+const HOLDER_ANSWER_MS = 500
 
 export interface HostLockOptions {
   platform?: NodeJS.Platform
@@ -204,11 +206,24 @@ async function nameLock(dataRoot: string, platform: NodeJS.Platform, purpose: st
   }
 }
 
+/**
+ * The holder's answer on its lock's name, or null once it has said nothing for `HOLDER_ANSWER_MS`. A timer runs out
+ * ahead of the I/O that arrived while this process's own loop was held (a busy start, a descheduled runner), and the
+ * connection itself may not have completed yet (its `connect` and its first read come in later polls), so the wait gives
+ * up only once the loop has polled the connected socket, reading: `connect`, then a check phase to end the poll it came
+ * in, then the next, which follows a whole poll. A reply that came in time is read, and only a holder that said nothing
+ * is unknown. Given up in the timer itself, a holder that answered in a millisecond read as nobody whenever the
+ * reader's loop was held past the wait, and a successor or a restart took a live host for none.
+ */
 function askHolder(name: string): Promise<number | null> {
   return new Promise((settle) => {
     let reply = ""
     const socket = connect(name)
-    const timer = setTimeout(() => socket.destroy(), 500)
+    const giveUp = () => setImmediate(() => setImmediate(() => socket.destroy()))
+    const timer = setTimeout(() => {
+      if (socket.connecting) socket.once("connect", giveUp)
+      else giveUp()
+    }, HOLDER_ANSWER_MS)
     socket.setEncoding("utf8")
     socket.on("data", (chunk: string) => { reply += chunk })
     socket.on("close", () => {
