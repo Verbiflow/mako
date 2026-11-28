@@ -61,7 +61,7 @@ test("C2: a placed Fin's row is its Apex's to show, not a Thread of its own, on 
   // Under Needs you it's a row of its own, opening where it's answered; its Apex's row doesn't stand in for it.
   const needs = waitingThreads(folded.threads, [], folded.placed)
   assert.deepEqual(needs.map((thread) => thread.id), [FIN_THREAD])
-  assert.equal(webInboxCount(folded.threads, [], folded.placed), 1)
+  assert.equal(webInboxCount(folded.threads, [], folded.placed, []), 1)
 })
 
 test("the Apex's device off: the Fin's row, written by its own device, still says what it asks, under its Apex", () => {

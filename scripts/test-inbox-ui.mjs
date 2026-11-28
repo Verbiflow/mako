@@ -287,7 +287,7 @@ async function checkWindow() {
   assert.ok(phone.groups > 0, "Threads stand under their projects")
   assert.ok(phone.fins.length >= 2, "each asking Fin is a row")
   assert.ok(phone.fins.every((fin) => fin.under), "hung under its Apex")
-  assert.equal(phone.count, phone.fins.length + (await evaluate(`document.querySelectorAll('[data-thread][data-standing="waiting"]').length`)), "the chip counts what needs you")
+  const phoneWaiting = await evaluate(`document.querySelectorAll('[data-thread][data-standing="waiting"]').length`)
   await capture("phone-list.png")
   console.log("PASS: the phone's top rows, projects and asking Fins")
 
@@ -296,6 +296,10 @@ async function checkWindow() {
   await until(`document.querySelector('[data-inbox] [data-ask=fin]') !== null`, "the phone's Inbox")
   const cards = await evaluate(`document.querySelectorAll('[data-inbox] [data-ask=fin]').length`)
   assert.equal(cards, phone.fins.length, "one card per asking Fin")
+  // The chip and the page's "N need you" are one count: the asking Fins, the waiting Threads and the Apex plan lines waiting on the person.
+  const phonePlans = await evaluate(`document.querySelectorAll('[data-inbox] [data-inbox-plan]').length`)
+  assert.equal(phone.count, phone.fins.length + phoneWaiting + phonePlans, "the chip counts what needs you, plan lines included")
+  assert.equal(await evaluate(`parseInt(document.querySelector('[data-inbox-summary]')?.textContent ?? '0', 10)`), phone.count, "the page's count is the chip's")
   await capture("phone-inbox.png")
   const phoneCards = await evaluate(`[...document.querySelectorAll('[data-inbox] [data-ask=fin]')].map((card) => ({ approval: card.dataset.finAsk === 'approval', typed: Boolean(card.querySelector('[data-fin-typed]')), open: card.querySelector('[data-fin-open]')?.textContent ?? null }))`)
   assert.ok(phoneCards.filter((card) => !card.approval).every((card) => card.typed), `a phone Inbox question takes typed words: ${JSON.stringify(phoneCards)}`)

@@ -1,8 +1,8 @@
 import { useEffect, useMemo } from "react"
-import { apexDigest, parsePlan, routeFor, type ApexDigest, type ApexEntry, type ApexPlanReading, type RouteCandidate } from "@mako/host/contracts/apexes"
+import { apexDigest, routeFor, type ApexDigest, type ApexEntry, type ApexPlanReading, type RouteCandidate } from "@mako/host/contracts/apexes"
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import type { ListedApex, ListedSession } from "@mako/protocol/thread-listing"
-import { apexesStore, type ApexElsewhere } from "@/state/apexes"
+import { apexesStore, planAsksOf, type ApexElsewhere, type PlanAsk } from "@/state/apexes"
 import { createHook, createStore } from "@/state/store"
 import { accountListStore, type AccountListState } from "./account-list"
 import type { WebClient } from "./client"
@@ -273,29 +273,32 @@ export function useWebDigest(client: WebClient, deviceId: string | undefined, ap
   return useMemo(() => apexDigest(fins, plan, seenAt), [fins, plan, seenAt])
 }
 
-/** A plan line that waits on the person, with where it is in its plan, to check it off. */
-export interface WebPlanAsk {
-  apex: ApexEntry & { deviceId: string }
-  section: string
-  index: number
-  text: string
+/** A plan line that waits on the person, with the Mac its Apex is on, to check it off there. */
+export type WebPlanAsk = PlanAsk<ApexEntry & { deviceId: string }>
+
+/**
+ * The plan lines waiting on the person across these Apexes, read as the desk reads its own (`planAsksOf`), each plan
+ * as this page shows it. A quiet owner's to-dos can't be checked off or answered until it's back: its Apex's digest
+ * shows them, as last known, and the Inbox neither lists nor counts them.
+ */
+export function webPlanAsks(apexes: readonly (ApexEntry & { deviceId: string })[], state: Pick<WebApexesState, "plans" | "plansAt" | "listed">): WebPlanAsk[] {
+  const plans: Record<string, string> = {}
+  for (const apex of apexes) {
+    if (state.listed[apex.thread]?.quietSince) continue
+    const plan = webPlanOf(state, apex.thread)
+    if (plan) plans[apex.thread] = plan
+  }
+  return planAsksOf(apexes, plans)
 }
 
-/** Every read Apex's plan lines that wait on the person, for the phone's Inbox. */
+/** Every read Apex's plan lines that wait on the person (`webPlanAsks`), each plan read once it's asked for. */
 export function useWebPlanAsks(client: WebClient): WebPlanAsk[] {
   const apexes = useEveryWebApex()
   const state = useWebApexes((each) => each)
   useEffect(() => {
     for (const apex of apexes) if (!state.listed[apex.thread] && state.plans[apex.thread] === undefined) void loadWebPlan(client, apex.deviceId, apex.thread)
   }, [client, apexes, state])
-  return useMemo(() => apexes.flatMap((apex) => {
-    // A quiet owner's to-dos can't be checked off or answered until it's back: its Apex's digest shows them, as last known.
-    if (state.listed[apex.thread]?.quietSince) return []
-    const plan = webPlanOf(state, apex.thread)
-    if (!plan) return []
-    return parsePlan(plan).sections.filter((section) => /^waiting on\b/i.test(section.name)).flatMap((section) =>
-      section.items.flatMap((item, index) => (item.done ? [] : [{ apex, section: section.name, index, text: item.text }])))
-  }), [apexes, state])
+  return useMemo(() => webPlanAsks(apexes, state), [apexes, state])
 }
 
 followListed()

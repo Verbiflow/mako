@@ -26,7 +26,7 @@ import { copyAge, formatRelative } from "@/lib/format"
 import { cn } from "@/lib/utils"
 import { useAccountList, type AccountListState } from "./account-list"
 import { useWebClient } from "./client"
-import { useWebApexesOf } from "./apexes"
+import { useWebApexesOf, useWebPlanAsks } from "./apexes"
 import { useDelayedStatus } from "./delayed-status"
 import { InstallCard } from "./install-card"
 import { usePullToRefresh } from "./pull"
@@ -112,6 +112,8 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
   }, [list.phase, folded])
   // Each Mac's Apexes, read now, so an Apex's digest opens with its conversation.
   useWebApexesOf(client, folded.threads)
+  // Their plans' lines waiting on the person count in the Inbox chip as on the Inbox page.
+  const planAsks = useWebPlanAsks(client)
   // What this browser asked an owner to mark, once its rows say it, is theirs to say again.
   useEffect(() => settleAskedMarks([...folded.threads, ...folded.placed, ...folded.archived]), [folded])
   const now = useTick(threads.some((thread) => thread.standing === "working"))
@@ -179,7 +181,7 @@ export function ThreadList({ selected, onOpen, onNew, onSettings, onInbox, wide,
         <div ref={content} className="pb-[calc(var(--dock,0px)+24px)]">
           <ListTrouble />
           {wide || list.phase === "starting" ? null : <SetupCard onNew={onNew} onSettings={onSettings} />}
-          <ListTop wide={wide} starting={starting} onNew={onNew} onSearch={threads.length > 0 || archived.length > 0 ? () => setSearchAsked((asked) => asked + 1) : undefined} inbox={onInbox && (threads.length > 0 || archived.length > 0) ? { count: webInboxCount(threads, fins, placed), open: inbox, onOpen: onInbox } : undefined} />
+          <ListTop wide={wide} starting={starting} onNew={onNew} onSearch={threads.length > 0 || archived.length > 0 ? () => setSearchAsked((asked) => asked + 1) : undefined} inbox={onInbox && (threads.length > 0 || archived.length > 0) ? { count: webInboxCount(threads, fins, placed, planAsks), open: inbox, onOpen: onInbox } : undefined} />
           {threads.length === 0 && archived.length === 0 ? (
             <EmptyList answered={list.phase === "live" || list.asOf !== undefined} onNew={onNew} />
           ) : groups.length ? (

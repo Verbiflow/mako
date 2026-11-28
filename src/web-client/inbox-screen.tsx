@@ -9,7 +9,7 @@ import { MakoMark } from "@/components/ui/mako-mark"
 import { cn } from "@/lib/utils"
 import { useAccountList } from "./account-list"
 import { FinAskCard } from "./fin-ask"
-import { useWebFinAsks, waitingThreads, asksBesidePlaced } from "./inbox"
+import { useWebFinAsks, waitingThreads, asksBesidePlaced, webInboxCount } from "./inbox"
 import { ThreadRow } from "./list"
 import { useArchiving } from "./archive-thread"
 import { isUnread, useReadState } from "./read-state"
@@ -36,7 +36,7 @@ export function InboxScreen({ onBack, onOpen }: { onBack: (() => void) | undefin
   const client = useWebClient()
   useWebApexesOf(client, threads)
   const planAsks = useWebPlanAsks(client)
-  const count = fins.length + waiting.length + planAsks.length
+  const count = webInboxCount(threads, asks, folded.placed, planAsks)
   const empty = !count && !toRead.length
   // A Fin's ask opens its Apex's Thread, where its Shiver card holds it.
   const openApex = (id: string) => {
