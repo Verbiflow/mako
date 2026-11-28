@@ -15,6 +15,7 @@ import { threads } from "@/state/threads"
 import { openConversation, windowRoutesStore } from "@/state/window-routes"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
 import { inboxView } from "@/state/inbox-view"
+import { useApexPlanAsks, type PlanAsk } from "@/state/apexes"
 import type { ThreadsState } from "@/state/thread-state"
 import { threadStatus } from "@/state/thread-status"
 import { threadsStore } from "@/state/thread-store"
@@ -326,9 +327,12 @@ export function sameItems<Item extends InboxAsk | ReadInboxItem>(left: readonly 
   return left === right || (left.length === right.length && left.every((item, index) => sameItem(item, right[index]!)))
 }
 
-/** How many things wait on the person: the Inbox row's count, the phone's chip. */
-export function inboxCount(model: InboxModel): number {
-  return model.asks.length
+/**
+ * How many things wait on the person: the Inbox's asks and the lines of an Apex's plan waiting on them, both listed
+ * under Needs you. The page's "N need you" and the rail's Inbox count are this one number, so they never disagree.
+ */
+export function inboxCount(model: InboxModel, plans: readonly PlanAsk[]): number {
+  return model.asks.length + plans.length
 }
 
 function subscribe(listener: () => void): () => void {
@@ -364,8 +368,16 @@ export function useInbox<S>(select: (model: InboxModel) => S, isEqual: (left: S,
   return useSyncExternalStore(subscribe, read, read)
 }
 
+/** The Inbox's count (`inboxCount`), reading every Apex's plan so its lines waiting on the person count before the page opens. */
 export function useInboxCount(): number {
-  return useInbox(inboxCount)
+  // The model keeps its identity until an item changes, so a token doesn't repaint the reader.
+  const model = useInbox(identity)
+  const plans = useApexPlanAsks()
+  return inboxCount(model, plans)
+}
+
+function identity(model: InboxModel): InboxModel {
+  return model
 }
 
 const rostersAsked = new Set<string>()
