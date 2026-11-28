@@ -2442,7 +2442,10 @@ export function ConversationTimeline({
           }}
           onWheel={onWheel}
           style={{ paddingInlineEnd: showNavigator ? NAVIGATOR_WIDTH : 0 }}
-          className="scroll-fade-scroller group/transcript min-h-0 flex-1 overflow-y-auto overscroll-contain"
+          // Focusable so the keys scroll it, but never ringed: its ring is the whole pane's edge, which a click in the
+          // transcript and then any key drew as a hard line along the composer's top. The pane scrolling under the
+          // keys is what shows they reach it.
+          className="scroll-fade-scroller group/transcript min-h-0 flex-1 overflow-y-auto overscroll-contain outline-none"
         >
           {isEmpty ? (
             empty
