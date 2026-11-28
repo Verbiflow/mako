@@ -60,7 +60,7 @@ export const LiveSessionModeSchema: z.ZodType<LiveSessionMode> = z.object({
   id: z.string(),
   name: z.string(),
   access: z.enum(ACCESS_TIER_NAMES).optional(),
-  enforcement: z.enum(["provider", "launch"]).optional(),
+  enforcement: z.enum(["provider", "launch", "mako"]).optional(),
   description: z.string().optional(),
 })
 

@@ -17,6 +17,8 @@ export type AccessEnforcement =
   | "provider"
   /** The provider reads it when its process starts; a running session keeps its launch tier. */
   | "launch"
+  /** Mako answers the agent's tool requests the tier covers, as they come, on top of one of the agent's own modes. */
+  | "mako"
 
 export interface AccessTierInfo {
   tier: AccessTier

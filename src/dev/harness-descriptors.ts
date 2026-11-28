@@ -1912,8 +1912,20 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
       }
     },
     "defaults": {
-      "work": [],
-      "none": "Use Gemini Nano when the account offers it, otherwise the agent's selected model."
+      "work": [
+        {
+          "model": "gemini-4-neon",
+          "options": {
+            "effort": "high"
+          }
+        },
+        {
+          "model": "gemini-3.1-pro",
+          "options": {
+            "effort": "high"
+          }
+        }
+      ]
     },
     "resumable": false,
     "capabilities": {
@@ -1934,9 +1946,9 @@ export const harnessDescriptors: Pick<HarnessDescriptor, "provider" | "displayNa
         "via": "Mako starts a fresh Antigravity session with the retained turns."
       },
       "steering": {
-        "state": "absent",
-        "by": "harness",
-        "reason": "Messages wait for the active ACP prompt to finish."
+        "state": "implemented",
+        "via": "A prompt sent while a turn runs ends the running prompt and carries the turn on, read at its next step.",
+        "lands": "step"
       },
       "compaction": {
         "state": "absent",

@@ -29,10 +29,6 @@ export function agyConversationPath(env: NodeJS.ProcessEnv, id: string): string 
   return join(env.GEMINI_HOME || join(env.HOME || homedir(), ".gemini"), agyDataDirectory(env), "conversations", id + ".db")
 }
 
-function bytesField(bytes: Uint8Array, field: number): Uint8Array | undefined {
-  return messageFields(bytes).bytes.get(field)?.[0]
-}
-
 /** A protobuf message's fields by number, its varints apart from its length-delimited values; fixed-width ones skipped. */
 function messageFields(bytes: Uint8Array): ProtoFields {
   const varints = new Map<number, number>()
@@ -92,21 +88,91 @@ export function agyStoredCalls(blob: Uint8Array, row: "step" | "generation"): Ag
   })
 }
 
-function stepEntry(idx: number, kind: number, payload: Uint8Array | null): Entry {
+/**
+ * A step's kind (`CortexStepType`, field 1 of the step), as Antigravity's own
+ * descriptors number them (agy 1.5.16).
+ */
+export const AGY_STEP = {
+  userInput: 14,
+  /** The model's reply: its words, its thinking and the calls it made. */
+  plannerResponse: 15,
+  errorMessage: 17,
+  checkpoint: 23,
+  ephemeralMessage: 90,
+  conversationHistory: 98,
+  /** What the agent tells the model by itself, such as a background command finishing. */
+  systemMessage: 101,
+  /** One tool call and its result, for the tools that have no step of their own. */
+  generic: 132,
+} as const
+
+/** Steps that are the model's context, never the conversation: nothing is drawn, and nothing is left unread. */
+const CONTEXT_STEPS = new Set<number>([AGY_STEP.checkpoint, AGY_STEP.ephemeralMessage, AGY_STEP.conversationHistory, AGY_STEP.systemMessage])
+
+/** `CortexStepStatus` (field 4 of a step) as ACP's tool statuses say it. */
+const STEP_STATUS: ReadonlyMap<number, string> = new Map([
+  [1, "pending"], [2, "in_progress"], [3, "completed"], [4, "failed"], [6, "cancelled"],
+  [7, "failed"], [8, "in_progress"], [9, "pending"], [11, "pending"], [12, "cancelled"],
+])
+
+const strictText = (bytes: Uint8Array) => new TextDecoder("utf-8", { fatal: true }).decode(bytes)
+const wordsAt = (fields: ProtoFields, field: number) => {
+  const bytes = fields.bytes.get(field)?.[0]
+  return bytes ? strictText(bytes) : ""
+}
+
+/**
+ * One row of the `steps` table as entries. A step holds its kind (1), status
+ * (4) and metadata (5): when it was made (1) and done (8), and for a tool's
+ * step the call (4: `ChatToolCall` with id 1, name 2, arguments 3). The model's
+ * reply (20) holds its words (1), thinking (3) and the calls it made (7), each
+ * drawn by the step that runs it; a person's message (19) its text (2); an
+ * error (24) its details (3, message 2); a generic tool's step (140) its result
+ * (2, text 1). A kind with no reader stays where it stood, unread.
+ */
+export function agyStepEntries(idx: number, kind: number, payload: Uint8Array | null): Entry[] {
   const id = `agy-step-${idx}`
-  const path = kind === 14 ? [19, 2] : kind === 15 ? [20, 1] : kind === 17 ? [24, 3, 2] : []
-  if (path.length) {
-    let field: Uint8Array | undefined = payload ?? undefined
-    try {
-      for (const tag of path) field = field && bytesField(field, tag)
-      if (field) {
-        const text = new TextDecoder("utf-8", { fatal: true }).decode(field)
-        if (kind === 17) return { type: "event", id, label: "Turn failed", detail: text.split("\n")[0] }
-        return { type: kind === 14 ? "user" : "text", id, text }
-      }
-    } catch { /* Preserve the step's position when a newer build changes its payload. */ }
+  if (CONTEXT_STEPS.has(kind)) return []
+  const unread = (reason: "unknown" | "unreadable"): Entry[] => [{ type: "unread", id, kind: `Antigravity step ${kind}`, reason }]
+  if (!payload) return unread("unreadable")
+  try {
+    const step = messageFields(payload)
+    const metadata = messageAt(step, 5)
+    if (kind === AGY_STEP.userInput) {
+      const text = wordsAt(messageAt(step, 19), 2)
+      return text ? [{ type: "user", id, text }] : unread("unreadable")
+    }
+    if (kind === AGY_STEP.plannerResponse) {
+      const reply = messageAt(step, 20)
+      const thinking = wordsAt(reply, 3).trim()
+      const text = wordsAt(reply, 8) || wordsAt(reply, 1)
+      const entries: Entry[] = []
+      if (thinking) entries.push({ type: "thinking", id: `${id}-thinking`, text: thinking })
+      if (text.trim()) entries.push({ type: "text", id, text })
+      // A reply of calls alone says nothing itself: its calls are their own steps.
+      return entries.length || reply.bytes.has(7) ? entries : unread("unreadable")
+    }
+    if (kind === AGY_STEP.errorMessage) {
+      const text = wordsAt(messageAt(messageAt(step, 24), 3), 2)
+      return text ? [{ type: "event", id, label: "Turn failed", detail: text.split("\n")[0] }] : unread("unreadable")
+    }
+    const call = messageAt(metadata, 4)
+    const name = wordsAt(call, 2)
+    if (!name) return unread("unknown")
+    const at = instantAt(messageAt(metadata, 1))
+    const endedAt = instantAt(messageAt(metadata, 8))
+    const status = STEP_STATUS.get(numberAt(step, 4))
+    const input = wordsAt(call, 3)
+    const output = kind === AGY_STEP.generic ? wordsAt(messageAt(messageAt(step, 140), 2), 1) : ""
+    return [{
+      type: "tool", id: wordsAt(call, 1) || id, name,
+      ...status && { status }, ...input && { input }, ...output && { output },
+      ...at && { at }, ...endedAt && status !== "pending" && { endedAt },
+    }]
+  } catch {
+    // A newer build that changed a payload keeps the step where it stood.
+    return unread("unreadable")
   }
-  return { type: "unread", id, kind: `Antigravity step ${kind}`, reason: path.length ? "unreadable" : "undrawn" }
 }
 
 /** The conversation's workspace folders, as the summary keeps them: a JSON list of `file:` URIs. */
@@ -180,7 +246,7 @@ export class AntigravityProvider implements SessionProvider {
       const entries: Entry[] = []
       for (const raw of db.prepare("SELECT idx, step_type, step_payload FROM steps ORDER BY idx").iterate()) {
         const row = step.parse(raw)
-        entries.push(stepEntry(row.idx, row.step_type, row.step_payload))
+        entries.push(...agyStepEntries(row.idx, row.step_type, row.step_payload))
       }
       return { ref, entries }
     } finally { db.close() }

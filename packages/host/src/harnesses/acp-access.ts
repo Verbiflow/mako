@@ -26,6 +26,13 @@ export interface AcpAccessPolicy {
    */
   launchNativeMode?: string
   /**
+   * Tiers no native mode makes true, which Mako makes true by answering the
+   * agent's tool requests itself: each runs in the native mode named, and every
+   * request for a tool's call is approved without a card. A question the agent
+   * asks the person still reaches them.
+   */
+  answered?: Partial<Record<AccessTier, string>>
+  /**
    * The tier a session runs under when the user has not chosen one. A
    * launch-listed default is passed to the process so the level the desk
    * reports is the level enforced; a native default is what the provider
@@ -92,6 +99,11 @@ export function acpSessionModes(
     modes.push(entry)
   }
   const covered = new Set(modes.map((mode) => mode.access))
+  for (const info of ACCESS_TIERS) {
+    if (!policy?.answered?.[info.tier] || covered.has(info.tier)) continue
+    covered.add(info.tier)
+    modes.push({ id: accessModeId(info.tier), name: info.label, description: info.summary, access: info.tier, enforcement: "mako" })
+  }
   for (const tier of policy?.launch ?? []) {
     if (covered.has(tier)) continue
     covered.add(tier)
@@ -118,6 +130,7 @@ export function acpInitialSelection(
   if (requested && !native && policy?.unlisted?.some((mode) => mode.id === requested.id))
     return { currentMode: requested.id }
   const tier = requested?.access ?? null
+  if (requested?.enforcement === "mako") return { currentMode: requested.id }
   if (!requested || !tier || requested.enforcement === "provider")
     return { currentMode: native?.currentModeId ?? null }
   if (policy?.launch?.includes(tier)) return { currentMode: requested.id }
@@ -150,6 +163,8 @@ export function acpModeChange(
   }
   const mode = modes.find((item) => item.id === modeId)
   if (!mode) throw new Error(`${harness} does not offer that access level`)
+  const answeredIn = mode.enforcement === "mako" ? policy?.answered?.[tier] : undefined
+  if (answeredIn) return { kind: "native", modeId, nativeModeId: answeredIn }
   if (policy?.launch?.includes(tier) && tier === launchedTier)
     return policy.launchNativeMode && current !== null && current !== modeId
       ? { kind: "native", modeId, nativeModeId: policy.launchNativeMode }
@@ -163,7 +178,30 @@ export function acpModeChange(
 export function acpReportedMode(
   policy: AcpAccessPolicy | undefined,
   nativeModeId: string,
-  launchedTier: AccessTier | null
+  launchedTier: AccessTier | null,
+  current: string | null = null
 ): string {
+  // A tier Mako answers for runs in a native mode of the agent's: the agent reporting that mode is the tier holding.
+  const answered = current ? accessTierOfModeId(current) : null
+  if (answered && policy?.answered?.[answered] === nativeModeId) return current!
   return launchedTier && nativeModeId === policy?.launchNativeMode ? accessModeId(launchedTier) : nativeModeId
+}
+
+/**
+ * Whether Mako answers this tool request itself: the session's mode is a tier
+ * Mako answers for (`AcpAccessPolicy.answered`), and the request asks to run a
+ * call, with a choice to allow it, rather than putting a question to the person.
+ * The option chosen is the one that allows it once.
+ */
+export function acpAnsweredRequest(
+  policy: AcpAccessPolicy | undefined,
+  currentMode: string | null | undefined,
+  request: { options: readonly { optionId: string; kind?: string }[]; questions?: readonly unknown[]; implementsPlan?: unknown },
+  toolCallId: string | undefined
+): string | undefined {
+  const tier = currentMode ? accessTierOfModeId(currentMode) : null
+  if (!tier || !policy?.answered?.[tier]) return undefined
+  if (request.questions?.length || request.implementsPlan || toolCallId?.startsWith("interaction_")) return undefined
+  if (!request.options.every((option) => option.kind && /^(allow|reject)_(once|always)$/.test(option.kind))) return undefined
+  return (request.options.find((option) => option.kind === "allow_once") ?? request.options.find((option) => option.kind === "allow_always"))?.optionId
 }

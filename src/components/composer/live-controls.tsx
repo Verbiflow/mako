@@ -67,6 +67,7 @@ function modeDetail(mode: LiveSessionMode, harness: string): string | null {
   if (mode.access && mode.name !== accessTierInfo(mode.access).label)
     parts.push(`${harness}: ${mode.name}`)
   if (mode.enforcement === "launch") parts.push("Set when the session starts")
+  if (mode.enforcement === "mako") parts.push("Mako approves each request")
   if (!mode.access && mode.description) parts.push(mode.description)
   return parts.length ? parts.join(" · ") : null
 }
