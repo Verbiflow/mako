@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url"
 import net from "node:net"
 import { syncBuiltinESMExports } from "node:module"
 import { mock } from "node:test"
-import { acquireHostLock, hostLockName } from "@mako/host/base/host-lock"
+import { acquireHostLock, hostLockHolder, hostLockName } from "@mako/host/base/host-lock"
 import { ranOut } from "./lib/ran-out.ts"
 
 if (process.argv[2] === "hold") await hold(process.argv[3]!)
@@ -18,6 +18,7 @@ else if (process.argv[2] === "brief") await brief(process.argv[3]!)
 else if (process.argv[2] === "handoff-race") await handoffRace()
 else if (process.argv[2] === "holder-readiness") await holderReadiness(Number(process.argv[3] ?? 1))
 else if (process.argv[2] === "busy-holder") await busyHolder(process.argv[3]!, process.argv[4]!)
+else if (process.argv[2] === "answering") await answering(process.argv[3]!)
 else await check()
 
 /** Holds the real kernel lock but cannot service its identity socket until the parent finishes its first query. */
@@ -61,6 +62,39 @@ async function busyIdentity(root: string) {
   }
 }
 
+/** Holds the real kernel lock with its loop free, answering every identity query at once. */
+async function answering(dataRoot: string) {
+  const lock = await acquireHostLock(dataRoot)
+  assert.equal(lock.kind, "held")
+  process.send?.("held")
+  setInterval(() => { void lock }, 1000)
+}
+
+/**
+ * A holder that answered in a millisecond, read by a process whose own loop was held past the identity wait right after
+ * it asked (a busy start, a descheduled runner): its timer runs out ahead of the reply already there, which is read, not
+ * taken for silence. Before, both readers named nobody.
+ */
+async function heldReader(root: string) {
+  await mkdir(root, { recursive: true })
+  const child = spawn(process.execPath, [...process.execArgv, fileURLToPath(import.meta.url), "answering", root], { stdio: ["ignore", "ignore", "inherit", "ipc"] })
+  const exited = once(child, "exit")
+  try {
+    await Promise.race([once(child, "message"), exited.then(([code]) => { throw new Error(`Answering holder exited ${code} before it held`) })])
+    const holdLoop = (ms: number) => { const until = Date.now() + ms; while (Date.now() < until) { /* the reader's loop held */ } }
+    const reading = hostLockHolder(root, "linux")
+    holdLoop(700)
+    assert.equal(await reading, child.pid, "a reply that came while the reader's loop was held is read")
+    const taking = acquireHostLock(root)
+    await new Promise((done) => setImmediate(done)) // the kernel's refusal, then the identity query
+    holdLoop(700)
+    assert.deepEqual(await taking, { kind: "taken", holder: child.pid }, "a refused host names the holder that answered while its loop was held")
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL")
+    await exited
+  }
+}
+
 /** Real socket locks: the first identity query was lost, then the host's readiness probe answered. */
 async function holderReadiness(rounds = 1) {
   if (process.platform === "darwin") return
@@ -68,6 +102,7 @@ async function holderReadiness(rounds = 1) {
   const root = await mkdtemp(join(tmpdir(), "mako-holder-readiness-"))
   try {
     for (let round = 0; round < rounds; round++) {
+      await heldReader(join(root, `${round}-held-reader`))
       await busyIdentity(join(root, `${round}-busy`))
       for (const mode of ["missed", "known", "silent", "gone", "without-probe", "other-purpose"] as const) {
         const dataRoot = join(root, `${round}-${mode}`)
@@ -107,7 +142,7 @@ async function holderReadiness(rounds = 1) {
         } finally { await close() }
       }
     }
-    console.log(`Socket lock holder readiness: ${rounds} rounds; missed reply recovered, known reply not reread, silent/departed holder stays unknown, no-probe behavior and purpose kept`)
+    console.log(`Socket lock holder readiness: ${rounds} rounds; a reply read though the reader's loop was held, missed reply recovered, known reply not reread, silent/departed holder stays unknown, no-probe behavior and purpose kept`)
   } finally { await rm(root, { recursive: true, force: true }) }
 }
 
