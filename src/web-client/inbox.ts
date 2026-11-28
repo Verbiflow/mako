@@ -1,6 +1,7 @@
 import type { NativeAgent } from "@mako/host/contracts/native-agents"
 import { threadChildren, useAcp, type AcpState } from "@/state/acp-state"
 import { personAsks, type PersonAsk } from "@/state/fin-asks"
+import type { WebPlanAsk } from "./apexes"
 import type { WebThread } from "./threads"
 
 /**
@@ -89,7 +90,10 @@ export function waitingThreads(threads: readonly WebThread[], fins: readonly Web
   return [...waiting, ...threads.filter((thread) => thread.standing === "waiting" && !apexes.has(thread.id) && !fin.has(thread.id))]
 }
 
-/** The Inbox's count: every Fin and Thread waiting on the person, the phone's chip and the desk's row alike. */
-export function webInboxCount(threads: readonly WebThread[], fins: readonly WebFinAsk[], placed: readonly WebThread[] = []): number {
-  return asksBesidePlaced(fins, placed).length + waitingThreads(threads, fins, placed).length
+/**
+ * The Inbox's count: every Fin, Thread and Apex plan line waiting on the person, as the desk counts its own
+ * (`inboxCount`). The list's Inbox chip and the Inbox page's "N need you" are this one number, so they never disagree.
+ */
+export function webInboxCount(threads: readonly WebThread[], fins: readonly WebFinAsk[], placed: readonly WebThread[], plans: readonly WebPlanAsk[]): number {
+  return asksBesidePlaced(fins, placed).length + waitingThreads(threads, fins, placed).length + plans.length
 }

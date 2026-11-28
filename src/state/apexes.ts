@@ -292,8 +292,8 @@ export function pickedApex(value: string): string | undefined {
 }
 
 /** A plan line under "Waiting on you" (or "Waiting on <name>"): the person's to do, in the Inbox and the digest. */
-export interface PlanAsk {
-  apex: ApexEntry
+export interface PlanAsk<Apex extends ApexEntry = ApexEntry> {
+  apex: Apex
   section: string
   index: number
   text: string
@@ -306,8 +306,11 @@ export function planKey(ask: PlanAsk): string {
 
 const WAITING = /^waiting on\b/i
 
-/** The lines of these Apexes' plans that wait on the person and aren't done, in the Apexes' order. */
-export function planAsksOf(apexes: readonly ApexEntry[], plans: ApexesState["plans"]): PlanAsk[] {
+/**
+ * The lines of these Apexes' plans that wait on the person and aren't done, in the Apexes' order: the desk's Inbox
+ * and the phone's read them alike, each with its own Apexes (the phone's knowing the Mac each is on).
+ */
+export function planAsksOf<Apex extends ApexEntry>(apexes: readonly Apex[], plans: ApexesState["plans"]): PlanAsk<Apex>[] {
   return apexes.flatMap((apex) => {
     const plan = plans[apex.thread]
     if (!plan) return []
