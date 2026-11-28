@@ -403,16 +403,9 @@ const DESK_COMMANDS: DeskCommand[] = [
     section: "Model",
     keys: "mod+shift+m",
     hint: "Search every authenticated model",
-    run: () => {
-      openPalette()
-      requestAnimationFrame(() => {
-        const input = document.querySelector<HTMLInputElement>('[role="dialog"] input')
-        if (input) {
-          input.value = ""
-          input.focus()
-        }
-      })
-    },
+    // The palette opens with its field empty and the caret in it; with Settings or a dialog open too, a field there
+    // was what the old way here reached for.
+    run: openPalette,
   },
   {
     id: "model.cycle-effort",

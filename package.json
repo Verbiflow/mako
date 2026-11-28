@@ -39,6 +39,7 @@
     "test:workspace-ui": "node scripts/test-workspace-ui.mjs",
     "test:opening-send-ui": "node scripts/test-opening-send-ui.mjs",
     "test:inbox-ui": "node scripts/test-inbox-ui.mjs",
+    "test:palette-ui": "node scripts/test-palette-ui.mjs",
     "test:automations-ui": "node scripts/test-automations-ui.mjs",
     "test:open-project": "tsx scripts/test-open-project.ts && tsx scripts/test-chat-projects.ts",
     "test:open-project-ui": "node scripts/test-open-project-ui.mjs",
