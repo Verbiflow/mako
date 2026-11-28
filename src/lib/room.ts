@@ -1,5 +1,6 @@
 import { FIT_RUNS, type RoomApp, type RoomFit, type RoomView } from "@mako/host/contracts/thread-app"
 import { formatAgo, formatBytes } from "@/state/thread-app"
+import { threadTitle } from "@/state/thread-titles"
 
 /**
  * The Room's words: what each app on this Mac is, what it holds, and how
@@ -15,13 +16,31 @@ function upFor(ms: number): string {
   const minutes = Math.floor(ms / 60_000)
   if (minutes < 1) return "under a minute"
   if (minutes < 60) return `${minutes} min`
-  return `${Math.floor(minutes / 60)} h`
+  const hours = Math.floor(minutes / 60)
+  return hours < 48 ? `${hours} h` : `${Math.floor(hours / 24)} days`
+}
+
+/** A crashed app is said on its own Thread, with Restart, for this long after it was last used; then it's dropped. */
+export const CRASHED_KEPT_MS = 24 * 60 * 60_000
+
+/** The apps worth listing: every one but a crash older than a day, which nobody is waiting on. */
+export function roomApps(apps: readonly RoomApp[], now: number): RoomApp[] {
+  return apps.filter((app) => app.state !== "crashed" || (app.usedAt ?? app.upAt ?? now) > now - CRASHED_KEPT_MS)
+}
+
+/** A Thread's title the host knows, or the one this window does when the host's is its placeholder. */
+function threadName(thread: NonNullable<RoomApp["thread"]>): string | undefined {
+  const title = thread.title.trim()
+  if (title && title !== "Untitled Thread") return title
+  return threadTitle(thread.id)
 }
 
 /** Its Thread's title, the folder it runs in, or what a spare checkout is for. */
 export function roomTitle(app: RoomApp): string {
-  if (app.thread) return app.thread.title
+  const named = app.thread ? threadName(app.thread) : undefined
+  if (named) return named
   if (app.kind === "spare") return "Checkout for a new Thread"
+  if (app.thread && app.checkout) return `${app.project?.name ?? basename(app.checkout)} · ${basename(app.checkout)}`
   return app.checkout ? basename(app.checkout) : "An app"
 }
 

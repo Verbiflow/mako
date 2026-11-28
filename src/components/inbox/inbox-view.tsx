@@ -1,38 +1,27 @@
-import { approvalWords } from "@mako/host/contracts/children"
-import { ApexInboxSection } from "@/components/apexes/apex-inbox"
-import { useApexPlanAsks } from "@/state/apexes"
-import { everyWhileShown } from "@/lib/window-shown"
-import { FinTypedAnswer } from "@/components/composer/fin-typed-answer"
-import { memo, useEffect, useRef, useState } from "react"
-import { CheckIcon, ChevronRightIcon, XIcon } from "lucide-react"
-import { childStateOf } from "@mako/host/contracts/children"
-import { ApexMark } from "@/components/ui/apex-mark"
-import { LiveMark } from "@/components/ui/live-mark"
-import { HarnessIcon } from "@/components/ui/provider-icon"
-import { FinMark } from "@/components/stage/child-tabs"
-import { RoomSection } from "@/components/rail/room-section"
-import { harnessLabel } from "@/components/rail/harness-meta"
-import { formatRelative } from "@/lib/format"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import { AskRow, AutomationFailRow, PlanRow, ReadRow } from "@/components/inbox/inbox-rows"
+import { ListPage, ListSection } from "@/components/ui/list"
+import { useListKeys, walkedRows } from "@/components/ui/use-list-keys"
+import { workspaceName } from "@/lib/format"
 import { useHarnessIdentity } from "@/lib/harness-label"
-import { cn } from "@/lib/utils"
-import { agentAskCard } from "@/state/agent-asks"
-import { ProposalBlock } from "@/components/automations/automation-proposal"
-import { automations, failedAutomationRuns, proposalById, useAutomations } from "@/state/automations"
-import { openAutomations } from "@/state/automations-view"
+import type { ThreadRef } from "@/lib/types"
+import { everyWhileShown } from "@/lib/window-shown"
+import { acp } from "@/state/acp"
+import { planKey, useApexPlanAsks, type PlanAsk } from "@/state/apexes"
+import { useAutomations } from "@/state/automations"
+import { showAutomation } from "@/state/automations-view"
+import { forgetRead, readToday, useInboxRead, type ReadEntry } from "@/state/inbox-read"
+import { inboxListStore, useInboxList } from "@/state/inbox-view"
 import { usePrefs } from "@/state/prefs"
-import { answerFin, type FinAnswer } from "@/state/fin-asks"
-import { ASK_TOUCH, runChoice, type AskCard as AskWords } from "@/lib/ask-card"
-import { setupAskCard } from "@/state/setup"
+import { markThreadReviewed, setThreadAttention } from "@/state/threads"
+import { useThreads } from "@/state/thread-store"
+import { threadTitle } from "@/state/thread-titles"
 import {
-  answerApproval,
   inboxView,
   openInboxItem,
   sameItems,
   useInbox,
   useInboxView,
-  type AgentAskInboxItem,
-  type ApprovalInboxItem,
-  type FinInboxItem,
   type InboxAsk,
   type InboxModel,
   type ReadInboxItem,
@@ -45,39 +34,67 @@ function sameModel(left: InboxModel, right: InboxModel): boolean {
 /** Ages in minutes: the Inbox repaints once a minute, never per token. */
 function useMinute(): number {
   const [now, setNow] = useState(() => Date.now())
-  useEffect(() => {
-    return everyWhileShown(60_000, () => setNow(Date.now()))
-  }, [])
+  useEffect(() => everyWhileShown(60_000, () => setNow(Date.now())), [])
   return now
 }
 
-function summary(model: InboxModel): string {
-  const reviews = model.toRead.filter((item) => item.kind === "review").length
-  const failed = model.toRead.length - reviews
-  const parts = [
-    model.asks.length ? `${model.asks.length} need${model.asks.length === 1 ? "s" : ""} you` : undefined,
-    reviews ? `${reviews} ${reviews === 1 ? "answer" : "answers"} to read` : undefined,
-    failed ? `${failed} failed` : undefined,
-  ].filter(Boolean)
+/** An automation whose newest run failed since Automations was last opened, as a line to read. */
+interface FailedAutomation {
+  key: string
+  project: string
+  id: string
+  name: string
+  why?: string
+  at: number
+}
+
+function useFailedAutomations(): FailedAutomation[] {
+  const seenAt = usePrefs((prefs) => prefs.automationsSeenAt)
+  const projects = useAutomations((state) => state.projects)
+  return useMemo(
+    () =>
+      projects.flatMap((reading) =>
+        reading.automations.flatMap((view) => {
+          const run = view.lastRun
+          if (!run || (run.status !== "failed" && run.status !== "failed-to-start")) return []
+          const at = run.endedAt ?? run.at
+          if (at <= seenAt) return []
+          return [{ key: `automation:${view.project}#${view.definition.id}`, project: view.project, id: view.definition.id, name: view.definition.name, ...(run.why && { why: run.why }), at }]
+        })
+      ),
+    [projects, seenAt]
+  )
+}
+
+type TodayItem = ReadInboxItem & { path: string; entry: ReadEntry }
+
+/** Today's reads as rows, each its Thread as the catalog has it, past what's still to read. */
+function useReadToday(toRead: readonly ReadInboxItem[], now: number): TodayItem[] {
+  const entries = useInboxRead((state) => state.entries)
+  const refs = useThreads((state) => state.threads)
+  return useMemo(() => {
+    const pending = new Set(toRead.map((item) => item.key))
+    const byPath = new Map<string, ThreadRef>(refs.map((ref) => [ref.path, ref]))
+    return readToday(entries, now).flatMap((entry): TodayItem[] => {
+      const ref = byPath.get(entry.path)
+      if (!ref || pending.has(`read:${entry.path}`)) return []
+      return [{ kind: entry.kind, key: `today:${entry.path}`, path: entry.path, entry, title: threadTitle(ref.threadId) ?? ref.title ?? workspaceName(ref.cwd), harness: ref.harness, at: entry.readAt, ...(entry.detail && { detail: entry.detail }), open: { kind: "ref", ref } }]
+    })
+  }, [entries, refs, toRead, now])
+}
+
+function summary(asks: number, toRead: number): string {
+  const parts = [asks ? `${asks} need${asks === 1 ? "s" : ""} you` : undefined, toRead ? `${toRead} to read` : undefined].filter(Boolean)
   return parts.length ? parts.join(" · ") : "Nothing waits on you"
 }
 
 /**
- * Everything waiting on the person, from every Thread and Fin, answerable
- * where it stands; then what's to read. Escape goes back to the conversation.
+ * Everything waiting on the person, from every Thread and Fin, answerable where it stands; then what's to read; then
+ * what was read today, folded. The keyboard walks it: j/k, 1–9 answer the selected ask, Enter opens, e settles a line
+ * to read and u puts back one read today. Escape goes back to the conversation.
  */
 export function InboxView() {
   const open = useInboxView((state) => state.open)
-  useEffect(() => {
-    if (!open) return
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "Escape" || event.defaultPrevented) return
-      event.preventDefault()
-      inboxView.close()
-    }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
-  }, [open])
   if (!open) return null
   return <InboxPane />
 }
@@ -85,278 +102,122 @@ export function InboxView() {
 function InboxPane() {
   useHarnessIdentity()
   const model = useInbox((next) => next, sameModel)
-  useMinute()
-  const seenAt = usePrefs((prefs) => prefs.automationsSeenAt)
-  const failedRuns = useAutomations((state) => failedAutomationRuns(state, seenAt))
-  const planAsks = useApexPlanAsks().length
-  const empty = !model.asks.length && !model.toRead.length && !failedRuns && !planAsks
+  const now = useMinute()
+  const planAsks = useApexPlanAsks()
+  const failedAutomations = useFailedAutomations()
+  const today = useReadToday(model.toRead, now)
+  const selected = useInboxList((state) => state.selected)
+  const readFolded = useInboxList((state) => state.readFolded)
+  const root = useRef<HTMLDivElement>(null)
+  const select = useCallback((key: string | undefined) => inboxListStore.set({ selected: key }), [])
+
+  const asks = useMemo(() => new Map<string, InboxAsk>(model.asks.map((item) => [item.key, item])), [model.asks])
+  const plans = useMemo(() => new Map<string, PlanAsk>(planAsks.map((ask) => [planKey(ask), ask])), [planAsks])
+  const reads = useMemo(() => new Map<string, ReadInboxItem>([...model.toRead, ...today].map((item) => [item.key, item])), [model.toRead, today])
+  const failures = useMemo(() => new Map(failedAutomations.map((each) => [each.key, each])), [failedAutomations])
+
+  const openPlan = (ask: PlanAsk) => {
+    if (!ask.apex.conversation) return
+    inboxView.close()
+    acp.open(ask.apex.conversation)
+  }
+  const openAutomation = (each: FailedAutomation) => {
+    inboxView.close()
+    showAutomation(each.project, each.id)
+  }
+  const settle = (key: string) => {
+    if (key.startsWith("read:")) markThreadReviewed(key.slice("read:".length))
+  }
+  const unsettle = (key: string) => {
+    const item = today.find((each) => each.key === key)
+    if (!item) return
+    setThreadAttention(item.path, item.kind === "failed" ? { kind: "failed", at: item.entry.at, ...(item.detail && { detail: item.detail }) } : { kind: "review", at: item.entry.at, unread: true })
+    forgetRead(item.path)
+  }
+
+  useListKeys({
+    root,
+    enabled: true,
+    selected,
+    onSelect: select,
+    onBack: () => inboxView.close(),
+    onOpen: (key) => {
+      const item = asks.get(key) ?? reads.get(key)
+      if (item) return openInboxItem(item)
+      const plan = plans.get(key)
+      if (plan) return openPlan(plan)
+      const failure = failures.get(key)
+      if (failure) openAutomation(failure)
+    },
+    onKey: (event, key, typing) => {
+      if (typing || event.metaKey || event.ctrlKey || event.altKey || key === undefined) return false
+      const row = walkedRows(root.current).find((each) => each.dataset.listRow === key)
+      const press = (selector: string) => {
+        const button = row?.querySelector<HTMLButtonElement>(selector)
+        if (!button || button.disabled) return false
+        button.click()
+        return true
+      }
+      if (/^[1-9]$/.test(event.key)) return press(`[data-inbox-choice="${event.key}"]`)
+      if (event.key === "a") return press('[data-inbox-answer="allow"], [data-inbox-answer="allow_once"]')
+      if (event.key === "d") return press('[data-inbox-answer="refuse"], [data-inbox-answer="reject_once"]')
+      if (event.key === "r" || (event.key === "Tab" && !event.shiftKey)) {
+        const field = row?.querySelector<HTMLInputElement>("[data-fin-typed] input")
+        if (!field) return false
+        field.focus()
+        return true
+      }
+      if (event.key === "e" && key.startsWith("read:")) {
+        settle(key)
+        return true
+      }
+      if (event.key === "u" && key.startsWith("today:")) {
+        unsettle(key)
+        return true
+      }
+      return false
+    },
+  })
+
+  const needs = model.asks.length + planAsks.length
+  const toRead = model.toRead.length + failedAutomations.length
+  const empty = !needs && !toRead && !today.length
   return (
     <section data-inbox aria-label="Inbox" className="absolute inset-0 z-30 flex min-h-0 flex-col bg-surface">
-      <header className="shrink-0 px-5 pt-3.5 pb-3">
-        <h1 className="text-title font-semibold text-foreground">Inbox</h1>
-        <p data-inbox-summary className="text-label text-faint">{summary(model)}</p>
-      </header>
-      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-        <div className="mx-auto flex w-full max-w-[560px] flex-col px-5 pt-4 pb-10">
-          {empty ? (
-            <p data-inbox-empty className="pt-16 text-center text-ui text-faint">
-              Nothing needs you. Asks from every Thread and Fin land here.
-            </p>
-          ) : null}
-          {model.asks.length ? (
-            <section aria-label="Needs you" data-inbox-section="needs">
-              <h2 className="flex h-7 items-center text-label font-medium text-attention">Needs you</h2>
-              <ul className="flex flex-col gap-2">
-                {model.asks.map((item) => (
-                  <li key={item.key}>
-                    <AskCard item={item} />
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-          <ApexInboxSection spaced={model.asks.length > 0} />
-          {failedRuns ? (
-            <section aria-label="Automations" data-inbox-section="automations" className={cn(model.asks.length && "pt-5")}>
-              <h2 className="flex h-7 items-center text-label font-medium text-attention">Automations</h2>
-              <button
-                type="button"
-                data-inbox-automations-failed={failedRuns}
-                onClick={() => {
-                  inboxView.close()
-                  openAutomations()
-                }}
-                className="pressable -mx-2 flex h-9 w-[calc(100%+1rem)] items-center gap-2 px-2 text-left text-ui text-foreground transition-colors hover:bg-fill-hover"
-              >
-                <span className="min-w-0 flex-1 truncate">{failedRuns === 1 ? "An automation's last run failed" : `${failedRuns} automations' last runs failed`}</span>
-                <span className="shrink-0 text-label text-faint">Open Automations</span>
-                <ChevronRightIcon className="size-3.5 shrink-0 text-faint" />
-              </button>
-            </section>
-          ) : null}
-          {model.toRead.length ? (
-            <section aria-label="To read" data-inbox-section="read" className={cn(model.asks.length && "pt-5")}>
-              <h2 className="flex h-7 items-center text-label font-medium text-faint">To read</h2>
-              <ul className="-mx-2 flex flex-col">
-                {model.toRead.map((item) => (
-                  <li key={item.key}>
-                    <ReadRow item={item} />
-                  </li>
-                ))}
-              </ul>
-            </section>
-          ) : null}
-          <div className="-mx-1.5 pt-5">
-            <RoomSection />
-          </div>
-        </div>
-      </div>
-    </section>
-  )
-}
-
-function Crumb({ item }: { item: InboxAsk }) {
-  const apex = item.kind === "fin" || item.kind === "approval" ? item.apex : undefined
-  return (
-    <span className="flex min-w-0 flex-1 items-center gap-1.5 overflow-hidden text-label text-faint">
-      {apex ? (
-        <>
-          <ApexMark className="size-3 shrink-0" />
-          <span className="min-w-0 shrink truncate">{apex.title}</span>
-          <ChevronRightIcon aria-hidden className="size-3 shrink-0 opacity-60" />
-        </>
-      ) : null}
-      <span className="min-w-0 flex-1 truncate font-medium text-foreground/90">{item.title}</span>
-      <span aria-hidden className="shrink-0 opacity-60">·</span>
-      {item.harness ? <span className="shrink-0">{harnessLabel(item.harness)}</span> : null}
-    </span>
-  )
-}
-
-/**
- * An ask's answers as the Inbox draws every ask (`AskCard`): what can't be given here said first, the one to take
- * filled. An answer that didn't land frees them again (`runChoice`).
- */
-function AskChoices({ card, sending, setSending }: { card: AskWords; sending: boolean; setSending: (held: boolean) => void }) {
-  return (
-    <>
-      {card.note ? <span className="text-label text-muted-foreground">{card.note}</span> : null}
-      {card.choices.map((choice) => (
-        <button key={choice.answer} type="button" data-inbox-answer={choice.answer} disabled={sending} onClick={() => void runChoice(choice, setSending)} className={cn(BUTTON, ASK_TOUCH, choice.primary ? PRIMARY : QUIET)}>
-          {choice.label}
-        </button>
-      ))}
-    </>
-  )
-}
-
-const BUTTON = "pressable flex h-7 items-center gap-1.5 px-2.5 text-label transition-colors disabled:opacity-50"
-const PRIMARY = "bg-foreground text-background hover:opacity-90"
-const QUIET = "bg-fill-hover text-foreground hover:bg-fill-selected"
-
-/** One ask: where it is, its mark and age, the question, and its answers in place. */
-const AskCard = memo(function AskCard({ item }: { item: InboxAsk }) {
-  const [sending, setSending] = useState(false)
-  const card = useRef<HTMLDivElement>(null)
-  const settle = (sent: Promise<boolean>) => {
-    setSending(true)
-    void sent.then((landed) => {
-      if (!landed) setSending(false)
-    })
-  }
-  return (
-    <div
-      ref={card}
-      tabIndex={0}
-      data-inbox-item={item.key}
-      data-inbox-kind={item.kind}
-      data-fin={item.kind === "fin" ? item.ask.fin : undefined}
-      aria-busy={sending || undefined}
-      aria-label={`${item.title}: ${item.question}`}
-      onKeyDown={(event) => {
-        if (event.target !== event.currentTarget || event.key !== "Enter") return
-        event.preventDefault()
-        openInboxItem(item)
-      }}
-      className="flex flex-col gap-2 bg-raised px-3.5 py-3 outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
-    >
-      <div data-ask-head className="flex h-5 min-w-0 items-center gap-2">
-        <AskMark item={item} />
-        <Crumb item={item} />
-        <span className="tabular shrink-0 text-label text-faint">{formatRelative(item.since)}</span>
-      </div>
-      <p data-ask-question className="pl-7 text-ui text-foreground">{item.question}</p>
-      {item.kind === "fin" && item.ask.ask.action ? <p className="-mt-1 pl-7 text-label text-muted-foreground">{item.ask.ask.action}</p> : null}
-      {item.kind === "agent-ask" && item.ask.want.kind === "automation-proposal" ? (
-        <ProposalAsk item={item} sending={sending} setSending={setSending} />
-      ) : (
-      <div data-ask-answers className="flex min-w-0 flex-wrap items-center gap-1.5 pl-7">
-        {item.kind === "fin" ? (
-          <FinAnswers item={item} sending={sending} send={(answer) => settle(answerFin(item.apex.conversation, item.ask, answer))} />
-        ) : item.kind === "approval" && item.answerable ? (
-          <ApprovalAnswers item={item} sending={sending} send={(option) => settle(answerApproval(item, option))} />
-        ) : item.kind === "agent-ask" ? (
-          <AskChoices card={agentAskCard(item.conversation, item.ask, harnessLabel(item.harness))} sending={sending} setSending={setSending} />
-        ) : item.kind === "setup" ? (
-          <AskChoices card={setupAskCard(item.folder, item.ask, item.away)} sending={sending} setSending={setSending} />
+      <ListPage scrollRef={root} title="Inbox" summary={<span data-inbox-summary>{summary(needs, toRead)}</span>} summaryTone={needs ? "attention" : "faint"}>
+        {empty ? (
+          <p data-inbox-empty className="pt-24 text-center text-ui text-faint">
+            Nothing needs you
+          </p>
         ) : null}
-        <span className="flex-1" />
-        <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">
-          Open
-        </button>
-      </div>
-      )}
-    </div>
-  )
-})
-
-/**
- * An agent's automation proposal, as its card in the Inbox: what it changes, read from the proposal Automations holds,
- * answered through the ask that carries it (`mako:agent-ask-answer`). Until the proposal is read, the ask's own answers.
- */
-function ProposalAsk({ item, sending, setSending }: { item: AgentAskInboxItem; sending: boolean; setSending: (held: boolean) => void }) {
-  const want = item.ask.want.kind === "automation-proposal" ? item.ask.want : undefined
-  const proposal = useAutomations((state) => (want ? proposalById(state, want.proposal) : undefined))
-  useEffect(() => {
-    if (want && !proposal) void automations.load(true)
-  }, [want, proposal])
-  const open = (
-    <button type="button" data-inbox-open onClick={() => openInboxItem(item)} className="pressable px-1.5 py-1 text-label text-faint hover:bg-fill-hover hover:text-foreground">
-      Open
-    </button>
-  )
-  if (!proposal)
-    return (
-      <div className="flex min-w-0 flex-wrap items-center gap-1.5 pl-7">
-        <AskChoices card={agentAskCard(item.conversation, item.ask, harnessLabel(item.harness))} sending={sending} setSending={setSending} />
-        <span className="flex-1" />
-        {open}
-      </div>
-    )
-  return (
-    <div data-inbox-proposal={proposal.id} className="flex min-w-0 flex-col pl-7">
-      {/* Decided as Automations decides it (`decide`, which settles its ask too): approving applies what this card shows. */}
-      <ProposalBlock proposal={proposal} compact inThread actions={open} onDecide={(approve) => automations.decide(proposal.id, approve).then(Boolean)} />
-    </div>
-  )
-}
-
-function AskMark({ item }: { item: InboxAsk }) {
-  if (item.kind === "fin") return <FinMark agent={item.agent} state={childStateOf(item.agent)} read />
-  if (item.kind === "setup")
-    return (
-      <LiveMark state="needs" kind={item.ask.by.fin ? "fin" : "thread"} label="Needs you">
-        {item.harness ? <HarnessIcon harness={item.harness} /> : null}
-      </LiveMark>
-    )
-  return (
-    <LiveMark state="needs" label={`Needs you in ${harnessLabel(item.harness)}`}>
-      <HarnessIcon harness={item.harness} />
-    </LiveMark>
-  )
-}
-
-function FinAnswers({ item, sending, send }: { item: FinInboxItem; sending: boolean; send: (answer: FinAnswer) => void }) {
-  if (item.ask.limit?.waiting) return <span className="text-label text-muted-foreground">Continues automatically. Open the Thread to use another account or harness now.</span>
-  if (item.ask.ask.kind === "approval")
-    return (
-      <>
-        <button type="button" data-inbox-answer="allow" disabled={sending} onClick={() => send({ allow: true })} className={cn(BUTTON, PRIMARY)}>
-          <CheckIcon className="size-3" />
-          {approvalWords(item.ask.ask).allow}
-        </button>
-        <button type="button" data-inbox-answer="refuse" disabled={sending} onClick={() => send({ allow: false })} className={cn(BUTTON, QUIET)}>
-          <XIcon className="size-3" />
-          {approvalWords(item.ask.ask).refuse}
-        </button>
-      </>
-    )
-  return (
-    <>
-      {(item.ask.ask.options ?? []).map((option, index) => {
-        const recommended = index === item.ask.ask.recommended
-        return (
-          <button key={`${index}:${option.label}`} type="button" data-inbox-answer={index} title={option.detail} disabled={sending} onClick={() => send({ option: index })} className={cn(BUTTON, recommended ? PRIMARY : QUIET)}>
-            {option.label}
-            {recommended ? <span className="opacity-60">Recommended</span> : null}
-          </button>
-        )
-      })}
-      <FinTypedAnswer title={item.ask.title} options={item.ask.ask.options?.length ?? 0} disabled={sending} onAnswer={(words) => send({ answer: words })} className="min-w-40 max-w-64" />
-    </>
-  )
-}
-
-function ApprovalAnswers({ item, sending, send }: { item: ApprovalInboxItem; sending: boolean; send: (option: string) => void }) {
-  const primary = item.permission.options.find((option) => option.kind === "allow_once") ?? item.permission.options[0]
-  return (
-    <>
-      {item.permission.options.map((option) => (
-        <button key={option.optionId} type="button" data-inbox-answer={option.kind ?? option.optionId} disabled={sending} onClick={() => send(option.optionId)} className={cn(BUTTON, option === primary ? PRIMARY : QUIET)}>
-          {option.name}
-        </button>
-      ))}
-    </>
-  )
-}
-
-function ReadRow({ item }: { item: ReadInboxItem }) {
-  return (
-    <button
-      type="button"
-      data-inbox-item={item.key}
-      data-inbox-kind={item.kind}
-      onClick={() => openInboxItem(item)}
-      className="pressable flex h-8 w-full min-w-0 items-center gap-2.5 px-2 text-left transition-colors duration-100 hover:bg-fill-hover"
-    >
-      <LiveMark state={item.kind === "failed" ? "failed" : "unread"} label={item.kind === "failed" ? "Failed" : "Answer to read"}>
-        <HarnessIcon harness={item.harness} />
-      </LiveMark>
-      <span className="min-w-0 shrink-0 truncate text-ui text-foreground">{item.title}</span>
-      <span className={cn("min-w-0 flex-1 truncate text-label", item.kind === "failed" ? "text-negative/90" : "text-faint")}>
-        {item.kind === "failed" ? (item.detail ?? "Failed") : "Finished"}
-      </span>
-      <span className="tabular shrink-0 text-label text-faint">{formatRelative(item.at)}</span>
-    </button>
+        {needs ? (
+          <ListSection label="Needs you" count={needs} attention data-inbox-section="needs">
+            {model.asks.map((item) => (
+              <AskRow key={item.key} item={item} selected={selected === item.key} onSelect={select} />
+            ))}
+            {planAsks.map((ask) => (
+              <PlanRow key={planKey(ask)} ask={ask} selected={selected === planKey(ask)} onSelect={select} onOpen={() => openPlan(ask)} />
+            ))}
+          </ListSection>
+        ) : null}
+        {toRead ? (
+          <ListSection label="To read" count={toRead} data-inbox-section="read">
+            {failedAutomations.map((each) => (
+              <AutomationFailRow key={each.key} rowKey={each.key} name={each.name} why={each.why} at={each.at} selected={selected === each.key} onSelect={select} onOpen={() => openAutomation(each)} />
+            ))}
+            {model.toRead.map((item) => (
+              <ReadRow key={item.key} item={item} selected={selected === item.key} onSelect={select} onSettle={() => settle(item.key)} />
+            ))}
+          </ListSection>
+        ) : null}
+        {today.length ? (
+          <ListSection label="Read today" count={today.length} folded={readFolded} onFold={() => inboxListStore.set({ readFolded: !readFolded })} data-inbox-section="today">
+            {today.map((item) => (
+              <ReadRow key={item.key} item={item} read selected={selected === item.key} onSelect={select} onSettle={() => unsettle(item.key)} />
+            ))}
+          </ListSection>
+        ) : null}
+      </ListPage>
+    </section>
   )
 }

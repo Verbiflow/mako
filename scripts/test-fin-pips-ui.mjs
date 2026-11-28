@@ -149,6 +149,8 @@ async function check() {
   const answered = asking[1]
   await evaluate(`document.querySelector('[data-rail-top-row="inbox"]').click(); true`)
   await until(`Boolean(document.querySelector('[data-inbox-item^="fin:${answered.child.thread}:"]'))`, "the Fin's ask in the Inbox")
+  await evaluate(`document.querySelector('[data-inbox-item^="fin:${answered.child.thread}:"]').click(); true`)
+  await until(`Boolean(document.querySelector('[data-inbox-item^="fin:${answered.child.thread}:"] [data-ask-answers]'))`, "the Fin's ask selected")
   await evaluate(`document.querySelector('[data-inbox-item^="fin:${answered.child.thread}:"]').querySelector('[data-inbox-answer="allow"], [data-inbox-answer="0"]').click(); true`)
   await until(`![...document.querySelectorAll('[data-asking-fin]')].some((row) => row.dataset.askingFin === ${JSON.stringify(answered.child.thread)})`, "the answered Fin leaving from under its Apex")
   rail = await evaluate(railState)

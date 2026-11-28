@@ -301,6 +301,9 @@ async function checkWindow() {
   for (const answer of ["decline", "approve"]) {
     await open(`${base}?mock&app=automations`)
     await evaluate(`import('/src/components/inbox/open-inbox.ts').then(({ openInbox }) => openInbox())`)
+    // Only the selected ask opens its card.
+    await until(`[...document.querySelectorAll('[data-inbox-kind="agent-ask"]')].some((node) => node.innerText.includes('Speed up the nightly triage'))`, "the proposing Thread's ask")
+    await evaluate(`[...document.querySelectorAll('[data-inbox-kind="agent-ask"]')].find((node) => node.innerText.includes('Speed up the nightly triage')).click(); true`)
     await until(`document.querySelector('[data-inbox] [data-inbox-proposal="p-triage-faster"] [data-diff-field="prompt"]') !== null`, "the Inbox's proposal card")
     assert.match(await text('[data-inbox-proposal]'), /Proposes a change/)
     assert.match(await text('[data-inbox-item]:has([data-inbox-proposal])'), /Speed up the nightly triage/, "the card names the proposing Thread")

@@ -14,6 +14,7 @@ import { prefsStore } from "@/state/prefs"
 import { threadTitlesStore } from "@/state/thread-titles"
 import type { AttentionByPath, ThreadsState } from "@/state/thread-state"
 import { threadsStore } from "@/state/thread-store"
+import { noteRead } from "@/state/inbox-read"
 import { agentAskDetail } from "@/state/agent-asks"
 import { noteRunDropped } from "@/state/native-run-dropped"
 import { finAskLine } from "@/state/fin-asks"
@@ -298,8 +299,10 @@ export function setThreadAttention(
  * not; that waits for an answer, not a look.
  */
 export function markThreadReviewed(path: string) {
-  const kind = threadsStore.get().attention[path]?.kind
-  if (kind !== "review" && kind !== "failed") return
+  const attention = threadsStore.get().attention[path]
+  if (attention?.kind !== "review" && attention?.kind !== "failed") return
+  // A read the Inbox keeps under "Read today"; an answer whose unread mark was already off was read before.
+  if (attention.kind === "failed" || attention.unread) noteRead({ path, kind: attention.kind, at: attention.at, ...(attention.kind === "failed" && attention.detail && { detail: attention.detail }) })
   setThreadAttention(path, null)
 }
 

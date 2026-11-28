@@ -63,27 +63,48 @@ export function useListKeys(keys: ListKeys): void {
     if (next !== keys.selected) keys.onSelect(next)
   })
 
-  // The selected row holds focus while focus is on the page or nowhere, so Enter and its own keys reach it.
+  // The selected row takes focus as the page opens, and holds it while focus is on the page or nowhere, so Enter and
+  // its own keys reach it.
+  const focused = useRef(false)
   useEffect(() => {
-    if (!keys.enabled || keys.selected === undefined) return
+    if (!keys.enabled) {
+      focused.current = false
+      return
+    }
+    if (keys.selected === undefined) return
     const root = keys.root.current
     const row = walkedRows(root).find((each) => each.dataset.listRow === keys.selected)
     const active = document.activeElement
     if (!row || active === row) return
     const resting = !active || active === document.body || (root?.contains(active) && !active.matches(TYPING) && active.closest("[data-list-row]") !== null)
-    if (resting) row.focus({ preventScroll: true })
+    // Opening, it takes focus from whatever the page now covers (a composer, a rail row).
+    if (resting || (!focused.current && !root?.contains(active))) row.focus({ preventScroll: true })
+    focused.current = true
   }, [keys.enabled, keys.selected, keys.root])
 
   useEffect(() => {
     if (!keys.enabled) return
     const onKey = (event: KeyboardEvent) => {
-      const { root, selected, onSelect, onOpen, onBack, search, views, onCheck, onKey: own } = current.current
+      const { root, onSelect, onOpen, onBack, search, views, onCheck, onKey: own } = current.current
+      let { selected } = current.current
       if (event.defaultPrevented || event.isComposing) return
       if (document.querySelector("[role=dialog], [role=menu], [role=listbox][data-state=open]")) return
       const target = event.target instanceof HTMLElement ? event.target : null
-      // Keys typed somewhere else (another pane's field, the palette) aren't the list's.
-      if (target && target !== document.body && !root.current?.contains(target)) return
+      // Keys pressed elsewhere (the rail, another pane's field) aren't the list's, but Escape outside a field still goes back.
+      if (target && target !== document.body && !root.current?.contains(target)) {
+        if (event.key === "Escape" && onBack && !target.matches(TYPING) && !event.metaKey && !event.ctrlKey && !event.altKey) {
+          event.preventDefault()
+          onBack()
+        }
+        return
+      }
       const typing = Boolean(target?.matches(TYPING))
+      // A row focused another way (Tab, a click on it) is the selected one.
+      const focusedRow = target?.matches("[data-list-row]") ? target.dataset.listRow : undefined
+      if (focusedRow !== undefined && focusedRow !== selected) {
+        selected = focusedRow
+        onSelect(focusedRow)
+      }
       if (own?.(event, selected, typing)) {
         event.preventDefault()
         return
@@ -109,6 +130,8 @@ export function useListKeys(keys: ListKeys): void {
         next.scrollIntoView({ block: "nearest" })
         return
       }
+      // Enter on a button or link inside a row is that control's own.
+      if (event.key === "Enter" && target?.closest("button, a, [role=button]")) return
       if (event.key === "Enter" && selected !== undefined && onOpen) {
         event.preventDefault()
         onOpen(selected)
@@ -127,7 +150,8 @@ export function useListKeys(keys: ListKeys): void {
         onCheck(selected)
       }
     }
-    window.addEventListener("keydown", onKey)
-    return () => window.removeEventListener("keydown", onKey)
+    // Ahead of the conversation's own keys: the page covers it, so its Escape and the rest are the page's.
+    window.addEventListener("keydown", onKey, true)
+    return () => window.removeEventListener("keydown", onKey, true)
   }, [keys.enabled])
 }
