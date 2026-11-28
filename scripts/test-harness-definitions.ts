@@ -111,6 +111,12 @@ for (const { provider, absent } of harnesses) {
   const continuation = providerHost.liveDrivers.get(provider)?.accountContinuation
   assert.ok(continuation, `${provider} declares whether its session goes on under another account (accountContinuation)`)
   assert.ok((continuation.kind === "resumes" ? continuation.via : continuation.reason).trim(), `${provider} explains its accountContinuation`)
+  // Every harness runs on Mako's cloud machines: its sign-in goes there (or says why it can't), as each checked step
+  // of the checklist's "Cloud sign-in" requires, and none ships without.
+  const cloudSignIn = providerHost.accountCapabilities.get(provider)?.cloudSignIn
+  assert.ok(cloudSignIn, `${provider}'s account capability gives cloudSignIn, so its sign-in reaches cloud machines`)
+  if (cloudSignIn.chain || cloudSignIn.mirror) assert.ok(cloudSignIn.chain && cloudSignIn.mirror, `${provider}'s rotating sign-in gives both chain and mirror`)
+  if (cloudSignIn.unshared !== undefined) assert.ok(cloudSignIn.unshared.trim(), `${provider} says what of its sign-in stays on the Mac`)
   const runner = providerHost.nativeRunners.get(provider)
   if (runner) {
     assert.ok(runner.transport.trim(), `${provider} declares its actual headless transport`)
@@ -343,6 +349,13 @@ for (const { provider } of harnesses) {
     assert.deepEqual(pinned.map((build) => build.target).sort(), [...versions.kept.targets].sort(), `${provider} pins an archive for each target it keeps; run npx tsx scripts/bump-harness-versions.ts ${provider} --keep`)
     for (const build of pinned) assert.equal(build.version, tested, `${provider}'s kept ${build.target} archive is of ${build.version}, not the tested ${tested}; move it with the bump`)
   } else assert.ok(!keptBuilds.some((build) => build.harness === provider), `${provider} keeps no builds, so it pins no archive`)
+  // A pinned install's files and digests are of exactly `tested`, so moving one moves the other (the bump writes both).
+  if (versions.digests) {
+    const pinned = z.object({ version: z.string(), builds: z.record(z.string(), z.object({ url: z.string(), sha512: z.string() })) })
+      .parse(await import(join(import.meta.dirname, "..", "packages", "host", "src", "harnesses", provider, versions.digests.file)))
+    assert.equal(pinned.version, tested, `${provider}'s ${versions.digests.file} holds the files of ${pinned.version}, not the tested ${tested}; move them with the bump`)
+    assert.deepEqual(Object.keys(pinned.builds).sort(), [...versions.digests.targets].sort(), `${provider}'s ${versions.digests.file} has a file for each target it declares`)
+  }
   if (versions.bundled) {
     const locked = lockfile.packages[`node_modules/${versions.bundled.package}`]
     assert.equal(locked?.version, versions.bundled.version, `${provider}'s bundled ${versions.bundled.package} is the one in Mako's lockfile`)

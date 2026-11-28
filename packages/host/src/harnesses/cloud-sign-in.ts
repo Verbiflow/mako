@@ -39,6 +39,16 @@ export interface CloudSignInCapability {
   chain?(env: NodeJS.ProcessEnv): Promise<CloudSignInChain | null>
   /** This Mac's own store read whole and written back, for a sign-in that rotates and that Mako Cloud refreshes for it. */
   mirror?: CloudSignInMirror
+  /**
+   * The key a Mako-kept key account (`key.<uuid>`, `withApiKeyAccounts`) runs on, for the cloud, or null for any other
+   * account. A key doesn't rotate, so it goes as it is; every key-taking harness shares this one path.
+   */
+  keySignIn?(name: string): Promise<CloudSignInExport | null>
+  /**
+   * What Settings says in place of "not signed in" when `export` finds nothing it can send: a sign-in of the harness's
+   * that stays on this Mac, and what does go to the cloud instead.
+   */
+  unshared?: string
   /** Writes `payload` where the harness reads it, replacing what an earlier install wrote. */
   install(payload: CloudSignInPayload, place: CloudSignInPlace): Promise<void>
   /** Takes back what `install` wrote, signing the harness out; true when there was something to take. */

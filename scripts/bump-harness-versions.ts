@@ -146,6 +146,36 @@ async function keepBuilds(provider: string, versions: HarnessVersions, version: 
   steps.push({ name: `${provider} ${version}'s archives pinned`, ok: true, detail: kept.targets.join(", ") })
 }
 
+const DigestManifest = z.object({ version: z.string(), url: z.url(), sha512: z.string().regex(/^[a-f0-9]{128}$/) })
+
+/**
+ * Writes the vendor's file and SHA-512 of `version` for each target a pinned install checks (`HarnessVersions.digests`),
+ * read from each target's own manifest, which must name `version`: the install then downloads exactly the files it
+ * checks, and an install of a `tested` with no files can't happen.
+ */
+async function writeDigests(provider: string, versions: HarnessVersions, version: string, steps: Step[]): Promise<void> {
+  const digests = versions.digests
+  if (!digests) return
+  const builds: Record<string, { url: string; sha512: string }> = {}
+  for (const target of digests.targets) {
+    const url = digests.manifests.replaceAll("{target}", target)
+    const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(FEED_TIMEOUT_MS) })
+    if (!response.ok) throw new Error(`${url} answered ${response.status}`)
+    const manifest = DigestManifest.parse(await response.json())
+    if (manifest.version !== version) throw new Error(`${url} names ${manifest.version}, not ${version}: its files can't be pinned`)
+    builds[target] = { url: manifest.url, sha512: manifest.sha512 }
+  }
+  const file = join(REPO, "packages/host/src/harnesses", provider, digests.file)
+  writeFileSync(file, [
+    `// Release files and SHA-512 digests from the vendor's platform manifests for ${provider} ${version}, written by scripts/bump-harness-versions.ts.`,
+    "/** The version every file below is: what Mako installs, and so what it declares tested. */",
+    `export const version = ${JSON.stringify(version)}`,
+    `export const builds = ${JSON.stringify(builds, null, 2)} as const`,
+    "",
+  ].join("\n"))
+  steps.push({ name: `${provider} ${version}'s files and digests written`, ok: true, detail: digests.targets.join(", ") })
+}
+
 /** When npm published `version` of the feed's package. */
 async function published(feed: HarnessVersions["feed"], version: string): Promise<string> {
   if (!("npm" in feed)) throw new Error(`${feed.manifest} dates no release`)
@@ -401,6 +431,7 @@ if (options.keep) {
     moveDeclaration(reading, tested, today)
     steps.push({ name: `declaration moved to ${tested}`, ok: true })
     await keepBuilds(provider, reading.versions, tested, steps)
+    await writeDigests(provider, reading.versions, tested, steps)
     // The package Mako speaks it with is published with each release, and moves with it.
     if (reading.versions.client) moveBundled(reading.versions.client.package, tested, steps)
     // The declaration this process loaded is the old one: install through a fresh process that reads the new one.

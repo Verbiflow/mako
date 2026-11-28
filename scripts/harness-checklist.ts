@@ -162,8 +162,15 @@ export const BESIDE_THE_DEFINITION: readonly Step[] = [
   },
   {
     title: "Cloud sign-in",
-    what: "Where the sign-in lives on Linux, whether it rotates, which credential the cloud gets, how it is installed on a machine and who refreshes it.",
-    enforcedBy: "not built: a run that resumes a laptop session on a fresh Linux machine and checks the laptop is still signed in",
+    what: "Every harness runs on Mako's cloud machines. Its account capability gives `cloudSignIn` (`packages/host/src/harnesses/cloud-sign-in.ts`): `export` reads the sign-in this Mac runs it under, refresh token withheld; `install` and `remove` write and take it back where the harness reads it on Linux; a sign-in that rotates also gives `chain` and `mirror`, so Mako Cloud refreshes it for both, and one that can't go says so in `unshared`. A harness that takes pasted API keys wraps its capability in `withApiKeyAccounts`, which sends a key account's key the one way every key-taking harness shares. Its `versions.ts` names `tested` in one literal line, which the machine image's record reads, and the image installs exactly that build. The cloud's own list of harnesses it keeps sign-ins for names it too.",
+    enforcedBy: "`test-cloud-sign-ins.ts` (each adapter's round trip and the sync), `test-harness-definitions.ts` (this step), the machine image's build (every harness installed at `tested`)",
+    check: (harness) => {
+      if (!providerHost.accountCapabilities.get(harness)?.cloudSignIn) return missing("no cloudSignIn on its account capability")
+      const versions = join(import.meta.dirname, "..", "packages", "host", "src", "harnesses", harness, "versions.ts")
+      if (!existsSync(versions)) return missing(`no ${harness}/versions.ts for the machine image's record`)
+      if ([...readFileSync(versions, "utf8").matchAll(/^\s*tested:\s*"([^"]+)",?\s*$/gm)].length !== 1) return missing(`${harness}/versions.ts doesn't name tested in one literal line`)
+      return done
+    },
   },
   {
     title: "Conformance",
