@@ -230,6 +230,8 @@ async function checkWindow() {
   await press("u", { meta: true, shift: true })
   await until(`document.querySelector('[data-inbox]') !== null`, "the Inbox opens")
   await roundTrip("the Inbox", { stays: `document.querySelector('[data-inbox]') !== null`, shot: "04-inbox-palette-dark.png" })
+  // The palette gave focus back to the composer, where Escape is the composer's: off the field, it's the Inbox's.
+  await evaluate("document.activeElement?.blur(), true")
   await press("Escape")
   await until(`document.querySelector('[data-inbox]') === null`, "the Inbox closes on its own Escape")
   await press("a", { meta: true, shift: true })
